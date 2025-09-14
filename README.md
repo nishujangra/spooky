@@ -1,16 +1,6 @@
-# CheatLoader
+# Spooky
 
 A high-performance load balancer and proxy server written in Rust, supporting both HTTP/3 (QUIC) and gRPC protocols with intelligent routing and health monitoring.
-
-## Architecture
-
-This project implements a sophisticated load balancing system with the following components:
-
-- **Request Listener**: Handles incoming client requests with protocol detection for gRPC and HTTP/3/QUIC
-- **Routing Engine**: Selects backend servers based on configurable load balancing algorithms
-- **Backend Servers**: Multiple server instances that handle the actual workload
-- **Async Health Check**: Continuously monitors server health and marks unhealthy servers
-- **Logging System**: Comprehensive request and system logging
 
 ## Features
 
@@ -62,58 +52,7 @@ load_balancing:
 1. Clone the repository:
 ```bash
 git clone <repository-url>
-cd cheatloader
-```
-
-2. Build the project:
-```bash
-cargo build --release
-```
-
-3. Run Apache to serve .shtml files:
-```bash
-# Start Apache server
-sudo systemctl start apache2
-
-# Or run Apache in the foreground for development
-sudo apache2 -X
-```
-
-4. Run the load balancer:
-```bash
-cargo run --release -- --config config.yaml
-```
-
-## Development
-
-### Building
-
-```bash
-# Debug build
-cargo build
-
-# Release build
-cargo build --release
-```
-
-### Testing
-
-```bash
-# Run all tests
-cargo test
-
-# Run tests with output
-cargo test -- --nocapture
-```
-
-### Running
-
-```bash
-# Run with default configuration
-cargo run
-
-# Run with custom configuration
-cargo run -- --config /path/to/config.yaml
+cd spooky
 ```
 
 ## Configuration Options
