@@ -84,3 +84,8 @@ docs/_build/
 # Backup files
 *.bak
 *.backup
+
+
+# Added by cargo
+
+/target
