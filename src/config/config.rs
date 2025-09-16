@@ -1,0 +1,74 @@
+use serde::Deserialize;
+
+#[derive(Debug, Deserialize)]
+pub struct Config {
+    pub listen: Listen,
+    pub backends: Vec<Backend>,
+    pub load_balancing: LoadBalancing,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Listen {
+    #[serde(default = "get_default_protocol")]
+    pub protocol: String,   // "http3" or "grpc"
+
+    #[serde(default = "get_default_port")]
+    pub port: u16,          // 9889
+
+    #[serde(default = "get_default_address")]
+    pub address: String,    // "0.0.0.0"
+    pub tls: Tls,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Tls {
+    pub cert: String,       // "/path/to/cert"
+    pub key: String,        // "/path/to/key"
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Backend {
+    pub id: String,         // "backend1"
+    pub address: String,    // "10.0.1.100:8080"
+
+    #[serde(default = "get_default_weight")]
+    pub weight: u32,        // 100
+    pub health_check: HealthCheck,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HealthCheck {
+    #[serde(default = "get_default_path")]
+    pub path: String,       // "/health"
+    pub interval: String,   // "5s" (could later parse into Duration)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LoadBalancing {
+    #[serde(rename = "type")]
+    pub lb_type: String,    // "weight-based", "least_connection", etc.
+}
+
+
+
+// default values
+
+fn get_default_protocol() -> String {
+    String::from("http3")
+}
+
+fn get_default_port() -> u16 {
+    9889
+}
+
+fn get_default_address() -> String {
+    String::from("0.0.0.0")
+}
+
+fn get_default_weight() -> u32 {
+    100
+}
+
+fn get_default_path() -> String {
+    String::from("/health")
+}
