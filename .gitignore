@@ -89,3 +89,7 @@ docs/_build/
 # Added by cargo
 
 /target
+
+
+# Config files
+config.yaml

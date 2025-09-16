@@ -1,0 +1,18 @@
+listen:
+    protocol: http3  # or grpc
+    port: 9889
+    address: "0.0.0.0"
+    tls:
+        cert: "/path/to/cert"
+        key: "/path/to/key"
+
+backends:
+    -   id: "backend1"
+        address: "10.0.1.100:8080"
+        weight: 100  # server can have /metric route for weight-based balancing
+        health_check:
+            path: "/health"
+            interval: 5s
+
+load_balancing:
+    type: weight-based  # weight-based, least_connection, ip-hash, round-robin
