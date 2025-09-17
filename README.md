@@ -43,6 +43,8 @@ load_balancing:
   type: weight-based
 ```
 
+You can generate certificates using [gen-cert.md](docs/gen-cert.md)
+
 ## Check if Proxy is Running
 
 ```bash
