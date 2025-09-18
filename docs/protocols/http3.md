@@ -51,7 +51,7 @@ Connection: keep-alive
 
 ### HTTP/2
 
-```http
+```text
 (Frame Layer Example)
 
 HEADERS Frame:
@@ -65,7 +65,7 @@ HEADERS Frame:
 
 ### HTTP/3
 
-```http
+```text
 (QPACK Encoded Headers Example)
 
 HEADERS Frame (QPACK-encoded):

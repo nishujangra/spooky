@@ -15,6 +15,9 @@ This is the list of references we have taken to build this project.
 4. [serde_yaml](https://crates.io/crates/serde_yaml) - YAML serialization
 5. [anyhow](https://crates.io/crates/anyhow) - Error handling
 6. [rustls](https://crates.io/crates/rustls) - TLS implementation
+7. [h3](https://crates.io/crates/h3)
+8. [h3_quinn](https://crates.io/crates/h3-quinn)
+9. [http](https://crates.io/crates/http)
 
 ## Documentations
 1. [Read YAML in Rust](https://rust.code-maven.com/yaml/) 
