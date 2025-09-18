@@ -45,3 +45,11 @@ Expected output
 ```text
 Connection to 127.0.0.1 7777 port [udp/*] succeeded!
 ```
+
+---
+
+## Sending HTTP3 request to the server using Curl
+
+```sh
+curl -vk --http3 https://127.0.0.1:7777/
+```
