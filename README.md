@@ -16,6 +16,12 @@ High-performance load balancer and proxy server in Rust. Supports HTTP/3 (QUIC) 
 # Build
 cargo build
 
+# Run
+cargo run --bin spooky
+
+# Want sample http3 server
+cargo run --bin server
+
 # Run with config
 ./target/debug/spooky --config config.yaml
 ```
