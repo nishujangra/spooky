@@ -6,7 +6,6 @@ This is the list of references we have taken to build this project.
 
 1. [RFC 9114 HTTP/3](https://www.rfc-editor.org/rfc/rfc9114.html)
 2. [RFC 9000 QUIC: A UDP-based Multiplexed and secure transport](https://www.rfc-editor.org/rfc/rfc9000.html)
-3. [RFC 9113 HTTP/2](https://www.rfc-editor.org/rfc/rfc9113.html) - For gRPC support
 
 ## Core Dependencies
 1. [quinn](https://crates.io/crates/quinn) - QUIC transport implementation
