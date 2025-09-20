@@ -16,3 +16,6 @@ backends:
 
 load_balancing:
     type: weight-based  # weight-based, least_connection, ip-hash, round-robin
+
+log:
+  level: info

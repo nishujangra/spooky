@@ -2,8 +2,10 @@ use quinn::{Endpoint, ServerConfig};
 use std::{net::SocketAddr, sync::Arc};
 use rustls;
 use quinn::crypto::rustls::QuicServerConfig;
+use log::{info, warn, debug, trace, error};
 
 use crate::config::config::Config;
+use crate::utils::tls::load_tls;
 
 pub struct Server {
     pub endpoint: Endpoint,
@@ -12,17 +14,23 @@ pub struct Server {
 
 impl Server {
     pub async fn new(config: Config) -> Result<Self, Box<dyn std::error::Error>> {
+        debug!("Initializing server with config: {:?}", config);
+        
         // Install default crypto provider for Rustls
+        trace!("Installing default crypto provider for Rustls");
         let _ = rustls::crypto::CryptoProvider::install_default(
             rustls::crypto::ring::default_provider()
         );
 
-        let (certs, key) = crate::utils::tls::load_tls(
+        debug!("Loading TLS certificates from: cert={}, key={}", 
+               config.listen.tls.cert, config.listen.tls.key);
+        let (certs, key) = load_tls(
             &config.listen.tls.cert,
             &config.listen.tls.key
         );
 
         // Create TLS config with ALPN support and explicit crypto provider
+        trace!("Creating TLS configuration");
         let crypto_provider = rustls::crypto::ring::default_provider();
 
         let mut tls_config = rustls::ServerConfig::builder_with_provider(crypto_provider.into())
@@ -33,8 +41,10 @@ impl Server {
             .expect("Failed to create TLS config");
 
         // Set ALPN protocols - HTTP/3 uses "h3"
+        debug!("Setting ALPN protocols to 'h3' for HTTP/3");
         tls_config.alpn_protocols = vec![b"h3".to_vec()];
 
+        trace!("Creating QUIC server configuration");
         let mut server_config = ServerConfig::with_crypto(Arc::new(
             QuicServerConfig::try_from(tls_config)
                 .expect("Failed to create QUIC server config"),
@@ -44,20 +54,22 @@ impl Server {
             .parse()
             .expect("Invalid Listen address");
 
+        debug!("Server will listen on: {}", addr);
         server_config.transport = Arc::new(quinn::TransportConfig::default());
 
         let endpoint = Endpoint::server(server_config, addr)?;
+        info!("Server endpoint created successfully");
 
         Ok(Server { endpoint, config })
     }
 
     pub async fn run(&self) {
-        println!("Proxy listening on 0.0.0.0:{}", self.config.listen.port);
+        info!("Proxy listening on {}:{}", self.config.listen.address, self.config.listen.port);
+        info!("Load balancing strategy: {}", self.config.load_balancing.lb_type);
+        info!("Backend servers: {}", self.config.backends.len());
 
         while let Some(connecting) = self.endpoint.accept().await {
-            println!("Got a new connection request!");
-            println!("From: {}", connecting.remote_address());
-
+            debug!("New connection request from: {}", connecting.remote_address());
             tokio::spawn(handle_connection(connecting));
         }
     }
@@ -66,10 +78,12 @@ impl Server {
 async fn handle_connection(connecting: quinn::Incoming) {
     match connecting.await {
         Ok(connection) => {
-            println!("New QUIC Connection: {:?}", connection.remote_address());
+            info!("New QUIC Connection established: {}", connection.remote_address());
             process_connection(connection).await;
         }
-        Err(e) => eprintln!("Connection failed: {}", e),
+        Err(e) => {
+            error!("Connection failed: {}", e);
+        }
     }
 }
 
@@ -78,6 +92,7 @@ async fn process_connection(connection: quinn::Connection) {
     use bytes::Bytes;
     use h3_quinn::Connection as H3QuinnConnection;
 
+    trace!("Creating H3 connection from QUIC connection");
     let h3_connection = H3QuinnConnection::new(connection);
 
     let mut h3_server: h3::server::Connection<_, Bytes> = server::builder()
@@ -86,12 +101,15 @@ async fn process_connection(connection: quinn::Connection) {
         .await
         .expect("Failed to build h3 server");
 
+    debug!("H3 server connection established, waiting for requests");
+
     loop {
         match h3_server.accept().await {
             Ok(Some(req_resolver)) => {
                 match req_resolver.resolve_request().await {
                     Ok((req, mut _stream)) => {
-                        println!("Got request: {:?}", req);
+                        info!("Received HTTP/3 request: {} {}", req.method(), req.uri());
+                        debug!("Request headers: {:?}", req.headers());
 
                         // let backend_addr: SocketAddr = "127.0.0.1:7777".parse().unwrap();
                         // let endpoint = Endpoint::client("[::]:0".parse().unwrap()).unwrap();
@@ -119,20 +137,20 @@ async fn process_connection(connection: quinn::Connection) {
                     
                         // stream.finish().await.unwrap();
 
-                        println!("Here load balancing strategy and select backe and redirect traffic")
+                        debug!("Load balancing strategy: selecting backend and redirecting traffic");
                     }
                     Err(e) => {
-                        eprintln!("Failed to resolve request: {e:?}");
+                        error!("Failed to resolve request: {e:?}");
                         break;
                     }
                 }
             }
             Ok(None) => {
-                println!("Connection closed gracefully");
+                debug!("Connection closed gracefully");
                 break;
             }
             Err(e) => {
-                println!("Connection closed: {e:?}");
+                warn!("Connection closed with error: {e:?}");
                 break;
             }
         }

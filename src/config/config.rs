@@ -5,6 +5,7 @@ pub struct Config {
     pub listen: Listen,
     pub backends: Vec<Backend>,
     pub load_balancing: LoadBalancing,
+    pub log: Log
 }
 
 #[derive(Debug, Deserialize)]
@@ -49,7 +50,10 @@ pub struct LoadBalancing {
     pub lb_type: String,    // "weight-based", "least_connection", etc.
 }
 
-
+#[derive(Debug, Deserialize)]
+pub struct Log {
+    pub level: String, // "info, warn, error"
+}
 
 // default values
 
