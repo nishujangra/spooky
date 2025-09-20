@@ -17,6 +17,8 @@ This is the list of references we have taken to build this project.
 7. [h3](https://crates.io/crates/h3)
 8. [h3_quinn](https://crates.io/crates/h3-quinn)
 9. [http](https://crates.io/crates/http)
+10. [log](https://crates.io/crates/log/0.4.28)
+11. [env_logger](https://crates.io/crates/env_logger/0.11.3)
 
 ## Documentations
 1. [Read YAML in Rust](https://rust.code-maven.com/yaml/) 
@@ -24,6 +26,7 @@ This is the list of references we have taken to build this project.
 3. [PrivateKeyDer](https://docs.rs/rustls-pki-types/1.12.0/rustls_pki_types/enum.PrivateKeyDer.html)
 4. [PrivatePkcs8KeyDer](https://docs.rs/rustls-pki-types/latest/rustls_pki_types/struct.PrivatePkcs8KeyDer.html)
 5. [CertificateDer](https://docs.rs/rustls-pki-types/1.12.0/rustls_pki_types/struct.CertificateDer.html)
+6. [HTTP/3 Implementation in Rust: Performance Tuning for Global Web Services](http://markaicode.com/http3-rust-implementation-performance-tuning/)
 
 ## Load Balancing Algorithms
 1. [Load Balancing Algorithms](https://kemptechnologies.com/load-balancer/load-balancing-algorithms-techniques/)
