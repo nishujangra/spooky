@@ -17,6 +17,7 @@ fn init_logger(log_level: &str) {
         "info" => LevelFilter::Info,
         "warn" => LevelFilter::Warn,
         "error" => LevelFilter::Error,
+        "off" => LevelFilter::Off,
         _ => {
             eprintln!("Invalid log level '{}', defaulting to 'info'", log_level);
             LevelFilter::Info
