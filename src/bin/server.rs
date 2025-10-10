@@ -3,7 +3,7 @@ use http::Response;
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 
 use quinn::{Endpoint, ServerConfig};
-use std::{fs, net::SocketAddr, sync::Arc};
+use std::{env, fs, net::SocketAddr, sync::Arc};
 
 use bytes::Bytes;
 
@@ -24,6 +24,20 @@ pub fn load_tls(
 
 #[tokio::main]
 async fn main() {
+    // Read port from CLI
+    let args: Vec<String> = env::args().collect();
+
+    let mut port = 0;
+
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--port" {
+            if let Some(p) = iter.next() {
+                port = p.parse::<u16>().expect("Port must be a number");
+            }
+        }
+    }
+
     // Install default crypto provider for Rustls
     let _ = rustls::crypto::CryptoProvider::install_default(
         rustls::crypto::ring::default_provider()
@@ -52,7 +66,7 @@ async fn main() {
             .expect("Failed to create QUIC server config"),
     ));
 
-    let addr: SocketAddr = format!("{}:{}", "127.0.0.1", "7777")
+    let addr: SocketAddr = format!("{}:{}", "127.0.0.1", port) // port read from the cli
         .parse()
         .expect("Invalid Listen address");
 
