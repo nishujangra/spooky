@@ -1,10 +1,14 @@
 use quinn::{Endpoint, ServerConfig};
 use std::{net::SocketAddr, sync::Arc};
 use rustls;
+
+use rand::seq::SliceRandom; // for choose()
+use rand::thread_rng;
+
 use quinn::crypto::rustls::QuicServerConfig;
 use log::{info, warn, debug, trace, error};
 
-use crate::config::config::Config;
+use crate::config::config::{Backend, Config, HealthCheck};
 use crate::utils::tls::load_tls;
 
 pub struct Server {
@@ -111,36 +115,60 @@ async fn process_connection(connection: quinn::Connection) {
                         info!("Received HTTP/3 request: {} {}", req.method(), req.uri());
                         debug!("Request headers: {:?}", req.headers());
 
-                        // let backend_addr: SocketAddr = "127.0.0.1:7777".parse().unwrap();
+                        // choose backend server
+                        // Pick random backend
+                        let backends = vec![
+                            Backend { 
+                                id: "backend1".into(), 
+                                address: "127.0.0.1:7001".into(), 
+                                weight: 100, 
+                                health_check: HealthCheck{
+                                    path: "/health".into(),
+                                    interval: "5s".into(),
+                                } 
+                            },
+                            Backend { 
+                                id: "backend2".into(), 
+                                address: "127.0.0.1:7002".into(), 
+                                weight: 100, 
+                                health_check: HealthCheck{
+                                    path: "/health".into(),
+                                    interval: "5s".into(),
+                                } 
+                            },
+
+                        ];
+
+                        let mut rng = thread_rng();
+                        if let Some(random_backend) = backends.choose(&mut rng) {
+                            println!("Selected backend address: {}", random_backend.address);
+                        } else {
+                            println!("No backends available!");
+                        }
+
+                        // transfer load to that server
+                        // give response
+
+                        // // --- establish backend connection ---
+                        // let backend_addr: SocketAddr = "127.0.0.1:7001".parse().unwrap();
                         // let endpoint = Endpoint::client("[::]:0".parse().unwrap()).unwrap();
 
-                        // let backend_connection = endpoint
+                        // let quinn_conn = endpoint
                         //     .connect(backend_addr, "localhost")
                         //     .unwrap()
                         //     .await
-                        //     .expect("connection to backend failed")
+                        //     .expect("connection to backend failed");
 
-                        // let h3_backend = H3QuinnConnection::new(backend_connection);
-                        // let (mut h3_client, driver) = client::builder().build(h3_backend).await.unwrap();
-                        // tokio::spawn(driver); // run client driver
 
-                        // // --- forward request to backend ---
-                        // let (mut backend_resp, mut backend_body) =
-                        //     h3_client.send_request(req, None).await.unwrap();
-
-                        // // --- send backend response back to original client ---
-                        // stream.send_response(backend_resp).await.unwrap();
-
-                        // while let Some(chunk) = backend_body.recv_data().await.unwrap() {
-                        //     stream.send_data(chunk).await.unwrap();
-                        // }
-                    
-                        // stream.finish().await.unwrap();
-
-                        debug!("Load balancing strategy: selecting backend and redirecting traffic");
-                    }
+                        // let h3_backend = H3QuinnConnection::new(quinn_conn);
+                        // let (mut h3_client, driver) = client::builder()
+                        //     .max_field_section_size(8192)
+                        //     .build(h3_backend)
+                        //     .await
+                        //     .unwrap();
+                    },
                     Err(e) => {
-                        error!("Failed to resolve request: {e:?}");
+                        error!("Error: {e:?}");
                         break;
                     }
                 }
