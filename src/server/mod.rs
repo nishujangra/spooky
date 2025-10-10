@@ -1,3 +1,16 @@
+//! HTTP/3 Load Balancer Server Implementation
+//! 
+//! TODO: Implement proper backend server selection using configured strategy
+//! TODO: Add health check monitoring for backend servers
+//! TODO: Implement request forwarding to selected backend
+//! TODO: Add response aggregation and error handling
+//! TODO: Implement connection pooling for backend servers
+//! TODO: Add metrics collection for load balancing decisions
+//! TODO: Handle backend server failures and failover
+//! TODO: Add request/response transformation capabilities
+//! TODO: Implement graceful shutdown handling
+//! TODO: Add circuit breaker pattern for unhealthy backends
+
 use quinn::{Endpoint, ServerConfig};
 use std::{net::SocketAddr, sync::Arc};
 use rustls;
@@ -115,6 +128,12 @@ async fn process_connection(connection: quinn::Connection) {
                         info!("Received HTTP/3 request: {} {}", req.method(), req.uri());
                         debug!("Request headers: {:?}", req.headers());
 
+                        // TODO: Use configured load balancing strategy instead of hardcoded random
+                        // TODO: Get backends from config instead of hardcoded list
+                        // TODO: Implement proper backend selection logic
+                        // TODO: Add backend health status checking before selection
+                        // TODO: Handle case when no healthy backends are available
+                        
                         // choose backend server
                         // Pick random backend
                         let backends = vec![
@@ -145,6 +164,15 @@ async fn process_connection(connection: quinn::Connection) {
                         } else {
                             println!("No backends available!");
                         }
+
+                        // TODO: Implement actual request forwarding to selected backend
+                        // TODO: Add HTTP/3 client connection to backend
+                        // TODO: Forward request headers and body to backend
+                        // TODO: Stream response back to client
+                        // TODO: Handle backend connection failures
+                        // TODO: Add timeout handling for backend requests
+                        // TODO: Implement retry logic for failed requests
+                        // TODO: Add request/response logging and metrics
 
                         // transfer load to that server
                         // give response

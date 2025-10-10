@@ -1,3 +1,16 @@
+//! Spooky HTTP/3 Load Balancer - Main Entry Point
+//! 
+//! TODO: Add CLI argument parsing for config file path
+//! TODO: Implement graceful shutdown signal handling
+//! TODO: Add configuration validation and error reporting
+//! TODO: Implement proper error handling for server initialization
+//! TODO: Add health check endpoint for load balancer itself
+//! TODO: Add metrics collection and monitoring endpoints
+//! TODO: Implement configuration hot-reload capability
+//! TODO: Add structured logging with request tracing
+//! TODO: Add startup banner and version information
+//! TODO: Implement proper process lifecycle management
+
 // proxy http3 server QUIC + HTTP/3
 use log::{info, debug, trace, error, LevelFilter};
 use env_logger;
@@ -31,6 +44,13 @@ fn init_logger(log_level: &str) {
 }
 
 fn read_config() -> Config {
+    // TODO: Make config file path configurable via CLI args
+    // TODO: Add support for multiple config file formats (YAML, JSON, TOML)
+    // TODO: Implement configuration schema validation
+    // TODO: Add configuration file watching for hot-reload
+    // TODO: Add fallback to default configuration if file not found
+    // TODO: Implement configuration encryption/decryption for sensitive data
+    
     let filename: String = String::from("config.yaml");
     trace!("Reading configuration from: {}", filename);
     
@@ -50,6 +70,15 @@ fn read_config() -> Config {
 
 #[tokio::main]
 async fn main() {
+    // TODO: Add startup banner with version and build info
+    // TODO: Implement signal handling for graceful shutdown (SIGTERM, SIGINT)
+    // TODO: Add panic hook for proper error reporting
+    // TODO: Implement proper error handling instead of expect() calls
+    // TODO: Add startup health checks before accepting connections
+    // TODO: Implement configuration validation before server start
+    // TODO: Add metrics server startup
+    // TODO: Implement proper process lifecycle management
+    
     // Read config first to get log level
     let config_yaml = read_config();
     
