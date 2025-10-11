@@ -11,7 +11,7 @@ pub struct Config {
 #[derive(Debug, Deserialize)]
 pub struct Listen {
     #[serde(default = "get_default_protocol")]
-    pub protocol: String,   // "http3" or "grpc"
+    pub protocol: String,   // "http3"
 
     #[serde(default = "get_default_port")]
     pub port: u16,          // 9889
@@ -41,6 +41,8 @@ pub struct Backend {
 pub struct HealthCheck {
     #[serde(default = "get_default_path")]
     pub path: String,       // "/health"
+
+    #[serde(default = "get_default_interval")]
     pub interval: String,   // "5s" (could later parse into Duration)
 }
 
@@ -52,11 +54,13 @@ pub struct LoadBalancing {
 
 #[derive(Debug, Deserialize)]
 pub struct Log {
+    #[serde(default = "get_default_log_level")]
     pub level: String, // "info, warn, error"
 }
 
-// default values
 
+
+// default values
 fn get_default_protocol() -> String {
     String::from("http3")
 }
@@ -75,4 +79,12 @@ fn get_default_weight() -> u32 {
 
 fn get_default_path() -> String {
     String::from("/health")
+}
+
+fn get_default_interval() -> String {
+    String::from("5s")
+}
+
+fn get_default_log_level() -> String {
+    String::from("info")
 }
