@@ -20,7 +20,7 @@ use std::fs;
 pub mod config;
 pub mod utils;
 
-pub mod server;
+pub mod proxy;
 use config::config::Config;
 
 fn init_logger(log_level: &str) {
@@ -71,6 +71,8 @@ fn read_config() -> Config {
 #[tokio::main]
 async fn main() {
     // TODO: Add startup banner with version and build info
+    
+
     // TODO: Implement signal handling for graceful shutdown (SIGTERM, SIGINT)
     // TODO: Add panic hook for proper error reporting
     // TODO: Implement proper error handling instead of expect() calls
@@ -89,7 +91,7 @@ async fn main() {
     info!("Log level set to: {}", config_yaml.log.level);
     debug!("Configuration: {:?}", config_yaml);
 
-    let proxy_server = server::Server::new(config_yaml)
+    let proxy_server = proxy::Server::new(config_yaml)
         .await
         .expect("Failed to create server");
 
