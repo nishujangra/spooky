@@ -23,6 +23,8 @@ pub mod utils;
 pub mod proxy;
 use config::config::Config;
 
+use crate::utils::validate::validate;
+
 fn init_logger(log_level: &str) {
     let level = match log_level.to_lowercase().as_str() {
         "trace" => LevelFilter::Trace,
@@ -83,6 +85,12 @@ async fn main() {
     
     // Read config first to get log level
     let config_yaml = read_config();
+
+    // Validate all the configs
+    if validate(&config_yaml) == false {
+        // boilerplate for any error to show
+        println!("Return error and do something");
+    }
     
     // Initialize logger with config log level
     init_logger(&config_yaml.log.level);
