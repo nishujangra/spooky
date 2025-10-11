@@ -1,10 +1,10 @@
 # Spooky
 
-High-performance load balancer and proxy server in Rust. Supports HTTP/3 (QUIC) and gRPC with intelligent routing and health monitoring.
+High-performance load balancer and proxy server in Rust. Supports HTTP/3 (QUIC) with intelligent routing and health monitoring.
 
 ## Features
 
-- HTTP/3 (QUIC) and gRPC protocols
+- HTTP/3 (QUIC) protocol
 - Load balancing: weight-based, least connection, IP hash, round-robin
 - Health monitoring with configurable intervals
 - TLS support with custom certificates

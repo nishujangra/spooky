@@ -1,5 +1,5 @@
 listen:
-    protocol: http3  # or grpc
+    protocol: http3
     port: 9889
     address: "0.0.0.0"
     tls:
