@@ -86,14 +86,15 @@ async fn main() {
     // Read config first to get log level
     let config_yaml = read_config();
 
-    // Validate all the configs
+    // Initialize the Logger
+    init_logger(&config_yaml.log.level);
+    
+    // Validate Configurations
     if validate(&config_yaml) == false {
-        // boilerplate for any error to show
-        println!("Return error and do something");
+        return;
     }
     
     // Initialize logger with config log level
-    init_logger(&config_yaml.log.level);
     
     info!("Starting Spooky HTTP/3 Proxy Server");
     info!("Log level set to: {}", config_yaml.log.level);
