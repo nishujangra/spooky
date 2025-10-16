@@ -4,7 +4,11 @@ use serde::Deserialize;
 pub struct Config {
     pub listen: Listen,
     pub backends: Vec<Backend>,
+
+    #[serde(default = "get_default_load_balancing")]
     pub load_balancing: LoadBalancing,
+
+    #[serde(default = "get_default_log")]
     pub log: Log
 }
 
@@ -14,7 +18,7 @@ pub struct Listen {
     pub protocol: String,   // "http3"
 
     #[serde(default = "get_default_port")]
-    pub port: u16,          // 9889
+    pub port: u32,          // 9889
 
     #[serde(default = "get_default_address")]
     pub address: String,    // "0.0.0.0"
@@ -65,7 +69,7 @@ fn get_default_protocol() -> String {
     String::from("http3")
 }
 
-fn get_default_port() -> u16 {
+fn get_default_port() -> u32 {
     9889
 }
 
@@ -87,4 +91,12 @@ fn get_default_interval() -> String {
 
 fn get_default_log_level() -> String {
     String::from("info")
+}
+
+fn get_default_load_balancing() -> LoadBalancing {
+    LoadBalancing { lb_type: String::from("weight-based") }
+}
+
+fn get_default_log() -> Log {
+    Log { level: String::from("info") }
 }
