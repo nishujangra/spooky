@@ -19,6 +19,7 @@ use std::fs;
 
 pub mod config;
 pub mod utils;
+pub mod lb;
 
 pub mod proxy;
 use config::config::Config;
@@ -79,7 +80,6 @@ async fn main() {
     // TODO: Add panic hook for proper error reporting
     // TODO: Implement proper error handling instead of expect() calls
     // TODO: Add startup health checks before accepting connections
-    // TODO: Implement configuration validation before server start
     // TODO: Add metrics server startup
     // TODO: Implement proper process lifecycle management
     

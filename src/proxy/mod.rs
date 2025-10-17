@@ -15,13 +15,11 @@ use quinn::{Endpoint, ServerConfig};
 use std::{net::SocketAddr, sync::Arc};
 use rustls;
 
-use rand::seq::SliceRandom; // for choose()
-use rand::thread_rng;
-
 use quinn::crypto::rustls::QuicServerConfig;
 use log::{info, warn, debug, trace, error};
 
 use crate::config::config::{Backend, Config, HealthCheck};
+use crate::lb::random::random;
 use crate::utils::tls::load_tls;
 
 pub struct Server {
@@ -157,12 +155,11 @@ async fn process_connection(connection: quinn::Connection) {
                             },
 
                         ];
-
-                        let mut rng = thread_rng();
-                        if let Some(random_backend) = backends.choose(&mut rng) {
-                            println!("Selected backend address: {}", random_backend.address);
+                        
+                        if let Some(selected_backend) = random(&backends) {
+                            println!("Using Backend: {}", selected_backend.address);
                         } else {
-                            println!("No backends available!");
+                            println!("No Selected Backend");
                         }
 
                         // TODO: Implement actual request forwarding to selected backend
