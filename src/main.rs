@@ -14,7 +14,7 @@
 use clap::{Parser};
 
 // proxy http3 server QUIC + HTTP/3
-use log::{info, debug, trace, error, LevelFilter};
+use log::{info, debug, error, LevelFilter};
 use env_logger;
 
 use std::{fs};
@@ -34,14 +34,6 @@ struct Cli {
     // Sets a custom config file
     #[arg(short, long)]
     config: Option<String>,
-}
-
-/// Initialize a minimal logger early — so we see errors before main logger setup
-fn init_early_logger() {
-    let _ = env_logger::builder()
-        .filter_level(LevelFilter::Error)
-        .format_timestamp_secs()
-        .try_init(); // ignore errors if already initialized
 }
 
 fn init_logger(log_level: &str) {
@@ -64,24 +56,20 @@ fn init_logger(log_level: &str) {
         .init();
 }
 
-fn read_config(filename: &str) -> Config {
+fn read_config(filename: &str) -> Result<Config, String> {
     // TODO: Add support for multiple config file formats (YAML, JSON, TOML)
     // TODO: Implement configuration schema validation
     // TODO: Add configuration file watching for hot-reload
     // TODO: Add fallback to default configuration if file not found
     // TODO: Implement configuration encryption/decryption for sensitive data
-    
-    let text = fs::read_to_string(filename).unwrap_or_else(|err| {
-        error!("Failed to read config file: {}", err);
-        std::process::exit(1);
-    });
 
-    let data: Config = serde_yaml::from_str(&text).unwrap_or_else(|err| {
-        error!("Could not parse YAML file: {}", err);
-        std::process::exit(1);
-    });
+    let text = fs::read_to_string(filename)
+        .map_err(|err| format!("Failed to read config file '{}': {}", filename, err))?;
 
-    data
+    let data: Config = serde_yaml::from_str(&text)
+        .map_err(|err| format!("Could not parse YAML file '{}': {}", filename, err))?;
+
+    Ok(data)
 }
 
 #[tokio::main]
@@ -96,15 +84,19 @@ async fn main() {
     // TODO: Add metrics server startup
     // TODO: Implement proper process lifecycle management
 
-    init_early_logger();
-
     // Parse CLI arguments
     let cli = Cli::parse();
 
     let config_path = cli.config.unwrap_or_else(|| "config.yaml".to_string());
 
     // Read configuration file
-    let config_yaml = read_config(&config_path);
+    let config_yaml = match read_config(&config_path) {
+        Ok(cfg) => cfg,
+        Err(err_msg) => {
+            eprintln!("Error loading config: {}", err_msg);
+            std::process::exit(1);
+        }
+    };
 
     // Initialize the Logger
     init_logger(&config_yaml.log.level);
