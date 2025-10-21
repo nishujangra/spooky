@@ -1,5 +1,17 @@
 use serde::Deserialize;
 
+use crate::config::default::{
+    get_default_address, 
+    get_default_interval, 
+    get_default_load_balancing, 
+    get_default_log, 
+    get_default_log_level, 
+    get_default_path, 
+    get_default_port, 
+    get_default_protocol, 
+    get_default_weight
+};
+
 #[derive(Debug, Deserialize)]
 pub struct Config {
     pub listen: Listen,
@@ -60,43 +72,4 @@ pub struct LoadBalancing {
 pub struct Log {
     #[serde(default = "get_default_log_level")]
     pub level: String, // "info, warn, error"
-}
-
-
-
-// default values
-fn get_default_protocol() -> String {
-    String::from("http3")
-}
-
-fn get_default_port() -> u32 {
-    9889
-}
-
-fn get_default_address() -> String {
-    String::from("0.0.0.0")
-}
-
-fn get_default_weight() -> u32 {
-    100
-}
-
-fn get_default_path() -> String {
-    String::from("/health")
-}
-
-fn get_default_interval() -> String {
-    String::from("5s")
-}
-
-fn get_default_log_level() -> String {
-    String::from("info")
-}
-
-fn get_default_load_balancing() -> LoadBalancing {
-    LoadBalancing { lb_type: String::from("weight-based") }
-}
-
-fn get_default_log() -> Log {
-    Log { level: String::from("info") }
 }

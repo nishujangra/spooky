@@ -26,7 +26,7 @@ pub mod lb;
 pub mod proxy;
 use config::config::Config;
 
-use crate::utils::validate::validate;
+use crate::config::validator::{validate as validate_config};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -102,7 +102,7 @@ async fn main() {
     init_logger(&config_yaml.log.level);
     
     // Validate Configurations
-    if validate(&config_yaml) == false {
+    if validate_config(&config_yaml) == false {
         error!("Configuration validation failed. Exiting...");
         std::process::exit(1);
     }
