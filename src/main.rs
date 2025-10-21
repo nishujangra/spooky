@@ -11,11 +11,13 @@
 //! TODO: Add startup banner and version information
 //! TODO: Implement proper process lifecycle management
 
+use clap::{Parser};
+
 // proxy http3 server QUIC + HTTP/3
 use log::{info, debug, trace, error, LevelFilter};
 use env_logger;
 
-use std::fs;
+use std::{fs};
 
 pub mod config;
 pub mod utils;
@@ -25,6 +27,22 @@ pub mod proxy;
 use config::config::Config;
 
 use crate::utils::validate::validate;
+
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Cli {    
+    // Sets a custom config file
+    #[arg(short, long)]
+    config: Option<String>,
+}
+
+/// Initialize a minimal logger early — so we see errors before main logger setup
+fn init_early_logger() {
+    let _ = env_logger::builder()
+        .filter_level(LevelFilter::Error)
+        .format_timestamp_secs()
+        .try_init(); // ignore errors if already initialized
+}
 
 fn init_logger(log_level: &str) {
     let level = match log_level.to_lowercase().as_str() {
@@ -46,16 +64,12 @@ fn init_logger(log_level: &str) {
         .init();
 }
 
-fn read_config() -> Config {
-    // TODO: Make config file path configurable via CLI args
+fn read_config(filename: &str) -> Config {
     // TODO: Add support for multiple config file formats (YAML, JSON, TOML)
     // TODO: Implement configuration schema validation
     // TODO: Add configuration file watching for hot-reload
     // TODO: Add fallback to default configuration if file not found
     // TODO: Implement configuration encryption/decryption for sensitive data
-    
-    let filename: String = String::from("config.yaml");
-    trace!("Reading configuration from: {}", filename);
     
     let text = fs::read_to_string(filename).unwrap_or_else(|err| {
         error!("Failed to read config file: {}", err);
@@ -67,8 +81,7 @@ fn read_config() -> Config {
         std::process::exit(1);
     });
 
-    debug!("Configuration loaded successfully");
-    return data;
+    data
 }
 
 #[tokio::main]
@@ -82,20 +95,27 @@ async fn main() {
     // TODO: Add startup health checks before accepting connections
     // TODO: Add metrics server startup
     // TODO: Implement proper process lifecycle management
-    
-    // Read config first to get log level
-    let config_yaml = read_config();
+
+    init_early_logger();
+
+    // Parse CLI arguments
+    let cli = Cli::parse();
+
+    let config_path = cli.config.unwrap_or_else(|| "config.yaml".to_string());
+
+    // Read configuration file
+    let config_yaml = read_config(&config_path);
 
     // Initialize the Logger
     init_logger(&config_yaml.log.level);
     
     // Validate Configurations
     if validate(&config_yaml) == false {
-        return;
+        error!("Configuration validation failed. Exiting...");
+        std::process::exit(1);
     }
     
     // Initialize logger with config log level
-    
     info!("Starting Spooky HTTP/3 Proxy Server");
     info!("Log level set to: {}", config_yaml.log.level);
     debug!("Configuration: {:?}", config_yaml);
