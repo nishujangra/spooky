@@ -1,8 +1,6 @@
 //! Spooky HTTP/3 Load Balancer - Main Entry Point
 //! 
-//! TODO: Add CLI argument parsing for config file path
 //! TODO: Implement graceful shutdown signal handling
-//! TODO: Add configuration validation and error reporting
 //! TODO: Implement proper error handling for server initialization
 //! TODO: Add health check endpoint for load balancer itself
 //! TODO: Add metrics collection and monitoring endpoints
@@ -17,14 +15,11 @@ use clap::{Parser};
 use log::{info, debug, error, LevelFilter};
 use env_logger;
 
-use std::{fs};
-
 pub mod config;
 pub mod utils;
 pub mod lb;
 
 pub mod proxy;
-use config::config::Config;
 
 use crate::config::validator::{validate as validate_config};
 
@@ -56,22 +51,6 @@ fn init_logger(log_level: &str) {
         .init();
 }
 
-fn read_config(filename: &str) -> Result<Config, String> {
-    // TODO: Add support for multiple config file formats (YAML, JSON, TOML)
-    // TODO: Implement configuration schema validation
-    // TODO: Add configuration file watching for hot-reload
-    // TODO: Add fallback to default configuration if file not found
-    // TODO: Implement configuration encryption/decryption for sensitive data
-
-    let text = fs::read_to_string(filename)
-        .map_err(|err| format!("Failed to read config file '{}': {}", filename, err))?;
-
-    let data: Config = serde_yaml::from_str(&text)
-        .map_err(|err| format!("Could not parse YAML file '{}': {}", filename, err))?;
-
-    Ok(data)
-}
-
 #[tokio::main]
 async fn main() {
     // TODO: Add startup banner with version and build info
@@ -90,7 +69,7 @@ async fn main() {
     let config_path = cli.config.unwrap_or_else(|| "config.yaml".to_string());
 
     // Read configuration file
-    let config_yaml = match read_config(&config_path) {
+    let config_yaml = match config::loader::read_config(&config_path) {
         Ok(cfg) => cfg,
         Err(err_msg) => {
             eprintln!("Error loading config: {}", err_msg);
@@ -112,7 +91,7 @@ async fn main() {
     info!("Log level set to: {}", config_yaml.log.level);
     debug!("Configuration: {:?}", config_yaml);
 
-    let proxy_server = proxy::Server::new(config_yaml)
+    let proxy_server = proxy::server::Server::new(config_yaml)
         .await
         .expect("Failed to create server");
 
