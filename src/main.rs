@@ -91,7 +91,7 @@ async fn main() {
     info!("Log level set to: {}", config_yaml.log.level);
     debug!("Configuration: {:?}", config_yaml);
 
-    let proxy_server = proxy::server::Server::new(config_yaml)
+    let proxy_server = proxy::Server::new(config_yaml)
         .await
         .expect("Failed to create server");
 

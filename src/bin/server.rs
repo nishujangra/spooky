@@ -27,7 +27,7 @@ async fn main() {
     // Read port from CLI
     let args: Vec<String> = env::args().collect();
 
-    let mut port = 0;
+    let mut port = 8000; // default port = 8000
 
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
