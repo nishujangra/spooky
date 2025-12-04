@@ -12,7 +12,7 @@ use crate::config::default::{
     get_default_weight
 };
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Config {
     pub listen: Listen,
     pub backends: Vec<Backend>,
@@ -24,7 +24,7 @@ pub struct Config {
     pub log: Log
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Listen {
     #[serde(default = "get_default_protocol")]
     pub protocol: String,   // "http3"
@@ -37,13 +37,13 @@ pub struct Listen {
     pub tls: Tls,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Tls {
     pub cert: String,       // "/path/to/cert"
     pub key: String,        // "/path/to/key"
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Backend {
     pub id: String,         // "backend1"
     pub address: String,    // "10.0.1.100:8080"
@@ -53,7 +53,7 @@ pub struct Backend {
     pub health_check: HealthCheck,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct HealthCheck {
     #[serde(default = "get_default_path")]
     pub path: String,       // "/health"
@@ -62,14 +62,22 @@ pub struct HealthCheck {
     pub interval: String,   // "5s" (could later parse into Duration)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct LoadBalancing {
     #[serde(rename = "type")]
     pub lb_type: String,    // "weight-based", "least_connection", etc.
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct Log {
     #[serde(default = "get_default_log_level")]
     pub level: String, // "info, warn, error"
+}
+
+
+
+impl Backend {
+    pub fn is_healthy(&self) -> bool {
+        true
+    }
 }
