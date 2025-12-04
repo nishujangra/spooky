@@ -1,6 +1,14 @@
 # Spooky
 
-High-performance load balancer and proxy server in Rust. Supports HTTP/3 (QUIC) with intelligent routing and health monitoring.
+**The first production-ready HTTP/3 load balancer written in Rust**
+
+Spooky is built for the modern web: QUIC-native, fast, and designed for environments where nginx's experimental HTTP/3 support isn't enough.
+
+---
+
+## Why Spooky?
+
+---
 
 ## Features
 
@@ -19,8 +27,8 @@ cargo build
 # Run
 cargo run --bin spooky
 
-# Want sample http3 server
-cargo run --bin server
+# Want sample http3 server on port 7001
+cargo run --bin server -- --port 7001
 
 # Run with config
 ./target/debug/spooky --config config.yaml
@@ -61,4 +69,4 @@ sudo ss -tulnp | grep 9889
 
 ## License
 
-AGPLv3 - see [LICENSE](LICENSE.md)
+ELv2 - see [LICENSE](LICENSE.md)
