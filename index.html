@@ -661,25 +661,6 @@
             
             <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
-        data-size="default" href=""
-        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative h-[30px] w-fit overflow-visible border border-transparent text-[0.8rem] font-medium after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
-
-        
-        Contributing
-        
-
-        
-
-        
-
-        
-    </a>
-</li>
-            
-            
-            
-            <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
-    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="/spooky/benchmarks/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative h-[30px] w-fit overflow-visible border border-transparent text-[0.8rem] font-medium after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -912,7 +893,7 @@
 </ul>
 <h3 id="development">Development</h3>
 <ul>
-<li><a href="development/contributing.md">Contributing Guide</a> - Development setup and guidelines</li>
+<li><a href="https://github.com/Supernova-Labs-Org/spooky/blob/master/CONTRIBUTING.md">Contributing Guide</a> - Development setup and guidelines</li>
 </ul>
 <h3 id="protocol-reference">Protocol Reference</h3>
 <ul>
@@ -939,7 +920,6 @@
 <li><code>architecture/</code>: High-level design and component details</li>
 <li><code>deployment/</code>: Production deployment guidance</li>
 <li><code>troubleshooting/</code>: Common issues and fixes</li>
-<li><code>development/</code>: Development and contribution guidance</li>
 <li><code>tutorials/</code>: Quickstart walkthroughs</li>
 <li><code>protocols/</code>: HTTP/3 and QUIC protocol notes</li>
 <li><code>api/</code>: API and observability overview</li>
@@ -976,7 +956,10 @@
 <p><strong>Load balancing algorithms</strong>:
 - <code>random</code> - Random selection
 - <code>round-robin</code> - Sequential rotation
-- <code>consistent-hash</code> - Hash-based affinity</p>
+- <code>consistent-hash</code> - Hash-based affinity (session stickiness, cache locality)
+- <code>least-connections</code> - Routes to backend with fewest active requests
+- <code>latency-aware</code> - Routes to fastest backends using EWMA latency scoring
+- <code>sticky-cid</code> - QUIC connection-ID affinity via consistent hashing</p>
 <h3 id="common-commands">Common Commands</h3>
 <p><strong>Start Spooky</strong>:</p>
 <pre><code class="language-bash">spooky --config /etc/spooky/config.yaml
@@ -1017,7 +1000,7 @@ RUST_LOG=trace spooky --config config.yaml
 <li>Include practical examples</li>
 <li>Update this index when adding new docs</li>
 </ol>
-<p>See <a href="development/contributing.md">Contributing Guide</a> for more details.</p>
+<p>See <a href="https://github.com/Supernova-Labs-Org/spooky/blob/master/CONTRIBUTING.md">Contributing Guide</a> for more details.</p>
 <h2 id="external-resources">External Resources</h2>
 <ul>
 <li><a href="https://www.rfc-editor.org/rfc/rfc9000.html">QUIC RFC 9000</a></li>

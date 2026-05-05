@@ -661,25 +661,6 @@
             
             <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
-        data-size="default" href=""
-        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative h-[30px] w-fit overflow-visible border border-transparent text-[0.8rem] font-medium after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
-
-        
-        Contributing
-        
-
-        
-
-        
-
-        
-    </a>
-</li>
-            
-            
-            
-            <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
-    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="/spooky/benchmarks/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative h-[30px] w-fit overflow-visible border border-transparent text-[0.8rem] font-medium after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -895,7 +876,7 @@
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <p>Comprehensive guide to load balancing algorithms, health checking, and backend management in Spooky.</p>
 <h2 id="load-balancing-algorithms">Load Balancing Algorithms</h2>
-<p>Spooky implements three load balancing algorithms, each optimized for different use cases. Each upstream pool configures its own algorithm independently via <code>load_balancing.type</code>.</p>
+<p>Spooky implements six load balancing algorithms, each optimized for different use cases. Each upstream pool configures its own algorithm independently via <code>load_balancing.type</code>.</p>
 <h3 id="round-robin">Round Robin</h3>
 <p><strong>Algorithm</strong>: Sequential distribution across healthy backends in a circular pattern.</p>
 <p><strong>Configuration</strong>:</p>
@@ -1015,6 +996,105 @@ load_balancing:
 - Testing and development
 - Avoiding predictable patterns for security</p>
 <p><strong>Performance</strong>: Very low overhead (random number generation)</p>
+<h3 id="least-connections">Least Connections</h3>
+<p><strong>Algorithm</strong>: Routes each request to the healthy backend with the fewest active in-flight requests.</p>
+<p><strong>Configuration</strong>:</p>
+<pre><code class="language-yaml">upstream:
+  api_pool:
+    load_balancing:
+      type: &quot;least-connections&quot;  # Accepts: least-connections, least_connections, lc
+    route:
+      path_prefix: &quot;/api&quot;
+    backends:
+      - id: &quot;backend1&quot;
+        address: &quot;10.0.1.10:8080&quot;
+        weight: 100
+        health_check:
+          path: &quot;/health&quot;
+          interval: 5000
+      - id: &quot;backend2&quot;
+        address: &quot;10.0.1.11:8080&quot;
+        weight: 100
+        health_check:
+          path: &quot;/health&quot;
+          interval: 5000
+</code></pre>
+<p><strong>Characteristics</strong>:
+- Tracks active in-flight request count per backend
+- Ties broken deterministically by backend index order
+- Automatically skips unhealthy backends
+- No session affinity</p>
+<p><strong>Use Cases</strong>:
+- Backends with variable request processing time
+- Workloads where some requests are significantly slower than others
+- Avoiding hot spots when backends have similar capacity</p>
+<p><strong>Performance</strong>: Very low overhead (scan healthy backends for minimum active count)</p>
+<h3 id="latency-aware">Latency-Aware</h3>
+<p><strong>Algorithm</strong>: Selects healthy backends using a latency score combining EWMA backend latency and active request pressure. Unsampled backends are probed first to avoid cold-start bias.</p>
+<p><strong>Configuration</strong>:</p>
+<pre><code class="language-yaml">upstream:
+  api_pool:
+    load_balancing:
+      type: &quot;latency-aware&quot;  # Accepts: latency-aware, latency_aware, la
+    route:
+      path_prefix: &quot;/api&quot;
+    backends:
+      - id: &quot;backend1&quot;
+        address: &quot;10.0.1.10:8080&quot;
+        weight: 100
+        health_check:
+          path: &quot;/health&quot;
+          interval: 5000
+      - id: &quot;backend2&quot;
+        address: &quot;10.0.1.11:8080&quot;
+        weight: 100
+        health_check:
+          path: &quot;/health&quot;
+          interval: 5000
+</code></pre>
+<p><strong>Characteristics</strong>:
+- Maintains EWMA latency per backend, updated after each completed request
+- New backends are probed first (no prior latency sample) before score-based selection
+- Automatically skips unhealthy backends
+- No session affinity</p>
+<p><strong>Use Cases</strong>:
+- Heterogeneous backends where some are consistently faster
+- Multi-region or mixed-hardware pools
+- Situations where you want faster backends to absorb proportionally more traffic automatically</p>
+<p><strong>Performance</strong>: Low overhead (EWMA update per request, score comparison at pick time)</p>
+<h3 id="sticky-cid">Sticky CID</h3>
+<p><strong>Algorithm</strong>: Consistent hashing keyed by QUIC connection ID (CID) for connection-level stickiness without application-layer session keys.</p>
+<p><strong>Configuration</strong>:</p>
+<pre><code class="language-yaml">upstream:
+  api_pool:
+    load_balancing:
+      type: &quot;sticky-cid&quot;  # Accepts: sticky-cid, sticky_cid, cid-sticky, cid_sticky
+    route:
+      path_prefix: &quot;/api&quot;
+    backends:
+      - id: &quot;backend1&quot;
+        address: &quot;10.0.1.10:8080&quot;
+        weight: 100
+        health_check:
+          path: &quot;/health&quot;
+          interval: 5000
+      - id: &quot;backend2&quot;
+        address: &quot;10.0.1.11:8080&quot;
+        weight: 100
+        health_check:
+          path: &quot;/health&quot;
+          interval: 5000
+</code></pre>
+<p><strong>Characteristics</strong>:
+- Same QUIC CID always routes to the same backend while backend health is stable
+- Falls back to another backend if the preferred one is unhealthy
+- Stickiness is per-connection, not per-session or per-user
+- Automatically skips unhealthy backends</p>
+<p><strong>Use Cases</strong>:
+- Applications that benefit from connection affinity without application-level session tokens
+- Reducing backend cache churn on a per-connection basis
+- Stateful HTTP/3 streams where all streams within a QUIC connection should land on the same backend</p>
+<p><strong>Performance</strong>: Low overhead (hash + BTreeMap lookup, same as consistent-hash)</p>
 <h2 id="algorithm-comparison">Algorithm Comparison</h2>
 <div class="table-wrapper"><table>
 <thead>
@@ -1039,7 +1119,7 @@ load_balancing:
 <tr>
 <td>Consistent Hash</td>
 <td>O(log n)</td>
-<td>Yes</td>
+<td>Yes (request key)</td>
 <td>Hash ring</td>
 <td>Even (with weight)</td>
 <td>Session affinity, cache locality</td>
@@ -1051,6 +1131,30 @@ load_balancing:
 <td>None</td>
 <td>Statistically even</td>
 <td>Stateless, high throughput</td>
+</tr>
+<tr>
+<td>Least Connections</td>
+<td>O(n)</td>
+<td>No</td>
+<td>Active count</td>
+<td>Demand-driven</td>
+<td>Variable request latency</td>
+</tr>
+<tr>
+<td>Latency-Aware</td>
+<td>O(n)</td>
+<td>No</td>
+<td>EWMA latency</td>
+<td>Latency-proportional</td>
+<td>Heterogeneous backends</td>
+</tr>
+<tr>
+<td>Sticky CID</td>
+<td>O(log n)</td>
+<td>Yes (QUIC CID)</td>
+<td>Hash ring</td>
+<td>Even</td>
+<td>Connection-level affinity</td>
 </tr>
 </tbody>
 </table></div>
@@ -1418,6 +1522,9 @@ done
 <li><strong>Use Round Robin</strong> for simple, even distribution with equal backends</li>
 <li><strong>Use Consistent Hash</strong> when session affinity or cache locality matters</li>
 <li><strong>Use Random</strong> for stateless, high-throughput scenarios</li>
+<li><strong>Use Least Connections</strong> when request durations vary significantly across backends</li>
+<li><strong>Use Latency-Aware</strong> when backends have different performance characteristics and you want faster ones to absorb more traffic automatically</li>
+<li><strong>Use Sticky CID</strong> for QUIC-connection affinity without application-layer session keys</li>
 </ul>
 <h3 id="weight-configuration_1">Weight Configuration</h3>
 <ul>
@@ -1822,6 +1929,24 @@ upstream:
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#random');">
             Random
+        </a>
+        
+        <a href="#least-connections"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#least-connections');">
+            Least Connections
+        </a>
+        
+        <a href="#latency-aware"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#latency-aware');">
+            Latency-Aware
+        </a>
+        
+        <a href="#sticky-cid"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#sticky-cid');">
+            Sticky CID
         </a>
         
         

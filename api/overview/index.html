@@ -661,25 +661,6 @@
             
             <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
-        data-size="default" href=""
-        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative h-[30px] w-fit overflow-visible border border-transparent text-[0.8rem] font-medium after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
-
-        
-        Contributing
-        
-
-        
-
-        
-
-        
-    </a>
-</li>
-            
-            
-            
-            <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
-    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="/spooky/benchmarks/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative h-[30px] w-fit overflow-visible border border-transparent text-[0.8rem] font-medium after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -969,7 +950,7 @@ log:                          # Logging configuration (optional, defaults applie
 <h4 id="upstreamconfig">UpstreamConfig</h4>
 <pre><code class="language-typescript">interface UpstreamConfig {
   route: RouteConfig;             // Routing rules (required)
-  load_balancing?: LoadBalancingConfig;  // Per-upstream LB (planned, not implemented)
+  load_balancing?: LoadBalancingConfig;  // Per-upstream LB algorithm
   backends: BackendConfig[];      // Backend servers (required, at least 1)
 }
 </code></pre>
@@ -999,8 +980,8 @@ log:                          # Logging configuration (optional, defaults applie
 </code></pre>
 <h4 id="loadbalancingconfig">LoadBalancingConfig</h4>
 <pre><code class="language-typescript">interface LoadBalancingConfig {
-  type: &quot;random&quot; | &quot;round-robin&quot; | &quot;consistent-hash&quot;;
-  key?: string;  // Hash key source (planned: header:name, cookie:name, query:name, path)
+  type: &quot;random&quot; | &quot;round-robin&quot; | &quot;consistent-hash&quot; | &quot;least-connections&quot; | &quot;latency-aware&quot; | &quot;sticky-cid&quot;;
+  key?: string;  // Reserved for future pluggable key extraction (currently ignored)
 }
 </code></pre>
 <h4 id="logconfig">LogConfig</h4>
