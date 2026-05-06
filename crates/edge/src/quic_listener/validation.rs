@@ -204,7 +204,11 @@ pub(super) fn validate_request_headers(
         Some(value) => match std::str::from_utf8(value) {
             Ok(value) => Some(value),
             Err(_) => {
-                return Err((http::StatusCode::BAD_REQUEST, b"invalid host header\n", false));
+                return Err((
+                    http::StatusCode::BAD_REQUEST,
+                    b"invalid host header\n",
+                    false,
+                ));
             }
         },
         None => None,

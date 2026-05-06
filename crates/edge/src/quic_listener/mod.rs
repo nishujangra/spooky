@@ -832,7 +832,11 @@ impl QUICListener {
                 connection.packets_since_rotation = 0;
                 metrics.inc_scid_rotation();
                 if log::log_enabled!(log::Level::Debug) {
-                    debug!("Issued new SCID seq={} cid={}", seq, hex::encode(&cid_bytes));
+                    debug!(
+                        "Issued new SCID seq={} cid={}",
+                        seq,
+                        hex::encode(&cid_bytes)
+                    );
                 }
             }
             Err(e) => {
@@ -3251,17 +3255,17 @@ impl QUICListener {
             LoadBalancingKeyPolicy::Path => path,
             LoadBalancingKeyPolicy::Authority => authority.unwrap_or(path),
             LoadBalancingKeyPolicy::Method => method,
-            LoadBalancingKeyPolicy::Header(name) => {
-                Self::header_value_for_lb_key(headers, name).unwrap_or_else(|| {
+            LoadBalancingKeyPolicy::Header(name) => Self::header_value_for_lb_key(headers, name)
+                .unwrap_or_else(|| {
                     authority.unwrap_or(if !path.is_empty() { path } else { method })
-                })
-            }
+                }),
             LoadBalancingKeyPolicy::Default => {
                 authority.unwrap_or(if !path.is_empty() { path } else { method })
             }
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn resolve_backend(
         method: &str,
         path: &str,
@@ -3569,8 +3573,9 @@ impl QUICListener {
             })?;
             let mut ca_reader = BufReader::new(ca_bytes.as_slice());
             let mut roots = RootCertStore::empty();
-            let ca_certs: Vec<rustls::pki_types::CertificateDer<'static>> =
-                certs(&mut ca_reader).collect::<Result<_, _>>().map_err(|err| {
+            let ca_certs: Vec<rustls::pki_types::CertificateDer<'static>> = certs(&mut ca_reader)
+                .collect::<Result<_, _>>()
+                .map_err(|err| {
                     ProxyError::Tls(format!(
                         "failed to parse listen.tls.client_auth.ca_file '{}': {}",
                         ca_file, err
@@ -3601,10 +3606,7 @@ impl QUICListener {
                     .allow_unauthenticated()
                     .build()
                     .map_err(|err| {
-                        ProxyError::Tls(format!(
-                            "failed to build optional mTLS verifier: {}",
-                            err
-                        ))
+                        ProxyError::Tls(format!("failed to build optional mTLS verifier: {}", err))
                     })?
             };
 
@@ -3866,9 +3868,8 @@ impl QUICListener {
                                 match request_body.frame().await {
                                     Some(Ok(frame)) => {
                                         if let Ok(data) = frame.into_data() {
-                                            let next_len = request_body_bytes
-                                                .len()
-                                                .saturating_add(data.len());
+                                            let next_len =
+                                                request_body_bytes.len().saturating_add(data.len());
                                             if next_len > max_request_body_bytes {
                                                 return Ok(Response::builder()
                                                     .status(StatusCode::PAYLOAD_TOO_LARGE)

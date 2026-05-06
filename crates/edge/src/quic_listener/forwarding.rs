@@ -93,10 +93,7 @@ impl QUICListener {
             } else {
                 "-".to_string()
             };
-            let lb_name = req
-                .backend_lb
-                .map(|value| value.as_str())
-                .unwrap_or("-");
+            let lb_name = req.backend_lb.map(|value| value.as_str()).unwrap_or("-");
             info!(
                 "request_id={} route_upstream={} route_path_len={} route_host_specific={} route_reason={} lb={}",
                 req.request_id,

@@ -122,7 +122,10 @@ fn validate_lb_key_policy(upstream_name: &str, key: Option<&str>) -> bool {
     if normalized.is_empty() || normalized == "default" {
         return true;
     }
-    if matches!(normalized.as_str(), "path" | "authority" | "host" | "method") {
+    if matches!(
+        normalized.as_str(),
+        "path" | "authority" | "host" | "method"
+    ) {
         return true;
     }
     if let Some(header) = normalized.strip_prefix("header:") {
