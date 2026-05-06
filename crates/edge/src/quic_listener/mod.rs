@@ -23,7 +23,9 @@ use log::{debug, error, info, warn};
 use quiche::Config;
 use quiche::h3::NameValue;
 use rand::RngCore;
+use rustls::RootCertStore;
 use rustls::ServerConfig as RustlsServerConfig;
+use rustls::server::WebPkiClientVerifier;
 use serde_json::json;
 use socket2::{Domain, Protocol, Socket, Type};
 use spooky_bridge::h3_to_h2::{ForwardedContext, build_h2_request_for_endpoint};
@@ -3462,7 +3464,7 @@ impl QUICListener {
             ))
         })?;
 
-        let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
+        let server_certs: Vec<rustls::pki_types::CertificateDer<'static>> =
             certs(&mut BufReader::new(cert_bytes.as_slice()))
                 .collect::<Result<_, _>>()
                 .map_err(|err| ProxyError::Tls(format!("failed to parse TLS cert PEM: {}", err)))?;
@@ -3493,12 +3495,80 @@ impl QUICListener {
             }
         };
 
-        let mut tls_config = RustlsServerConfig::builder()
-            .with_no_client_auth()
-            .with_single_cert(certs, key)
-            .map_err(|err| {
-                ProxyError::Tls(format!("failed to build rustls ServerConfig: {}", err))
+        let mut tls_config = if config.listen.tls.client_auth.enabled {
+            let ca_file = config
+                .listen
+                .tls
+                .client_auth
+                .ca_file
+                .as_ref()
+                .ok_or_else(|| {
+                    ProxyError::Tls(
+                        "listen.tls.client_auth.ca_file is required when mTLS is enabled"
+                            .to_string(),
+                    )
+                })?;
+            let ca_bytes = std::fs::read(ca_file).map_err(|err| {
+                ProxyError::Tls(format!(
+                    "failed to read listen.tls.client_auth.ca_file '{}': {}",
+                    ca_file, err
+                ))
             })?;
+            let mut ca_reader = BufReader::new(ca_bytes.as_slice());
+            let mut roots = RootCertStore::empty();
+            let ca_certs: Vec<rustls::pki_types::CertificateDer<'static>> =
+                certs(&mut ca_reader).collect::<Result<_, _>>().map_err(|err| {
+                    ProxyError::Tls(format!(
+                        "failed to parse listen.tls.client_auth.ca_file '{}': {}",
+                        ca_file, err
+                    ))
+                })?;
+            if ca_certs.is_empty() {
+                return Err(ProxyError::Tls(format!(
+                    "listen.tls.client_auth.ca_file '{}' does not contain certificates",
+                    ca_file
+                )));
+            }
+            for cert in ca_certs {
+                roots.add(cert).map_err(|err| {
+                    ProxyError::Tls(format!(
+                        "failed to add certificate from listen.tls.client_auth.ca_file '{}': {}",
+                        ca_file, err
+                    ))
+                })?;
+            }
+
+            let verifier_builder = WebPkiClientVerifier::builder(Arc::new(roots));
+            let verifier = if config.listen.tls.client_auth.require_client_cert {
+                verifier_builder.build().map_err(|err| {
+                    ProxyError::Tls(format!("failed to build required mTLS verifier: {}", err))
+                })?
+            } else {
+                verifier_builder
+                    .allow_unauthenticated()
+                    .build()
+                    .map_err(|err| {
+                        ProxyError::Tls(format!(
+                            "failed to build optional mTLS verifier: {}",
+                            err
+                        ))
+                    })?
+            };
+
+            RustlsServerConfig::builder()
+                .with_client_cert_verifier(verifier)
+                .with_single_cert(server_certs, key)
+                .map_err(|err| {
+                    ProxyError::Tls(format!("failed to build rustls ServerConfig: {}", err))
+                })?
+        } else {
+            RustlsServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(server_certs, key)
+                .map_err(|err| {
+                    ProxyError::Tls(format!("failed to build rustls ServerConfig: {}", err))
+                })?
+        };
 
         tls_config.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
 
@@ -3523,6 +3593,11 @@ impl QUICListener {
         let bind = format!("{}:{}", config.listen.address, config.listen.port);
         let alt_svc_value = format!("h3=\":{}\"; ma=86400", config.listen.port);
         let backend_timeout = Duration::from_millis(config.performance.backend_timeout_ms);
+        let max_request_body_bytes = config.performance.max_request_body_bytes.max(1);
+        let max_response_body_bytes = config.performance.max_response_body_bytes.max(1);
+        let bootstrap_max_connections = config.performance.max_active_connections.max(1);
+        let bootstrap_connection_timeout =
+            Duration::from_millis(config.performance.backend_total_request_timeout_ms.max(1));
 
         let h2_pool = Arc::clone(&shared_state.h2_pool);
         let backend_endpoints = Arc::clone(&shared_state.backend_endpoints);
@@ -3573,6 +3648,7 @@ impl QUICListener {
                 "Bootstrap TLS listener on https://{} (TCP+TLS) — advertising Alt-Svc: {}",
                 bind, alt_svc_value
             );
+            let connection_limiter = Arc::new(Semaphore::new(bootstrap_max_connections));
             loop {
                 let (stream, peer) = match listener.accept().await {
                     Ok(v) => v,
@@ -3588,8 +3664,17 @@ impl QUICListener {
                 let backend_endpoints = Arc::clone(&backend_endpoints);
                 let upstream_pools = upstream_pools.clone();
                 let routing_index = Arc::clone(&routing_index);
+                let connection_timeout = bootstrap_connection_timeout;
+                let connection_permit = match Arc::clone(&connection_limiter).try_acquire_owned() {
+                    Ok(permit) => permit,
+                    Err(_) => {
+                        debug!("Bootstrap connection limit reached; dropping {}", peer);
+                        continue;
+                    }
+                };
 
                 tokio::spawn(async move {
+                    let _connection_permit = connection_permit;
                     let tls_stream = match acceptor.accept(stream).await {
                         Ok(s) => s,
                         Err(err) => {
@@ -3612,12 +3697,18 @@ impl QUICListener {
                         let routing_index = Arc::clone(&routing_index);
 
                         Box::pin(async move {
-                            let _method = req.method().to_string();
+                            let method = req.method().to_string();
                             let path = req
                                 .uri()
                                 .path_and_query()
                                 .map(|pq| pq.as_str().to_owned())
                                 .unwrap_or_else(|| "/".to_string());
+                            let route_path = path
+                                .as_bytes()
+                                .iter()
+                                .position(|b| *b == b'?' || *b == b'#')
+                                .map(|idx| &path[..idx])
+                                .unwrap_or(path.as_str());
                             let authority = req
                                 .uri()
                                 .authority()
@@ -3629,44 +3720,23 @@ impl QUICListener {
                                         .map(str::to_owned)
                                 });
 
-                            // Route lookup
-                            let upstream_name = routing_index.lookup(&path, authority.as_deref());
-                            let upstream_name = match upstream_name {
-                                Some(name) => name.to_string(),
-                                None => {
-                                    return Ok(Response::builder()
-                                        .status(StatusCode::BAD_GATEWAY)
-                                        .header("alt-svc", &alt)
-                                        .body(Full::new(Bytes::from_static(b"no route\n")))
-                                        .unwrap_or_else(|_| {
-                                            Response::new(Full::new(Bytes::from_static(b"error\n")))
-                                        }));
-                                }
-                            };
-
-                            // Pick backend
-                            let backend_addr = {
-                                let pool_lock = match upstream_pools.get(&upstream_name) {
-                                    Some(p) => p,
-                                    None => {
-                                        return Ok(Response::builder()
-                                            .status(StatusCode::BAD_GATEWAY)
-                                            .header("alt-svc", &alt)
-                                            .body(Full::new(Bytes::from_static(b"no pool\n")))
-                                            .unwrap_or_else(|_| {
-                                                Response::new(Full::new(Bytes::from_static(
-                                                    b"error\n",
-                                                )))
-                                            }));
-                                    }
-                                };
-                                let pool = match pool_lock.read() {
-                                    Ok(p) => p,
+                            // Route + LB/health-aware backend selection.
+                            let resolved = Self::resolve_backend(
+                                method.as_str(),
+                                route_path,
+                                authority.as_deref(),
+                                None,
+                                &upstream_pools,
+                                &routing_index,
+                            );
+                            let (_upstream_name, backend_addr, _backend_idx, _pool, _lb, _, _, _) =
+                                match resolved {
+                                    Ok(value) => value,
                                     Err(_) => {
                                         return Ok(Response::builder()
                                             .status(StatusCode::BAD_GATEWAY)
                                             .header("alt-svc", &alt)
-                                            .body(Full::new(Bytes::from_static(b"pool error\n")))
+                                            .body(Full::new(Bytes::from_static(b"no route\n")))
                                             .unwrap_or_else(|_| {
                                                 Response::new(Full::new(Bytes::from_static(
                                                     b"error\n",
@@ -3674,21 +3744,6 @@ impl QUICListener {
                                             }));
                                     }
                                 };
-                                match pool.pool.address(0).map(str::to_owned) {
-                                    Some(addr) => addr,
-                                    None => {
-                                        return Ok(Response::builder()
-                                            .status(StatusCode::SERVICE_UNAVAILABLE)
-                                            .header("alt-svc", &alt)
-                                            .body(Full::new(Bytes::from_static(b"no backends\n")))
-                                            .unwrap_or_else(|_| {
-                                                Response::new(Full::new(Bytes::from_static(
-                                                    b"error\n",
-                                                )))
-                                            }));
-                                    }
-                                }
-                            };
 
                             let endpoint = match backend_endpoints.get(&backend_addr) {
                                 Some(ep) => ep.clone(),
@@ -3747,10 +3802,39 @@ impl QUICListener {
                             upstream_req = upstream_req
                                 .header("forwarded", format!("for={};proto=https", peer.ip()));
 
-                            let body_bytes = match req.into_body().collect().await {
-                                Ok(collected) => collected.to_bytes(),
-                                Err(_) => Bytes::new(),
-                            };
+                            let mut request_body = req.into_body();
+                            let mut request_body_bytes = bytes::BytesMut::new();
+                            loop {
+                                match request_body.frame().await {
+                                    Some(Ok(frame)) => {
+                                        if let Ok(data) = frame.into_data() {
+                                            let next_len = request_body_bytes
+                                                .len()
+                                                .saturating_add(data.len());
+                                            if next_len > max_request_body_bytes {
+                                                return Ok(Response::builder()
+                                                    .status(StatusCode::PAYLOAD_TOO_LARGE)
+                                                    .header("alt-svc", &alt)
+                                                    .body(Full::new(Bytes::from_static(
+                                                        b"request body too large\n",
+                                                    )))
+                                                    .unwrap_or_else(|_| {
+                                                        Response::new(Full::new(
+                                                            Bytes::from_static(b"error\n"),
+                                                        ))
+                                                    }));
+                                            }
+                                            request_body_bytes.extend_from_slice(&data);
+                                        }
+                                    }
+                                    Some(Err(_)) => {
+                                        request_body_bytes.clear();
+                                        break;
+                                    }
+                                    None => break,
+                                }
+                            }
+                            let body_bytes = request_body_bytes.freeze();
 
                             // Build a template request (no body) then clone per retry attempt
                             let template = match upstream_req.body(()) {
@@ -3842,10 +3926,38 @@ impl QUICListener {
                             }
                             resp_builder = resp_builder.header("alt-svc", &alt);
 
-                            let resp_body = match upstream_resp.into_body().collect().await {
-                                Ok(collected) => collected.to_bytes(),
-                                Err(_) => Bytes::new(),
-                            };
+                            let mut response_body = upstream_resp.into_body();
+                            let mut resp_body_bytes = bytes::BytesMut::new();
+                            loop {
+                                match response_body.frame().await {
+                                    Some(Ok(frame)) => {
+                                        if let Ok(data) = frame.into_data() {
+                                            let next_len =
+                                                resp_body_bytes.len().saturating_add(data.len());
+                                            if next_len > max_response_body_bytes {
+                                                return Ok(Response::builder()
+                                                    .status(StatusCode::BAD_GATEWAY)
+                                                    .header("alt-svc", &alt)
+                                                    .body(Full::new(Bytes::from_static(
+                                                        b"upstream response body too large\n",
+                                                    )))
+                                                    .unwrap_or_else(|_| {
+                                                        Response::new(Full::new(
+                                                            Bytes::from_static(b"error\n"),
+                                                        ))
+                                                    }));
+                                            }
+                                            resp_body_bytes.extend_from_slice(&data);
+                                        }
+                                    }
+                                    Some(Err(_)) => {
+                                        resp_body_bytes.clear();
+                                        break;
+                                    }
+                                    None => break,
+                                }
+                            }
+                            let resp_body = resp_body_bytes.freeze();
 
                             Ok(resp_builder
                                 .body(Full::new(resp_body))
@@ -3853,16 +3965,29 @@ impl QUICListener {
                         })
                     });
 
-                    if use_h2 {
+                    let serve_result = if use_h2 {
                         let executor = hyper_util::rt::TokioExecutor::new();
-                        if let Err(err) = http2::Builder::new(executor)
-                            .serve_connection(io, svc)
-                            .await
-                        {
-                            debug!("Bootstrap h2 connection from {} closed: {}", peer, err);
+                        tokio::time::timeout(
+                            connection_timeout,
+                            http2::Builder::new(executor).serve_connection(io, svc),
+                        )
+                        .await
+                    } else {
+                        tokio::time::timeout(
+                            connection_timeout,
+                            http1::Builder::new().serve_connection(io, svc),
+                        )
+                        .await
+                    };
+
+                    match serve_result {
+                        Ok(Ok(())) => {}
+                        Ok(Err(err)) => {
+                            debug!("Bootstrap connection from {} closed: {}", peer, err);
                         }
-                    } else if let Err(err) = http1::Builder::new().serve_connection(io, svc).await {
-                        debug!("Bootstrap h1 connection from {} closed: {}", peer, err);
+                        Err(_) => {
+                            debug!("Bootstrap connection from {} timed out", peer);
+                        }
                     }
                 });
             }
