@@ -1,7 +1,7 @@
 //! Spooky HTTP/3 Load Balancer - Main Entry Point
 
 use std::net::SocketAddr;
-use std::sync::mpsc::{self, RecvTimeoutError, SyncSender, TrySendError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, SyncSender, TrySendError};
 mod privilege_drop;
 mod runtime_guard;
 
@@ -32,6 +32,9 @@ struct IngressPacket {
     local_addr: SocketAddr,
     bytes: Vec<u8>,
 }
+
+const PACKET_BUFFER_CAPACITY: usize = 65_535;
+const PACKET_BUFFER_RECYCLE_CAPACITY: usize = 2048;
 
 #[cfg(unix)]
 async fn wait_for_shutdown_signal() {
@@ -317,6 +320,8 @@ fn run_sharded_listener_worker(
     let mut shard_handles = Vec::with_capacity(shard_count);
     let mut shard_txs: Vec<SyncSender<IngressPacket>> = Vec::with_capacity(shard_count);
     let mut shard_queue_bytes: Vec<Arc<AtomicUsize>> = Vec::with_capacity(shard_count);
+    let mut recycle_rxs: Vec<Receiver<Vec<u8>>> = Vec::with_capacity(shard_count);
+    let mut free_buffers: Vec<Vec<Vec<u8>>> = vec![Vec::new(); shard_count];
 
     for shard_idx in 0..shard_count {
         let shard_socket = socket.try_clone().map_err(|err| {
@@ -333,6 +338,8 @@ fn run_sharded_listener_worker(
             .saturating_add(shard_idx);
         let shard_queue_bytes_counter = Arc::new(AtomicUsize::new(0));
         shard_queue_bytes.push(Arc::clone(&shard_queue_bytes_counter));
+        let (recycle_tx, recycle_rx) = mpsc::sync_channel::<Vec<u8>>(PACKET_BUFFER_RECYCLE_CAPACITY);
+        recycle_rxs.push(recycle_rx);
 
         let (tx, rx) = mpsc::sync_channel::<IngressPacket>(shard_queue_capacity);
         shard_txs.push(tx);
@@ -365,6 +372,10 @@ fn run_sharded_listener_worker(
                                 packet.local_addr,
                                 &mut packet.bytes,
                             );
+                            if packet.bytes.capacity() <= PACKET_BUFFER_CAPACITY * 2 {
+                                packet.bytes.clear();
+                                let _ = recycle_tx.try_send(packet.bytes);
+                            }
                             release_shard_queue_bytes(
                                 shard_queue_bytes_counter.as_ref(),
                                 packet_bytes,
@@ -396,6 +407,13 @@ fn run_sharded_listener_worker(
 
     let mut recv_buf = [0u8; 65_535];
     while !worker_shutdown.load(Ordering::Relaxed) {
+        for shard_idx in 0..shard_count {
+            while let Ok(mut buf) = recycle_rxs[shard_idx].try_recv() {
+                buf.clear();
+                free_buffers[shard_idx].push(buf);
+            }
+        }
+
         match socket.recv_from(&mut recv_buf) {
             Ok((len, peer)) => {
                 if len == 0 {
@@ -417,10 +435,15 @@ fn run_sharded_listener_worker(
                     worker_shared.set_ingress_queue_bytes(total);
                     continue;
                 }
+                let mut packet_bytes = free_buffers[shard_idx]
+                    .pop()
+                    .unwrap_or_else(|| Vec::with_capacity(PACKET_BUFFER_CAPACITY));
+                packet_bytes.extend_from_slice(&recv_buf[..len]);
+
                 let packet = IngressPacket {
                     peer,
                     local_addr,
-                    bytes: recv_buf[..len].to_vec(),
+                    bytes: packet_bytes,
                 };
                 match shard_txs[shard_idx].try_send(packet) {
                     Ok(()) => {
@@ -430,24 +453,34 @@ fn run_sharded_listener_worker(
                             .sum();
                         worker_shared.set_ingress_queue_bytes(total);
                     }
-                    Err(TrySendError::Full(packet)) => {
+                    Err(TrySendError::Full(mut packet)) => {
+                        let packet_bytes_len = packet.bytes.len();
                         release_shard_queue_bytes(
                             shard_queue_bytes[shard_idx].as_ref(),
-                            packet.bytes.len(),
+                            packet_bytes_len,
                         );
                         worker_shared.inc_ingress_queue_drop();
-                        worker_shared.inc_ingress_queue_drop_bytes(packet.bytes.len());
+                        worker_shared.inc_ingress_queue_drop_bytes(packet_bytes_len);
+                        if packet.bytes.capacity() <= PACKET_BUFFER_CAPACITY * 2 {
+                            packet.bytes.clear();
+                            free_buffers[shard_idx].push(packet.bytes);
+                        }
                         let total: usize = shard_queue_bytes
                             .iter()
                             .map(|c| c.load(Ordering::Relaxed))
                             .sum();
                         worker_shared.set_ingress_queue_bytes(total);
                     }
-                    Err(TrySendError::Disconnected(packet)) => {
+                    Err(TrySendError::Disconnected(mut packet)) => {
+                        let packet_bytes_len = packet.bytes.len();
                         release_shard_queue_bytes(
                             shard_queue_bytes[shard_idx].as_ref(),
-                            packet.bytes.len(),
+                            packet_bytes_len,
                         );
+                        if packet.bytes.capacity() <= PACKET_BUFFER_CAPACITY * 2 {
+                            packet.bytes.clear();
+                            free_buffers[shard_idx].push(packet.bytes);
+                        }
                         return Err(format!(
                             "worker {} shard {} dispatch channel disconnected",
                             worker_idx, shard_idx
