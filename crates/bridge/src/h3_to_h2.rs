@@ -1,5 +1,4 @@
 use std::{
-    collections::HashSet,
     convert::Infallible,
     net::{IpAddr, SocketAddr},
 };
@@ -58,7 +57,6 @@ pub fn build_h2_request_for_endpoint(
     let uri = Uri::try_from(uri).map_err(|_| BridgeError::InvalidUri)?;
 
     let mut builder = Request::builder().method(method).uri(uri);
-    let connection_tokens = connection_header_tokens(headers);
     let mut host_from_headers: Option<String> = None;
 
     for header in headers {
@@ -68,7 +66,7 @@ pub fn build_h2_request_for_endpoint(
         }
 
         let header_name = HeaderName::from_bytes(name).map_err(|_| BridgeError::InvalidHeader)?;
-        if should_strip_request_header(&header_name, &connection_tokens) {
+        if should_strip_request_header(&header_name, headers) {
             continue;
         }
 
@@ -142,8 +140,7 @@ pub fn build_h2_request_for_endpoint(
     builder.body(body).map_err(BridgeError::Build)
 }
 
-fn connection_header_tokens(headers: &[quiche::h3::Header]) -> HashSet<String> {
-    let mut tokens = HashSet::new();
+fn connection_header_mentions(headers: &[quiche::h3::Header], header_name: &str) -> bool {
     for header in headers {
         if !header.name().eq_ignore_ascii_case(b"connection") {
             continue;
@@ -152,17 +149,17 @@ fn connection_header_tokens(headers: &[quiche::h3::Header]) -> HashSet<String> {
             continue;
         };
         for token in value.split(',') {
-            let normalized = token.trim().to_ascii_lowercase();
-            if !normalized.is_empty() {
-                tokens.insert(normalized);
+            let normalized = token.trim();
+            if !normalized.is_empty() && normalized.eq_ignore_ascii_case(header_name) {
+                return true;
             }
         }
     }
-    tokens
+    false
 }
 
-fn should_strip_request_header(name: &HeaderName, connection_tokens: &HashSet<String>) -> bool {
-    if connection_tokens.contains(name.as_str()) {
+fn should_strip_request_header(name: &HeaderName, headers: &[quiche::h3::Header]) -> bool {
+    if connection_header_mentions(headers, name.as_str()) {
         return true;
     }
 
