@@ -1016,7 +1016,7 @@
 <li><strong>Blocking backend calls</strong>: Main thread blocks during HTTP/2 requests</li>
 <li><strong>Full body buffering</strong>: High memory usage for large requests/responses</li>
 <li><strong>Configuration hot reload missing</strong>: Runtime config updates still require restart</li>
-<li><strong>HTTP/3-only ingress</strong>: No native HTTP/1.1 or HTTP/2 client ingress support</li>
+<li><strong>Dual-ingress operational complexity</strong>: Runtime serves HTTP/3 (native) plus HTTP/1.1/2 TLS bootstrap, so operators must secure and observe both paths consistently</li>
 <li><strong>Method-based route matching unimplemented</strong>: <code>route.method</code> remains reserved for future use</li>
 <li><strong>Control/metrics endpoint hardening is operator-dependent</strong>: endpoints should remain network-isolated unless explicitly protected</li>
 </ol>

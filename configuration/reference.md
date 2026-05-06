@@ -109,7 +109,7 @@ The following table lists all default configuration values used when properties 
 | Property | Default Value | Description |
 |----------|---------------|-------------|
 | `version` | `1` | Configuration format version |
-| `listen.protocol` | `"http3"` | Ingress protocol (HTTP/3 over QUIC only) |
+| `listen.protocol` | `"http3"` | Native ingress protocol (HTTP/3 over QUIC); TLS bootstrap ingress for HTTP/1.1/2 compatibility is also active |
 | `listen.port` | `9889` | Listening port |
 | `listen.address` | `"0.0.0.0"` | Listening address |
 | `listen.tls.cert_file` | Required | TLS certificate file path |
@@ -145,7 +145,7 @@ Configures the listening interface for incoming client connections. HTTP/3 requi
 
 | Property | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
-| `protocol` | string | No | `http3` | Protocol to listen on (HTTP/3 over QUIC only) |
+| `protocol` | string | No | `http3` | Native ingress protocol for the data plane (HTTP/3 over QUIC) |
 | `address` | string | No | `0.0.0.0` | IP address to bind to |
 | `port` | integer | No | `9889` | Port to bind to |
 | `tls` | object | Yes | - | TLS configuration (required for HTTP/3) |
@@ -154,7 +154,7 @@ Configures the listening interface for incoming client connections. HTTP/3 requi
 
 - `http3`: HTTP/3 over QUIC (recommended)
 
-HTTP/1.1 and HTTP/2 ingress are not currently supported directly. If those clients must be supported, place an external frontend that terminates legacy protocols and forwards to Spooky over HTTP/3.
+Spooky also exposes a TLS bootstrap ingress for HTTP/1.1 and HTTP/2 clients. This compatibility path is primarily used for browser interoperability and advertising `Alt-Svc` so clients can upgrade to HTTP/3.
 
 ### TLS Configuration
 
