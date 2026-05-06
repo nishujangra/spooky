@@ -37,10 +37,10 @@ pub(super) fn validate_request_headers(
     }
 
     let mut header_bytes = 0usize;
-    let mut method = None::<String>;
-    let mut path = None::<String>;
-    let mut authority = None::<String>;
-    let mut host = None::<String>;
+    let mut method = None::<&[u8]>;
+    let mut path = None::<&[u8]>;
+    let mut authority = None::<&[u8]>;
+    let mut host = None::<&[u8]>;
     let mut scheme_seen = false;
 
     for header in list {
@@ -62,7 +62,7 @@ pub(super) fn validate_request_headers(
                         false,
                     ));
                 }
-                method = Some(String::from_utf8_lossy(header.value()).to_string());
+                method = Some(header.value());
             }
             b":path" => {
                 if path.is_some() {
@@ -72,7 +72,7 @@ pub(super) fn validate_request_headers(
                         false,
                     ));
                 }
-                path = Some(String::from_utf8_lossy(header.value()).to_string());
+                path = Some(header.value());
             }
             b":authority" => {
                 if authority.is_some() {
@@ -82,7 +82,7 @@ pub(super) fn validate_request_headers(
                         false,
                     ));
                 }
-                authority = Some(String::from_utf8_lossy(header.value()).to_string());
+                authority = Some(header.value());
             }
             b"host" => {
                 if host.is_some() {
@@ -92,7 +92,7 @@ pub(super) fn validate_request_headers(
                         false,
                     ));
                 }
-                host = Some(String::from_utf8_lossy(header.value()).to_string());
+                host = Some(header.value());
             }
             b":scheme" => {
                 if scheme_seen {
@@ -115,7 +115,7 @@ pub(super) fn validate_request_headers(
         }
     }
 
-    let method = match method {
+    let method_bytes = match method {
         Some(method) => method,
         None => {
             return Err((
@@ -125,7 +125,7 @@ pub(super) fn validate_request_headers(
             ));
         }
     };
-    let path = match path {
+    let path_bytes = match path {
         Some(path) => path,
         None => {
             return Err((
@@ -136,7 +136,7 @@ pub(super) fn validate_request_headers(
         }
     };
 
-    if method.trim().is_empty() || method.as_bytes().iter().any(|b| b.is_ascii_whitespace()) {
+    if method_bytes.is_empty() || method_bytes.iter().any(|b| b.is_ascii_whitespace()) {
         return Err((
             http::StatusCode::BAD_REQUEST,
             b"invalid :method header\n",
@@ -144,7 +144,7 @@ pub(super) fn validate_request_headers(
         ));
     }
 
-    if path.is_empty() || !path.starts_with('/') {
+    if path_bytes.is_empty() || path_bytes[0] != b'/' {
         return Err((
             http::StatusCode::BAD_REQUEST,
             b"invalid :path header\n",
@@ -152,8 +152,52 @@ pub(super) fn validate_request_headers(
         ));
     }
 
+    let method = match std::str::from_utf8(method_bytes) {
+        Ok(method) => method,
+        Err(_) => {
+            return Err((
+                http::StatusCode::BAD_REQUEST,
+                b"invalid :method header\n",
+                false,
+            ));
+        }
+    };
+    let path = match std::str::from_utf8(path_bytes) {
+        Ok(path) => path,
+        Err(_) => {
+            return Err((
+                http::StatusCode::BAD_REQUEST,
+                b"invalid :path header\n",
+                false,
+            ));
+        }
+    };
+
+    let authority = match authority {
+        Some(value) => match std::str::from_utf8(value) {
+            Ok(value) => Some(value),
+            Err(_) => {
+                return Err((
+                    http::StatusCode::BAD_REQUEST,
+                    b"invalid :authority header\n",
+                    false,
+                ));
+            }
+        },
+        None => None,
+    };
+    let host = match host {
+        Some(value) => match std::str::from_utf8(value) {
+            Ok(value) => Some(value),
+            Err(_) => {
+                return Err((http::StatusCode::BAD_REQUEST, b"invalid host header\n", false));
+            }
+        },
+        None => None,
+    };
+
     if resilience.enforce_authority_host_match
-        && let (Some(authority_value), Some(host_value)) = (authority.as_deref(), host.as_deref())
+        && let (Some(authority_value), Some(host_value)) = (authority, host)
     {
         let normalized_authority = normalize_host_for_routing(authority_value)
             .unwrap_or_else(|| authority_value.to_ascii_lowercase());
@@ -168,7 +212,7 @@ pub(super) fn validate_request_headers(
         }
     }
 
-    if !resilience.method_allowed(&method) {
+    if !resilience.method_allowed(method) {
         return Err((
             http::StatusCode::METHOD_NOT_ALLOWED,
             b"request method blocked by policy\n",
@@ -176,7 +220,7 @@ pub(super) fn validate_request_headers(
         ));
     }
 
-    if resilience.path_denied(&path) {
+    if resilience.path_denied(path) {
         return Err((
             http::StatusCode::FORBIDDEN,
             b"request path blocked by policy\n",
@@ -185,9 +229,9 @@ pub(super) fn validate_request_headers(
     }
 
     Ok(RequestValidationResult {
-        method,
-        path,
-        authority: authority.or(host),
+        method: method.to_string(),
+        path: path.to_string(),
+        authority: authority.or(host).map(str::to_string),
     })
 }
 
