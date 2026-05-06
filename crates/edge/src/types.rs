@@ -250,6 +250,8 @@ pub enum ResponseChunk {
     Error(ProxyError),
 }
 
+pub type DeferredResponseHeaders = (http::StatusCode, Vec<(Vec<u8>, Vec<u8>)>);
+
 pub struct RequestEnvelope {
     pub request_id: u64,
     pub trace_id: Option<String>,
@@ -301,8 +303,24 @@ pub struct RequestEnvelope {
     pub request_fin_received: bool,
     /// In-flight upstream forwarding task for this request stream.
     pub upstream_task: Option<tokio::task::JoinHandle<UpstreamResult>>,
-    /// Receives response body chunks to write back over QUIC.
-    pub response_chunk_rx: Option<mpsc::Receiver<ResponseChunk>>,
+    /// Upstream response body stream, polled directly from the worker loop.
+    pub response_body: Option<hyper::body::Incoming>,
+    /// Buffered response chunks awaiting QUIC write availability.
+    pub response_chunk_queue: VecDeque<ResponseChunk>,
+    /// True when headers should be deferred until full body validation completes.
+    pub response_defer_headers_until_body_validated: bool,
+    /// Deferred response status/headers for unknown-length bodies.
+    pub response_pending_headers: Option<DeferredResponseHeaders>,
+    /// Buffered unknown-length body chunks until validation completes.
+    pub response_prebuffer_chunks: Vec<Bytes>,
+    /// Total upstream response body bytes observed so far.
+    pub response_bytes_received: usize,
+    /// Last observed upstream response-body byte time.
+    pub response_last_body_activity: Option<Instant>,
+    /// Deadline for receiving the first upstream response body byte.
+    pub response_first_byte_deadline: Option<Instant>,
+    /// Whether any upstream response body bytes have been observed.
+    pub response_body_started: bool,
     /// True once downstream response headers are emitted on this stream.
     pub response_headers_sent: bool,
     /// A chunk that could not be written due to QUIC send backpressure; retried next poll.

@@ -35,10 +35,7 @@ use spooky_lb::{HealthFailureReason, HealthTransition, UpstreamPool};
 use spooky_transport::h2_client::{H2Client, TlsClientConfig};
 use spooky_transport::h2_pool::H2Pool;
 use tokio::runtime::Handle;
-use tokio::sync::{
-    Semaphore, mpsc,
-    mpsc::error::{TryRecvError, TrySendError},
-};
+use tokio::sync::{Semaphore, mpsc::error::TrySendError};
 use tokio_rustls::TlsAcceptor;
 use tracing::{Instrument, info_span};
 
@@ -53,8 +50,7 @@ use crate::{
         DEFAULT_SCID_LEN_BYTES, MAX_DATAGRAM_SIZE_BYTES, MAX_STREAMS_PER_CONNECTION,
         MAX_UDP_PAYLOAD_BYTES, MIN_SCID_LEN_BYTES, REQUEST_CHUNK_BYTES_LIMIT,
         REQUEST_CHUNK_CHANNEL_CAPACITY, RESET_TOKEN_LEN_BYTES, RESPONSE_CHUNK_BYTES_LIMIT,
-        RESPONSE_CHUNK_CHANNEL_CAPACITY, SCID_ROTATION_PACKET_THRESHOLD, UDP_READ_TIMEOUT_MS,
-        scid_rotation_interval,
+        SCID_ROTATION_PACKET_THRESHOLD, UDP_READ_TIMEOUT_MS, scid_rotation_interval,
     },
     outcome_from_status,
     resilience::{RouteQueueRejection, RuntimeResilience},
@@ -2184,7 +2180,15 @@ impl QUICListener {
                             phase: StreamPhase::ReceivingRequest,
                             request_fin_received,
                             upstream_task,
-                            response_chunk_rx: None,
+                            response_body: None,
+                            response_chunk_queue: std::collections::VecDeque::new(),
+                            response_defer_headers_until_body_validated: false,
+                            response_pending_headers: None,
+                            response_prebuffer_chunks: Vec::new(),
+                            response_bytes_received: 0,
+                            response_last_body_activity: None,
+                            response_first_byte_deadline: None,
+                            response_body_started: false,
                             response_headers_sent: false,
                             pending_chunk: None,
                         },
@@ -2413,11 +2417,10 @@ impl QUICListener {
     /// Per stream, in order:
     /// 1. Drain request body buffer → body channel (`try_send`).
     /// 2. Close body channel once FIN received and buffer empty.
-    /// 3. Poll `upstream_task` (`try_recv`).
+    /// 3. Poll `upstream_task` completion.
     ///    - Error result  → send error response, mark terminal.
-    ///    - Ok result     → send H3 response headers, spawn body-pump task,
-    ///      store `response_chunk_rx`, transition to SendingResponse.
-    /// 4. Flush `response_chunk_rx` chunks into H3 (`try_recv` loop).
+    ///    - Ok result     → send H3 headers/body state, transition to SendingResponse.
+    /// 4. Poll upstream body directly and flush queued chunks into H3.
     ///    - `Data`  → `h3.send_body(..., false)`
     ///    - `End`   → `h3.send_body(..., true)`, mark Completed
     ///    - `Error` → send 502, mark Failed
@@ -2754,186 +2757,44 @@ impl QUICListener {
                                 }
                             }
                             if let Some(req) = streams.get_mut(&stream_id) {
-                                req.response_chunk_rx = None;
+                                req.response_body = None;
+                                req.response_chunk_queue.clear();
+                                req.response_pending_headers = None;
+                                req.response_prebuffer_chunks.clear();
+                                req.response_bytes_received = 0;
+                                req.response_last_body_activity = None;
+                                req.response_first_byte_deadline = None;
+                                req.response_body_started = false;
                                 req.response_headers_sent = true;
                                 req.phase = StreamPhase::Completed;
                                 req.response_status = Some(status.as_u16());
                             }
                             immediate_terminal = true;
                         } else {
-                            // Spawn a task that pumps body frames into a ResponseChunk channel.
-                            // Enforces body deadlines; for unknown-length responses it first
-                            // validates total body size against cap before emitting any headers.
-                            let (chunk_tx, chunk_rx) =
-                                mpsc::channel::<ResponseChunk>(RESPONSE_CHUNK_CHANNEL_CAPACITY);
-                            let fail_tx = chunk_tx.clone();
-                            let response_chunk_buffer_pool = Arc::clone(response_chunk_buffer_pool);
-                            // `backend_body_total_timeout` is used as a pre-first-byte guard:
-                            // once the upstream starts making body progress, the idle timeout
-                            // governs pacing and the stream may continue until request deadline.
-                            let first_byte_deadline =
-                                tokio::time::Instant::now() + backend_body_total_timeout;
-                            let deferred_status = status;
-                            let deferred_headers = owned_h3_headers.clone();
-                            let fut = async move {
-                                use http_body_util::BodyExt;
-                                let mut body: hyper::body::Incoming = body;
-                                let mut response_bytes_received: usize = 0;
-                                let mut buffered_chunks: Vec<Bytes> = response_chunk_buffer_pool
-                                    .lock()
-                                    .ok()
-                                    .and_then(|mut pool| pool.pop())
-                                    .unwrap_or_default();
-                                buffered_chunks.clear();
-                                let mut saw_body_progress = false;
-                                loop {
-                                    let frame_fut = BodyExt::frame(&mut body);
-                                    let now = tokio::time::Instant::now();
-                                    if !saw_body_progress && now >= first_byte_deadline {
-                                        let _ = chunk_tx
-                                            .send(ResponseChunk::Error(ProxyError::Timeout))
-                                            .await;
-                                        return;
-                                    }
-                                    let wait_timeout = if saw_body_progress {
-                                        backend_body_idle_timeout
-                                    } else {
-                                        first_byte_deadline
-                                            .saturating_duration_since(now)
-                                            .min(backend_body_idle_timeout)
-                                    };
-                                    let result =
-                                        tokio::time::timeout(wait_timeout, frame_fut).await;
-                                    match result {
-                                        Err(_elapsed) => {
-                                            // Body read idle timeout — signal timeout to flush loop.
-                                            let _ = chunk_tx
-                                                .send(ResponseChunk::Error(ProxyError::Timeout))
-                                                .await;
-                                            return;
-                                        }
-                                        Ok(Some(Ok(f))) => {
-                                            if let Ok(data) = f.into_data() {
-                                                if !data.is_empty() {
-                                                    saw_body_progress = true;
-                                                }
-                                                if defer_headers_until_body_validated {
-                                                    response_bytes_received =
-                                                        response_bytes_received
-                                                            .saturating_add(data.len());
-                                                    if response_bytes_received
-                                                        > max_response_body_bytes
-                                                    {
-                                                        let _ = chunk_tx
-                                                            .send(ResponseChunk::Error(ProxyError::Pool(
-                                                                PoolError::BackendOverloaded(
-                                                                    "upstream response body too large".into(),
-                                                                ),
-                                                            )))
-                                                            .await;
-                                                        return;
-                                                    }
-                                                    if response_bytes_received
-                                                        > unknown_length_response_prebuffer_bytes
-                                                    {
-                                                        let _ = chunk_tx
-                                                            .send(ResponseChunk::Error(ProxyError::Pool(
-                                                                PoolError::BackendOverloaded(
-                                                                    "unknown-length response prebuffer limit exceeded"
-                                                                        .into(),
-                                                                ),
-                                                            )))
-                                                            .await;
-                                                        return;
-                                                    }
-                                                    for start in (0..data.len())
-                                                        .step_by(RESPONSE_CHUNK_BYTES_LIMIT)
-                                                    {
-                                                        let end = (start
-                                                            + RESPONSE_CHUNK_BYTES_LIMIT)
-                                                            .min(data.len());
-                                                        buffered_chunks
-                                                            .push(data.slice(start..end));
-                                                    }
-                                                } else {
-                                                    for start in (0..data.len())
-                                                        .step_by(RESPONSE_CHUNK_BYTES_LIMIT)
-                                                    {
-                                                        let end = (start
-                                                            + RESPONSE_CHUNK_BYTES_LIMIT)
-                                                            .min(data.len());
-                                                        if chunk_tx
-                                                            .send(ResponseChunk::Data(
-                                                                data.slice(start..end),
-                                                            ))
-                                                            .await
-                                                            .is_err()
-                                                        {
-                                                            return;
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                            // skip trailers / other frame types
-                                        }
-                                        Ok(Some(Err(_))) => {
-                                            let _ = chunk_tx
-                                                .send(ResponseChunk::Error(ProxyError::Transport(
-                                                    "upstream body error".into(),
-                                                )))
-                                                .await;
-                                            return;
-                                        }
-                                        Ok(None) => {
-                                            if defer_headers_until_body_validated {
-                                                if chunk_tx
-                                                    .send(ResponseChunk::Start {
-                                                        status: deferred_status,
-                                                        headers: deferred_headers,
-                                                    })
-                                                    .await
-                                                    .is_err()
-                                                {
-                                                    return;
-                                                }
-                                                for chunk in buffered_chunks.drain(..) {
-                                                    if chunk_tx
-                                                        .send(ResponseChunk::Data(chunk))
-                                                        .await
-                                                        .is_err()
-                                                    {
-                                                        return;
-                                                    }
-                                                }
-                                                buffered_chunks.clear();
-                                                if let Ok(mut pool) =
-                                                    response_chunk_buffer_pool.lock()
-                                                    && pool.len() < 256
-                                                {
-                                                    pool.push(buffered_chunks);
-                                                }
-                                            }
-                                            let _ = chunk_tx.send(ResponseChunk::End).await;
-                                            return;
-                                        }
-                                    }
-                                }
-                            };
-                            let request_span = streams
-                                .get(&stream_id)
-                                .and_then(|req| req.trace_span.clone());
-                            let spawned = match request_span {
-                                Some(span) => spawn_async_task(fut.instrument(span), "body-pump"),
-                                None => spawn_async_task(fut, "body-pump"),
-                            };
-                            if !spawned {
-                                let _ = fail_tx.try_send(ResponseChunk::Error(
-                                    ProxyError::Transport("runtime unavailable".into()),
-                                ));
-                            }
-
                             if let Some(req) = streams.get_mut(&stream_id) {
-                                req.response_chunk_rx = Some(chunk_rx);
+                                let mut prebuffer = if defer_headers_until_body_validated {
+                                    response_chunk_buffer_pool
+                                        .lock()
+                                        .ok()
+                                        .and_then(|mut pool| pool.pop())
+                                        .unwrap_or_default()
+                                } else {
+                                    Vec::new()
+                                };
+                                prebuffer.clear();
+                                req.response_body = Some(body);
+                                req.response_chunk_queue.clear();
+                                req.response_defer_headers_until_body_validated =
+                                    defer_headers_until_body_validated;
+                                req.response_pending_headers = defer_headers_until_body_validated
+                                    .then_some((status, owned_h3_headers.clone()));
+                                req.response_prebuffer_chunks = prebuffer;
+                                req.response_bytes_received = 0;
+                                let now = Instant::now();
+                                req.response_last_body_activity = Some(now);
+                                req.response_first_byte_deadline =
+                                    Some(now + backend_body_total_timeout);
+                                req.response_body_started = false;
                                 req.response_headers_sent = !defer_headers_until_body_validated;
                                 req.phase = StreamPhase::SendingResponse;
                                 req.response_status = Some(status.as_u16());
@@ -3018,22 +2879,135 @@ impl QUICListener {
 
             // ── 4: flush response chunks ──────────────────────────────────────
             let mut terminal = false;
-            if let Some(req) = streams.get_mut(&stream_id)
-                && let Some(rx) = &mut req.response_chunk_rx
-            {
+            if let Some(req) = streams.get_mut(&stream_id) {
+                if req.phase == StreamPhase::SendingResponse {
+                    loop {
+                        if req.pending_chunk.is_some() || !req.response_chunk_queue.is_empty() {
+                            break;
+                        }
+                        if req.response_body.is_none() {
+                            break;
+                        }
+
+                        let now = Instant::now();
+                        if !req.response_body_started
+                            && req.response_first_byte_deadline.is_some_and(|d| now >= d)
+                        {
+                            req.response_chunk_queue
+                                .push_back(ResponseChunk::Error(ProxyError::Timeout));
+                            req.response_body = None;
+                            break;
+                        }
+                        if req.response_body_started
+                            && req.response_last_body_activity.is_some_and(|last| {
+                                now.saturating_duration_since(last) >= backend_body_idle_timeout
+                            })
+                        {
+                            req.response_chunk_queue
+                                .push_back(ResponseChunk::Error(ProxyError::Timeout));
+                            req.response_body = None;
+                            break;
+                        }
+
+                        let next_frame = req
+                            .response_body
+                            .as_mut()
+                            .and_then(|body| BodyExt::frame(body).now_or_never());
+                        match next_frame {
+                            None => break,
+                            Some(Some(Ok(frame))) => {
+                                if let Ok(data) = frame.into_data() {
+                                    if !data.is_empty() {
+                                        req.response_body_started = true;
+                                        req.response_last_body_activity = Some(now);
+                                        req.response_first_byte_deadline = None;
+                                    }
+
+                                    if req.response_defer_headers_until_body_validated {
+                                        req.response_bytes_received =
+                                            req.response_bytes_received.saturating_add(data.len());
+                                        if req.response_bytes_received > max_response_body_bytes {
+                                            req.response_chunk_queue.push_back(
+                                                ResponseChunk::Error(ProxyError::Pool(
+                                                    PoolError::BackendOverloaded(
+                                                        "upstream response body too large".into(),
+                                                    ),
+                                                )),
+                                            );
+                                            req.response_body = None;
+                                            break;
+                                        }
+                                        if req.response_bytes_received
+                                            > unknown_length_response_prebuffer_bytes
+                                        {
+                                            req.response_chunk_queue.push_back(
+                                                ResponseChunk::Error(ProxyError::Pool(
+                                                    PoolError::BackendOverloaded(
+                                                        "unknown-length response prebuffer limit exceeded"
+                                                            .into(),
+                                                    ),
+                                                )),
+                                            );
+                                            req.response_body = None;
+                                            break;
+                                        }
+                                        for start in
+                                            (0..data.len()).step_by(RESPONSE_CHUNK_BYTES_LIMIT)
+                                        {
+                                            let end = (start + RESPONSE_CHUNK_BYTES_LIMIT)
+                                                .min(data.len());
+                                            req.response_prebuffer_chunks
+                                                .push(data.slice(start..end));
+                                        }
+                                    } else {
+                                        for start in
+                                            (0..data.len()).step_by(RESPONSE_CHUNK_BYTES_LIMIT)
+                                        {
+                                            let end = (start + RESPONSE_CHUNK_BYTES_LIMIT)
+                                                .min(data.len());
+                                            req.response_chunk_queue.push_back(
+                                                ResponseChunk::Data(data.slice(start..end)),
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            Some(Some(Err(_))) => {
+                                req.response_chunk_queue.push_back(ResponseChunk::Error(
+                                    ProxyError::Transport("upstream body error".into()),
+                                ));
+                                req.response_body = None;
+                                break;
+                            }
+                            Some(None) => {
+                                req.response_body = None;
+                                if req.response_defer_headers_until_body_validated {
+                                    if let Some((status, headers)) =
+                                        req.response_pending_headers.take()
+                                    {
+                                        req.response_chunk_queue
+                                            .push_back(ResponseChunk::Start { status, headers });
+                                    }
+                                    for chunk in req.response_prebuffer_chunks.drain(..) {
+                                        req.response_chunk_queue
+                                            .push_back(ResponseChunk::Data(chunk));
+                                    }
+                                }
+                                req.response_chunk_queue.push_back(ResponseChunk::End);
+                                break;
+                            }
+                        }
+                    }
+                }
+
                 // Drain as many chunks as quiche will accept this iteration.
                 loop {
                     // Retry any chunk that previously hit backpressure.
                     let chunk = match req.pending_chunk.take() {
                         Some(c) => c,
-                        None => match rx.try_recv() {
-                            Ok(c) => c,
-                            Err(TryRecvError::Empty) => break,
-                            Err(TryRecvError::Disconnected) => {
-                                req.phase = StreamPhase::Failed;
-                                terminal = true;
-                                break;
-                            }
+                        None => match req.response_chunk_queue.pop_front() {
+                            Some(c) => c,
+                            None => break,
                         },
                     };
                     match chunk {
@@ -3257,6 +3231,7 @@ impl QUICListener {
             // ── 5: remove terminal streams ────────────────────────────────────
             if terminal {
                 if let Some(req) = streams.get_mut(&stream_id) {
+                    Self::recycle_response_prebuffer_chunks(req, response_chunk_buffer_pool);
                     abort_stream(req, metrics);
                 }
                 streams.remove(&stream_id);
@@ -3264,6 +3239,19 @@ impl QUICListener {
         }
 
         Ok(())
+    }
+
+    fn recycle_response_prebuffer_chunks(
+        req: &mut RequestEnvelope,
+        response_chunk_buffer_pool: &Arc<std::sync::Mutex<Vec<Vec<Bytes>>>>,
+    ) {
+        let mut chunks = std::mem::take(&mut req.response_prebuffer_chunks);
+        chunks.clear();
+        if let Ok(mut pool) = response_chunk_buffer_pool.lock()
+            && pool.len() < 256
+        {
+            pool.push(chunks);
+        }
     }
 
     /// Resolve routing + LB for a request, returning `(backend_addr, backend_index, pool)`.
@@ -4130,19 +4118,6 @@ fn runtime_handle() -> Option<Handle> {
     fallback_runtime().map(|rt| rt.handle().clone())
 }
 
-fn spawn_async_task<F>(fut: F, _task_name: &str) -> bool
-where
-    F: Future + Send + 'static,
-    F::Output: Send + 'static,
-{
-    if let Some(handle) = runtime_handle() {
-        handle.spawn(fut);
-        true
-    } else {
-        false
-    }
-}
-
 fn spawn_supervised_async_task<F>(
     handle: &Handle,
     task_name: &'static str,
@@ -4834,7 +4809,15 @@ mod tests {
             phase,
             request_fin_received: false,
             upstream_task: None,
-            response_chunk_rx: None,
+            response_body: None,
+            response_chunk_queue: std::collections::VecDeque::new(),
+            response_defer_headers_until_body_validated: false,
+            response_pending_headers: None,
+            response_prebuffer_chunks: Vec::new(),
+            response_bytes_received: 0,
+            response_last_body_activity: None,
+            response_first_byte_deadline: None,
+            response_body_started: false,
             response_headers_sent: false,
             pending_chunk: None,
         }
@@ -4918,34 +4901,26 @@ mod tests {
     }
 
     /// Path B: client reset during body streaming (SendingResponse phase).
-    /// Dropping response_chunk_rx causes the body-pump task's next send to
-    /// return Err, making the task exit promptly.
+    /// Clears queued/pending response state.
     #[test]
-    fn abort_stream_sending_response_closes_chunk_channel() {
+    fn abort_stream_sending_response_clears_chunk_state() {
         let metrics = crate::Metrics::default();
-        let (chunk_tx, chunk_rx) = mpsc::channel::<crate::ResponseChunk>(4);
 
         let mut req = make_envelope(StreamPhase::SendingResponse);
-        req.response_chunk_rx = Some(chunk_rx);
+        req.response_chunk_queue
+            .push_back(crate::ResponseChunk::Data(bytes::Bytes::from_static(b"x")));
         req.pending_chunk = Some(crate::ResponseChunk::End);
 
         let phase = abort_stream(&mut req, &metrics);
 
         assert_eq!(phase, StreamPhase::SendingResponse);
         assert!(
-            req.response_chunk_rx.is_none(),
-            "chunk receiver must be cleared"
+            req.response_chunk_queue.is_empty(),
+            "chunk queue must be cleared"
         );
         assert!(
             req.pending_chunk.is_none(),
             "pending chunk must be discarded"
-        );
-
-        // The body-pump task's sender should observe a closed channel.
-        let send_result = chunk_tx.try_send(crate::ResponseChunk::End);
-        assert!(
-            send_result.is_err(),
-            "body-pump task send must fail after receiver dropped"
         );
     }
 
@@ -4971,13 +4946,12 @@ mod tests {
                 retry_denial_reason: None,
             }
         });
-        let (chunk_tx, chunk_rx) = mpsc::channel::<crate::ResponseChunk>(4);
-
         let mut req = make_envelope(StreamPhase::SendingResponse);
         req.global_inflight_permit = Some(global_permit);
         req.upstream_inflight_permit = Some(upstream_permit);
         req.upstream_task = Some(result_task);
-        req.response_chunk_rx = Some(chunk_rx);
+        req.response_chunk_queue
+            .push_back(crate::ResponseChunk::Data(bytes::Bytes::from_static(b"x")));
         req.pending_chunk = Some(crate::ResponseChunk::End);
 
         let phase = abort_stream(&mut req, &metrics);
@@ -4994,11 +4968,8 @@ mod tests {
             "upstream semaphore must be fully freed"
         );
         assert!(req.upstream_task.is_none());
-        assert!(req.response_chunk_rx.is_none());
+        assert!(req.response_chunk_queue.is_empty());
         assert!(req.pending_chunk.is_none());
-
-        // Body-pump task sender sees closed channel.
-        assert!(chunk_tx.try_send(crate::ResponseChunk::End).is_err());
     }
 
     /// Verify abort_stream is idempotent: calling it twice must not panic or

@@ -57,7 +57,14 @@ pub(crate) fn abort_stream(req: &mut RequestEnvelope, metrics: &Metrics) -> Stre
     if let Some(handle) = req.upstream_task.take() {
         handle.abort();
     }
-    req.response_chunk_rx = None;
+    req.response_body = None;
+    req.response_chunk_queue.clear();
+    req.response_pending_headers = None;
+    req.response_prebuffer_chunks.clear();
+    req.response_bytes_received = 0;
+    req.response_last_body_activity = None;
+    req.response_first_byte_deadline = None;
+    req.response_body_started = false;
     req.pending_chunk = None;
     req.global_inflight_permit = None;
     req.upstream_inflight_permit = None;
