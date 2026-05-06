@@ -87,10 +87,16 @@ impl QUICListener {
         let latency_ms = req.start.elapsed().as_millis() as u64;
         if req.routing_transparency_enabled {
             let reason = if req.routing_transparency_include_reason {
-                req.route_reason.as_deref().unwrap_or("-")
+                req.route_reason
+                    .map(|value| format!("{value:?}"))
+                    .unwrap_or_else(|| "-".to_string())
             } else {
-                "-"
+                "-".to_string()
             };
+            let lb_name = req
+                .backend_lb
+                .map(|value| value.as_str())
+                .unwrap_or("-");
             info!(
                 "request_id={} route_upstream={} route_path_len={} route_host_specific={} route_reason={} lb={}",
                 req.request_id,
@@ -98,7 +104,7 @@ impl QUICListener {
                 req.route_path_len.unwrap_or_default(),
                 req.route_host_specific.unwrap_or(false),
                 reason,
-                req.backend_lb.as_deref().unwrap_or("-")
+                lb_name
             );
         }
 

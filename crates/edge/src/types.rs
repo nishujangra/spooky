@@ -18,8 +18,45 @@ use crate::RetryReason;
 use crate::cid_radix::CidRadix;
 use crate::constants::MAX_DATAGRAM_SIZE_BYTES;
 use crate::resilience::{AdaptivePermit, RouteQueuePermit, RuntimeResilience};
-use crate::route_index;
+use crate::route_index::{self, RouteDecisionReason};
 use crate::watchdog::WatchdogCoordinator;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendLbKind {
+    RoundRobin,
+    ConsistentHash,
+    Random,
+    LeastConnections,
+    LatencyAware,
+    StickyCid,
+    Unknown,
+}
+
+impl BackendLbKind {
+    pub fn from_name(value: &str) -> Self {
+        match value {
+            "round-robin" => Self::RoundRobin,
+            "consistent-hash" => Self::ConsistentHash,
+            "random" => Self::Random,
+            "least-connections" => Self::LeastConnections,
+            "latency-aware" => Self::LatencyAware,
+            "sticky-cid" => Self::StickyCid,
+            _ => Self::Unknown,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::RoundRobin => "round-robin",
+            Self::ConsistentHash => "consistent-hash",
+            Self::Random => "random",
+            Self::LeastConnections => "least-connections",
+            Self::LatencyAware => "latency-aware",
+            Self::StickyCid => "sticky-cid",
+            Self::Unknown => "unknown",
+        }
+    }
+}
 
 pub struct SharedRuntimeState {
     pub(crate) h2_pool: Arc<H2Pool>,
@@ -200,10 +237,10 @@ pub struct RequestEnvelope {
     pub backend_addr: Option<String>,
     pub backend_index: Option<usize>,
     pub upstream_name: Option<String>,
-    pub route_reason: Option<String>,
+    pub(crate) route_reason: Option<RouteDecisionReason>,
     pub route_path_len: Option<usize>,
     pub route_host_specific: Option<bool>,
-    pub backend_lb: Option<String>,
+    pub backend_lb: Option<BackendLbKind>,
     pub upstream_pool: Option<Arc<RwLock<UpstreamPool>>>,
     pub routing_transparency_enabled: bool,
     pub routing_transparency_include_reason: bool,
