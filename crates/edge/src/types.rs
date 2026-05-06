@@ -58,10 +58,46 @@ impl BackendLbKind {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum LoadBalancingKeyPolicy {
+    Default,
+    Path,
+    Authority,
+    Method,
+    Header(String),
+}
+
+impl LoadBalancingKeyPolicy {
+    pub fn from_config(raw: Option<&str>) -> Self {
+        let Some(raw) = raw else {
+            return Self::Default;
+        };
+        let normalized = raw.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "" => Self::Default,
+            "default" => Self::Default,
+            "path" => Self::Path,
+            "authority" | "host" => Self::Authority,
+            "method" => Self::Method,
+            _ => {
+                if let Some(header) = normalized.strip_prefix("header:") {
+                    if header.is_empty() {
+                        return Self::Default;
+                    }
+                    Self::Header(header.to_string())
+                } else {
+                    Self::Default
+                }
+            }
+        }
+    }
+}
+
 pub struct SharedRuntimeState {
     pub(crate) h2_pool: Arc<H2Pool>,
     pub(crate) backend_endpoints: Arc<HashMap<String, BackendEndpoint>>,
     pub(crate) upstream_pools: HashMap<String, Arc<RwLock<UpstreamPool>>>,
+    pub(crate) upstream_lb_keys: HashMap<String, LoadBalancingKeyPolicy>,
     pub(crate) upstream_inflight: HashMap<String, Arc<Semaphore>>,
     pub(crate) global_inflight: Arc<Semaphore>,
     pub(crate) metrics: Arc<Metrics>,
@@ -113,6 +149,7 @@ pub struct QUICListener {
     pub h2_pool: Arc<H2Pool>,
     pub backend_endpoints: Arc<HashMap<String, BackendEndpoint>>,
     pub upstream_pools: HashMap<String, Arc<RwLock<UpstreamPool>>>,
+    pub upstream_lb_keys: HashMap<String, LoadBalancingKeyPolicy>,
     pub upstream_inflight: HashMap<String, Arc<Semaphore>>,
     pub global_inflight: Arc<Semaphore>,
     pub(crate) routing_index: route_index::RouteIndex,

@@ -59,7 +59,7 @@ use crate::{
     outcome_from_status,
     resilience::{RouteQueueRejection, RuntimeResilience},
     route_index::{RouteDecisionReason, RouteIndex, normalize_host_for_routing},
-    types::BackendLbKind,
+    types::{BackendLbKind, LoadBalancingKeyPolicy},
     watchdog::{WatchdogCoordinator, WatchdogRuntimeConfig, now_millis},
 };
 
@@ -213,6 +213,7 @@ impl QUICListener {
             .map_err(ProxyError::Tls)?,
         );
         let mut upstream_pools = HashMap::new();
+        let mut upstream_lb_keys = HashMap::new();
         let mut upstream_inflight = HashMap::new();
 
         for (name, upstream) in &config.upstream {
@@ -223,6 +224,10 @@ impl QUICListener {
                 ))
             })?;
             upstream_pools.insert(name.clone(), Arc::new(RwLock::new(upstream_pool)));
+            upstream_lb_keys.insert(
+                name.clone(),
+                LoadBalancingKeyPolicy::from_config(upstream.load_balancing.key.as_deref()),
+            );
             upstream_inflight.insert(name.clone(), Arc::new(Semaphore::new(per_upstream_limit)));
         }
 
@@ -281,6 +286,7 @@ impl QUICListener {
                     .collect(),
             ),
             upstream_pools,
+            upstream_lb_keys,
             upstream_inflight,
             global_inflight: Arc::new(Semaphore::new(global_inflight_limit)),
             metrics: Arc::new(Metrics::new(worker_slots, route_labels)),
@@ -403,6 +409,7 @@ impl QUICListener {
             h2_pool: Arc::clone(&shared_state.h2_pool),
             backend_endpoints: Arc::clone(&shared_state.backend_endpoints),
             upstream_pools: shared_state.upstream_pools.clone(),
+            upstream_lb_keys: shared_state.upstream_lb_keys.clone(),
             upstream_inflight: shared_state.upstream_inflight.clone(),
             global_inflight: Arc::clone(&shared_state.global_inflight),
             routing_index,
@@ -1169,6 +1176,7 @@ impl QUICListener {
                 Arc::clone(&h2_pool),
                 Arc::clone(&self.backend_endpoints),
                 &self.upstream_pools,
+                &self.upstream_lb_keys,
                 &self.upstream_inflight,
                 Arc::clone(&self.global_inflight),
                 self.backend_timeout,
@@ -1414,6 +1422,7 @@ impl QUICListener {
         h2_pool: Arc<H2Pool>,
         backend_endpoints: Arc<HashMap<String, BackendEndpoint>>,
         upstream_pools: &HashMap<String, Arc<RwLock<UpstreamPool>>>,
+        upstream_lb_keys: &HashMap<String, LoadBalancingKeyPolicy>,
         upstream_inflight: &HashMap<String, Arc<Semaphore>>,
         global_inflight: Arc<Semaphore>,
         backend_timeout: Duration,
@@ -1511,7 +1520,9 @@ impl QUICListener {
                         route_path,
                         authority.as_deref(),
                         Some(connection.sticky_cid_key.as_ref()),
+                        &list,
                         upstream_pools,
+                        upstream_lb_keys,
                         routing_index,
                     );
 
@@ -3215,12 +3226,50 @@ impl QUICListener {
     }
 
     /// Resolve routing + LB for a request, returning `(backend_addr, backend_index, pool)`.
+    fn header_value_for_lb_key<'a>(
+        headers: &'a [quiche::h3::Header],
+        header_name: &str,
+    ) -> Option<&'a str> {
+        headers.iter().find_map(|header| {
+            std::str::from_utf8(header.name())
+                .ok()
+                .filter(|name| name.eq_ignore_ascii_case(header_name))
+                .and_then(|_| std::str::from_utf8(header.value()).ok())
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+        })
+    }
+
+    fn key_for_policy<'a>(
+        policy: &LoadBalancingKeyPolicy,
+        method: &'a str,
+        path: &'a str,
+        authority: Option<&'a str>,
+        headers: &'a [quiche::h3::Header],
+    ) -> &'a str {
+        match policy {
+            LoadBalancingKeyPolicy::Path => path,
+            LoadBalancingKeyPolicy::Authority => authority.unwrap_or(path),
+            LoadBalancingKeyPolicy::Method => method,
+            LoadBalancingKeyPolicy::Header(name) => {
+                Self::header_value_for_lb_key(headers, name).unwrap_or_else(|| {
+                    authority.unwrap_or(if !path.is_empty() { path } else { method })
+                })
+            }
+            LoadBalancingKeyPolicy::Default => {
+                authority.unwrap_or(if !path.is_empty() { path } else { method })
+            }
+        }
+    }
+
     fn resolve_backend(
         method: &str,
         path: &str,
         authority: Option<&str>,
         cid_key: Option<&str>,
+        headers: &[quiche::h3::Header],
         upstream_pools: &HashMap<String, Arc<RwLock<UpstreamPool>>>,
+        upstream_lb_keys: &HashMap<String, LoadBalancingKeyPolicy>,
         routing_index: &RouteIndex,
     ) -> Result<ResolvedBackend, ProxyError> {
         if method.is_empty() || path.is_empty() {
@@ -3237,7 +3286,11 @@ impl QUICListener {
             .ok_or_else(|| ProxyError::Transport(format!("pool not found: {upstream_name}")))?
             .clone();
 
-        let request_key = authority.unwrap_or(if !path.is_empty() { path } else { method });
+        let lb_policy = upstream_lb_keys
+            .get(upstream_name)
+            .cloned()
+            .unwrap_or(LoadBalancingKeyPolicy::Default);
+        let request_key = Self::key_for_policy(&lb_policy, method, path, authority, headers);
         let key_for_lb = |lb_type: &str| -> &str {
             if lb_type == "sticky-cid" {
                 cid_key.unwrap_or(request_key)
@@ -3602,6 +3655,7 @@ impl QUICListener {
         let h2_pool = Arc::clone(&shared_state.h2_pool);
         let backend_endpoints = Arc::clone(&shared_state.backend_endpoints);
         let upstream_pools = shared_state.upstream_pools.clone();
+        let upstream_lb_keys = shared_state.upstream_lb_keys.clone();
         let routing_index = RouteIndex::from_upstreams(&config.upstream);
 
         let handle = match runtime_handle() {
@@ -3663,6 +3717,7 @@ impl QUICListener {
                 let h2_pool = Arc::clone(&h2_pool);
                 let backend_endpoints = Arc::clone(&backend_endpoints);
                 let upstream_pools = upstream_pools.clone();
+                let upstream_lb_keys = upstream_lb_keys.clone();
                 let routing_index = Arc::clone(&routing_index);
                 let connection_timeout = bootstrap_connection_timeout;
                 let connection_permit = match Arc::clone(&connection_limiter).try_acquire_owned() {
@@ -3694,6 +3749,7 @@ impl QUICListener {
                         let h2_pool = Arc::clone(&h2_pool);
                         let backend_endpoints = Arc::clone(&backend_endpoints);
                         let upstream_pools = upstream_pools.clone();
+                        let upstream_lb_keys = upstream_lb_keys.clone();
                         let routing_index = Arc::clone(&routing_index);
 
                         Box::pin(async move {
@@ -3726,7 +3782,9 @@ impl QUICListener {
                                 route_path,
                                 authority.as_deref(),
                                 None,
+                                &[],
                                 &upstream_pools,
+                                &upstream_lb_keys,
                                 &routing_index,
                             );
                             let (_upstream_name, backend_addr, _backend_idx, _pool, _lb, _, _, _) =

@@ -1,5 +1,6 @@
 use crate::backend_endpoint::{BackendEndpoint, BackendScheme};
 use crate::config::{CURRENT_CONFIG_VERSION, Config, SUPPORTED_CONFIG_VERSIONS};
+use http::HeaderName;
 use log::{error, info, warn};
 use std::fs::File;
 use std::io::BufReader;
@@ -111,6 +112,41 @@ fn is_loopback_bind_address(raw: &str) -> bool {
         .parse::<IpAddr>()
         .map(|ip| ip.is_loopback())
         .unwrap_or(false)
+}
+
+fn validate_lb_key_policy(upstream_name: &str, key: Option<&str>) -> bool {
+    let Some(raw) = key else {
+        return true;
+    };
+    let normalized = raw.trim().to_ascii_lowercase();
+    if normalized.is_empty() || normalized == "default" {
+        return true;
+    }
+    if matches!(normalized.as_str(), "path" | "authority" | "host" | "method") {
+        return true;
+    }
+    if let Some(header) = normalized.strip_prefix("header:") {
+        if header.is_empty() {
+            error!(
+                "Invalid load_balancing.key '{}' for upstream '{}': header name cannot be empty",
+                raw, upstream_name
+            );
+            return false;
+        }
+        if HeaderName::from_bytes(header.as_bytes()).is_err() {
+            error!(
+                "Invalid load_balancing.key '{}' for upstream '{}': header name is not valid",
+                raw, upstream_name
+            );
+            return false;
+        }
+        return true;
+    }
+    error!(
+        "Invalid load_balancing.key '{}' for upstream '{}': expected one of default/path/authority/method/header:<name>",
+        raw, upstream_name
+    );
+    false
 }
 
 pub fn validate(config: &Config) -> bool {
@@ -910,6 +946,10 @@ pub fn validate(config: &Config) -> bool {
                 "Invalid load balancing type '{}' for upstream '{}'",
                 upstream.load_balancing.lb_type, upstream_name
             );
+            return false;
+        }
+
+        if !validate_lb_key_policy(upstream_name, upstream.load_balancing.key.as_deref()) {
             return false;
         }
 

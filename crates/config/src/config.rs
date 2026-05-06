@@ -247,9 +247,8 @@ pub struct LoadBalancing {
     #[serde(rename = "type")]
     pub lb_type: String, // "random","round_robin","consistent_hash","least_connections","latency_aware","sticky_cid"
 
-    // Add support for consistent hash configuration
     #[serde(default)]
-    pub key: Option<String>, // For consistent hashing (header, cookie, etc.)
+    pub key: Option<String>, // Key policy: default|path|authority|method|header:<name>
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
