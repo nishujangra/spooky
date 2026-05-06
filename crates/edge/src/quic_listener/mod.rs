@@ -1472,6 +1472,8 @@ impl QUICListener {
                     };
                     let method = request.method;
                     let path = request.path;
+                    let route_path_end = request.route_path_end;
+                    let route_path = &path[..route_path_end];
                     let authority = request.authority;
 
                     metrics.inc_total();
@@ -1503,7 +1505,7 @@ impl QUICListener {
                     // Route lookup — needed to start the H2 request immediately.
                     let resolved = Self::resolve_backend(
                         &method,
-                        &path,
+                        route_path,
                         authority.as_deref(),
                         Some(connection.sticky_cid_key.as_ref()),
                         upstream_pools,
@@ -2122,6 +2124,7 @@ impl QUICListener {
                             trace_span,
                             method,
                             path,
+                            route_path_end,
                             authority,
                             body_tx,
                             body_buf: std::collections::VecDeque::new(),
@@ -3108,7 +3111,7 @@ impl QUICListener {
                             // Mirror the health/metrics updates from the old
                             // send_backend_response timeout/error paths.
                             let upstream_name =
-                                routing_index.lookup(&req.path, req.authority.as_deref());
+                                routing_index.lookup(req.route_path(), req.authority.as_deref());
                             if let (Some(idx), Some(pool)) = (
                                 req.backend_index,
                                 upstream_name.and_then(|n| upstream_pools.get(n)),
@@ -4594,6 +4597,7 @@ mod tests {
             trace_span: None,
             method: "GET".into(),
             path: "/".into(),
+            route_path_end: 1,
             authority: None,
             body_tx: None,
             body_buf: std::collections::VecDeque::new(),

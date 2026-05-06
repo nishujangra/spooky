@@ -203,7 +203,7 @@ impl QUICListener {
         };
 
         // Re-acquire the upstream pool for health marking.
-        let upstream_name = routing_index.lookup(&req.path, req.authority.as_deref());
+        let upstream_name = routing_index.lookup(req.route_path(), req.authority.as_deref());
         let upstream_pool = req
             .upstream_pool
             .as_ref()

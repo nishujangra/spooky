@@ -184,6 +184,7 @@ pub struct RequestEnvelope {
 
     pub method: String,
     pub path: String,
+    pub route_path_end: usize,
     pub authority: Option<String>,
     /// Sender half of the body channel.  Dropping it signals end-of-body to hyper.
     pub body_tx: Option<mpsc::Sender<Bytes>>,
@@ -236,6 +237,10 @@ pub struct RequestEnvelope {
 impl RequestEnvelope {
     pub fn request_id(&self) -> u64 {
         self.request_id
+    }
+
+    pub fn route_path(&self) -> &str {
+        &self.path[..self.route_path_end.min(self.path.len())]
     }
 }
 

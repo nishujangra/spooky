@@ -3,6 +3,7 @@ use super::*;
 pub(super) struct RequestValidationResult {
     pub(super) method: String,
     pub(super) path: String,
+    pub(super) route_path_end: usize,
     pub(super) authority: Option<String>,
 }
 
@@ -172,6 +173,19 @@ pub(super) fn validate_request_headers(
             ));
         }
     };
+    let route_path_end = path
+        .as_bytes()
+        .iter()
+        .position(|b| *b == b'?' || *b == b'#')
+        .unwrap_or(path.len());
+    let route_path = &path[..route_path_end];
+    if route_path.is_empty() || !route_path.starts_with('/') {
+        return Err((
+            http::StatusCode::BAD_REQUEST,
+            b"invalid :path header\n",
+            false,
+        ));
+    }
 
     let authority = match authority {
         Some(value) => match std::str::from_utf8(value) {
@@ -220,7 +234,7 @@ pub(super) fn validate_request_headers(
         ));
     }
 
-    if resilience.path_denied(path) {
+    if resilience.path_denied(route_path) {
         return Err((
             http::StatusCode::FORBIDDEN,
             b"request path blocked by policy\n",
@@ -231,6 +245,7 @@ pub(super) fn validate_request_headers(
     Ok(RequestValidationResult {
         method: method.to_string(),
         path: path.to_string(),
+        route_path_end,
         authority: authority.or(host).map(str::to_string),
     })
 }
