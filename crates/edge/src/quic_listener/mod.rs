@@ -431,6 +431,7 @@ impl QUICListener {
             request_buffer_global_cap_bytes,
             unknown_length_response_prebuffer_bytes,
             require_client_cert,
+            response_chunk_buffer_pool: Arc::new(std::sync::Mutex::new(Vec::new())),
             recv_buf: [0; MAX_DATAGRAM_SIZE_BYTES],
             send_buf: [0; MAX_DATAGRAM_SIZE_BYTES],
             connections: HashMap::new(),
@@ -1195,6 +1196,7 @@ impl QUICListener {
                 self.request_buffer_global_cap_bytes,
                 self.unknown_length_response_prebuffer_bytes,
                 self.client_body_idle_timeout,
+                &self.response_chunk_buffer_pool,
                 self.config.observability.tracing.enabled,
                 self.config.observability.routing.enabled,
                 self.config.observability.routing.include_reason,
@@ -1284,6 +1286,7 @@ impl QUICListener {
                     self.max_response_body_bytes,
                     self.unknown_length_response_prebuffer_bytes,
                     self.client_body_idle_timeout,
+                    &self.response_chunk_buffer_pool,
                     self.config.listen.port,
                 ) {
                     error!("advance_streams_non_blocking in timeout path: {:?}", e);
@@ -1441,6 +1444,7 @@ impl QUICListener {
         request_buffer_global_cap_bytes: usize,
         unknown_length_response_prebuffer_bytes: usize,
         client_body_idle_timeout: Duration,
+        response_chunk_buffer_pool: &Arc<std::sync::Mutex<Vec<Vec<Bytes>>>>,
         tracing_enabled: bool,
         routing_transparency_enabled: bool,
         routing_transparency_include_reason: bool,
@@ -2395,6 +2399,7 @@ impl QUICListener {
             max_response_body_bytes,
             unknown_length_response_prebuffer_bytes,
             client_body_idle_timeout,
+            response_chunk_buffer_pool,
             listen_port,
         )?;
 
@@ -2434,6 +2439,7 @@ impl QUICListener {
         max_response_body_bytes: usize,
         unknown_length_response_prebuffer_bytes: usize,
         client_body_idle_timeout: Duration,
+        response_chunk_buffer_pool: &Arc<std::sync::Mutex<Vec<Vec<Bytes>>>>,
         listen_port: u32,
     ) -> Result<(), quiche::h3::Error> {
         let stream_ids: Vec<u64> = streams.keys().copied().collect();
@@ -2766,6 +2772,8 @@ impl QUICListener {
                             let (chunk_tx, chunk_rx) =
                                 mpsc::channel::<ResponseChunk>(RESPONSE_CHUNK_CHANNEL_CAPACITY);
                             let fail_tx = chunk_tx.clone();
+                            let response_chunk_buffer_pool =
+                                Arc::clone(response_chunk_buffer_pool);
                             // `backend_body_total_timeout` is used as a pre-first-byte guard:
                             // once the upstream starts making body progress, the idle timeout
                             // governs pacing and the stream may continue until request deadline.
@@ -2777,7 +2785,12 @@ impl QUICListener {
                                 use http_body_util::BodyExt;
                                 let mut body: hyper::body::Incoming = body;
                                 let mut response_bytes_received: usize = 0;
-                                let mut buffered_chunks: Vec<Bytes> = Vec::new();
+                                let mut buffered_chunks: Vec<Bytes> = response_chunk_buffer_pool
+                                    .lock()
+                                    .ok()
+                                    .and_then(|mut pool| pool.pop())
+                                    .unwrap_or_default();
+                                buffered_chunks.clear();
                                 let mut saw_body_progress = false;
                                 loop {
                                     let frame_fut = BodyExt::frame(&mut body);
@@ -2889,7 +2902,7 @@ impl QUICListener {
                                                 {
                                                     return;
                                                 }
-                                                for chunk in buffered_chunks {
+                                                for chunk in buffered_chunks.drain(..) {
                                                     if chunk_tx
                                                         .send(ResponseChunk::Data(chunk))
                                                         .await
@@ -2897,6 +2910,12 @@ impl QUICListener {
                                                     {
                                                         return;
                                                     }
+                                                }
+                                                buffered_chunks.clear();
+                                                if let Ok(mut pool) = response_chunk_buffer_pool.lock()
+                                                    && pool.len() < 256
+                                                {
+                                                    pool.push(buffered_chunks);
                                                 }
                                             }
                                             let _ = chunk_tx.send(ResponseChunk::End).await;

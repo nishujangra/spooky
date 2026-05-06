@@ -7,7 +7,7 @@ use spooky_transport::h2_pool::H2Pool;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     net::UdpSocket,
-    sync::{Arc, RwLock},
+    sync::{Arc, Mutex, RwLock},
     time::{Duration, Instant},
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
@@ -171,6 +171,7 @@ pub struct QUICListener {
     pub request_buffer_global_cap_bytes: usize,
     pub unknown_length_response_prebuffer_bytes: usize,
     pub require_client_cert: bool,
+    pub response_chunk_buffer_pool: Arc<Mutex<Vec<Vec<Bytes>>>>,
 
     pub recv_buf: [u8; MAX_DATAGRAM_SIZE_BYTES],
     pub send_buf: [u8; MAX_DATAGRAM_SIZE_BYTES],
