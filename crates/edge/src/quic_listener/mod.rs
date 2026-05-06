@@ -1850,6 +1850,7 @@ impl QUICListener {
 
                             let h2 = h2_pool.clone();
                             let fwd_addr = addr.clone();
+                            let fwd_index = idx;
                             let cb = Arc::clone(&resilience.circuit_breakers);
                             let retry_budget = Arc::clone(&resilience.retry_budget);
                             let route_name = upstream_name.clone();
@@ -1882,6 +1883,7 @@ impl QUICListener {
 
                                     let send_once =
                                         |backend: String,
+                                         backend_idx: usize,
                                          req: http::Request<
                                             BoxBody<Bytes, std::convert::Infallible>,
                                         >,
@@ -1894,7 +1896,7 @@ impl QUICListener {
                                             }
                                             let send_result = tokio::time::timeout(
                                                 backend_timeout,
-                                                h2.send(&backend, req),
+                                                h2.send_by_index(backend_idx, req),
                                             )
                                             .await
                                             .map_err(|_| ProxyError::Timeout);
@@ -1908,21 +1910,23 @@ impl QUICListener {
                                     let response: Response<Incoming> = if allow_hedge {
                                         let hedge_candidate = alternate_backend
                                             .clone()
-                                            .and_then(|(backend, _idx)| {
+                                            .and_then(|(backend, idx)| {
                                                 let meta = forward_meta.as_ref()?;
                                                 let endpoint = backend_endpoints.get(&backend)?;
                                                 meta.build_bodyless_request(endpoint)
                                                     .ok()
-                                                    .map(|req| (backend, req))
+                                                    .map(|req| (backend, idx, req))
                                             });
 
-                                        if let Some((hedge_backend, hedge_request)) =
+                                        if let Some((hedge_backend, hedge_backend_idx, hedge_request)) =
                                             hedge_candidate
                                         {
                                             let primary_started = Instant::now();
                                             let primary_backend = fwd_addr.clone();
+                                            let primary_backend_idx = fwd_index;
                                             let primary_fut = send_once(
                                                 primary_backend,
+                                                primary_backend_idx,
                                                 request,
                                                 Arc::clone(&cb),
                                                 Arc::clone(&h2),
@@ -1940,6 +1944,7 @@ impl QUICListener {
                                                 hedge_telemetry.launched = true;
                                                 let hedge_fut = send_once(
                                                     hedge_backend,
+                                                    hedge_backend_idx,
                                                     hedge_request,
                                                     Arc::clone(&cb),
                                                     Arc::clone(&h2),
@@ -1965,6 +1970,7 @@ impl QUICListener {
                                         } else {
                                             send_once(
                                                 fwd_addr.clone(),
+                                                fwd_index,
                                                 request,
                                                 Arc::clone(&cb),
                                                 Arc::clone(&h2),
@@ -1974,6 +1980,7 @@ impl QUICListener {
                                     } else {
                                         match send_once(
                                             fwd_addr.clone(),
+                                            fwd_index,
                                             request,
                                             Arc::clone(&cb),
                                             Arc::clone(&h2),
@@ -1998,7 +2005,7 @@ impl QUICListener {
                                                         retry_denial_reason = Some(RetryReason::NoAlternateBackend);
                                                     }
                                                     return Err(primary_err);
-                                                } else if let Some((retry_backend, _)) =
+                                                } else if let Some((retry_backend, retry_idx)) =
                                                         alternate_backend.clone()
                                                     && let Some(meta) = forward_meta.as_ref()
                                                     && let Some(endpoint) = backend_endpoints
@@ -2014,6 +2021,7 @@ impl QUICListener {
                                                     );
                                                     send_once(
                                                         retry_backend,
+                                                        retry_idx,
                                                         retry_request,
                                                         Arc::clone(&cb),
                                                         Arc::clone(&h2),
@@ -3789,7 +3797,7 @@ impl QUICListener {
                                 &upstream_lb_keys,
                                 &routing_index,
                             );
-                            let (_upstream_name, backend_addr, _backend_idx, _pool, _lb, _, _, _) =
+                            let (_upstream_name, backend_addr, backend_idx, _pool, _lb, _, _, _) =
                                 match resolved {
                                     Ok(value) => value,
                                     Err(_) => {
@@ -3927,7 +3935,7 @@ impl QUICListener {
                                 let retry_req = Request::from_parts((*parts).clone(), retry_body);
                                 match tokio::time::timeout(
                                     backend_timeout,
-                                    h2_pool.send(&backend_addr, retry_req),
+                                    h2_pool.send_by_index(backend_idx, retry_req),
                                 )
                                 .await
                                 {

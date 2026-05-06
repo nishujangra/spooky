@@ -14,7 +14,8 @@ struct BackendHandle {
 }
 
 pub struct H2Pool {
-    backends: HashMap<String, BackendHandle>,
+    backend_index: HashMap<String, usize>,
+    backends: Vec<BackendHandle>,
 }
 
 impl H2Pool {
@@ -31,7 +32,8 @@ impl H2Pool {
     {
         let inflight = max_inflight.max(1);
         let max_idle_per_backend = max_idle_per_backend.max(1);
-        let mut map = HashMap::new();
+        let mut index = HashMap::new();
+        let mut backend_handles = Vec::new();
         for backend in backends {
             let client = H2Client::new(
                 max_idle_per_backend,
@@ -39,19 +41,25 @@ impl H2Pool {
                 connect_timeout,
                 tls.clone(),
             )?;
-            map.insert(
-                backend,
-                BackendHandle {
-                    client,
-                    inflight: Arc::new(Semaphore::new(inflight)),
-                },
-            );
+            let slot = backend_handles.len();
+            index.insert(backend, slot);
+            backend_handles.push(BackendHandle {
+                client,
+                inflight: Arc::new(Semaphore::new(inflight)),
+            });
         }
-        Ok(Self { backends: map })
+        Ok(Self {
+            backend_index: index,
+            backends: backend_handles,
+        })
     }
 
     pub fn has_backend(&self, backend: &str) -> bool {
-        self.backends.contains_key(backend)
+        self.backend_index.contains_key(backend)
+    }
+
+    pub fn backend_index(&self, backend: &str) -> Option<usize> {
+        self.backend_index.get(backend).copied()
     }
 
     pub async fn send(
@@ -59,15 +67,28 @@ impl H2Pool {
         backend: &str,
         req: Request<BoxBody<Bytes, Infallible>>,
     ) -> Result<hyper::Response<Incoming>, PoolError> {
+        let idx = self
+            .backend_index(backend)
+            .ok_or_else(|| PoolError::UnknownBackend(backend.to_string()))?;
+        self.send_by_index(idx, req).await
+    }
+
+    pub async fn send_by_index(
+        &self,
+        backend_index: usize,
+        req: Request<BoxBody<Bytes, Infallible>>,
+    ) -> Result<hyper::Response<Incoming>, PoolError> {
         let handle = self
             .backends
-            .get(backend)
-            .ok_or_else(|| PoolError::UnknownBackend(backend.to_string()))?;
-
+            .get(backend_index)
+            .ok_or_else(|| PoolError::UnknownBackend(backend_index.to_string()))?;
         let _permit = match Arc::clone(&handle.inflight).try_acquire_owned() {
             Ok(permit) => permit,
             Err(TryAcquireError::NoPermits) => {
-                return Err(PoolError::BackendOverloaded(backend.to_string()));
+                return Err(PoolError::BackendOverloaded(format!(
+                    "backend-index:{}",
+                    backend_index
+                )));
             }
             Err(TryAcquireError::Closed) => return Err(PoolError::InflightLimiterClosed),
         };
