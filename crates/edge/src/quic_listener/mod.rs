@@ -821,11 +821,9 @@ impl QUICListener {
                 connection.last_scid_rotation = now;
                 connection.packets_since_rotation = 0;
                 metrics.inc_scid_rotation();
-                debug!(
-                    "Issued new SCID seq={} cid={}",
-                    seq,
-                    hex::encode(&cid_bytes)
-                );
+                if log::log_enabled!(log::Level::Debug) {
+                    debug!("Issued new SCID seq={} cid={}", seq, hex::encode(&cid_bytes));
+                }
             }
             Err(e) => {
                 debug!("SCID rotation skipped: {:?}", e);
@@ -1009,7 +1007,14 @@ impl QUICListener {
         let h2_pool = self.h2_pool.clone();
 
         // First, try to find existing connection by DCID
-        debug!("Looking up connection with DCID: {:?}", hex::encode(dcid));
+        let dcid_hex = if log::log_enabled!(log::Level::Debug) {
+            Some(hex::encode(dcid))
+        } else {
+            None
+        };
+        if let Some(dcid_hex) = dcid_hex.as_deref() {
+            debug!("Looking up connection with DCID: {:?}", dcid_hex);
+        }
         let (mut connection, current_primary) =
             if let Some(mut conn) = self.connections.remove(dcid) {
                 let primary = Arc::clone(&conn.primary_scid);
@@ -1023,7 +1028,7 @@ impl QUICListener {
                     conn.peer_address = peer;
                     debug!(
                         "Found existing connection via SCID alias {} -> {}",
-                        hex::encode(dcid),
+                        dcid_hex.as_deref().unwrap_or("<redacted>"),
                         hex::encode(&primary)
                     );
                     (conn, primary)
@@ -1045,7 +1050,7 @@ impl QUICListener {
                             debug!(
                                 "Dropping packet for unknown connection from {} (DCID: {:?})",
                                 peer,
-                                hex::encode(dcid)
+                                dcid_hex.as_deref().unwrap_or("<redacted>")
                             );
                             return;
                         }
@@ -1079,7 +1084,7 @@ impl QUICListener {
                             debug!(
                                 "Dropping packet for unknown connection from {} (DCID: {:?})",
                                 peer,
-                                hex::encode(dcid)
+                                dcid_hex.as_deref().unwrap_or("<redacted>")
                             );
                             return;
                         }
@@ -1102,7 +1107,7 @@ impl QUICListener {
                         debug!(
                             "Dropping packet for unknown connection from {} (DCID: {:?})",
                             peer,
-                            hex::encode(dcid)
+                            dcid_hex.as_deref().unwrap_or("<redacted>")
                         );
                         return;
                     }
