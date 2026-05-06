@@ -338,7 +338,8 @@ fn run_sharded_listener_worker(
             .saturating_add(shard_idx);
         let shard_queue_bytes_counter = Arc::new(AtomicUsize::new(0));
         shard_queue_bytes.push(Arc::clone(&shard_queue_bytes_counter));
-        let (recycle_tx, recycle_rx) = mpsc::sync_channel::<Vec<u8>>(PACKET_BUFFER_RECYCLE_CAPACITY);
+        let (recycle_tx, recycle_rx) =
+            mpsc::sync_channel::<Vec<u8>>(PACKET_BUFFER_RECYCLE_CAPACITY);
         recycle_rxs.push(recycle_rx);
 
         let (tx, rx) = mpsc::sync_channel::<IngressPacket>(shard_queue_capacity);

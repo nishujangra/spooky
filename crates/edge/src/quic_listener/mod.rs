@@ -2049,13 +2049,11 @@ impl QUICListener {
                                     retry_denial_reason,
                                 }
                             };
-                            let upstream_task = match runtime_handle() {
-                                Some(handle) => Some(match trace_span_for_upstream {
+                            let upstream_task =
+                                runtime_handle().map(|handle| match trace_span_for_upstream {
                                     Some(span) => handle.spawn(fut.instrument(span)),
                                     None => handle.spawn(fut),
-                                }),
-                                None => None,
-                            };
+                                });
                             if upstream_task.is_none() {
                                 error!("dropping upstream task: no runtime available");
                             }
@@ -2534,8 +2532,8 @@ impl QUICListener {
                 None
             };
 
-            let upstream_ready: Option<UpstreamResult> = if let Some(task) = completed_task {
-                Some(match task.now_or_never() {
+            let upstream_ready: Option<UpstreamResult> =
+                completed_task.map(|task| match task.now_or_never() {
                     Some(Ok(result)) => result,
                     Some(Err(join_err)) => UpstreamResult {
                         forward: Err(ProxyError::Transport(format!(
@@ -2556,10 +2554,7 @@ impl QUICListener {
                         retry_attempt_reason: None,
                         retry_denial_reason: None,
                     },
-                })
-            } else {
-                None
-            };
+                });
 
             if let Some(forward_result) = upstream_ready {
                 if forward_result.hedge.launched {
@@ -2772,8 +2767,7 @@ impl QUICListener {
                             let (chunk_tx, chunk_rx) =
                                 mpsc::channel::<ResponseChunk>(RESPONSE_CHUNK_CHANNEL_CAPACITY);
                             let fail_tx = chunk_tx.clone();
-                            let response_chunk_buffer_pool =
-                                Arc::clone(response_chunk_buffer_pool);
+                            let response_chunk_buffer_pool = Arc::clone(response_chunk_buffer_pool);
                             // `backend_body_total_timeout` is used as a pre-first-byte guard:
                             // once the upstream starts making body progress, the idle timeout
                             // governs pacing and the stream may continue until request deadline.
@@ -2912,7 +2906,8 @@ impl QUICListener {
                                                     }
                                                 }
                                                 buffered_chunks.clear();
-                                                if let Ok(mut pool) = response_chunk_buffer_pool.lock()
+                                                if let Ok(mut pool) =
+                                                    response_chunk_buffer_pool.lock()
                                                     && pool.len() < 256
                                                 {
                                                     pool.push(buffered_chunks);
@@ -3365,7 +3360,9 @@ impl QUICListener {
                 ProxyError::Transport("no healthy servers".into())
             })?;
             if !pool.begin_request_if_healthy(idx) {
-                return Err(ProxyError::Transport("selected backend is unhealthy".into()));
+                return Err(ProxyError::Transport(
+                    "selected backend is unhealthy".into(),
+                ));
             }
             let backend_addr = pool
                 .pool
