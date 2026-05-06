@@ -453,11 +453,11 @@ impl LoadBalancing {
     pub fn pick_readonly(&self, _key: &str, pool: &BackendPool) -> Option<usize> {
         match self {
             LoadBalancing::RoundRobin(rr) => rr.pick_readonly(pool),
+            LoadBalancing::ConsistentHash(ch) => ch.pick_readonly(_key, pool),
             LoadBalancing::Random(rand) => rand.pick_readonly(pool),
             LoadBalancing::LeastConnections(lc) => lc.pick_readonly(pool),
             LoadBalancing::LatencyAware(la) => la.pick_readonly(pool),
-            // ConsistentHash and StickyCid keep mutable ring caches.
-            LoadBalancing::ConsistentHash(_) | LoadBalancing::StickyCid(_) => None,
+            LoadBalancing::StickyCid(sticky) => sticky.pick_readonly(_key, pool),
         }
     }
 
@@ -554,6 +554,10 @@ impl ConsistentHash {
         };
 
         Some(self.ring[lookup_idx].1)
+    }
+
+    pub fn pick_readonly(&self, key: &str, pool: &BackendPool) -> Option<usize> {
+        weighted_rendezvous_pick(key, pool)
     }
 
     fn rebuild_ring(&mut self, pool: &BackendPool) {
@@ -715,6 +719,13 @@ impl StickyCid {
         }
         self.inner.pick(key, pool)
     }
+
+    pub fn pick_readonly(&self, key: &str, pool: &BackendPool) -> Option<usize> {
+        if key.is_empty() {
+            return pool.healthy.first().copied();
+        }
+        self.inner.pick_readonly(key, pool)
+    }
 }
 
 fn expected_ring_entries(pool: &BackendPool, replicas: u32) -> usize {
@@ -756,6 +767,36 @@ fn hash64(data: &[u8]) -> u64 {
         hash = hash64_update(hash, *byte);
     }
     hash
+}
+
+fn hash_key_backend(key: &str, backend: &str) -> u64 {
+    let mut hash = FNV_OFFSET;
+    for &byte in key.as_bytes() {
+        hash = hash64_update(hash, byte);
+    }
+    hash = hash64_update(hash, b'|');
+    for &byte in backend.as_bytes() {
+        hash = hash64_update(hash, byte);
+    }
+    hash
+}
+
+fn weighted_rendezvous_pick(key: &str, pool: &BackendPool) -> Option<usize> {
+    let mut best: Option<(u64, usize)> = None;
+    for &idx in &pool.healthy {
+        let backend = &pool.backends[idx];
+        let weight = backend.weight().max(1) as u64;
+        let score = hash_key_backend(key, backend.address()).wrapping_mul(weight);
+        match best {
+            Some((best_score, best_idx)) => {
+                if score > best_score || (score == best_score && idx < best_idx) {
+                    best = Some((score, idx));
+                }
+            }
+            None => best = Some((score, idx)),
+        }
+    }
+    best.map(|(_, idx)| idx)
 }
 
 fn hash64_update(hash: u64, byte: u8) -> u64 {

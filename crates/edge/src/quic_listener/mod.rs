@@ -3312,52 +3312,33 @@ impl QUICListener {
         };
 
         let (backend_index, lb_type, backend_addr) = {
-            let (read_lb_type, read_fast_selected) = {
-                let pool = upstream_pool
-                    .read()
-                    .map_err(|_| ProxyError::Transport("upstream pool lock poisoned".into()))?;
-                if pool.pool.is_empty() {
-                    return Err(ProxyError::Transport("no servers in upstream".into()));
-                }
-                let lb_type = pool.lb_name();
-                let key = key_for_lb(lb_type);
-                let fast_pick = pool
-                    .pick_readonly(key)
-                    .and_then(|idx| pool.pool.address(idx).map(|addr| (idx, addr.to_string())));
-                let fast_selected = fast_pick.and_then(|(idx, addr)| {
-                    pool.begin_request_if_healthy(idx).then_some((idx, addr))
-                });
-                (lb_type, fast_selected)
-            };
-
-            if let Some((idx, addr)) = read_fast_selected {
-                (idx, read_lb_type, addr)
-            } else {
-                let mut pool = upstream_pool
-                    .write()
-                    .map_err(|_| ProxyError::Transport("upstream pool lock poisoned".into()))?;
-                if pool.pool.is_empty() {
-                    return Err(ProxyError::Transport("no servers in upstream".into()));
-                }
-                let lb_type = pool.lb_name();
-                let key = key_for_lb(lb_type);
-
-                let idx = pool.pick(key).ok_or_else(|| {
-                    let total = pool.pool.len();
-                    let healthy = pool.pool.healthy_len();
-                    error!(
-                        "no healthy backends available: {}/{} backends healthy",
-                        healthy, total
-                    );
-                    ProxyError::Transport("no healthy servers".into())
-                })?;
-                let backend_addr = pool
-                    .pool
-                    .address(idx)
-                    .map(str::to_string)
-                    .ok_or_else(|| ProxyError::Transport("invalid server address".into()))?;
-                (idx, lb_type, backend_addr)
+            let pool = upstream_pool
+                .read()
+                .map_err(|_| ProxyError::Transport("upstream pool lock poisoned".into()))?;
+            if pool.pool.is_empty() {
+                return Err(ProxyError::Transport("no servers in upstream".into()));
             }
+            let lb_type = pool.lb_name();
+            let key = key_for_lb(lb_type);
+
+            let idx = pool.pick_readonly(key).ok_or_else(|| {
+                let total = pool.pool.len();
+                let healthy = pool.pool.healthy_len();
+                error!(
+                    "no healthy backends available: {}/{} backends healthy",
+                    healthy, total
+                );
+                ProxyError::Transport("no healthy servers".into())
+            })?;
+            if !pool.begin_request_if_healthy(idx) {
+                return Err(ProxyError::Transport("selected backend is unhealthy".into()));
+            }
+            let backend_addr = pool
+                .pool
+                .address(idx)
+                .map(str::to_string)
+                .ok_or_else(|| ProxyError::Transport("invalid server address".into()))?;
+            (idx, lb_type, backend_addr)
         };
 
         debug!(
