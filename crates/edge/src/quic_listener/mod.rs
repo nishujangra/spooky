@@ -108,6 +108,11 @@ type ResolvedBackend = (
 );
 
 impl QUICListener {
+    #[inline]
+    fn sticky_key_for_scid(scid: &[u8]) -> Arc<str> {
+        Arc::<str>::from(hex::encode(scid))
+    }
+
     pub fn new(config: SpookyConfig) -> Result<Self, ProxyError> {
         let shared_state = Arc::new(Self::build_shared_state(&config)?);
         Self::spawn_control_plane_tasks(&config, &shared_state, 1)?;
@@ -761,6 +766,7 @@ impl QUICListener {
             peer_address: peer,
             last_activity: Instant::now(),
             primary_scid: Arc::from(&scid_bytes[..]),
+            sticky_cid_key: Self::sticky_key_for_scid(&scid_bytes),
             routing_scids: HashSet::from([Arc::from(&scid_bytes[..])]),
             packets_since_rotation: 0,
             last_scid_rotation: Instant::now(),
@@ -894,6 +900,7 @@ impl QUICListener {
 
         connection.routing_scids = active_scids;
         connection.primary_scid = Arc::clone(&primary);
+        connection.sticky_cid_key = Self::sticky_key_for_scid(primary.as_ref());
         primary
     }
 
@@ -1489,12 +1496,11 @@ impl QUICListener {
                     }
 
                     // Route lookup — needed to start the H2 request immediately.
-                    let sticky_cid_key = hex::encode(connection.primary_scid.as_ref());
                     let resolved = Self::resolve_backend(
                         &method,
                         &path,
                         authority.as_deref(),
-                        Some(sticky_cid_key.as_str()),
+                        Some(connection.sticky_cid_key.as_ref()),
                         upstream_pools,
                         routing_index,
                     );

@@ -117,6 +117,7 @@ pub struct QuicConnection {
     pub peer_address: SocketAddr,
     pub last_activity: Instant,
     pub primary_scid: Arc<[u8]>,
+    pub sticky_cid_key: Arc<str>,
     pub routing_scids: HashSet<Arc<[u8]>>,
     pub packets_since_rotation: u64,
     pub last_scid_rotation: Instant,
