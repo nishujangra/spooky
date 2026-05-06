@@ -10,7 +10,7 @@ use std::{
     sync::{Arc, RwLock},
     time::{Duration, Instant},
 };
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc, oneshot};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use tracing::Span;
 
 use crate::Metrics;
@@ -298,8 +298,8 @@ pub struct RequestEnvelope {
     pub phase: StreamPhase,
     /// True once the client has sent FIN on the request stream.
     pub request_fin_received: bool,
-    /// Receives the upstream H2 response (status, headers, body stream).
-    pub upstream_result_rx: Option<oneshot::Receiver<UpstreamResult>>,
+    /// In-flight upstream forwarding task for this request stream.
+    pub upstream_task: Option<tokio::task::JoinHandle<UpstreamResult>>,
     /// Receives response body chunks to write back over QUIC.
     pub response_chunk_rx: Option<mpsc::Receiver<ResponseChunk>>,
     /// True once downstream response headers are emitted on this stream.

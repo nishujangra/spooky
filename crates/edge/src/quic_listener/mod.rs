@@ -12,6 +12,7 @@ use std::{
 use core::net::SocketAddr;
 
 use bytes::Bytes;
+use futures_util::FutureExt;
 use http::{Request, Response, StatusCode};
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::body::Incoming;
@@ -37,7 +38,6 @@ use tokio::runtime::Handle;
 use tokio::sync::{
     Semaphore, mpsc,
     mpsc::error::{TryRecvError, TrySendError},
-    oneshot,
 };
 use tokio_rustls::TlsAcceptor;
 use tracing::{Instrument, info_span};
@@ -1532,7 +1532,7 @@ impl QUICListener {
 
                     let (
                         body_tx,
-                        upstream_result_rx,
+                        upstream_task,
                         backend_addr,
                         backend_index,
                         upstream_name,
@@ -1872,7 +1872,6 @@ impl QUICListener {
                                 })
                             });
                             let trace_span_for_upstream = trace_span.clone();
-                            let (result_tx, result_rx) = oneshot::channel::<UpstreamResult>();
                             let fut = async move {
                                 let mut hedge_telemetry = crate::HedgeTelemetry::default();
                                 let mut retry_count: u8 = 0;
@@ -2038,25 +2037,27 @@ impl QUICListener {
                                     Ok((parts.status, parts.headers, body))
                                 }
                                 .await;
-                                // Ignore send error: receiver dropped means the stream was reset.
-                                let _ = result_tx.send(UpstreamResult {
+                                UpstreamResult {
                                     forward: result,
                                     hedge: hedge_telemetry,
                                     retry_count,
                                     retry_attempt_reason,
                                     retry_denial_reason,
-                                });
+                                }
                             };
-                            let spawned = match trace_span_for_upstream {
-                                Some(span) => spawn_async_task(fut.instrument(span), "upstream"),
-                                None => spawn_async_task(fut, "upstream"),
+                            let upstream_task = match runtime_handle() {
+                                Some(handle) => Some(match trace_span_for_upstream {
+                                    Some(span) => handle.spawn(fut.instrument(span)),
+                                    None => handle.spawn(fut),
+                                }),
+                                None => None,
                             };
-                            if !spawned {
+                            if upstream_task.is_none() {
                                 error!("dropping upstream task: no runtime available");
                             }
                             (
                                 tx,
-                                Some(result_rx),
+                                upstream_task,
                                 Some(addr),
                                 Some(idx),
                                 Some(upstream_name),
@@ -2129,7 +2130,7 @@ impl QUICListener {
                         drop(upstream_inflight_permit);
                         drop(adaptive_admission_permit);
                         drop(route_queue_permit);
-                        drop(upstream_result_rx);
+                        drop(upstream_task);
                         Self::send_simple_response(
                             h3,
                             &mut connection.quic,
@@ -2180,7 +2181,7 @@ impl QUICListener {
                             error_kind: None,
                             phase: StreamPhase::ReceivingRequest,
                             request_fin_received,
-                            upstream_result_rx,
+                            upstream_task,
                             response_chunk_rx: None,
                             response_headers_sent: false,
                             pending_chunk: None,
@@ -2409,7 +2410,7 @@ impl QUICListener {
     /// Per stream, in order:
     /// 1. Drain request body buffer → body channel (`try_send`).
     /// 2. Close body channel once FIN received and buffer empty.
-    /// 3. Poll `upstream_result_rx` (`try_recv`).
+    /// 3. Poll `upstream_task` (`try_recv`).
     ///    - Error result  → send error response, mark terminal.
     ///    - Ok result     → send H3 response headers, spawn body-pump task,
     ///      store `response_chunk_rx`, transition to SendingResponse.
@@ -2503,7 +2504,7 @@ impl QUICListener {
                 }
             }
 
-            // ── 3: poll upstream oneshot ──────────────────────────────────────
+            // ── 3: poll upstream task ─────────────────────────────────────────
             // Only transition to response handling once request-body ingestion is
             // complete. This preserves request-size enforcement semantics:
             // oversized requests must still be able to terminate with 413 even if
@@ -2515,27 +2516,41 @@ impl QUICListener {
                     && req.body_buf.is_empty()
             });
 
-            // upstream_ready: Option<UpstreamResult>
-            //   None          → oneshot not yet resolved (or not eligible), skip
-            //   Some(Ok(...)) → upstream responded successfully
-            //   Some(Err(.))  → upstream error (or sender dropped)
-            let upstream_ready: Option<UpstreamResult> = if can_poll_upstream {
-                streams
-                    .get_mut(&stream_id)
-                    .and_then(|req| req.upstream_result_rx.as_mut())
-                    .and_then(|rx| match rx.try_recv() {
-                        Ok(result) => Some(result),
-                        Err(oneshot::error::TryRecvError::Empty) => None,
-                        Err(oneshot::error::TryRecvError::Closed) => Some(UpstreamResult {
-                            forward: Err(ProxyError::Transport(
-                                "upstream task dropped sender".into(),
-                            )),
-                            hedge: crate::HedgeTelemetry::default(),
-                            retry_count: 0,
-                            retry_attempt_reason: None,
-                            retry_denial_reason: None,
-                        }),
-                    })
+            let completed_task = if can_poll_upstream {
+                streams.get_mut(&stream_id).and_then(|req| {
+                    req.upstream_task
+                        .as_ref()
+                        .is_some_and(|handle| handle.is_finished())
+                        .then(|| req.upstream_task.take())
+                        .flatten()
+                })
+            } else {
+                None
+            };
+
+            let upstream_ready: Option<UpstreamResult> = if let Some(task) = completed_task {
+                Some(match task.now_or_never() {
+                    Some(Ok(result)) => result,
+                    Some(Err(join_err)) => UpstreamResult {
+                        forward: Err(ProxyError::Transport(format!(
+                            "upstream task join error: {}",
+                            join_err
+                        ))),
+                        hedge: crate::HedgeTelemetry::default(),
+                        retry_count: 0,
+                        retry_attempt_reason: None,
+                        retry_denial_reason: None,
+                    },
+                    None => UpstreamResult {
+                        forward: Err(ProxyError::Transport(
+                            "upstream task unexpectedly pending".into(),
+                        )),
+                        hedge: crate::HedgeTelemetry::default(),
+                        retry_count: 0,
+                        retry_attempt_reason: None,
+                        retry_denial_reason: None,
+                    },
+                })
             } else {
                 None
             };
@@ -2564,7 +2579,7 @@ impl QUICListener {
                 }
 
                 if let Some(req) = streams.get_mut(&stream_id) {
-                    req.upstream_result_rx = None;
+                    req.upstream_task = None;
                     req.retry_count = forward_result.retry_count;
                     req.error_kind = match &forward_result.forward {
                         Err(ProxyError::Timeout) => Some("timeout"),
@@ -4760,7 +4775,8 @@ mod tests {
     use crate::resilience::{AdaptiveAdmission, RouteQueueLimiter};
     use crate::{RequestEnvelope, StreamPhase};
     use std::time::Instant;
-    use tokio::sync::{Semaphore, mpsc, oneshot};
+    use tokio::runtime::Builder;
+    use tokio::sync::{Semaphore, mpsc};
 
     fn make_envelope(phase: StreamPhase) -> RequestEnvelope {
         RequestEnvelope {
@@ -4801,7 +4817,7 @@ mod tests {
             error_kind: None,
             phase,
             request_fin_received: false,
-            upstream_result_rx: None,
+            upstream_task: None,
             response_chunk_rx: None,
             response_headers_sent: false,
             pending_chunk: None,
@@ -4860,36 +4876,29 @@ mod tests {
     }
 
     /// Path A (variant): client reset while awaiting upstream response.
-    /// Dropping upstream_result_rx cancels the oneshot — the upstream task's
-    /// send will return Err and it will exit.
+    /// Dropping upstream_task aborts the in-flight upstream task.
     #[test]
-    fn abort_stream_awaiting_upstream_cancels_oneshot() {
+    fn abort_stream_awaiting_upstream_cancels_task() {
         let metrics = crate::Metrics::default();
-        let (result_tx, result_rx) = oneshot::channel::<crate::UpstreamResult>();
+        let runtime = Builder::new_current_thread().enable_time().build().unwrap();
+        let result_task = runtime.spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            crate::UpstreamResult {
+                forward: Err(spooky_errors::ProxyError::Timeout),
+                hedge: crate::HedgeTelemetry::default(),
+                retry_count: 0,
+                retry_attempt_reason: None,
+                retry_denial_reason: None,
+            }
+        });
 
         let mut req = make_envelope(StreamPhase::AwaitingUpstream);
-        req.upstream_result_rx = Some(result_rx);
+        req.upstream_task = Some(result_task);
 
         let phase = abort_stream(&mut req, &metrics);
 
         assert_eq!(phase, StreamPhase::AwaitingUpstream);
-        assert!(
-            req.upstream_result_rx.is_none(),
-            "oneshot receiver must be cleared"
-        );
-
-        // Sending on the now-orphaned sender should return Err (closed).
-        let send_result = result_tx.send(crate::UpstreamResult {
-            forward: Err(spooky_errors::ProxyError::Transport("test".into())),
-            hedge: crate::HedgeTelemetry::default(),
-            retry_count: 0,
-            retry_attempt_reason: None,
-            retry_denial_reason: None,
-        });
-        assert!(
-            send_result.is_err(),
-            "upstream task send must fail after receiver dropped"
-        );
+        assert!(req.upstream_task.is_none(), "upstream task must be cleared");
     }
 
     /// Path B: client reset during body streaming (SendingResponse phase).
@@ -4935,13 +4944,23 @@ mod tests {
         let global_permit = global_sem.clone().try_acquire_owned().unwrap();
         let upstream_permit = upstream_sem.clone().try_acquire_owned().unwrap();
 
-        let (_result_tx, result_rx) = oneshot::channel::<crate::UpstreamResult>();
+        let runtime = Builder::new_current_thread().enable_time().build().unwrap();
+        let result_task = runtime.spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+            crate::UpstreamResult {
+                forward: Err(spooky_errors::ProxyError::Timeout),
+                hedge: crate::HedgeTelemetry::default(),
+                retry_count: 0,
+                retry_attempt_reason: None,
+                retry_denial_reason: None,
+            }
+        });
         let (chunk_tx, chunk_rx) = mpsc::channel::<crate::ResponseChunk>(4);
 
         let mut req = make_envelope(StreamPhase::SendingResponse);
         req.global_inflight_permit = Some(global_permit);
         req.upstream_inflight_permit = Some(upstream_permit);
-        req.upstream_result_rx = Some(result_rx);
+        req.upstream_task = Some(result_task);
         req.response_chunk_rx = Some(chunk_rx);
         req.pending_chunk = Some(crate::ResponseChunk::End);
 
@@ -4958,7 +4977,7 @@ mod tests {
             2,
             "upstream semaphore must be fully freed"
         );
-        assert!(req.upstream_result_rx.is_none());
+        assert!(req.upstream_task.is_none());
         assert!(req.response_chunk_rx.is_none());
         assert!(req.pending_chunk.is_none());
 

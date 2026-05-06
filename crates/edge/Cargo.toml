@@ -29,6 +29,7 @@ serde_json.workspace = true
 tokio-rustls.workspace = true
 rustls.workspace = true
 rustls-pemfile.workspace = true
+futures-util = "0.3"
 
 [dev-dependencies]
 rand.workspace = true
