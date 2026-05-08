@@ -852,6 +852,7 @@
 <li>Per-upstream configuration and routing</li>
 <li>Connection ID management and QUIC packet routing</li>
 <li>TLS 1.3 with certificate chain loading</li>
+<li>Downstream mTLS (client certificate authentication) via <code>listen.tls.client_auth.enabled</code>, <code>listen.tls.client_auth.require_client_cert</code>, and <code>listen.tls.client_auth.ca_file</code></li>
 <li>Structured logging with multiple levels</li>
 <li>Configuration validation at startup</li>
 <li>Graceful shutdown with connection draining</li>
@@ -904,7 +905,7 @@
 <h3 id="security">Security</h3>
 <ul>
 <li><strong>TLS peer verification</strong>: Enable certificate verification for production</li>
-<li><strong>mTLS support</strong>: Client certificate authentication</li>
+<li><strong>mTLS operational tooling</strong>: Certificate rotation/revocation workflows and deployment guidance</li>
 <li><strong>Request validation</strong>: Size limits, header validation</li>
 <li><strong>IP allowlist/blocklist</strong>: Simple access control</li>
 </ul>

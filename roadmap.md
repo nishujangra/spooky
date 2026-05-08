@@ -14,6 +14,7 @@
 - Per-upstream configuration and routing
 - Connection ID management and QUIC packet routing
 - TLS 1.3 with certificate chain loading
+- Downstream mTLS (client certificate authentication) via `listen.tls.client_auth.enabled`, `listen.tls.client_auth.require_client_cert`, and `listen.tls.client_auth.ca_file`
 - Structured logging with multiple levels
 - Configuration validation at startup
 - Graceful shutdown with connection draining
@@ -70,7 +71,7 @@
 ### Security
 
 - **TLS peer verification**: Enable certificate verification for production
-- **mTLS support**: Client certificate authentication
+- **mTLS operational tooling**: Certificate rotation/revocation workflows and deployment guidance
 - **Request validation**: Size limits, header validation
 - **IP allowlist/blocklist**: Simple access control
 
