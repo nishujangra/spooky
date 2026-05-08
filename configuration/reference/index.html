@@ -1713,7 +1713,7 @@ log:
 <td>integer</td>
 <td>No</td>
 <td><code>2</code></td>
-<td>Threads for background tasks (health checks, metrics)</td>
+<td>Tokio worker threads for the control-plane runtime (startup, health checks, metrics, and other async control tasks)</td>
 </tr>
 <tr>
 <td><code>reuseport</code></td>

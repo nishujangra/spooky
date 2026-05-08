@@ -549,7 +549,7 @@ Controls resource limits, tuning knobs, and connection-flood protection. All fie
 | Property | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
 | `worker_threads` | integer | No | `1` | Number of polling worker threads |
-| `control_plane_threads` | integer | No | `2` | Threads for background tasks (health checks, metrics) |
+| `control_plane_threads` | integer | No | `2` | Tokio worker threads for the control-plane runtime (startup, health checks, metrics, and other async control tasks) |
 | `reuseport` | bool | No | `true` | Enable `SO_REUSEPORT`; required when `worker_threads > 1` |
 | `pin_workers` | bool | No | `false` | Pin each worker thread to a dedicated CPU core |
 | `global_inflight_limit` | integer | No | `4096` | Maximum concurrent in-flight requests across all upstreams |
