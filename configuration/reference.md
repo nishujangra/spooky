@@ -154,7 +154,7 @@ Configures the listening interface for incoming client connections. HTTP/3 requi
 
 - `http3`: HTTP/3 over QUIC (recommended)
 
-Spooky also exposes a TLS bootstrap ingress for HTTP/1.1 and HTTP/2 clients. This compatibility path is primarily used for browser interoperability and advertising `Alt-Svc` so clients can upgrade to HTTP/3.
+Spooky also exposes a TLS bootstrap ingress for HTTP/1.1 and HTTP/2 clients. This compatibility path is primarily used for browser interoperability and advertising `Alt-Svc` so clients can upgrade to HTTP/3. Backend selection on the bootstrap path uses the same route-resolution, load-balancing strategy, and health-aware eligibility rules as the native QUIC ingress.
 
 ### TLS Configuration
 
