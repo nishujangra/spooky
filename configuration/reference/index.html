@@ -873,7 +873,7 @@ upstream:
   api_pool:
     load_balancing:
       type: &quot;consistent-hash&quot;
-      # key: &quot;header:x-user-id&quot;  # Planned feature, not currently supported
+      key: &quot;header:x-user-id&quot;  # Optional key source for consistent-hash/sticky-cid
 
     route:
       host: &quot;api.example.com&quot;
@@ -1276,7 +1276,7 @@ listen:
 <td>string</td>
 <td>No</td>
 <td>-</td>
-<td>HTTP method to match (reserved for future use)</td>
+<td>HTTP method to match (case-insensitive, e.g. <code>GET</code>, <code>POST</code>)</td>
 </tr>
 </tbody>
 </table></div>
@@ -1520,7 +1520,7 @@ backends:
 <td>string</td>
 <td>No</td>
 <td>-</td>
-<td>Reserved for future pluggable key extraction (currently ignored)</td>
+<td>Optional key source for <code>consistent-hash</code> and <code>sticky-cid</code> (<code>header:&lt;name&gt;</code>, <code>cookie:&lt;name&gt;</code>, <code>query:&lt;name&gt;</code>, <code>path</code>, <code>authority</code>, <code>method</code>, <code>cid</code>)</td>
 </tr>
 </tbody>
 </table></div>
@@ -1540,11 +1540,12 @@ backends:
       type: &quot;round-robin&quot;
 </code></pre>
 <h4 id="consistent-hash">consistent-hash</h4>
-<p>Routes requests using consistent hashing based on a fixed key derived from the request. Currently uses request authority (if present), otherwise request path, otherwise HTTP method.</p>
+<p>Routes requests using consistent hashing. By default it hashes request authority (if present), otherwise request path, otherwise HTTP method. Set <code>load_balancing.key</code> to override key derivation.</p>
 <pre><code class="language-yaml">upstream:
   my_pool:
     load_balancing:
       type: &quot;consistent-hash&quot;
+      key: &quot;header:x-user-id&quot;
 </code></pre>
 <h4 id="least-connections">least-connections</h4>
 <p>Selects the healthy backend with the fewest active requests. Ties are deterministic by backend index order.</p>

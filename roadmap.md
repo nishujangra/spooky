@@ -14,6 +14,7 @@
 - Per-upstream configuration and routing
 - Connection ID management and QUIC packet routing
 - TLS 1.3 with certificate chain loading
+- Upstream TLS peer verification enabled by default via `upstream_tls.verify_certificates`
 - Downstream mTLS (client certificate authentication) via `listen.tls.client_auth.enabled`, `listen.tls.client_auth.require_client_cert`, and `listen.tls.client_auth.ca_file`
 - Structured logging with multiple levels
 - Configuration validation at startup
@@ -70,7 +71,6 @@
 
 ### Security
 
-- **TLS peer verification**: Enable certificate verification for production
 - **mTLS operational tooling**: Certificate rotation/revocation workflows and deployment guidance
 - **Request validation**: Size limits, header validation
 - **IP allowlist/blocklist**: Simple access control
@@ -143,7 +143,7 @@
 1. Async data plane - unblock main thread
 2. Configuration hot reload - reduce operational friction
 3. Streaming bodies - reduce memory usage
-4. TLS peer verification - production security
+4. mTLS operational tooling - certificate lifecycle automation
 
 ### Medium Priority (3-6 months)
 
@@ -169,7 +169,7 @@
 2. **Full body buffering**: High memory usage for large requests/responses
 3. **Configuration hot reload missing**: Runtime config updates still require restart
 4. **Dual-ingress operational complexity**: Runtime serves HTTP/3 (native) plus HTTP/1.1/2 TLS bootstrap, so operators must secure and observe both paths consistently
-5. **Method-based route matching unimplemented**: `route.method` remains reserved for future use
+5. **Method-based route matching constraints**: keep route precedence and method tie-break semantics covered by integration tests as routing rules evolve
 6. **Control/metrics endpoint hardening is operator-dependent**: endpoints should remain network-isolated unless explicitly protected
 
 ### Refactoring Needs

@@ -58,7 +58,7 @@ upstream:
   api_pool:
     load_balancing:
       type: "consistent-hash"  # Accepts: consistent-hash, consistent_hash, ch
-      # key: "header:x-user-id"  # Planned feature: configurable hash key source
+      key: "header:x-user-id"   # Optional key source: header/cookie/query/path/authority/method/cid
     route:
       path_prefix: "/api"
     backends:
@@ -86,18 +86,17 @@ upstream:
 
 **Hash Key Sources**:
 
-Currently, the key parameter is configured but hash key extraction must be implemented in the proxy layer. The algorithm accepts any string key.
-
 ```yaml
-# Current behavior: fixed key derivation from request
 load_balancing:
   type: "consistent-hash"
-# Planned configurable key sources (not currently implemented):
-# key: "header:x-user-id"       # User ID from header
+  key: "header:x-user-id"       # User ID from header
 # key: "header:x-session-id"    # Session ID from header
 # key: "cookie:session_id"      # Session cookie
 # key: "query:user_id"          # Query parameter
-# key: "path"                   # Request path
+# key: "path"                   # Request path (without query string)
+# key: "authority"              # Host/authority
+# key: "method"                 # HTTP method
+# key: "cid"                    # QUIC connection ID (same as sticky-cid default)
 ```
 
 **Use Cases**:

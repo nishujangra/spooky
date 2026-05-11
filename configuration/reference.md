@@ -27,7 +27,7 @@ upstream:
   api_pool:
     load_balancing:
       type: "consistent-hash"
-      # key: "header:x-user-id"  # Planned feature, not currently supported
+      key: "header:x-user-id"  # Optional key source for consistent-hash/sticky-cid
 
     route:
       host: "api.example.com"
@@ -217,7 +217,7 @@ Route matching determines which upstream pool handles a request. Routes are eval
 |----------|------|----------|---------|-------------|
 | `host` | string | No | - | Host header to match (e.g., `api.example.com`) |
 | `path_prefix` | string | No | - | Path prefix to match (e.g., `/api`) |
-| `method` | string | No | - | HTTP method to match (reserved for future use) |
+| `method` | string | No | - | HTTP method to match (case-insensitive, e.g. `GET`, `POST`) |
 
 Route matching rules:
 
@@ -374,7 +374,7 @@ Load balancing determines how requests are distributed across healthy backends w
 | Property | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
 | `type` | string | Yes | - | Load balancing algorithm |
-| `key` | string | No | - | Reserved for future pluggable key extraction (currently ignored) |
+| `key` | string | No | - | Optional key source for `consistent-hash` and `sticky-cid` (`header:<name>`, `cookie:<name>`, `query:<name>`, `path`, `authority`, `method`, `cid`) |
 
 ### Supported Algorithms
 
@@ -402,13 +402,14 @@ upstream:
 
 #### consistent-hash
 
-Routes requests using consistent hashing based on a fixed key derived from the request. Currently uses request authority (if present), otherwise request path, otherwise HTTP method.
+Routes requests using consistent hashing. By default it hashes request authority (if present), otherwise request path, otherwise HTTP method. Set `load_balancing.key` to override key derivation.
 
 ```yaml
 upstream:
   my_pool:
     load_balancing:
       type: "consistent-hash"
+      key: "header:x-user-id"
 ```
 
 #### least-connections
