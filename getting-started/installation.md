@@ -156,13 +156,13 @@ sudo chown -R spooky:spooky /etc/spooky /var/log/spooky
 sudo chmod 750 /etc/spooky /etc/spooky/certs /var/log/spooky
 
 # Copy default config
-sudo install -m 0640 -o spooky -g spooky deploy/debian/config.yaml /etc/spooky/config.yaml
+sudo install -m 0640 -o spooky -g spooky packaging/deb/debian/config.yaml /etc/spooky/config.yaml
 ```
 
 Then place TLS certificates as described above, and install the systemd unit:
 
 ```bash
-sudo install -m 0644 deploy/debian/spooky.service /lib/systemd/system/spooky.service
+sudo install -m 0644 packaging/deb/debian/spooky.service /lib/systemd/system/spooky.service
 sudo systemctl daemon-reload
 sudo systemctl enable spooky.service
 sudo systemctl start spooky.service
@@ -317,7 +317,7 @@ The package install may have been interrupted. Reinstall or manually restore the
 ```bash
 sudo dpkg -i spooky_0.1.0-beta_amd64.deb
 # or:
-sudo install -m 0640 -o spooky -g spooky deploy/debian/config.yaml /etc/spooky/config.yaml
+sudo install -m 0640 -o spooky -g spooky packaging/deb/debian/config.yaml /etc/spooky/config.yaml
 ```
 
 **`Permission denied` on TLS key/cert:**
