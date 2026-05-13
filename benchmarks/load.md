@@ -9,7 +9,7 @@
 | **Target** | `127.0.0.1:9889` (loopback) |
 | **Protocol** | HTTP/3 over QUIC → HTTP/2 upstream, TLS (self-signed) |
 | **Backends** | 2 × upstream servers on `127.0.0.1:7001` and `127.0.0.1:7002` |
-| **Config** | `config/config.yaml` — worker_threads=4, per_backend_inflight_limit=256, global_inflight_limit=4096, adaptive admission enabled |
+| **Config** | `config/config.development.yaml` with benchmark-specific performance overrides (`worker_threads=4`, `per_backend_inflight_limit=256`, `global_inflight_limit=4096`, adaptive admission enabled) |
 | **Run ID** | `20260501T170035Z` |
 
 ---

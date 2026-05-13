@@ -900,8 +900,8 @@
 <p><strong>Load Balancing</strong>
 - Random distribution
 - Round-robin rotation (default)
-- Consistent hashing with configurable virtual nodes
-- Global load balancing strategy (same for all upstreams)</p>
+- Consistent hashing with weighted virtual nodes
+- Per-upstream strategies with optional global fallback default</p>
 <p><strong>Routing</strong>
 - Path prefix matching with longest-match selection
 - Host-based routing
@@ -933,7 +933,7 @@ cargo build --release
 make certs-selfsigned
 
 # Start proxy
-./target/release/spooky --config config/config.yaml
+./target/release/spooky --config config/config.development.yaml
 </code></pre>
 <h2 id="configuration-example">Configuration Example</h2>
 <p>Spooky uses YAML configuration with validation at startup:</p>
@@ -944,8 +944,8 @@ listen:
   port: 9889
   address: &quot;0.0.0.0&quot;
   tls:
-    cert: &quot;certs/cert.pem&quot;
-    key: &quot;certs/key.pem&quot;
+    cert: &quot;certs/proxy-cert.pem&quot;
+    key: &quot;certs/proxy-key-pkcs8.pem&quot;
 
 upstream:
   api_backend:

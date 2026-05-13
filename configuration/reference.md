@@ -112,9 +112,9 @@ The following table lists all default configuration values used when properties 
 | `listen.protocol` | `"http3"` | Native ingress protocol (HTTP/3 over QUIC); TLS bootstrap ingress for HTTP/1.1/2 compatibility is also active |
 | `listen.port` | `9889` | Listening port |
 | `listen.address` | `"0.0.0.0"` | Listening address |
-| `listen.tls.cert_file` | Required | TLS certificate file path |
-| `listen.tls.key_file` | Required | TLS private key file path |
-| `upstream[].route.path_prefix` | `"/"` | Path prefix for routing |
+| `listen.tls.cert` | Required | TLS certificate file path |
+| `listen.tls.key` | Required | TLS private key file path |
+| `upstream[].route.path_prefix` | none | Path prefix for routing (set explicitly; use `/` for catch-all) |
 | `upstream[].backends[].weight` | `100` | Backend weight for load balancing |
 | `upstream[].backends[].health_check.path` | `"/health"` | Health check endpoint |
 | `upstream[].backends[].health_check.interval` | `5000` | Health check interval (ms) |

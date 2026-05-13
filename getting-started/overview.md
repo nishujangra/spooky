@@ -35,8 +35,8 @@ HTTP/3 Client → QUIC/TLS → Spooky Edge → HTTP/2 → Backend Servers
 **Load Balancing**
 - Random distribution
 - Round-robin rotation (default)
-- Consistent hashing with configurable virtual nodes
-- Global load balancing strategy (same for all upstreams)
+- Consistent hashing with weighted virtual nodes
+- Per-upstream strategies with optional global fallback default
 
 **Routing**
 - Path prefix matching with longest-match selection
@@ -78,7 +78,7 @@ cargo build --release
 make certs-selfsigned
 
 # Start proxy
-./target/release/spooky --config config/config.yaml
+./target/release/spooky --config config/config.development.yaml
 ```
 
 ## Configuration Example
@@ -93,8 +93,8 @@ listen:
   port: 9889
   address: "0.0.0.0"
   tls:
-    cert: "certs/cert.pem"
-    key: "certs/key.pem"
+    cert: "certs/proxy-cert.pem"
+    key: "certs/proxy-key-pkcs8.pem"
 
 upstream:
   api_backend:

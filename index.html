@@ -866,6 +866,7 @@
 <ul>
 <li><a href="getting-started/overview/">Overview</a> - Project introduction and capabilities</li>
 <li><a href="getting-started/installation/">Installation</a> - System requirements and installation procedures</li>
+<li><a href="getting-started/docker/">Docker Installation</a> - Containerized setup and operations</li>
 <li><a href="tutorials/quickstart/">Quick Start Tutorial</a> - Step-by-step guide to get running</li>
 </ul>
 <h3 id="configuration">Configuration</h3>
@@ -921,7 +922,6 @@
 <li><code>tutorials/</code>: Quickstart walkthroughs</li>
 <li><code>protocols/</code>: HTTP/3 and QUIC protocol notes</li>
 <li><code>api/</code>: API and observability overview</li>
-<li><code>internal/</code>: Internal architecture notes</li>
 </ul>
 <h2 id="quick-references">Quick References</h2>
 <h3 id="common-configuration-tasks">Common Configuration Tasks</h3>
@@ -938,7 +938,7 @@
           path: &quot;/health&quot;
           interval: 5000
 </code></pre>
-<p><em>Note: Load balancing strategy is configured globally, not per upstream.</em></p>
+<p><em>Note: Load balancing can be configured per-upstream and also at the top level as a fallback default.</em></p>
 <p><strong>Path-based routing</strong>:</p>
 <pre><code class="language-yaml">upstream:
   api:

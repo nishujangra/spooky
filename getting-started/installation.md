@@ -43,6 +43,13 @@ sudo systemctl restart spooky
 sudo systemctl status spooky
 ```
 
+To build a `.deb` package from source in this repository:
+
+```bash
+./packaging/deb/make-deb.sh
+sudo dpkg -i spooky_0.1.0-beta_amd64.deb
+```
+
 ### Build from Source
 
 **Clone and build:**

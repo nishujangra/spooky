@@ -902,6 +902,10 @@ sudo dpkg -i spooky_0.1.0-beta_amd64.deb
 <pre><code class="language-bash">sudo systemctl restart spooky
 sudo systemctl status spooky
 </code></pre>
+<p>To build a <code>.deb</code> package from source in this repository:</p>
+<pre><code class="language-bash">./packaging/deb/make-deb.sh
+sudo dpkg -i spooky_0.1.0-beta_amd64.deb
+</code></pre>
 <h3 id="build-from-source">Build from Source</h3>
 <p><strong>Clone and build:</strong></p>
 <pre><code class="language-bash">git clone https://github.com/Supernova-Labs-Org/spooky.git

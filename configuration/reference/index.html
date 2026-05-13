@@ -1004,19 +1004,19 @@ log:
 <td>Listening address</td>
 </tr>
 <tr>
-<td><code>listen.tls.cert_file</code></td>
+<td><code>listen.tls.cert</code></td>
 <td>Required</td>
 <td>TLS certificate file path</td>
 </tr>
 <tr>
-<td><code>listen.tls.key_file</code></td>
+<td><code>listen.tls.key</code></td>
 <td>Required</td>
 <td>TLS private key file path</td>
 </tr>
 <tr>
 <td><code>upstream[].route.path_prefix</code></td>
-<td><code>"/"</code></td>
-<td>Path prefix for routing</td>
+<td>none</td>
+<td>Path prefix for routing (set explicitly; use <code>/</code> for catch-all)</td>
 </tr>
 <tr>
 <td><code>upstream[].backends[].weight</code></td>

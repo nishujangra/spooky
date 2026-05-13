@@ -9,6 +9,7 @@ Technical documentation for the Spooky HTTP/3 edge proxy and load balancer.
 ### Getting Started
 - [Overview](getting-started/overview.md) - Project introduction and capabilities
 - [Installation](getting-started/installation.md) - System requirements and installation procedures
+- [Docker Installation](getting-started/docker.md) - Containerized setup and operations
 - [Quick Start Tutorial](tutorials/quickstart.md) - Step-by-step guide to get running
 
 ### Configuration
@@ -56,7 +57,6 @@ Technical documentation for the Spooky HTTP/3 edge proxy and load balancer.
 - `tutorials/`: Quickstart walkthroughs
 - `protocols/`: HTTP/3 and QUIC protocol notes
 - `api/`: API and observability overview
-- `internal/`: Internal architecture notes
 
 ## Quick References
 
@@ -77,7 +77,7 @@ upstream:
           interval: 5000
 ```
 
-*Note: Load balancing strategy is configured globally, not per upstream.*
+*Note: Load balancing can be configured per-upstream and also at the top level as a fallback default.*
 
 **Path-based routing**:
 ```yaml
