@@ -867,23 +867,22 @@
 - Root is only required when binding privileged ports (<code>&lt;1024</code>).
 - For typical deployments, run Spooky as an unprivileged user on a non-privileged port.</p>
 <h2 id="installation-methods">Installation Methods</h2>
-<h3 id="pre-built-binaries">Pre-built Binaries</h3>
-<p>Download the latest release from <a href="https://github.com/Supernova-Labs-Org/spooky/releases">GitHub Releases</a>.</p>
-<p><strong>Linux (x86_64):</strong></p>
-<pre><code class="language-bash">wget https://github.com/Supernova-Labs-Org/spooky/releases/download/v0.1.0/spooky-linux-x86_64.tar.gz
-tar -xzf spooky-linux-x86_64.tar.gz
-sudo install -m 755 spooky /usr/local/bin/spooky
+<h3 id="debian-package-recommended-for-linux">Debian Package (Recommended for Linux)</h3>
+<p>Download and install the <code>.deb</code> from <a href="https://github.com/Supernova-Labs-Org/spooky/releases">GitHub Releases</a>:</p>
+<pre><code class="language-bash">wget https://github.com/Supernova-Labs-Org/spooky/releases/download/v0.1.0-beta/spooky_0.1.0-beta_amd64.deb
+sudo dpkg -i spooky_0.1.0-beta_amd64.deb
 </code></pre>
-<p><strong>macOS (x86_64/ARM64):</strong></p>
-<pre><code class="language-bash">wget https://github.com/Supernova-Labs-Org/spooky/releases/download/v0.1.0/spooky-macos-universal.tar.gz
-tar -xzf spooky-macos-universal.tar.gz
-sudo install -m 755 spooky /usr/local/bin/spooky
+<p>The package installs:
+- Binary: <code>/usr/bin/spooky</code>
+- Default config: <code>/etc/spooky/config.yaml</code>
+- Certs directory: <code>/etc/spooky/certs/</code>
+- Log directory: <code>/var/log/spooky/</code>
+- Systemd unit: <code>/lib/systemd/system/spooky.service</code>
+- System user/group: <code>spooky</code></p>
+<p>After install, place your TLS certificates (see <a href="#tls-certificates">TLS Certificates</a> below), edit <code>/etc/spooky/config.yaml</code>, then start the service:</p>
+<pre><code class="language-bash">sudo systemctl restart spooky
+sudo systemctl status spooky
 </code></pre>
-<h3 id="cargo-install">Cargo Install</h3>
-<p>Install directly from crates.io:</p>
-<pre><code class="language-bash">cargo install spooky
-</code></pre>
-<p>This compiles from source and installs to <code>~/.cargo/bin/</code>. Ensure this directory is in your PATH.</p>
 <h3 id="build-from-source">Build from Source</h3>
 <p><strong>Clone and build:</strong></p>
 <pre><code class="language-bash">git clone https://github.com/Supernova-Labs-Org/spooky.git
@@ -896,196 +895,123 @@ cargo build --release
 cargo test -p spooky-edge --test lb_integration
 </code></pre>
 <p><strong>System-wide installation:</strong></p>
-<pre><code class="language-bash">sudo install -m 755 target/release/spooky /usr/local/bin/spooky
+<pre><code class="language-bash">sudo install -m 755 target/release/spooky /usr/bin/spooky
 </code></pre>
-<h2 id="platform-specific-setup">Platform-Specific Setup</h2>
-<h3 id="ubuntudebian">Ubuntu/Debian</h3>
-<pre><code class="language-bash"># Install build dependencies
-sudo apt update
-sudo apt install -y cmake build-essential pkg-config
+<h2 id="tls-certificates">TLS Certificates</h2>
+<p>Spooky requires TLS certificates to serve QUIC/HTTP3 traffic. The service runs as the <code>spooky</code> user, so certificates must be readable by that user.</p>
+<h3 id="using-your-own-certificates">Using Your Own Certificates</h3>
+<p>Copy your certificate and private key into the certs directory and set correct ownership:</p>
+<pre><code class="language-bash"># Copy certificates
+sudo cp /path/to/fullchain.pem /etc/spooky/certs/fullchain.pem
+sudo cp /path/to/privkey.pem   /etc/spooky/certs/privkey.pem
 
-# Install Rust if not present
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.cargo/env
-
-# Build and install
-git clone https://github.com/Supernova-Labs-Org/spooky.git
-cd spooky
-cargo build --release
-sudo install -m 755 target/release/spooky /usr/local/bin/spooky
+# Set ownership and permissions
+sudo chown spooky:spooky /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
+sudo chmod 640 /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
 </code></pre>
-<h3 id="centosrhel-8">CentOS/RHEL 8+</h3>
-<pre><code class="language-bash"># Install build dependencies
-sudo dnf groupinstall -y &quot;Development Tools&quot;
-sudo dnf install -y cmake pkgconfig
-
-# Install Rust if not present
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.cargo/env
-
-# Build and install
-git clone https://github.com/Supernova-Labs-Org/spooky.git
-cd spooky
-cargo build --release
-sudo install -m 755 target/release/spooky /usr/local/bin/spooky
+<p>Then update <code>/etc/spooky/config.yaml</code> to point to these paths:</p>
+<pre><code class="language-yaml">listen:
+  tls:
+    cert: &quot;/etc/spooky/certs/fullchain.pem&quot;
+    key:  &quot;/etc/spooky/certs/privkey.pem&quot;
 </code></pre>
-<h3 id="macos">macOS</h3>
-<pre><code class="language-bash"># Install dependencies via Homebrew
-brew install cmake pkg-config rust
+<h3 id="using-the-repos-development-certificates">Using the Repo's Development Certificates</h3>
+<p>If you are building from source and want to use the included development certificates (located in <code>certs/</code> in the repo), copy them in the same way:</p>
+<pre><code class="language-bash">sudo cp certs/proxy-fullchain.pem /etc/spooky/certs/fullchain.pem
+sudo cp certs/proxy-key-pkcs8.pem /etc/spooky/certs/privkey.pem
 
-# Build and install
-git clone https://github.com/Supernova-Labs-Org/spooky.git
-cd spooky
-cargo build --release
-sudo install -m 755 target/release/spooky /usr/local/bin/spooky
+sudo chown spooky:spooky /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
+sudo chmod 640 /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
 </code></pre>
-<h3 id="windows">Windows</h3>
-<p><strong>Prerequisites:</strong>
-1. Install Rust from <a href="https://rustup.rs/">rustup.rs</a>
-2. Install Visual Studio Build Tools with C++ support from <a href="https://visualstudio.microsoft.com/visual-cpp-build-tools/">Microsoft</a></p>
-<p><strong>Build:</strong></p>
-<pre><code class="language-powershell">git clone https://github.com/Supernova-Labs-Org/spooky.git
-cd spooky
-cargo build --release
+<p>Update <code>/etc/spooky/config.yaml</code>:</p>
+<pre><code class="language-yaml">listen:
+  tls:
+    cert: &quot;/etc/spooky/certs/fullchain.pem&quot;
+    key:  &quot;/etc/spooky/certs/privkey.pem&quot;
 </code></pre>
-<p>Binary location: <code>target\release\spooky.exe</code></p>
-<h2 id="docker-deployment">Docker Deployment</h2>
-<p><strong>Dockerfile:</strong></p>
-<pre><code class="language-dockerfile">FROM rust:1.70-slim as builder
-
-WORKDIR /app
-COPY . .
-RUN cargo build --release
-
-FROM debian:bookworm-slim
-RUN apt-get update &amp;&amp; \
-    apt-get install -y ca-certificates &amp;&amp; \
-    rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/target/release/spooky /usr/local/bin/spooky
-
-EXPOSE 9889/udp
-CMD [&quot;spooky&quot;]
-</code></pre>
-<p><strong>Build and run:</strong></p>
-<pre><code class="language-bash">docker build -t spooky:latest .
-
-docker run -d \
-  --name spooky \
-  -p 9889:9889/udp \
-  -v /path/to/config.yaml:/etc/spooky/config.yaml:ro \
-  -v /path/to/certs:/etc/spooky/certs:ro \
-  spooky:latest --config /etc/spooky/config.yaml
-</code></pre>
-<p><strong>Using Docker Compose:</strong></p>
-<pre><code class="language-yaml">version: '3.8'
-services:
-  spooky:
-    build: .
-    ports:
-      - &quot;9889:9889/udp&quot;
-    volumes:
-      - ./config.yaml:/etc/spooky/config.yaml:ro
-      - ./certs:/etc/spooky/certs:ro
-    command: [&quot;--config&quot;, &quot;/etc/spooky/config.yaml&quot;]
-    restart: unless-stopped
-</code></pre>
-<h2 id="installation-verification">Installation Verification</h2>
-<pre><code class="language-bash"># Verify binary is accessible
-spooky --version
-
-# Display help and available options
-spooky --help
-
-# Validate configuration syntax (startup validation happens before serving)
-spooky --config /path/to/config.yaml
-</code></pre>
-<p>Expected output from <code>spooky --version</code>:</p>
-<pre><code>spooky 0.1.0
-</code></pre>
-<h2 id="post-installation-configuration">Post-Installation Configuration</h2>
-<h3 id="1-create-configuration-directory">1. Create Configuration Directory</h3>
-<pre><code class="language-bash">sudo mkdir -p /etc/spooky
-sudo mkdir -p /etc/spooky/certs
-sudo chown -R $(whoami) /etc/spooky
-</code></pre>
-<h3 id="2-generate-tls-certificates">2. Generate TLS Certificates</h3>
-<p><strong>Self-signed certificates (development):</strong></p>
+<blockquote>
+<p><strong>Note:</strong> The development certificates are signed by the repo's test CA (<code>certs/ca-cert.pem</code>). Do not use them in production.</p>
+</blockquote>
+<h3 id="generating-self-signed-certificates">Generating Self-Signed Certificates</h3>
+<p>For quick local testing without the repo's dev certs:</p>
 <pre><code class="language-bash">openssl req -x509 -newkey rsa:4096 -nodes \
-  -keyout /etc/spooky/certs/key.pem \
-  -out /etc/spooky/certs/cert.pem \
+  -keyout /tmp/privkey.pem \
+  -out /tmp/fullchain.pem \
   -days 365 \
   -subj &quot;/CN=proxy.example.com&quot;
+
+sudo mv /tmp/fullchain.pem /etc/spooky/certs/fullchain.pem
+sudo mv /tmp/privkey.pem   /etc/spooky/certs/privkey.pem
+sudo chown spooky:spooky /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
+sudo chmod 640 /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
 </code></pre>
 <p>For production certificates, see <a href="../../configuration/tls/">TLS Configuration</a>.</p>
-<h3 id="3-create-base-configuration">3. Create Base Configuration</h3>
-<p>Create <code>/etc/spooky/config.yaml</code>:</p>
-<pre><code class="language-yaml">version: 1
+<h2 id="post-installation-configuration">Post-Installation Configuration</h2>
+<h3 id="manual-setup-non-package-installs">Manual Setup (non-package installs)</h3>
+<p>If you installed from source or a tarball, set up the directories, user, and service manually:</p>
+<pre><code class="language-bash"># Create directories
+sudo mkdir -p /etc/spooky/certs
+sudo mkdir -p /var/log/spooky
 
-listen:
-  protocol: http3
-  port: 9889
-  address: &quot;0.0.0.0&quot;
-  tls:
-    cert: &quot;/etc/spooky/certs/cert.pem&quot;
-    key: &quot;/etc/spooky/certs/key.pem&quot;
+# Create system user
+sudo groupadd --system spooky
+sudo useradd --system --gid spooky --no-create-home \
+     --home-dir /etc/spooky --shell /usr/sbin/nologin \
+     --comment &quot;Spooky reverse proxy&quot; spooky
 
-upstream:
-  default:
-    load_balancing:
-      type: &quot;random&quot;
-    route:
-      path_prefix: &quot;/&quot;
-    backends:
-      - id: &quot;backend-1&quot;
-        address: &quot;127.0.0.1:8080&quot;
-        weight: 100
-        health_check:
-          path: &quot;/health&quot;
-          interval: 5000
+# Set ownership
+sudo chown -R spooky:spooky /etc/spooky /var/log/spooky
+sudo chmod 750 /etc/spooky /etc/spooky/certs /var/log/spooky
 
-log:
-  level: info
+# Copy default config
+sudo install -m 0640 -o spooky -g spooky deploy/debian/config.yaml /etc/spooky/config.yaml
 </code></pre>
-<h3 id="4-system-service-setup-linux">4. System Service Setup (Linux)</h3>
-<p>Create <code>/etc/systemd/system/spooky.service</code>:</p>
-<pre><code class="language-ini">[Unit]
-Description=Spooky HTTP/3 to HTTP/2 Proxy
-After=network.target
-
-[Service]
-Type=simple
-User=spooky
-Group=spooky
-ExecStart=/usr/local/bin/spooky --config /etc/spooky/config.yaml
-Restart=on-failure
-RestartSec=5s
-
-# Security hardening
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/log/spooky
-
-[Install]
-WantedBy=multi-user.target
-</code></pre>
-<p>Create service user and enable:</p>
-<pre><code class="language-bash">sudo useradd -r -s /bin/false spooky
+<p>Then place TLS certificates as described above, and install the systemd unit:</p>
+<pre><code class="language-bash">sudo install -m 0644 deploy/debian/spooky.service /lib/systemd/system/spooky.service
 sudo systemctl daemon-reload
 sudo systemctl enable spooky.service
 sudo systemctl start spooky.service
 </code></pre>
-<h3 id="5-log-management">5. Log Management</h3>
-<p>By default, Spooky logs to stderr (captured by journald under systemd). To write logs to a file instead, set <code>log.file.enabled: true</code> in your config:</p>
-<pre><code class="language-yaml">log:
+<h3 id="configuration-file">Configuration File</h3>
+<p>Edit <code>/etc/spooky/config.yaml</code> to match your environment. Minimal working example:</p>
+<pre><code class="language-yaml">version: 1
+
+listen:
+  protocol: http3
+  address: &quot;0.0.0.0&quot;
+  port: 9889
+  tls:
+    cert: &quot;/etc/spooky/certs/fullchain.pem&quot;
+    key:  &quot;/etc/spooky/certs/privkey.pem&quot;
+
+upstream:
+  default:
+    load_balancing:
+      type: round-robin
+    route:
+      path_prefix: &quot;/&quot;
+    backends:
+      - id: &quot;backend1&quot;
+        address: &quot;backend.internal.example:8443&quot;
+        weight: 100
+        health_check:
+          path: &quot;/health&quot;
+          interval: 5000
+          timeout_ms: 1000
+          failure_threshold: 3
+          success_threshold: 2
+          cooldown_ms: 5000
+
+log:
   level: info
+  format: json
   file:
     enabled: true
     path: /var/log/spooky/spooky.log
 </code></pre>
-<p>Configure log rotation for file-based logging:</p>
-<p>Create <code>/etc/logrotate.d/spooky</code>:</p>
+<p>See <a href="../../configuration/reference/">Configuration Reference</a> for all options.</p>
+<h3 id="log-rotation">Log Rotation</h3>
+<p>Configure log rotation for file-based logging. Create <code>/etc/logrotate.d/spooky</code>:</p>
 <pre><code>/var/log/spooky/*.log {
     daily
     rotate 14
@@ -1100,26 +1026,94 @@ sudo systemctl start spooky.service
     endscript
 }
 </code></pre>
-<h2 id="troubleshooting-installation">Troubleshooting Installation</h2>
+<h2 id="platform-specific-notes">Platform-Specific Notes</h2>
+<h3 id="ubuntudebian">Ubuntu/Debian</h3>
+<p>Install build dependencies before building from source:</p>
+<pre><code class="language-bash">sudo apt update
+sudo apt install -y cmake build-essential pkg-config
+
+# Install Rust if not present
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+</code></pre>
+<h3 id="centosrhel-8">CentOS/RHEL 8+</h3>
+<pre><code class="language-bash">sudo dnf groupinstall -y &quot;Development Tools&quot;
+sudo dnf install -y cmake pkgconfig
+
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+</code></pre>
+<h3 id="macos">macOS</h3>
+<pre><code class="language-bash">brew install cmake pkg-config rust
+</code></pre>
+<h3 id="windows">Windows</h3>
+<ol>
+<li>Install Rust from <a href="https://rustup.rs/">rustup.rs</a></li>
+<li>Install Visual Studio Build Tools with C++ support from <a href="https://visualstudio.microsoft.com/visual-cpp-build-tools/">Microsoft</a></li>
+</ol>
+<p>Binary location after build: <code>target\release\spooky.exe</code></p>
+<h2 id="docker-deployment">Docker Deployment</h2>
+<pre><code class="language-dockerfile">FROM rust:1.85-slim as builder
+WORKDIR /app
+COPY . .
+RUN cargo build --release
+
+FROM debian:bookworm-slim
+RUN apt-get update &amp;&amp; \
+    apt-get install -y ca-certificates &amp;&amp; \
+    rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/target/release/spooky /usr/bin/spooky
+EXPOSE 9889/udp
+CMD [&quot;spooky&quot;, &quot;--config&quot;, &quot;/etc/spooky/config.yaml&quot;]
+</code></pre>
+<pre><code class="language-bash">docker run -d \
+  --name spooky \
+  -p 9889:9889/udp \
+  -v /etc/spooky/config.yaml:/etc/spooky/config.yaml:ro \
+  -v /etc/spooky/certs:/etc/spooky/certs:ro \
+  spooky:latest
+</code></pre>
+<h2 id="verification">Verification</h2>
+<pre><code class="language-bash"># Check service status
+sudo systemctl status spooky
+
+# Validate configuration (runs startup validation then exits)
+sudo -u spooky spooky --config /etc/spooky/config.yaml
+
+# View logs
+sudo journalctl -u spooky -f
+# or if file logging is enabled:
+sudo tail -f /var/log/spooky/spooky.log
+</code></pre>
+<h2 id="troubleshooting">Troubleshooting</h2>
+<p><strong><code>/etc/spooky/config.yaml</code> missing after <code>dpkg -i</code>:</strong>
+The package install may have been interrupted. Reinstall or manually restore the file:</p>
+<pre><code class="language-bash">sudo dpkg -i spooky_0.1.0-beta_amd64.deb
+# or:
+sudo install -m 0640 -o spooky -g spooky deploy/debian/config.yaml /etc/spooky/config.yaml
+</code></pre>
+<p><strong><code>Permission denied</code> on TLS key/cert:</strong>
+The <code>spooky</code> user cannot read the certificate files. Fix ownership and permissions:</p>
+<pre><code class="language-bash">sudo chown spooky:spooky /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
+sudo chmod 640 /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
+sudo systemctl restart spooky
+</code></pre>
+<p><strong><code>Permission denied</code> when binding to port &lt; 1024:</strong>
+Use a port &gt; 1024, or grant the capability:</p>
+<pre><code class="language-bash">sudo setcap CAP_NET_BIND_SERVICE=+eip /usr/bin/spooky
+</code></pre>
 <p><strong>Build fails with linker errors:</strong>
-- Ensure build tools are installed: <code>cmake</code>, <code>pkg-config</code>, C compiler
-- Update Rust toolchain: <code>rustup update</code></p>
-<p><strong>Permission denied when binding to port:</strong>
-- Use port &gt; 1024, or grant capability: <code>sudo setcap CAP_NET_BIND_SERVICE=+eip /usr/local/bin/spooky</code>
-- Run as privileged user (not recommended for production)</p>
+Ensure build tools are installed: <code>cmake</code>, <code>pkg-config</code>, C compiler. Update Rust: <code>rustup update</code>.</p>
 <p><strong>Certificate errors on startup:</strong>
-- Verify certificate and key paths in configuration
-- Check file permissions: certificates must be readable by the service user
-- Validate certificate format: <code>openssl x509 -in cert.pem -text -noout</code></p>
-<p><strong>Binary not found after cargo install:</strong>
-- Add <code>~/.cargo/bin</code> to PATH: <code>export PATH="$HOME/.cargo/bin:$PATH"</code>
-- Add to shell profile for persistence</p>
+Verify paths in config match actual file locations. Validate format:</p>
+<pre><code class="language-bash">openssl x509 -in /etc/spooky/certs/fullchain.pem -text -noout
+</code></pre>
 <h2 id="next-steps">Next Steps</h2>
 <ul>
-<li><a href="../../configuration/reference/">Configuration Reference</a> - Complete configuration options</li>
-<li><a href="../../configuration/tls/">TLS Setup Guide</a> - Production certificate management</li>
-<li><a href="../../deployment/production/">Production Deployment</a> - Production deployment best practices</li>
-<li><a href="../../troubleshooting/common-issues/">Troubleshooting</a> - Common issues and solutions</li>
+<li><a href="../../configuration/reference/">Configuration Reference</a> — Complete configuration options</li>
+<li><a href="../../configuration/tls/">TLS Setup Guide</a> — Production certificate management</li>
+<li><a href="../../deployment/production/">Production Deployment</a> — Production deployment best practices</li>
+<li><a href="../../troubleshooting/common-issues/">Troubleshooting</a> — Common issues and solutions</li>
 </ul>
   </div>
   
@@ -1413,16 +1407,10 @@ sudo systemctl start spooky.service
         </a>
         
         
-        <a href="#pre-built-binaries"
+        <a href="#debian-package-recommended-for-linux"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#pre-built-binaries');">
-            Pre-built Binaries
-        </a>
-        
-        <a href="#cargo-install"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#cargo-install');">
-            Cargo Install
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#debian-package-recommended-for-linux');">
+            Debian Package (Recommended for Linux)
         </a>
         
         <a href="#build-from-source"
@@ -1434,10 +1422,66 @@ sudo systemctl start spooky.service
         
 
         
-        <a href="#platform-specific-setup"
+        <a href="#tls-certificates"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#platform-specific-setup');">
-            Platform-Specific Setup
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#tls-certificates');">
+            TLS Certificates
+        </a>
+        
+        
+        <a href="#using-your-own-certificates"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#using-your-own-certificates');">
+            Using Your Own Certificates
+        </a>
+        
+        <a href="#using-the-repos-development-certificates"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#using-the-repos-development-certificates');">
+            Using the Repo's Development Certificates
+        </a>
+        
+        <a href="#generating-self-signed-certificates"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#generating-self-signed-certificates');">
+            Generating Self-Signed Certificates
+        </a>
+        
+        
+
+        
+        <a href="#post-installation-configuration"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#post-installation-configuration');">
+            Post-Installation Configuration
+        </a>
+        
+        
+        <a href="#manual-setup-non-package-installs"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#manual-setup-non-package-installs');">
+            Manual Setup (non-package installs)
+        </a>
+        
+        <a href="#configuration-file"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#configuration-file');">
+            Configuration File
+        </a>
+        
+        <a href="#log-rotation"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#log-rotation');">
+            Log Rotation
+        </a>
+        
+        
+
+        
+        <a href="#platform-specific-notes"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#platform-specific-notes');">
+            Platform-Specific Notes
         </a>
         
         
@@ -1476,58 +1520,18 @@ sudo systemctl start spooky.service
         
 
         
-        <a href="#installation-verification"
+        <a href="#verification"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#installation-verification');">
-            Installation Verification
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#verification');">
+            Verification
         </a>
         
 
         
-        <a href="#post-installation-configuration"
+        <a href="#troubleshooting"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#post-installation-configuration');">
-            Post-Installation Configuration
-        </a>
-        
-        
-        <a href="#1-create-configuration-directory"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#1-create-configuration-directory');">
-            1. Create Configuration Directory
-        </a>
-        
-        <a href="#2-generate-tls-certificates"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#2-generate-tls-certificates');">
-            2. Generate TLS Certificates
-        </a>
-        
-        <a href="#3-create-base-configuration"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#3-create-base-configuration');">
-            3. Create Base Configuration
-        </a>
-        
-        <a href="#4-system-service-setup-linux"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#4-system-service-setup-linux');">
-            4. System Service Setup (Linux)
-        </a>
-        
-        <a href="#5-log-management"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#5-log-management');">
-            5. Log Management
-        </a>
-        
-        
-
-        
-        <a href="#troubleshooting-installation"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#troubleshooting-installation');">
-            Troubleshooting Installation
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#troubleshooting');">
+            Troubleshooting
         </a>
         
 

@@ -19,33 +19,29 @@
 
 ## Installation Methods
 
-### Pre-built Binaries
+### Debian Package (Recommended for Linux)
 
-Download the latest release from [GitHub Releases](https://github.com/Supernova-Labs-Org/spooky/releases).
-
-**Linux (x86_64):**
-```bash
-wget https://github.com/Supernova-Labs-Org/spooky/releases/download/v0.1.0/spooky-linux-x86_64.tar.gz
-tar -xzf spooky-linux-x86_64.tar.gz
-sudo install -m 755 spooky /usr/local/bin/spooky
-```
-
-**macOS (x86_64/ARM64):**
-```bash
-wget https://github.com/Supernova-Labs-Org/spooky/releases/download/v0.1.0/spooky-macos-universal.tar.gz
-tar -xzf spooky-macos-universal.tar.gz
-sudo install -m 755 spooky /usr/local/bin/spooky
-```
-
-### Cargo Install
-
-Install directly from crates.io:
+Download and install the `.deb` from [GitHub Releases](https://github.com/Supernova-Labs-Org/spooky/releases):
 
 ```bash
-cargo install spooky
+wget https://github.com/Supernova-Labs-Org/spooky/releases/download/v0.1.0-beta/spooky_0.1.0-beta_amd64.deb
+sudo dpkg -i spooky_0.1.0-beta_amd64.deb
 ```
 
-This compiles from source and installs to `~/.cargo/bin/`. Ensure this directory is in your PATH.
+The package installs:
+- Binary: `/usr/bin/spooky`
+- Default config: `/etc/spooky/config.yaml`
+- Certs directory: `/etc/spooky/certs/`
+- Log directory: `/var/log/spooky/`
+- Systemd unit: `/lib/systemd/system/spooky.service`
+- System user/group: `spooky`
+
+After install, place your TLS certificates (see [TLS Certificates](#tls-certificates) below), edit `/etc/spooky/config.yaml`, then start the service:
+
+```bash
+sudo systemctl restart spooky
+sudo systemctl status spooky
+```
 
 ### Build from Source
 
@@ -66,247 +62,158 @@ cargo test -p spooky-edge --test lb_integration
 
 **System-wide installation:**
 ```bash
-sudo install -m 755 target/release/spooky /usr/local/bin/spooky
+sudo install -m 755 target/release/spooky /usr/bin/spooky
 ```
 
-## Platform-Specific Setup
+## TLS Certificates
 
-### Ubuntu/Debian
+Spooky requires TLS certificates to serve QUIC/HTTP3 traffic. The service runs as the `spooky` user, so certificates must be readable by that user.
+
+### Using Your Own Certificates
+
+Copy your certificate and private key into the certs directory and set correct ownership:
 
 ```bash
-# Install build dependencies
-sudo apt update
-sudo apt install -y cmake build-essential pkg-config
+# Copy certificates
+sudo cp /path/to/fullchain.pem /etc/spooky/certs/fullchain.pem
+sudo cp /path/to/privkey.pem   /etc/spooky/certs/privkey.pem
 
-# Install Rust if not present
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.cargo/env
-
-# Build and install
-git clone https://github.com/Supernova-Labs-Org/spooky.git
-cd spooky
-cargo build --release
-sudo install -m 755 target/release/spooky /usr/local/bin/spooky
+# Set ownership and permissions
+sudo chown spooky:spooky /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
+sudo chmod 640 /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
 ```
 
-### CentOS/RHEL 8+
+Then update `/etc/spooky/config.yaml` to point to these paths:
 
-```bash
-# Install build dependencies
-sudo dnf groupinstall -y "Development Tools"
-sudo dnf install -y cmake pkgconfig
-
-# Install Rust if not present
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-source ~/.cargo/env
-
-# Build and install
-git clone https://github.com/Supernova-Labs-Org/spooky.git
-cd spooky
-cargo build --release
-sudo install -m 755 target/release/spooky /usr/local/bin/spooky
-```
-
-### macOS
-
-```bash
-# Install dependencies via Homebrew
-brew install cmake pkg-config rust
-
-# Build and install
-git clone https://github.com/Supernova-Labs-Org/spooky.git
-cd spooky
-cargo build --release
-sudo install -m 755 target/release/spooky /usr/local/bin/spooky
-```
-
-### Windows
-
-**Prerequisites:**
-1. Install Rust from [rustup.rs](https://rustup.rs/)
-2. Install Visual Studio Build Tools with C++ support from [Microsoft](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
-
-**Build:**
-```powershell
-git clone https://github.com/Supernova-Labs-Org/spooky.git
-cd spooky
-cargo build --release
-```
-
-Binary location: `target\release\spooky.exe`
-
-## Docker Deployment
-
-**Dockerfile:**
-```dockerfile
-FROM rust:1.70-slim as builder
-
-WORKDIR /app
-COPY . .
-RUN cargo build --release
-
-FROM debian:bookworm-slim
-RUN apt-get update && \
-    apt-get install -y ca-certificates && \
-    rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/target/release/spooky /usr/local/bin/spooky
-
-EXPOSE 9889/udp
-CMD ["spooky"]
-```
-
-**Build and run:**
-```bash
-docker build -t spooky:latest .
-
-docker run -d \
-  --name spooky \
-  -p 9889:9889/udp \
-  -v /path/to/config.yaml:/etc/spooky/config.yaml:ro \
-  -v /path/to/certs:/etc/spooky/certs:ro \
-  spooky:latest --config /etc/spooky/config.yaml
-```
-
-**Using Docker Compose:**
 ```yaml
-version: '3.8'
-services:
-  spooky:
-    build: .
-    ports:
-      - "9889:9889/udp"
-    volumes:
-      - ./config.yaml:/etc/spooky/config.yaml:ro
-      - ./certs:/etc/spooky/certs:ro
-    command: ["--config", "/etc/spooky/config.yaml"]
-    restart: unless-stopped
+listen:
+  tls:
+    cert: "/etc/spooky/certs/fullchain.pem"
+    key:  "/etc/spooky/certs/privkey.pem"
 ```
 
-## Installation Verification
+### Using the Repo's Development Certificates
+
+If you are building from source and want to use the included development certificates (located in `certs/` in the repo), copy them in the same way:
 
 ```bash
-# Verify binary is accessible
-spooky --version
+sudo cp certs/proxy-fullchain.pem /etc/spooky/certs/fullchain.pem
+sudo cp certs/proxy-key-pkcs8.pem /etc/spooky/certs/privkey.pem
 
-# Display help and available options
-spooky --help
-
-# Validate configuration syntax (startup validation happens before serving)
-spooky --config /path/to/config.yaml
+sudo chown spooky:spooky /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
+sudo chmod 640 /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
 ```
 
-Expected output from `spooky --version`:
-```
-spooky 0.1.0
-```
+Update `/etc/spooky/config.yaml`:
 
-## Post-Installation Configuration
-
-### 1. Create Configuration Directory
-
-```bash
-sudo mkdir -p /etc/spooky
-sudo mkdir -p /etc/spooky/certs
-sudo chown -R $(whoami) /etc/spooky
+```yaml
+listen:
+  tls:
+    cert: "/etc/spooky/certs/fullchain.pem"
+    key:  "/etc/spooky/certs/privkey.pem"
 ```
 
-### 2. Generate TLS Certificates
+> **Note:** The development certificates are signed by the repo's test CA (`certs/ca-cert.pem`). Do not use them in production.
 
-**Self-signed certificates (development):**
+### Generating Self-Signed Certificates
+
+For quick local testing without the repo's dev certs:
+
 ```bash
 openssl req -x509 -newkey rsa:4096 -nodes \
-  -keyout /etc/spooky/certs/key.pem \
-  -out /etc/spooky/certs/cert.pem \
+  -keyout /tmp/privkey.pem \
+  -out /tmp/fullchain.pem \
   -days 365 \
   -subj "/CN=proxy.example.com"
+
+sudo mv /tmp/fullchain.pem /etc/spooky/certs/fullchain.pem
+sudo mv /tmp/privkey.pem   /etc/spooky/certs/privkey.pem
+sudo chown spooky:spooky /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
+sudo chmod 640 /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
 ```
 
 For production certificates, see [TLS Configuration](../configuration/tls.md).
 
-### 3. Create Base Configuration
+## Post-Installation Configuration
 
-Create `/etc/spooky/config.yaml`:
+### Manual Setup (non-package installs)
+
+If you installed from source or a tarball, set up the directories, user, and service manually:
+
+```bash
+# Create directories
+sudo mkdir -p /etc/spooky/certs
+sudo mkdir -p /var/log/spooky
+
+# Create system user
+sudo groupadd --system spooky
+sudo useradd --system --gid spooky --no-create-home \
+     --home-dir /etc/spooky --shell /usr/sbin/nologin \
+     --comment "Spooky reverse proxy" spooky
+
+# Set ownership
+sudo chown -R spooky:spooky /etc/spooky /var/log/spooky
+sudo chmod 750 /etc/spooky /etc/spooky/certs /var/log/spooky
+
+# Copy default config
+sudo install -m 0640 -o spooky -g spooky deploy/debian/config.yaml /etc/spooky/config.yaml
+```
+
+Then place TLS certificates as described above, and install the systemd unit:
+
+```bash
+sudo install -m 0644 deploy/debian/spooky.service /lib/systemd/system/spooky.service
+sudo systemctl daemon-reload
+sudo systemctl enable spooky.service
+sudo systemctl start spooky.service
+```
+
+### Configuration File
+
+Edit `/etc/spooky/config.yaml` to match your environment. Minimal working example:
 
 ```yaml
 version: 1
 
 listen:
   protocol: http3
-  port: 9889
   address: "0.0.0.0"
+  port: 9889
   tls:
-    cert: "/etc/spooky/certs/cert.pem"
-    key: "/etc/spooky/certs/key.pem"
+    cert: "/etc/spooky/certs/fullchain.pem"
+    key:  "/etc/spooky/certs/privkey.pem"
 
 upstream:
   default:
     load_balancing:
-      type: "random"
+      type: round-robin
     route:
       path_prefix: "/"
     backends:
-      - id: "backend-1"
-        address: "127.0.0.1:8080"
+      - id: "backend1"
+        address: "backend.internal.example:8443"
         weight: 100
         health_check:
           path: "/health"
           interval: 5000
+          timeout_ms: 1000
+          failure_threshold: 3
+          success_threshold: 2
+          cooldown_ms: 5000
 
 log:
   level: info
-```
-
-### 4. System Service Setup (Linux)
-
-Create `/etc/systemd/system/spooky.service`:
-
-```ini
-[Unit]
-Description=Spooky HTTP/3 to HTTP/2 Proxy
-After=network.target
-
-[Service]
-Type=simple
-User=spooky
-Group=spooky
-ExecStart=/usr/local/bin/spooky --config /etc/spooky/config.yaml
-Restart=on-failure
-RestartSec=5s
-
-# Security hardening
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/log/spooky
-
-[Install]
-WantedBy=multi-user.target
-```
-
-Create service user and enable:
-```bash
-sudo useradd -r -s /bin/false spooky
-sudo systemctl daemon-reload
-sudo systemctl enable spooky.service
-sudo systemctl start spooky.service
-```
-
-### 5. Log Management
-
-By default, Spooky logs to stderr (captured by journald under systemd). To write logs to a file instead, set `log.file.enabled: true` in your config:
-
-```yaml
-log:
-  level: info
+  format: json
   file:
     enabled: true
     path: /var/log/spooky/spooky.log
 ```
 
-Configure log rotation for file-based logging:
+See [Configuration Reference](../configuration/reference.md) for all options.
 
-Create `/etc/logrotate.d/spooky`:
+### Log Rotation
+
+Configure log rotation for file-based logging. Create `/etc/logrotate.d/spooky`:
 
 ```
 /var/log/spooky/*.log {
@@ -324,28 +231,121 @@ Create `/etc/logrotate.d/spooky`:
 }
 ```
 
-## Troubleshooting Installation
+## Platform-Specific Notes
+
+### Ubuntu/Debian
+
+Install build dependencies before building from source:
+
+```bash
+sudo apt update
+sudo apt install -y cmake build-essential pkg-config
+
+# Install Rust if not present
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+```
+
+### CentOS/RHEL 8+
+
+```bash
+sudo dnf groupinstall -y "Development Tools"
+sudo dnf install -y cmake pkgconfig
+
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source ~/.cargo/env
+```
+
+### macOS
+
+```bash
+brew install cmake pkg-config rust
+```
+
+### Windows
+
+1. Install Rust from [rustup.rs](https://rustup.rs/)
+2. Install Visual Studio Build Tools with C++ support from [Microsoft](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
+
+Binary location after build: `target\release\spooky.exe`
+
+## Docker Deployment
+
+```dockerfile
+FROM rust:1.85-slim as builder
+WORKDIR /app
+COPY . .
+RUN cargo build --release
+
+FROM debian:bookworm-slim
+RUN apt-get update && \
+    apt-get install -y ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+COPY --from=builder /app/target/release/spooky /usr/bin/spooky
+EXPOSE 9889/udp
+CMD ["spooky", "--config", "/etc/spooky/config.yaml"]
+```
+
+```bash
+docker run -d \
+  --name spooky \
+  -p 9889:9889/udp \
+  -v /etc/spooky/config.yaml:/etc/spooky/config.yaml:ro \
+  -v /etc/spooky/certs:/etc/spooky/certs:ro \
+  spooky:latest
+```
+
+## Verification
+
+```bash
+# Check service status
+sudo systemctl status spooky
+
+# Validate configuration (runs startup validation then exits)
+sudo -u spooky spooky --config /etc/spooky/config.yaml
+
+# View logs
+sudo journalctl -u spooky -f
+# or if file logging is enabled:
+sudo tail -f /var/log/spooky/spooky.log
+```
+
+## Troubleshooting
+
+**`/etc/spooky/config.yaml` missing after `dpkg -i`:**
+The package install may have been interrupted. Reinstall or manually restore the file:
+```bash
+sudo dpkg -i spooky_0.1.0-beta_amd64.deb
+# or:
+sudo install -m 0640 -o spooky -g spooky deploy/debian/config.yaml /etc/spooky/config.yaml
+```
+
+**`Permission denied` on TLS key/cert:**
+The `spooky` user cannot read the certificate files. Fix ownership and permissions:
+```bash
+sudo chown spooky:spooky /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
+sudo chmod 640 /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
+sudo systemctl restart spooky
+```
+
+**`Permission denied` when binding to port < 1024:**
+Use a port > 1024, or grant the capability:
+```bash
+sudo setcap CAP_NET_BIND_SERVICE=+eip /usr/bin/spooky
+```
 
 **Build fails with linker errors:**
-- Ensure build tools are installed: `cmake`, `pkg-config`, C compiler
-- Update Rust toolchain: `rustup update`
-
-**Permission denied when binding to port:**
-- Use port > 1024, or grant capability: `sudo setcap CAP_NET_BIND_SERVICE=+eip /usr/local/bin/spooky`
-- Run as privileged user (not recommended for production)
+Ensure build tools are installed: `cmake`, `pkg-config`, C compiler. Update Rust: `rustup update`.
 
 **Certificate errors on startup:**
-- Verify certificate and key paths in configuration
-- Check file permissions: certificates must be readable by the service user
-- Validate certificate format: `openssl x509 -in cert.pem -text -noout`
-
-**Binary not found after cargo install:**
-- Add `~/.cargo/bin` to PATH: `export PATH="$HOME/.cargo/bin:$PATH"`
-- Add to shell profile for persistence
+Verify paths in config match actual file locations. Validate format:
+```bash
+openssl x509 -in /etc/spooky/certs/fullchain.pem -text -noout
+```
 
 ## Next Steps
 
-- [Configuration Reference](../configuration/reference.md) - Complete configuration options
-- [TLS Setup Guide](../configuration/tls.md) - Production certificate management
-- [Production Deployment](../deployment/production.md) - Production deployment best practices
-- [Troubleshooting](../troubleshooting/common-issues.md) - Common issues and solutions
+- [Configuration Reference](../configuration/reference.md) — Complete configuration options
+- [TLS Setup Guide](../configuration/tls.md) — Production certificate management
+- [Production Deployment](../deployment/production.md) — Production deployment best practices
+- [Troubleshooting](../troubleshooting/common-issues.md) — Common issues and solutions
