@@ -52,6 +52,19 @@ sudo dpkg -i spooky_0.1.0-beta_amd64.deb
 
 ### Build from Source
 
+**Install build dependencies** (required — quiche/BoringSSL needs cmake and a C++ compiler):
+
+```bash
+# Ubuntu/Debian
+sudo apt install -y cmake build-essential pkg-config
+
+# CentOS/RHEL
+sudo dnf groupinstall -y "Development Tools" && sudo dnf install -y cmake pkgconfig
+
+# macOS
+brew install cmake pkg-config
+```
+
 **Clone and build:**
 ```bash
 git clone https://github.com/Supernova-Labs-Org/spooky.git
