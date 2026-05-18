@@ -169,4 +169,4 @@ See [Contributing Guide](https://github.com/Supernova-Labs-Org/spooky/blob/maste
 
 ## License
 
-Elastic License 2.0 (ELv2) - see [LICENSE](https://github.com/Supernova-Labs-Org/spooky/blob/master/LICENSE.md) for details.
+GNU General Public License v3.0 (GPLv3) - see [LICENSE](https://github.com/Supernova-Labs-Org/spooky/blob/master/LICENSE.md) for details.
