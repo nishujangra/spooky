@@ -14,7 +14,7 @@ spooky --config <CONFIG>
 
 | Option | Short | Type | Required | Description |
 |--------|-------|------|----------|-------------|
-| `--config` | `-c` | string | Yes | Path to configuration file |
+| `--config` | `-c` | string | No | Path to configuration file (defaults to `/etc/spooky/config.yaml` if omitted) |
 | `--version` | `-V` | boolean | No | Show version information |
 | `--help` | `-h` | boolean | No | Show help information |
 
@@ -62,7 +62,11 @@ interface ListenConfig {
 interface TLSConfig {
   cert: string;        // Path to certificate file
   key: string;         // Path to private key file
-  ca?: string;         // Path to CA certificate (client auth)
+  client_auth?: {
+    enabled: boolean;              // Enable mTLS client authentication
+    require_client_cert: boolean;  // Reject connections without a client cert
+    ca_file: string;               // Path to CA certificate used to verify clients
+  };
 }
 ```
 
@@ -104,8 +108,7 @@ interface HealthCheckConfig {
   interval?: number;       // Check interval in ms (default: 5000)
   timeout_ms?: number;     // Request timeout in ms (default: 1000)
   success_threshold?: number;   // Successes to mark healthy (default: 2)
-  failure_threshold?: number; // Failures to mark unhealthy (default: 3)
-  method?: string;         // HTTP method (default: "GET")
+  failure_threshold?: number;   // Failures to mark unhealthy (default: 3)
 }
 ```
 
@@ -114,7 +117,7 @@ interface HealthCheckConfig {
 ```typescript
 interface LoadBalancingConfig {
   type: "random" | "round-robin" | "consistent-hash" | "least-connections" | "latency-aware" | "sticky-cid";
-  key?: string;  // Reserved for future pluggable key extraction (currently ignored)
+  key?: string;  // Key source for consistent hashing. Supported sources: "header:<name>", "cookie:<name>", "query:<name>", "path", "authority", "method", "cid". Falls back to "cid" if unset or the source is absent on a request.
 }
 ```
 

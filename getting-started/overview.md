@@ -52,7 +52,7 @@ HTTP/3 Client → QUIC/TLS → Spooky Edge → HTTP/2 → Backend Servers
 
 **Runtime Requirements:**
 - Rust 1.85 or later (edition 2024)
-- Linux, macOS, or Windows
+- Linux (runtime supported; macOS and Windows may compile but are not supported for production use)
 - UDP port access for QUIC traffic
 - 256MB RAM minimum (1GB recommended for production)
 

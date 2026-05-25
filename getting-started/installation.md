@@ -10,7 +10,7 @@
 
 **Software:**
 - Rust 1.85 or later (2024 edition)
-- Operating System: Linux, macOS, or Windows
+- Operating System: Linux (runtime supported; macOS and Windows may compile but are not supported for production use)
 - Build tools: CMake, pkg-config, C compiler toolchain
 
 **Permissions:**
@@ -283,6 +283,8 @@ brew install cmake pkg-config rust
 ```
 
 ### Windows
+
+> **Note:** Windows is not a supported runtime platform. The Spooky binary uses Unix-specific APIs (signals, `getuid`) that are not available on Windows. The instructions below may allow a build to succeed, but running Spooky on Windows in production is not supported.
 
 1. Install Rust from [rustup.rs](https://rustup.rs/)
 2. Install Visual Studio Build Tools with C++ support from [Microsoft](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
