@@ -935,8 +935,8 @@ cargo test -p spooky-edge --test lb_integration
 sudo cp /path/to/fullchain.pem /etc/spooky/certs/fullchain.pem
 sudo cp /path/to/privkey.pem   /etc/spooky/certs/privkey.pem
 
-# Set ownership and permissions
-sudo chown spooky:spooky /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
+# Set ownership and permissions (root owns, spooky group can read)
+sudo chown root:spooky /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
 sudo chmod 640 /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
 </code></pre>
 <p>Then update <code>/etc/spooky/config.yaml</code> to point to these paths:</p>
@@ -950,7 +950,7 @@ sudo chmod 640 /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
 <pre><code class="language-bash">sudo cp certs/proxy-fullchain.pem /etc/spooky/certs/fullchain.pem
 sudo cp certs/proxy-key-pkcs8.pem /etc/spooky/certs/privkey.pem
 
-sudo chown spooky:spooky /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
+sudo chown root:spooky /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
 sudo chmod 640 /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
 </code></pre>
 <p>Update <code>/etc/spooky/config.yaml</code>:</p>
@@ -972,7 +972,7 @@ sudo chmod 640 /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
 
 sudo mv /tmp/fullchain.pem /etc/spooky/certs/fullchain.pem
 sudo mv /tmp/privkey.pem   /etc/spooky/certs/privkey.pem
-sudo chown spooky:spooky /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
+sudo chown root:spooky /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
 sudo chmod 640 /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
 </code></pre>
 <p>For production certificates, see <a href="../../configuration/tls/">TLS Configuration</a>.</p>
@@ -1127,7 +1127,7 @@ sudo install -m 0640 -o spooky -g spooky packaging/deb/debian/config.yaml /etc/s
 </code></pre>
 <p><strong><code>Permission denied</code> on TLS key/cert:</strong>
 The <code>spooky</code> user cannot read the certificate files. Fix ownership and permissions:</p>
-<pre><code class="language-bash">sudo chown spooky:spooky /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
+<pre><code class="language-bash">sudo chown root:spooky /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
 sudo chmod 640 /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
 sudo systemctl restart spooky
 </code></pre>
