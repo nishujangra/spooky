@@ -535,7 +535,7 @@
             
             <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
-        data-size="default" href="architecture/"
+        data-size="default" href="architecture.md"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative h-[30px] w-fit overflow-visible border border-transparent text-[0.8rem] font-medium after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
         
@@ -656,7 +656,7 @@
             
             <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
-        data-size="default" href="benchmarks/"
+        data-size="default" href="benchmarks.md"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative h-[30px] w-fit overflow-visible border border-transparent text-[0.8rem] font-medium after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
         
@@ -856,161 +856,212 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Spooky lets HAProxy, NGINX, and Apache environments adopt QUIC/HTTP/3 in days instead of quarters.</p>
-<p>Technical documentation for the Spooky HTTP/3 edge proxy and load balancer.</p>
-<h2 id="quick-navigation">Quick Navigation</h2>
-<h3 id="getting-started">Getting Started</h3>
-<ul>
-<li><a href="getting-started/overview/">Overview</a> - Project introduction and capabilities</li>
-<li><a href="getting-started/installation/">Installation</a> - System requirements and installation procedures</li>
-<li><a href="getting-started/docker/">Docker Installation</a> - Containerized setup and operations</li>
-<li><a href="tutorials/quickstart/">Quick Start Tutorial</a> - Step-by-step guide to get running</li>
-</ul>
-<h3 id="configuration">Configuration</h3>
-<ul>
-<li><a href="configuration/reference/">Configuration Reference</a> - Complete configuration documentation</li>
-<li><a href="configuration/tls/">TLS Setup</a> - Certificate generation and management</li>
-</ul>
-<h3 id="user-guides">User Guides</h3>
-<ul>
-<li><a href="user-guide/basics/">Basic Usage</a> - Core concepts and usage patterns</li>
-<li><a href="user-guide/load-balancing/">Load Balancing</a> - Load balancing algorithms and health checks</li>
-</ul>
-<h3 id="architecture">Architecture</h3>
-<ul>
-<li><a href="architecture/">Architecture Overview</a> - System design and component interaction</li>
-<li><a href="architecture/overview/">Component Details</a> - High-level architectural principles</li>
-<li><a href="architecture/components/">Component Breakdown</a> - Detailed crate documentation</li>
-</ul>
-<h3 id="deployment">Deployment</h3>
-<ul>
-<li><a href="deployment/production/">Production Deployment</a> - Production deployment guide</li>
-<li><a href="troubleshooting/common-issues/">Troubleshooting</a> - Common issues and solutions</li>
-</ul>
-<h3 id="development">Development</h3>
-<ul>
-<li><a href="https://github.com/Supernova-Labs-Org/spooky/blob/master/CONTRIBUTING.md">Contributing Guide</a> - Development setup and guidelines</li>
-</ul>
-<h3 id="protocol-reference">Protocol Reference</h3>
-<ul>
-<li><a href="protocols/http3/">HTTP/3 Protocol</a> - HTTP/3 overview and implementation</li>
-<li><a href="protocols/quic/">QUIC Protocol</a> - QUIC fundamentals and usage</li>
-</ul>
-<h3 id="api-and-observability">API and Observability</h3>
-<ul>
-<li><a href="api/overview/">API Overview</a> - Metrics, logging, and future admin API</li>
-</ul>
-<h3 id="planning">Planning</h3>
-<ul>
-<li><a href="roadmap/">Roadmap</a> - Feature roadmap and priorities</li>
-<li><a href="release-maturity/">Release Maturity</a> - Beta scope and GA exit criteria</li>
-</ul>
-<h2 id="documentation-structure">Documentation Structure</h2>
-<ul>
-<li><code>README.md</code>: Documentation index (this page)</li>
-<li><code>architecture.md</code>: Main architecture document</li>
-<li><code>roadmap.md</code>: Project roadmap</li>
-<li><code>getting-started/</code>: Overview and installation guides</li>
-<li><code>configuration/</code>: Configuration reference and TLS setup</li>
-<li><code>user-guide/</code>: Basic usage and load balancing guide</li>
-<li><code>architecture/</code>: High-level design and component details</li>
-<li><code>deployment/</code>: Production deployment guidance</li>
-<li><code>troubleshooting/</code>: Common issues and fixes</li>
-<li><code>tutorials/</code>: Quickstart walkthroughs</li>
-<li><code>protocols/</code>: HTTP/3 and QUIC protocol notes</li>
-<li><code>api/</code>: API and observability overview</li>
-</ul>
-<h2 id="quick-references">Quick References</h2>
-<h3 id="common-configuration-tasks">Common Configuration Tasks</h3>
-<p><strong>Basic upstream pool</strong>:</p>
-<pre><code class="language-yaml">upstream:
-  backend:
+    <p>Spooky is an open-source HTTP/3 (QUIC) edge reverse proxy written in Rust that terminates QUIC connections and forwards traffic to HTTP/2 backends.</p>
+<hr />
+<h2 id="where-to-start">Where to start</h2>
+<h3 id="operator-install-configure-run-in-production">Operator — install, configure, run in production</h3>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>What you'll find</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="getting-started/installation/">Installation</a></td>
+<td>Debian package, build from source, system requirements, TLS certificate layout</td>
+</tr>
+<tr>
+<td><a href="getting-started/docker/">Docker</a></td>
+<td>Container image, Compose bootstrap, smoke-test scripts</td>
+</tr>
+<tr>
+<td><a href="configuration/reference/">Configuration Reference</a></td>
+<td>Every config key, type, default, and constraint in one place</td>
+</tr>
+<tr>
+<td><a href="configuration/tls/">TLS Setup</a></td>
+<td>Certificate generation, mTLS client auth, key ownership and permissions</td>
+</tr>
+<tr>
+<td><a href="deployment/production/">Production Deployment</a></td>
+<td>Systemd unit, privilege drop, sysctl tuning, canary rollout guidance</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="developer-understand-the-architecture-contribute">Developer — understand the architecture, contribute</h3>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>What you'll find</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="architecture/overview/">Architecture Overview</a></td>
+<td>Design principles, data-plane topology, sharded ingress model</td>
+</tr>
+<tr>
+<td><a href="architecture/components/">Component Breakdown</a></td>
+<td>Per-crate responsibilities, inter-crate boundaries, key types</td>
+</tr>
+<tr>
+<td><a href="user-guide/load-balancing/">Load Balancing</a></td>
+<td>All six algorithms with characteristics, use-case guidance, and config examples</td>
+</tr>
+<tr>
+<td><a href="https://github.com/Supernova-Labs-Org/spooky/blob/master/CONTRIBUTING.md">Contributing Guide</a></td>
+<td>Dev setup, build commands, test matrix, PR conventions</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="reference-config-schema-api-benchmarks-changelog">Reference — config schema, API, benchmarks, changelog</h3>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>What you'll find</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="configuration/reference/">Configuration Reference</a></td>
+<td>Authoritative schema reference for every configuration block</td>
+</tr>
+<tr>
+<td><a href="api/overview/">API Overview</a></td>
+<td>Metrics endpoint, control API (health, ready, runtime), bearer auth</td>
+</tr>
+<tr>
+<td><a href="benchmarks/load/">Benchmarks</a></td>
+<td>Load test results: throughput, latency percentiles, test environment</td>
+</tr>
+<tr>
+<td><a href="roadmap/">Roadmap</a></td>
+<td>Planned features, GA exit criteria, known limitations</td>
+</tr>
+<tr>
+<td><a href="changelog/">Changelog</a></td>
+<td>Version history with added, fixed, and changed entries</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2 id="status">Status</h2>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Version</td>
+<td>v0.1.1-beta</td>
+</tr>
+<tr>
+<td>Maturity</td>
+<td>Beta</td>
+</tr>
+<tr>
+<td>License</td>
+<td>GPLv3</td>
+</tr>
+</tbody>
+</table></div>
+<p>Beta means core proxying, routing, load balancing, and health-check features are implemented and actively validated, but the project remains pre-GA — extended soak validation and broader failure-mode hardening are still in progress.</p>
+<p>Controlled production rollout is supported. See <a href="release-maturity/">release-maturity.md</a> for operator expectations, environment guidance, and GA exit criteria.</p>
+<hr />
+<h2 id="quick-reference">Quick reference</h2>
+<h3 id="minimal-working-config">Minimal working config</h3>
+<pre><code class="language-yaml">version: 1
+
+listen:
+  address: &quot;0.0.0.0&quot;
+  port: 9889
+  tls:
+    cert: /etc/spooky/certs/fullchain.pem
+    key: /etc/spooky/certs/privkey.pem
+
+upstream:
+  default:
     route:
       path_prefix: &quot;/&quot;
     backends:
-      - id: &quot;backend-1&quot;
+      - id: backend1
         address: &quot;127.0.0.1:8080&quot;
-        weight: 100
         health_check:
           path: &quot;/health&quot;
           interval: 5000
 </code></pre>
-<p><em>Note: Load balancing can be configured per-upstream and also at the top level as a fallback default.</em></p>
-<p><strong>Path-based routing</strong>:</p>
-<pre><code class="language-yaml">upstream:
-  api:
-    route:
-      path_prefix: &quot;/api&quot;
-    # ... backends
-
-  web:
-    route:
-      path_prefix: &quot;/&quot;
-    # ... backends
-</code></pre>
-<p><strong>Load balancing algorithms</strong>:
-- <code>random</code> - Random selection
-- <code>round-robin</code> - Sequential rotation
-- <code>consistent-hash</code> - Hash-based affinity (session stickiness, cache locality)
-- <code>least-connections</code> - Routes to backend with fewest active requests
-- <code>latency-aware</code> - Routes to fastest backends using EWMA latency scoring
-- <code>sticky-cid</code> - QUIC connection-ID affinity via consistent hashing</p>
-<h3 id="common-commands">Common Commands</h3>
-<p><strong>Start Spooky</strong>:</p>
+<p>Backends are verified HTTPS by default. To forward to a cleartext HTTP backend, set <code>upstream_tls.verify_certificates: false</code> and be aware that a warning is logged at startup. The full schema is in <a href="configuration/reference/">configuration/reference.md</a>.</p>
+<h3 id="common-commands">Common commands</h3>
+<p><strong>Start the proxy:</strong></p>
 <pre><code class="language-bash">spooky --config /etc/spooky/config.yaml
 </code></pre>
-<p><strong>Test HTTP/3 connection</strong>:</p>
+<p><strong>Test an HTTP/3 connection</strong> (requires curl built with HTTP/3 support):</p>
 <pre><code class="language-bash">curl --http3-only -k \
   --resolve proxy.example.com:9889:127.0.0.1 \
   https://proxy.example.com:9889/health
 </code></pre>
-<p><strong>Check configuration</strong>:</p>
-<pre><code class="language-bash">spooky --config config.yaml  # Starts serving after validation
+<p><strong>Check health and readiness</strong> (control API, default port 9902):</p>
+<pre><code class="language-bash">curl http://127.0.0.1:9902/health
+curl http://127.0.0.1:9902/ready
 </code></pre>
-<p><strong>View logs</strong>:</p>
-<pre><code class="language-bash"># All logs
-RUST_LOG=info spooky --config config.yaml
-
-# Debug QUIC only
-RUST_LOG=spooky_edge=debug spooky --config config.yaml
-
-# Trace everything
-RUST_LOG=trace spooky --config config.yaml
-</code></pre>
-<h2 id="documentation-guidelines">Documentation Guidelines</h2>
-<p>This documentation follows these principles:</p>
-<ol>
-<li><strong>Technical Accuracy</strong>: All examples are based on the actual codebase</li>
-<li><strong>Honest Status</strong>: Capabilities and limitations are documented as-is</li>
-<li><strong>Direct Communication</strong>: Clear, concise technical writing</li>
-<li><strong>Complete Coverage</strong>: All configuration options documented</li>
-<li><strong>Practical Examples</strong>: Working code and configuration samples</li>
-</ol>
-<h2 id="contributing-to-documentation">Contributing to Documentation</h2>
-<p>To improve documentation:</p>
-<ol>
-<li>Check accuracy against source code</li>
-<li>Test all examples and commands</li>
-<li>Use clear, technical language</li>
-<li>Include practical examples</li>
-<li>Update this index when adding new docs</li>
-</ol>
-<p>See <a href="https://github.com/Supernova-Labs-Org/spooky/blob/master/CONTRIBUTING.md">Contributing Guide</a> for more details.</p>
-<h2 id="external-resources">External Resources</h2>
+<h3 id="log-levels">Log levels</h3>
+<p>Spooky accepts both its own names and the standard equivalents in <code>log.level</code> or <code>RUST_LOG</code>.</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Spooky name</th>
+<th>Standard equivalent</th>
+<th>Verbosity</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>whisper</code></td>
+<td><code>trace</code></td>
+<td>Everything, including internal QUIC events</td>
+</tr>
+<tr>
+<td><code>haunt</code></td>
+<td><code>debug</code></td>
+<td>Per-request routing, backend selection, health transitions</td>
+</tr>
+<tr>
+<td><code>spooky</code></td>
+<td><code>info</code></td>
+<td>Startup, shutdown, configuration summary (default)</td>
+</tr>
+<tr>
+<td><code>scream</code></td>
+<td><code>warn</code></td>
+<td>Recoverable errors, degraded-mode events</td>
+</tr>
+<tr>
+<td><code>poltergeist</code></td>
+<td><code>error</code></td>
+<td>Fatal or unrecoverable conditions</td>
+</tr>
+<tr>
+<td><code>silence</code></td>
+<td><code>off</code></td>
+<td>No output</td>
+</tr>
+</tbody>
+</table></div>
+<p>Set per-crate verbosity with <code>RUST_LOG</code> (e.g., <code>RUST_LOG=spooky_edge=haunt,info</code>). Output format is controlled by <code>log.format: plain | json</code>.</p>
+<hr />
+<h2 id="external-standards">External standards</h2>
 <ul>
-<li><a href="https://www.rfc-editor.org/rfc/rfc9000.html">QUIC RFC 9000</a></li>
-<li><a href="https://www.rfc-editor.org/rfc/rfc9114.html">HTTP/3 RFC 9114</a></li>
-<li><a href="https://docs.rs/quiche/">quiche Documentation</a></li>
-<li><a href="https://doc.rust-lang.org/">Rust Documentation</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc9000.html">RFC 9000 — QUIC: A UDP-Based Multiplexed and Secure Transport</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc9114.html">RFC 9114 — HTTP/3</a></li>
+<li><a href="https://www.rfc-editor.org/rfc/rfc9113.html">RFC 9113 — HTTP/2</a></li>
 </ul>
-<h2 id="getting-help">Getting Help</h2>
-<ul>
-<li>Review troubleshooting guide: <a href="troubleshooting/common-issues/">docs/troubleshooting/common-issues.md</a></li>
-<li>Check GitHub issues for community discussions</li>
-<li>Read protocol documentation for HTTP/3 and QUIC specifics</li>
-</ul>
-<h2 id="license">License</h2>
-<p>GNU General Public License v3.0 (GPLv3) - see <a href="https://github.com/Supernova-Labs-Org/spooky/blob/master/LICENSE.md">LICENSE</a> for details.</p>
   </div>
   
   <script>
@@ -1157,12 +1208,6 @@ RUST_LOG=trace spooky --config config.yaml
                     
                     <div class="flex flex-col gap-3">
                         
-                        <a class="text-2xl font-medium" href="architecture/">
-                            
-                            Overview
-                            
-                        </a>
-                        
                         <a class="text-2xl font-medium" href="architecture/overview/">
                             
                             High-Level Design
@@ -1204,12 +1249,6 @@ RUST_LOG=trace spooky --config config.yaml
                     <div class="text-muted-foreground text-sm font-medium">Development</div>
                     
                     <div class="flex flex-col gap-3">
-                        
-                        <a class="text-2xl font-medium" href="benchmarks/">
-                            
-                            Benchmarks
-                            
-                        </a>
                         
                         <a class="text-2xl font-medium" href="benchmarks/load/">
                             
@@ -1280,136 +1319,74 @@ RUST_LOG=trace spooky --config config.yaml
         
         
         
-        <a href="#quick-navigation"
+        <a href="#where-to-start"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#quick-navigation');">
-            Quick Navigation
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#where-to-start');">
+            Where to start
         </a>
         
         
-        <a href="#getting-started"
+        <a href="#operator-install-configure-run-in-production"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#getting-started');">
-            Getting Started
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#operator-install-configure-run-in-production');">
+            Operator — install, configure, run in production
         </a>
         
-        <a href="#configuration"
+        <a href="#developer-understand-the-architecture-contribute"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#configuration');">
-            Configuration
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#developer-understand-the-architecture-contribute');">
+            Developer — understand the architecture, contribute
         </a>
         
-        <a href="#user-guides"
+        <a href="#reference-config-schema-api-benchmarks-changelog"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#user-guides');">
-            User Guides
-        </a>
-        
-        <a href="#architecture"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#architecture');">
-            Architecture
-        </a>
-        
-        <a href="#deployment"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#deployment');">
-            Deployment
-        </a>
-        
-        <a href="#development"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#development');">
-            Development
-        </a>
-        
-        <a href="#protocol-reference"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#protocol-reference');">
-            Protocol Reference
-        </a>
-        
-        <a href="#api-and-observability"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#api-and-observability');">
-            API and Observability
-        </a>
-        
-        <a href="#planning"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#planning');">
-            Planning
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#reference-config-schema-api-benchmarks-changelog');">
+            Reference — config schema, API, benchmarks, changelog
         </a>
         
         
 
         
-        <a href="#documentation-structure"
+        <a href="#status"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#documentation-structure');">
-            Documentation Structure
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#status');">
+            Status
         </a>
         
 
         
-        <a href="#quick-references"
+        <a href="#quick-reference"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#quick-references');">
-            Quick References
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#quick-reference');">
+            Quick reference
         </a>
         
         
-        <a href="#common-configuration-tasks"
+        <a href="#minimal-working-config"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#common-configuration-tasks');">
-            Common Configuration Tasks
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#minimal-working-config');">
+            Minimal working config
         </a>
         
         <a href="#common-commands"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#common-commands');">
-            Common Commands
+            Common commands
+        </a>
+        
+        <a href="#log-levels"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#log-levels');">
+            Log levels
         </a>
         
         
 
         
-        <a href="#documentation-guidelines"
+        <a href="#external-standards"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#documentation-guidelines');">
-            Documentation Guidelines
-        </a>
-        
-
-        
-        <a href="#contributing-to-documentation"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#contributing-to-documentation');">
-            Contributing to Documentation
-        </a>
-        
-
-        
-        <a href="#external-resources"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#external-resources');">
-            External Resources
-        </a>
-        
-
-        
-        <a href="#getting-help"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#getting-help');">
-            Getting Help
-        </a>
-        
-
-        
-        <a href="#license"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#license');">
-            License
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#external-standards');">
+            External standards
         </a>
         
 

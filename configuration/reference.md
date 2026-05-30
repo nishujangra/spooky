@@ -2,6 +2,125 @@
 
 Complete reference for all Spooky configuration options.
 
+---
+
+## Common Patterns
+
+Before the full reference, here are the four config shapes that cover most deployments. All options used here are documented in full below.
+
+### Single upstream, all traffic
+
+```yaml
+version: 1
+
+listen:
+  address: "0.0.0.0"
+  port: 9889
+  tls:
+    cert: /etc/spooky/certs/fullchain.pem
+    key: /etc/spooky/certs/privkey.pem
+
+upstream:
+  default:
+    load_balancing:
+      type: round-robin
+    route:
+      path_prefix: "/"
+    backends:
+      - id: backend-1
+        address: "10.0.1.10:8080"
+        weight: 100
+        health_check:
+          path: "/health"
+          interval: 5000
+```
+
+### Path-based routing to two pools
+
+```yaml
+upstream:
+  api:
+    load_balancing:
+      type: least-connections
+    route:
+      path_prefix: "/api"
+    backends:
+      - id: api-1
+        address: "10.0.1.10:8080"
+        weight: 100
+        health_check:
+          path: "/health"
+          interval: 5000
+
+  default:
+    load_balancing:
+      type: round-robin
+    route:
+      path_prefix: "/"
+    backends:
+      - id: web-1
+        address: "10.0.2.10:8080"
+        weight: 100
+        health_check:
+          path: "/status"
+          interval: 10000
+```
+
+Spooky uses longest-match on `path_prefix`. `/api` matches before `/` for requests starting with `/api`.
+
+### Session-sticky routing with consistent hashing
+
+```yaml
+upstream:
+  app:
+    load_balancing:
+      type: consistent-hash
+      key: "header:x-session-id"   # hash on session header; falls back to QUIC CID if absent
+    route:
+      path_prefix: "/"
+    backends:
+      - id: app-1
+        address: "10.0.1.10:8080"
+        weight: 100
+      - id: app-2
+        address: "10.0.1.11:8080"
+        weight: 100
+```
+
+### Latency-aware routing with health checks and weighted backends
+
+```yaml
+upstream:
+  app:
+    load_balancing:
+      type: latency-aware           # routes to fastest backends using EWMA scoring
+    route:
+      path_prefix: "/"
+    backends:
+      - id: primary
+        address: "10.0.1.10:8080"
+        weight: 150                 # higher weight = more traffic when latency is equal
+        health_check:
+          path: "/health"
+          interval: 3000
+          timeout_ms: 1000
+          failure_threshold: 2
+          success_threshold: 1
+      - id: secondary
+        address: "10.0.1.11:8080"
+        weight: 100
+        health_check:
+          path: "/health"
+          interval: 3000
+          timeout_ms: 1000
+          failure_threshold: 2
+          success_threshold: 1
+```
+
+---
+
+The full schema reference follows.
+
 ## Configuration File Format
 
 Spooky uses YAML for configuration. Specify the configuration file using the `--config` flag:

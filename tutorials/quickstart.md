@@ -1,17 +1,21 @@
-# Quickstart Guide
+# Quickstart
 
-This guide demonstrates how to deploy a working Spooky HTTP/3 proxy in under 10 minutes. You will set up a basic proxy configuration, generate self-signed certificates, and verify HTTP/3 connectivity to a backend service.
+Spooky is an HTTP/3 (QUIC) edge reverse proxy. Clients connect over HTTP/3; Spooky forwards to your existing HTTP/2 backends unchanged. This guide gets a working proxy running locally and confirms the full upgrade path — including the `Alt-Svc` header that tells browsers to switch to HTTP/3.
+
+Total time: about 5 minutes.
 
 ## Prerequisites
 
-- Rust 1.85 or later installed (edition 2024)
-- Basic familiarity with command-line tools
-- An HTTP/2 backend service running locally (or use the example backend provided)
-- UDP port 9889 available for QUIC traffic
+- **Rust 1.85+** (edition 2024) — `rustup update stable`
+- **curl with HTTP/3 support** — the curl that ships with macOS does not include HTTP/3. Install one that does:
+  ```bash
+  brew install curl
+  # then use $(brew --prefix curl)/bin/curl in the commands below, or put it first on PATH
+  ```
+  Alternatively, use Spooky's own `h2_backend` test client (shown in Step 3) to confirm connectivity without curl.
+- **UDP port 9889 free** — QUIC runs over UDP. Check with `lsof -iUDP:9889`.
 
-## Step 1: Build Spooky
-
-Clone the repository and build the release binary:
+## Step 1: Build
 
 ```bash
 git clone https://github.com/Supernova-Labs-Org/spooky.git
@@ -19,11 +23,11 @@ cd spooky
 cargo build --release
 ```
 
-The compiled binary will be located at `target/release/spooky`. Build time is typically 2-5 minutes depending on your system.
+The binary lands at `target/release/spooky`.
 
-## Step 2: Generate Self-Signed Certificates
+## Step 2: Generate a Certificate
 
-QUIC requires TLS 1.3, so you need certificate and key files. For testing purposes, generate a self-signed certificate:
+QUIC requires TLS 1.3. For local testing, a self-signed certificate works fine:
 
 ```bash
 mkdir -p certs
@@ -34,237 +38,105 @@ openssl req -x509 -newkey rsa:4096 -nodes \
   -subj "/CN=localhost"
 ```
 
-This creates:
-- `certs/cert.pem`: The TLS certificate
-- `certs/key.pem`: The private key
+Production: see [TLS Setup](../configuration/tls.md).
 
-**Note:** For production deployments, use certificates from a trusted Certificate Authority (CA). See [TLS Configuration](../configuration/tls.md) for production certificate setup.
+## Step 3: Start a Test Backend
 
-## Step 3: Start a Test Backend Server
+Spooky requires HTTP/2 backends. HTTP/1.1-only upstreams are not supported.
 
-You need an HTTP/2 backend for Spooky to forward traffic to. If you don't have one running, use the provided HTTP/2 test backend:
+Use the bundled test backend, which speaks HTTP/2 out of the box:
 
 ```bash
-# Using Spooky's built-in HTTP/2 test backend
 cargo run --bin h2_backend -- --port 8080
 ```
 
-This starts an HTTP/2 test server on `127.0.0.1:8080`. Spooky currently requires HTTP/2 backends — plain HTTP/1.1 upstream support is not yet implemented.
+Leave this running in its own terminal.
 
-## Step 4: Create Configuration File
+## Step 4: Write the Config
 
-Create a minimal configuration file named `config.yaml`:
+Create `config.yaml` in the repository root:
 
 ```yaml
-version: 1
+version: 1                        # config schema version — must be 1
 
 listen:
-  protocol: http3
-  port: 9889
-  address: "0.0.0.0"
+  protocol: http3                 # accept QUIC/HTTP/3 on this socket
+  port: 9889                      # UDP port clients connect to
+  address: "0.0.0.0"             # bind all interfaces; use 127.0.0.1 for loopback-only
   tls:
-    cert: "certs/cert.pem"
-    key: "certs/key.pem"
+    cert: "certs/cert.pem"        # path to PEM-encoded certificate chain
+    key: "certs/key.pem"          # path to PEM-encoded private key
 
 upstream:
-  default:
+  default:                        # pool name — referenced internally; "default" catches all unmatched routes
     load_balancing:
-      type: "random"
+      type: round-robin           # distribute requests evenly across backends in order
     route:
-      path_prefix: "/"
+      path_prefix: "/"            # match every request path
     backends:
-      - id: "local-backend"
-        address: "127.0.0.1:8080"
-        weight: 100
-        # health_check is optional — omit to disable active health polling
+      - id: backend-1             # arbitrary label shown in logs
+        address: "127.0.0.1:8080" # where to forward — must be an HTTP/2 endpoint
+        weight: 100               # relative share of traffic (only meaningful with multiple backends)
 
 log:
-  level: info
+  level: info                     # debug | info | warn | error
 ```
 
-This configuration:
-- Listens for HTTP/3 (QUIC) on UDP port 9889 and HTTP/1.1+HTTP/2 (TLS) on TCP port 9889
-- Uses the generated self-signed certificates
-- Forwards all requests to `127.0.0.1:8080` using random load balancing
-- Advertises `Alt-Svc` on every response so browsers upgrade to HTTP/3 automatically
-
 ## Step 5: Start Spooky
-
-Launch the proxy with the configuration file:
 
 ```bash
 ./target/release/spooky --config config.yaml
 ```
 
-Expected output:
+You should see:
 
 ```
-[INFO] Loading configuration from config.yaml
-[INFO] Starting Spooky HTTP/3 proxy
-[INFO] Listening on 0.0.0.0:9889 (HTTP/3)
-[INFO] Backend local-backend (127.0.0.1:8080) marked healthy
-[INFO] Proxy started successfully
+INFO spooky: loading config path="config.yaml"
+INFO spooky: listening on 0.0.0.0:9889 protocol=http3
+INFO spooky: upstream pool ready pool=default backends=1
 ```
 
-The proxy is now accepting HTTP/3 connections on port 9889 and forwarding them to the backend on port 8080.
+## Step 6: Verify HTTP/3
 
-## Step 6: Test Connectivity
-
-Verify that HTTP/3 requests are being proxied correctly. You will need an HTTP/3-capable client such as curl with HTTP/3 support.
-
-### Using curl with HTTP/3
-
-If you have curl compiled with HTTP/3 support:
+### 6a. Force HTTP/3 (confirms QUIC is working)
 
 ```bash
 curl --http3-only -k https://localhost:9889/
 ```
 
-The `-k` flag bypasses certificate validation for self-signed certificates. You should see the response from your backend server.
+`--http3-only` refuses to fall back to TCP. If this succeeds, QUIC is live.
 
-### Using curl with Alt-Svc Discovery
+### 6b. Verify the Alt-Svc upgrade path (mimics browser behavior)
 
-For a more realistic test that mimics browser behavior:
-
-```bash
-curl -k \
-  --resolve localhost:9889:127.0.0.1 \
-  https://localhost:9889/
-```
-
-Verify HTTP/3 connectivity by forcing HTTP/3-only requests:
+Browsers don't start with HTTP/3 — they discover it via the `Alt-Svc` response header on a regular HTTPS request, then switch on the next connection. Test that Spooky sends this header correctly:
 
 ```bash
-curl -k --http3-only https://localhost:9889/
+curl -k -I https://localhost:9889/
 ```
 
-If successful, you should receive a response from your backend. Spooky advertises `Alt-Svc: h3=":PORT"; ma=86400` on every response, so browsers automatically upgrade to HTTP/3 on subsequent visits. HTTP/3 connectivity is confirmed when the response contains the `alt-svc` header or when you force `--http3-only` and the request succeeds.
-
-### Using a Custom HTTP/3 Client
-
-If you don't have HTTP/3 support in curl, you can use other clients:
-
-**Using h3i (HTTP/3 interactive client):**
-
-```bash
-cargo install h3i
-h3i https://localhost:9889/ --insecure
-```
-
-**Using qh3 (QUIC HTTP/3 client):**
-
-```bash
-git clone https://github.com/cloudflare/quiche.git
-cd quiche/tools/apps
-cargo build --release
-./target/release/quiche-client https://localhost:9889/ --no-verify
-```
-
-## Step 7: Verify Backend Forwarding
-
-Check that requests are being forwarded to the backend. In the terminal running Spooky, you should see log entries indicating request handling:
+Look for this line in the response headers:
 
 ```
-[INFO] QUIC connection established from 127.0.0.1:55420
-[INFO] HTTP/3 stream 0: GET /
-[INFO] Forwarding to backend local-backend (127.0.0.1:8080)
-[INFO] Response 200 OK forwarded to client
+alt-svc: h3=":9889"; ma=86400
 ```
 
-In the backend server terminal, verify that HTTP requests are being received.
+`h3=":9889"` tells the client that HTTP/3 is available on port 9889. `ma=86400` is the max-age in seconds (24 hours) — how long the client should remember and prefer HTTP/3 for this origin.
 
-## Step 8: Test Path-Based Routing (Optional)
+If you see this header, Spooky is correctly advertising HTTP/3 to clients that don't yet support it or haven't upgraded yet.
 
-To demonstrate routing capabilities, modify the configuration to add multiple upstream pools:
+## Common Issues
 
-```yaml
-upstream:
-  api_backend:
-    load_balancing:
-      type: "round-robin"
-    route:
-      path_prefix: "/api"
-    backends:
-      - id: "api-server"
-        address: "127.0.0.1:8001"
-        weight: 100
+**`Error: Address already in use`** — something else is bound to UDP 9889. Find it with `lsof -iUDP:9889` and stop it, or change `port` in `config.yaml`.
 
-  default_backend:
-    load_balancing:
-      type: "random"
-    route:
-      path_prefix: "/"
-    backends:
-      - id: "default-server"
-        address: "127.0.0.1:8080"
-        weight: 100
-```
+**`Failed to connect to backend`** — the h2_backend process isn't running, or is on a different port. Confirm it's up with `curl -k --http2 https://localhost:8080/` (expect a response, not a connection refused).
 
-Restart Spooky with the updated configuration. Requests to `/api/*` will route to port 8001, while all other requests route to port 8080.
+**`Failed to load TLS certificate`** — the paths in `config.yaml` don't match where you generated the files. Both `certs/cert.pem` and `certs/key.pem` must exist relative to the working directory you launch Spooky from.
 
-Test the routing:
+**curl falls back to HTTP/2 silently** — you're using the system curl, which lacks HTTP/3 support. Use `brew install curl` and invoke it with the full path, or check `curl --version` for `HTTP/3` in the features list.
 
-```bash
-# Routes to default backend (port 8080)
-curl --http3-only -k https://localhost:9889/
+## What to Read Next
 
-# Routes to API backend (port 8001)
-curl --http3-only -k https://localhost:9889/api/users
-```
-
-## Common Issues and Solutions
-
-### Port Already in Use
-
-If port 9889 is already bound:
-
-```
-Error: Address already in use (os error 98)
-```
-
-Solution: Either stop the conflicting process or change the port in `config.yaml`.
-
-### Backend Connection Refused
-
-If Spooky cannot connect to the backend:
-
-```
-[ERROR] Failed to connect to backend local-backend: Connection refused
-```
-
-Solution: Ensure the backend service is running on the configured address and port.
-
-### Certificate Errors
-
-If the certificate is not found:
-
-```
-[ERROR] Failed to load TLS certificate: No such file or directory
-```
-
-Solution: Verify that the certificate paths in `config.yaml` are correct and the files exist.
-
-### Health Check Failures
-
-If backends are marked unhealthy:
-
-```
-[WARN] Backend local-backend health check failed: timeout
-```
-
-Solution: Ensure the health check path exists on the backend and responds within the timeout period (default 2 seconds).
-
-## Next Steps
-
-You now have a working HTTP/3 to HTTP/2 proxy. To further configure and optimize Spooky:
-
-- **[Configuration Reference](../configuration/reference.md)** - Complete configuration options including advanced load balancing and routing
-- **[TLS Setup](../configuration/tls.md)** - Configure production TLS certificates with Let's Encrypt or other CAs
-- **[Load Balancing Guide](../user-guide/load-balancing.md)** - Understand different load balancing algorithms and when to use them
-- **[Production Deployment](../deployment/production.md)** - Best practices for production deployment including systemd integration and monitoring
-- **[Troubleshooting](../troubleshooting/common-issues.md)** - Solutions to common operational issues
-
-For HTTP/3 and QUIC protocol details:
-
-- **[HTTP/3 Overview](../protocols/http3.md)** - HTTP/3 protocol implementation and differences from HTTP/2
-- **[QUIC Overview](../protocols/quic.md)** - QUIC transport protocol details and how Spooky uses it
+- **[Configuration Reference](../configuration/reference.md)** — every config field, its type, default value, and valid range.
+- **[Load Balancing Guide](../user-guide/load-balancing.md)** — when to use round-robin vs. least-connections vs. random, and how weights interact.
+- **[TLS Setup](../configuration/tls.md)** — production certificates with Let's Encrypt, cert rotation, and mTLS.
+- **[Production Deployment](../deployment/production.md)** — systemd unit file, resource limits, metrics endpoints, and hardening checklist.

@@ -535,7 +535,7 @@
             
             <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
-        data-size="default" href="../../architecture/"
+        data-size="default" href="../../architecture.md"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative h-[30px] w-fit overflow-visible border border-transparent text-[0.8rem] font-medium after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
         
@@ -656,7 +656,7 @@
             
             <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
-        data-size="default" href="../../benchmarks/"
+        data-size="default" href="../../benchmarks.md"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative h-[30px] w-fit overflow-visible border border-transparent text-[0.8rem] font-medium after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
         
@@ -870,6 +870,107 @@
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <p>Complete reference for all Spooky configuration options.</p>
+<hr />
+<h2 id="common-patterns">Common Patterns</h2>
+<p>Before the full reference, here are the four config shapes that cover most deployments. All options used here are documented in full below.</p>
+<h3 id="single-upstream-all-traffic">Single upstream, all traffic</h3>
+<pre><code class="language-yaml">version: 1
+
+listen:
+  address: &quot;0.0.0.0&quot;
+  port: 9889
+  tls:
+    cert: /etc/spooky/certs/fullchain.pem
+    key: /etc/spooky/certs/privkey.pem
+
+upstream:
+  default:
+    load_balancing:
+      type: round-robin
+    route:
+      path_prefix: &quot;/&quot;
+    backends:
+      - id: backend-1
+        address: &quot;10.0.1.10:8080&quot;
+        weight: 100
+        health_check:
+          path: &quot;/health&quot;
+          interval: 5000
+</code></pre>
+<h3 id="path-based-routing-to-two-pools">Path-based routing to two pools</h3>
+<pre><code class="language-yaml">upstream:
+  api:
+    load_balancing:
+      type: least-connections
+    route:
+      path_prefix: &quot;/api&quot;
+    backends:
+      - id: api-1
+        address: &quot;10.0.1.10:8080&quot;
+        weight: 100
+        health_check:
+          path: &quot;/health&quot;
+          interval: 5000
+
+  default:
+    load_balancing:
+      type: round-robin
+    route:
+      path_prefix: &quot;/&quot;
+    backends:
+      - id: web-1
+        address: &quot;10.0.2.10:8080&quot;
+        weight: 100
+        health_check:
+          path: &quot;/status&quot;
+          interval: 10000
+</code></pre>
+<p>Spooky uses longest-match on <code>path_prefix</code>. <code>/api</code> matches before <code>/</code> for requests starting with <code>/api</code>.</p>
+<h3 id="session-sticky-routing-with-consistent-hashing">Session-sticky routing with consistent hashing</h3>
+<pre><code class="language-yaml">upstream:
+  app:
+    load_balancing:
+      type: consistent-hash
+      key: &quot;header:x-session-id&quot;   # hash on session header; falls back to QUIC CID if absent
+    route:
+      path_prefix: &quot;/&quot;
+    backends:
+      - id: app-1
+        address: &quot;10.0.1.10:8080&quot;
+        weight: 100
+      - id: app-2
+        address: &quot;10.0.1.11:8080&quot;
+        weight: 100
+</code></pre>
+<h3 id="latency-aware-routing-with-health-checks-and-weighted-backends">Latency-aware routing with health checks and weighted backends</h3>
+<pre><code class="language-yaml">upstream:
+  app:
+    load_balancing:
+      type: latency-aware           # routes to fastest backends using EWMA scoring
+    route:
+      path_prefix: &quot;/&quot;
+    backends:
+      - id: primary
+        address: &quot;10.0.1.10:8080&quot;
+        weight: 150                 # higher weight = more traffic when latency is equal
+        health_check:
+          path: &quot;/health&quot;
+          interval: 3000
+          timeout_ms: 1000
+          failure_threshold: 2
+          success_threshold: 1
+      - id: secondary
+        address: &quot;10.0.1.11:8080&quot;
+        weight: 100
+        health_check:
+          path: &quot;/health&quot;
+          interval: 3000
+          timeout_ms: 1000
+          failure_threshold: 2
+          success_threshold: 1
+</code></pre>
+<hr />
+<p>The full schema reference follows.</p>
 <h2 id="configuration-file-format">Configuration File Format</h2>
 <p>Spooky uses YAML for configuration. Specify the configuration file using the <code>--config</code> flag:</p>
 <pre><code class="language-bash">spooky --config /path/to/config.yaml
@@ -2770,12 +2871,6 @@ log:
                     
                     <div class="flex flex-col gap-3">
                         
-                        <a class="text-2xl font-medium" href="../../architecture/">
-                            
-                            Overview
-                            
-                        </a>
-                        
                         <a class="text-2xl font-medium" href="../../architecture/overview/">
                             
                             High-Level Design
@@ -2817,12 +2912,6 @@ log:
                     <div class="text-muted-foreground text-sm font-medium">Development</div>
                     
                     <div class="flex flex-col gap-3">
-                        
-                        <a class="text-2xl font-medium" href="../../benchmarks/">
-                            
-                            Benchmarks
-                            
-                        </a>
                         
                         <a class="text-2xl font-medium" href="../../benchmarks/load/">
                             
@@ -2892,6 +2981,40 @@ log:
         
         
         
+        
+        <a href="#common-patterns"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#common-patterns');">
+            Common Patterns
+        </a>
+        
+        
+        <a href="#single-upstream-all-traffic"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#single-upstream-all-traffic');">
+            Single upstream, all traffic
+        </a>
+        
+        <a href="#path-based-routing-to-two-pools"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#path-based-routing-to-two-pools');">
+            Path-based routing to two pools
+        </a>
+        
+        <a href="#session-sticky-routing-with-consistent-hashing"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#session-sticky-routing-with-consistent-hashing');">
+            Session-sticky routing with consistent hashing
+        </a>
+        
+        <a href="#latency-aware-routing-with-health-checks-and-weighted-backends"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#latency-aware-routing-with-health-checks-and-weighted-backends');">
+            Latency-aware routing with health checks and weighted backends
+        </a>
+        
+        
+
         
         <a href="#configuration-file-format"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"

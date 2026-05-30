@@ -1,172 +1,121 @@
-# Spooky Documentation
+Spooky is an open-source HTTP/3 (QUIC) edge reverse proxy written in Rust that terminates QUIC connections and forwards traffic to HTTP/2 backends.
 
-Spooky lets HAProxy, NGINX, and Apache environments adopt QUIC/HTTP/3 in days instead of quarters.
+---
 
-Technical documentation for the Spooky HTTP/3 edge proxy and load balancer.
+## Where to start
 
-## Quick Navigation
+### Operator — install, configure, run in production
 
-### Getting Started
-- [Overview](getting-started/overview.md) - Project introduction and capabilities
-- [Installation](getting-started/installation.md) - System requirements and installation procedures
-- [Docker Installation](getting-started/docker.md) - Containerized setup and operations
-- [Quick Start Tutorial](tutorials/quickstart.md) - Step-by-step guide to get running
+| Document | What you'll find |
+|---|---|
+| [Installation](getting-started/installation.md) | Debian package, build from source, system requirements, TLS certificate layout |
+| [Docker](getting-started/docker.md) | Container image, Compose bootstrap, smoke-test scripts |
+| [Configuration Reference](configuration/reference.md) | Every config key, type, default, and constraint in one place |
+| [TLS Setup](configuration/tls.md) | Certificate generation, mTLS client auth, key ownership and permissions |
+| [Production Deployment](deployment/production.md) | Systemd unit, privilege drop, sysctl tuning, canary rollout guidance |
 
-### Configuration
-- [Configuration Reference](configuration/reference.md) - Complete configuration documentation
-- [TLS Setup](configuration/tls.md) - Certificate generation and management
+### Developer — understand the architecture, contribute
 
-### User Guides
-- [Basic Usage](user-guide/basics.md) - Core concepts and usage patterns
-- [Load Balancing](user-guide/load-balancing.md) - Load balancing algorithms and health checks
+| Document | What you'll find |
+|---|---|
+| [Architecture Overview](architecture/overview.md) | Design principles, data-plane topology, sharded ingress model |
+| [Component Breakdown](architecture/components.md) | Per-crate responsibilities, inter-crate boundaries, key types |
+| [Load Balancing](user-guide/load-balancing.md) | All six algorithms with characteristics, use-case guidance, and config examples |
+| [Contributing Guide](https://github.com/Supernova-Labs-Org/spooky/blob/master/CONTRIBUTING.md) | Dev setup, build commands, test matrix, PR conventions |
 
-### Architecture
-- [Architecture Overview](architecture.md) - System design and component interaction
-- [Component Details](architecture/overview.md) - High-level architectural principles
-- [Component Breakdown](architecture/components.md) - Detailed crate documentation
+### Reference — config schema, API, benchmarks, changelog
 
-### Deployment
-- [Production Deployment](deployment/production.md) - Production deployment guide
-- [Troubleshooting](troubleshooting/common-issues.md) - Common issues and solutions
+| Document | What you'll find |
+|---|---|
+| [Configuration Reference](configuration/reference.md) | Authoritative schema reference for every configuration block |
+| [API Overview](api/overview.md) | Metrics endpoint, control API (health, ready, runtime), bearer auth |
+| [Benchmarks](benchmarks/load.md) | Load test results: throughput, latency percentiles, test environment |
+| [Roadmap](roadmap.md) | Planned features, GA exit criteria, known limitations |
+| [Changelog](changelog.md) | Version history with added, fixed, and changed entries |
 
-### Development
-- [Contributing Guide](https://github.com/Supernova-Labs-Org/spooky/blob/master/CONTRIBUTING.md) - Development setup and guidelines
+---
 
-### Protocol Reference
-- [HTTP/3 Protocol](protocols/http3.md) - HTTP/3 overview and implementation
-- [QUIC Protocol](protocols/quic.md) - QUIC fundamentals and usage
+## Status
 
-### API and Observability
-- [API Overview](api/overview.md) - Metrics, logging, and future admin API
+| Field | Value |
+|---|---|
+| Version | v0.1.1-beta |
+| Maturity | Beta |
+| License | GPLv3 |
 
-### Planning
-- [Roadmap](roadmap.md) - Feature roadmap and priorities
-- [Release Maturity](release-maturity.md) - Beta scope and GA exit criteria
+Beta means core proxying, routing, load balancing, and health-check features are implemented and actively validated, but the project remains pre-GA — extended soak validation and broader failure-mode hardening are still in progress.
 
-## Documentation Structure
+Controlled production rollout is supported. See [release-maturity.md](release-maturity.md) for operator expectations, environment guidance, and GA exit criteria.
 
-- `README.md`: Documentation index (this page)
-- `architecture.md`: Main architecture document
-- `roadmap.md`: Project roadmap
-- `getting-started/`: Overview and installation guides
-- `configuration/`: Configuration reference and TLS setup
-- `user-guide/`: Basic usage and load balancing guide
-- `architecture/`: High-level design and component details
-- `deployment/`: Production deployment guidance
-- `troubleshooting/`: Common issues and fixes
-- `tutorials/`: Quickstart walkthroughs
-- `protocols/`: HTTP/3 and QUIC protocol notes
-- `api/`: API and observability overview
+---
 
-## Quick References
+## Quick reference
 
-### Common Configuration Tasks
+### Minimal working config
 
-**Basic upstream pool**:
 ```yaml
+version: 1
+
+listen:
+  address: "0.0.0.0"
+  port: 9889
+  tls:
+    cert: /etc/spooky/certs/fullchain.pem
+    key: /etc/spooky/certs/privkey.pem
+
 upstream:
-  backend:
+  default:
     route:
       path_prefix: "/"
     backends:
-      - id: "backend-1"
+      - id: backend1
         address: "127.0.0.1:8080"
-        weight: 100
         health_check:
           path: "/health"
           interval: 5000
 ```
 
-*Note: Load balancing can be configured per-upstream and also at the top level as a fallback default.*
+Backends are verified HTTPS by default. To forward to a cleartext HTTP backend, set `upstream_tls.verify_certificates: false` and be aware that a warning is logged at startup. The full schema is in [configuration/reference.md](configuration/reference.md).
 
-**Path-based routing**:
-```yaml
-upstream:
-  api:
-    route:
-      path_prefix: "/api"
-    # ... backends
+### Common commands
 
-  web:
-    route:
-      path_prefix: "/"
-    # ... backends
-```
-
-**Load balancing algorithms**:
-- `random` - Random selection
-- `round-robin` - Sequential rotation
-- `consistent-hash` - Hash-based affinity (session stickiness, cache locality)
-- `least-connections` - Routes to backend with fewest active requests
-- `latency-aware` - Routes to fastest backends using EWMA latency scoring
-- `sticky-cid` - QUIC connection-ID affinity via consistent hashing
-
-### Common Commands
-
-**Start Spooky**:
+**Start the proxy:**
 ```bash
 spooky --config /etc/spooky/config.yaml
 ```
 
-**Test HTTP/3 connection**:
+**Test an HTTP/3 connection** (requires curl built with HTTP/3 support):
 ```bash
 curl --http3-only -k \
   --resolve proxy.example.com:9889:127.0.0.1 \
   https://proxy.example.com:9889/health
 ```
 
-**Check configuration**:
+**Check health and readiness** (control API, default port 9902):
 ```bash
-spooky --config config.yaml  # Starts serving after validation
+curl http://127.0.0.1:9902/health
+curl http://127.0.0.1:9902/ready
 ```
 
-**View logs**:
-```bash
-# All logs
-RUST_LOG=info spooky --config config.yaml
+### Log levels
 
-# Debug QUIC only
-RUST_LOG=spooky_edge=debug spooky --config config.yaml
+Spooky accepts both its own names and the standard equivalents in `log.level` or `RUST_LOG`.
 
-# Trace everything
-RUST_LOG=trace spooky --config config.yaml
-```
+| Spooky name | Standard equivalent | Verbosity |
+|---|---|---|
+| `whisper` | `trace` | Everything, including internal QUIC events |
+| `haunt` | `debug` | Per-request routing, backend selection, health transitions |
+| `spooky` | `info` | Startup, shutdown, configuration summary (default) |
+| `scream` | `warn` | Recoverable errors, degraded-mode events |
+| `poltergeist` | `error` | Fatal or unrecoverable conditions |
+| `silence` | `off` | No output |
 
-## Documentation Guidelines
+Set per-crate verbosity with `RUST_LOG` (e.g., `RUST_LOG=spooky_edge=haunt,info`). Output format is controlled by `log.format: plain | json`.
 
-This documentation follows these principles:
+---
 
-1. **Technical Accuracy**: All examples are based on the actual codebase
-2. **Honest Status**: Capabilities and limitations are documented as-is
-3. **Direct Communication**: Clear, concise technical writing
-4. **Complete Coverage**: All configuration options documented
-5. **Practical Examples**: Working code and configuration samples
+## External standards
 
-## Contributing to Documentation
-
-To improve documentation:
-
-1. Check accuracy against source code
-2. Test all examples and commands
-3. Use clear, technical language
-4. Include practical examples
-5. Update this index when adding new docs
-
-See [Contributing Guide](https://github.com/Supernova-Labs-Org/spooky/blob/master/CONTRIBUTING.md) for more details.
-
-## External Resources
-
-- [QUIC RFC 9000](https://www.rfc-editor.org/rfc/rfc9000.html)
-- [HTTP/3 RFC 9114](https://www.rfc-editor.org/rfc/rfc9114.html)
-- [quiche Documentation](https://docs.rs/quiche/)
-- [Rust Documentation](https://doc.rust-lang.org/)
-
-## Getting Help
-
-- Review troubleshooting guide: [docs/troubleshooting/common-issues.md](troubleshooting/common-issues.md)
-- Check GitHub issues for community discussions
-- Read protocol documentation for HTTP/3 and QUIC specifics
-
-## License
-
-GNU General Public License v3.0 (GPLv3) - see [LICENSE](https://github.com/Supernova-Labs-Org/spooky/blob/master/LICENSE.md) for details.
+- [RFC 9000 — QUIC: A UDP-Based Multiplexed and Secure Transport](https://www.rfc-editor.org/rfc/rfc9000.html)
+- [RFC 9114 — HTTP/3](https://www.rfc-editor.org/rfc/rfc9114.html)
+- [RFC 9113 — HTTP/2](https://www.rfc-editor.org/rfc/rfc9113.html)

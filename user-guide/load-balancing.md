@@ -2,6 +2,25 @@
 
 Comprehensive guide to load balancing algorithms, health checking, and backend management in Spooky.
 
+---
+
+## Choose Your Algorithm
+
+| If your workload looks like this… | Use this algorithm |
+|---|---|
+| Stateless API or service, backends are equal capacity | `round-robin` |
+| Stateless API, but backends vary in speed or size | `latency-aware` |
+| Stateless API, prefer simplest possible config | `random` |
+| Session state lives on the backend (shopping carts, websockets, sticky sessions) | `consistent-hash` with `key: "header:x-session-id"` or `cookie:<name>` |
+| QUIC clients that must hit the same backend for the lifetime of a connection | `sticky-cid` |
+| Backends are heterogeneous — some are slower or smaller | `least-connections` |
+
+**When in doubt, start with `round-robin`.** It has the lowest overhead, requires no configuration beyond the type name, and performs well for the majority of stateless API workloads. Switch to `latency-aware` if you observe uneven backend utilization due to speed differences, or to `least-connections` if request durations are highly variable.
+
+If you are migrating from NGINX `least_conn`, use `least-connections`. If you are migrating from NGINX `ip_hash` or HAProxy `balance source`, use `consistent-hash`.
+
+---
+
 ## Load Balancing Algorithms
 
 Spooky implements six load balancing algorithms, each optimized for different use cases. Each upstream pool configures its own algorithm independently via `load_balancing.type`.
