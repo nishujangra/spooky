@@ -818,193 +818,271 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <h2 id="current-status">Current Status</h2>
-<p><strong>Beta. Core features are functional and tested.</strong> Spooky can terminate HTTP/3 connections, forward to HTTP/2 backends, and perform load balancing with health checks. It is pre-GA and should be deployed with production guardrails (see <a href="../release-maturity/">Release Maturity</a> and Technical Debt below).</p>
-<h3 id="completed">Completed</h3>
+    <p>Spooky's roadmap is organized into two tracks. <strong>Part A</strong> covers the hardening work required to reach GA across correctness, protocol coverage, routing, resilience, security, observability, configuration, and packaging. <strong>Part B</strong> covers the areas where Spooky is building a stronger position: performance, operator simplicity, reliability intelligence, and change safety.</p>
+<p>Items ship in waves: correctness and production trust first, then migration tooling, then measurable capability leadership.</p>
+<hr />
+<h2 id="what-is-shipped-v011-beta">What Is Shipped (v0.1.1-beta)</h2>
 <ul>
-<li>HTTP/3 termination via quiche</li>
-<li>HTTP/2 backend connectivity</li>
-<li>Path and host-based routing</li>
-<li>Multiple load balancing algorithms (random, round-robin, consistent hash, least-connections, latency-aware, sticky-cid)</li>
-<li>Active health checking with automatic backend management</li>
-<li>Per-upstream configuration and routing</li>
-<li>Connection ID management and QUIC packet routing</li>
-<li>TLS 1.3 with certificate chain loading</li>
-<li>Upstream TLS peer verification enabled by default via <code>upstream_tls.verify_certificates</code></li>
-<li>Downstream mTLS (client certificate authentication) via <code>listen.tls.client_auth.enabled</code>, <code>listen.tls.client_auth.require_client_cert</code>, and <code>listen.tls.client_auth.ca_file</code></li>
-<li>Structured logging with multiple levels</li>
-<li>Configuration validation at startup</li>
-<li>Graceful shutdown with connection draining</li>
+<li>HTTP/3 termination via quiche (RFC 9114) and QUIC transport (RFC 9000)</li>
+<li>HTTP/2 backend connectivity with connection pooling</li>
+<li>Path prefix and host-based routing with longest-match selection</li>
+<li>Six load balancing algorithms: random, round-robin, consistent hash, least-connections, latency-aware, sticky-cid</li>
+<li>Active health checking with configurable thresholds and cooldown</li>
+<li>Circuit breaker, retry budgets, request hedging, brownout mode, adaptive admission</li>
+<li>Per-upstream and per-backend inflight caps and queue limits</li>
+<li>TLS 1.3 with certificate chain loading; downstream mTLS via <code>listen.tls.client_auth.*</code></li>
+<li>Upstream TLS peer verification on by default; cleartext requires explicit opt-in</li>
+<li>Prometheus metrics endpoint, control API (<code>/health</code>, <code>/ready</code>, <code>/admin/runtime</code>)</li>
+<li>Structured JSON logging with standard and Spooky-themed log levels</li>
+<li>Debian package with systemd unit; Docker packaging</li>
+<li>Configuration validation at startup with actionable error output</li>
 </ul>
-<h2 id="phase-1-operational-hardening">Phase 1: Operational Hardening</h2>
-<p><strong>Goal</strong>: Expand operational and scalability capabilities for production deployments.</p>
-<h3 id="performance">Performance</h3>
+<hr />
+<h2 id="execution-priorities">Execution Priorities</h2>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Priority</th>
+<th>Scope</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>P0</strong></td>
+<td>Correctness, safety, security hardening, test matrix integrity</td>
+</tr>
+<tr>
+<td><strong>P1</strong></td>
+<td>Routing/LB/resilience depth, dynamic config safety, production operations, cloud-native packaging</td>
+</tr>
+<tr>
+<td><strong>P2</strong></td>
+<td>Differentiation tracks — starting with performance leadership and operator simplicity</td>
+</tr>
+</tbody>
+</table></div>
+<hr />
+<h2 id="part-a-hardening-track">Part A: Hardening Track</h2>
+<h3 id="a1-core-runtime-correctness-and-safety">A1 — Core Runtime Correctness and Safety</h3>
+<p><strong>Goal:</strong> Eliminate correctness hazards in the concurrency model, error taxonomy, and protocol handling that could cause data loss, misrouting, or silent failure.</p>
 <ul>
-<li><strong>Async data plane</strong>: Move backend forwarding off the main poll thread</li>
-<li><strong>Streaming bodies</strong>: Implement incremental request/response streaming instead of full buffering</li>
-<li><strong>Multi-threading</strong>: Support multi-threaded QUIC packet processing</li>
-<li><strong>Connection pooling optimizations</strong>: Reduce allocation overhead in HTTP/2 pool</li>
+<li>Replace relaxed atomic ordering with Acquire/Release semantics for all inter-thread coordination flags. Validate with concurrency tests covering shutdown, queue accounting, and watchdog coordination.</li>
+<li>Separate error taxonomy into transport, config, and internal-runtime classes so that non-health errors do not incorrectly trigger backend health transitions.</li>
+<li>Unify hop-by-hop header filter pipeline across HTTP/1.1, HTTP/2, and HTTP/3 ingress paths. The same header strip set must be validated across all three paths.</li>
+<li>Add strict UTF-8 parse with explicit 4xx rejection on invalid pseudo-header bytes. Fuzz corpus must include malformed UTF-8 and pass rejection invariants.</li>
+<li>Establish canonical error-class mapping so metrics and logs show identical normalized failure categories.</li>
+<li>Remove dead branches and runtime checks that are unreachable given validator guarantees.</li>
 </ul>
-<h3 id="observability">Observability</h3>
+<h3 id="a2-protocol-consistency-http11-http2-http3">A2 — Protocol Consistency (HTTP/1.1, HTTP/2, HTTP/3)</h3>
+<p><strong>Goal:</strong> Guarantee that the same route and payload behaves identically across all three protocol paths.</p>
 <ul>
-<li><strong>Metrics export</strong>: Prometheus endpoint live — per-route counters, latency percentiles, active-connection and queue-size gauges, full drop counter coverage across all ingress paths</li>
-<li><strong>Resilience metrics</strong>: Per-feature counters for retries (attempt + denial by reason), hedges (triggered/won/wasted/latency), circuit breaker rejections, and brownout state gauge</li>
-<li><strong>Distributed tracing</strong>: OpenTelemetry integration</li>
-<li><strong>Request logging</strong>: Per-request structured logs with correlation IDs</li>
-<li><strong>Connection metrics</strong>: Track QUIC RTT, packet loss, stream count</li>
+<li>Protocol consistency contract covering status codes, headers, retries, and timeouts — validated by cross-protocol golden tests.</li>
+<li>Documented and integration-tested ALPN/Alt-Svc upgrade state machine for the bootstrap-to-H3 upgrade path.</li>
+<li>QUIC connection churn and handshake failure hardening: token bucket + handshake budgets with sustained-churn stability tests.</li>
+<li>Explicit max-stream, idle timeout, and stream reset policy controls for HTTP/2 and HTTP/3, with stream-stress tests covering defined latency and error budgets.</li>
 </ul>
-<h3 id="operational">Operational</h3>
+<h3 id="a3-routing-engine">A3 — Routing Engine</h3>
+<p><strong>Goal:</strong> Expand the matching surface to cover the full set of conditions that reverse proxy operators expect.</p>
 <ul>
-<li><strong>Configuration hot reload</strong>: Reload config on SIGHUP without dropping connections</li>
-<li><strong>Health check improvements</strong>: Separate client pool for probes to avoid contention</li>
-<li><strong>TLS certificate reload</strong>: Automatic reload on certificate rotation</li>
-<li><strong>Admin API</strong>: HTTP endpoint for runtime statistics and control</li>
+<li>Route matching for exact path, prefix, regex, method, host, header values, and query parameters. Precedence and tie-break behavior must be deterministically specified and conformance-tested.</li>
+<li>RFC 3986 normalization policy modes: strict, passthrough, and safe-normalize. Encoded slashes, dot segments, and duplicate slashes must be deterministic across all modes.</li>
+<li>Route-level traffic split, mirror traffic, and staged rollout policy — with weighted distribution verified to stay within configured statistical bounds.</li>
+<li>Route graph versioning with atomic swap and rollback so live updates never produce invalid route windows.</li>
 </ul>
-<h3 id="reliability">Reliability</h3>
+<h3 id="a4-load-balancing">A4 — Load Balancing</h3>
+<p><strong>Goal:</strong> Make selection deterministic, fair, and operationally transparent under concurrency.</p>
 <ul>
-<li><strong>Circuit breaker</strong>: Per-backend circuit breakers to prevent cascading failures</li>
-<li><strong>Retry logic</strong>: Configurable request retry with exponential backoff</li>
-<li><strong>Request timeouts</strong>: Per-route timeout configuration</li>
-<li><strong>Rate limiting</strong>: Per-IP and per-route rate limits</li>
+<li>Deterministic fair selection primitives with lock-aware hot path for round-robin, least-connections, weighted, and sticky algorithms.</li>
+<li>Weighted round-robin and power-of-two-choices variants with target-percent drift guard, validated by 95% confidence interval checks.</li>
+<li>Cookie, header, CID, and hash-based session affinity with TTL and rebalance semantics. Stickiness and failover tests must prove deterministic rebinding.</li>
+<li>Latency-based and success-rate-based outlier ejection with configurable cooldown curves. Flapping backend tests must show controlled ejection and re-entry.</li>
+<li>Graceful drain state with admission cutoff and inflight completion budget. Zero-downtime backend drain scenario must pass.</li>
 </ul>
-<h2 id="phase-2-advanced-features">Phase 2: Advanced Features</h2>
-<p><strong>Goal</strong>: Add advanced traffic management and operational capabilities.</p>
-<h3 id="traffic-management">Traffic Management</h3>
+<h3 id="a5-resilience-and-fault-tolerance">A5 — Resilience and Fault Tolerance</h3>
+<p><strong>Goal:</strong> Make every resilience control safe, observable, and non-destructive under edge cases.</p>
 <ul>
-<li><strong>Weighted routing</strong>: Route percentage of traffic to different upstreams</li>
-<li><strong>Header-based routing</strong>: Route by arbitrary request headers</li>
-<li><strong>Request rewriting</strong>: URL rewriting and header manipulation</li>
-<li><strong>Compression</strong>: Automatic response compression</li>
+<li>Policy-driven retry classifier by method, status code, and error class. POST and unsafe requests must never be retried unless explicitly permitted.</li>
+<li>Circuit-breaker open/half-open/closed transition metrics and event logs per route and upstream, making transition timelines auditable.</li>
+<li>Sharded or atomic fast-path queue counters to keep admission overhead bounded at peak concurrency.</li>
+<li>Explicit degrade tiers: shed, partial features, static fallback — with measurable SLO preservation playbooks.</li>
+<li>Bulkhead boundaries per route and upstream pool so one pool failure does not cause global latency collapse.</li>
 </ul>
-<h3 id="load-balancing">Load Balancing</h3>
+<h3 id="a6-security">A6 — Security</h3>
+<p><strong>Goal:</strong> Reach enterprise baseline security posture across TLS, header handling, and control plane access.</p>
 <ul>
-<li><strong>Weighted least connection</strong>: Combine weights with connection count</li>
-<li><strong>Cached consistent hash</strong>: Cache hash ring to avoid rebuilds</li>
+<li>Security profiles (<code>strict</code>, <code>balanced</code>, <code>compat</code>) with explicit cipher and TLS version policy. Profile tests must verify the protocol/cipher acceptance and rejection matrix.</li>
+<li>Complete mTLS negative-case coverage: cert chain, EKU, SAN, expiry, and revocation handling. Invalid, wrong-CA, and expired cert tests must reliably reject.</li>
+<li>Request smuggling defense: CL/TE ambiguity rejection and malformed framing protection validated against a smuggling attack corpus.</li>
+<li>Hard limits on max header size and count with clear rejection responses and no crash or latency blowup.</li>
+<li>Fine-grained authorization model for control endpoints with optional mTLS for the control channel. Unauthorized access must be fully denied and audited.</li>
+<li>Environment sanitization and secure command execution policy for restart hooks. Secret env variables must never be inherited.</li>
+<li>Insecure upstream TLS verification must require an explicit environment gate with startup warning. The production profile must block insecure upstream verification by default.</li>
 </ul>
-<h3 id="security">Security</h3>
+<h3 id="a7-observability">A7 — Observability</h3>
+<p><strong>Goal:</strong> Make Spooky's telemetry stable, machine-readable, and trustworthy under all operational conditions.</p>
 <ul>
-<li><strong>mTLS operational tooling</strong>: Certificate rotation/revocation workflows and deployment guidance</li>
-<li><strong>Request validation</strong>: Size limits, header validation</li>
-<li><strong>IP allowlist/blocklist</strong>: Simple access control</li>
+<li>Versioned metrics schema with deprecation windows and compatibility docs. Contract tests must enforce required metric names, labels, and types.</li>
+<li>Structured JSON access logs with required fields and request correlation IDs. Log schema validator must pass across all scenario families.</li>
+<li>End-to-end span propagation with consistent <code>traceparent</code> behavior. Trace continuity tests must cover retry, circuit, and failover paths.</li>
+<li>SLO-driven alert packs (latency, error, saturation, availability) with burn-rate rules. Alert simulation must show high precision and actionable context.</li>
+<li>Runtime event bus for reloads, drains, ejections, and policy changes. Every control-plane transition must have both event and metric evidence.</li>
 </ul>
-<h3 id="deployment">Deployment</h3>
+<h3 id="a8-configuration-and-control-plane">A8 — Configuration and Control Plane</h3>
+<p><strong>Goal:</strong> Make configuration lifecycle safe, introspectable, and recoverable.</p>
 <ul>
-<li><strong>Dynamic backend discovery</strong>: Service discovery integration (DNS SRV, Consul, etcd)</li>
-<li><strong>Backend metadata</strong>: Tags and labels for flexible routing</li>
-<li><strong>A/B testing support</strong>: Route subset of traffic to experimental backends</li>
-<li><strong>Canary deployments</strong>: Gradually shift traffic to new backend versions</li>
+<li>Safe dynamic config apply: validation, staging, atomic activation, and rollback. A failed config must never impact the active dataplane.</li>
+<li>Semantic config versioning and built-in migration assistant. Backward-compatible minor upgrades must generate a migration report.</li>
+<li>Full semantic preflight validator with actionable diagnostics. Validation error output must pinpoint field path and remediation.</li>
+<li>Effective config dump, runtime counters, and active policy snapshot endpoints so operators can reconstruct the runtime decision path from API and logs.</li>
 </ul>
-<h2 id="phase-3-enterprise-features">Phase 3: Enterprise Features</h2>
-<p><strong>Goal</strong>: Support large-scale deployments with advanced requirements.</p>
-<h3 id="multi-tenancy">Multi-Tenancy</h3>
+<h3 id="a9-performance-engineering">A9 — Performance Engineering</h3>
+<p><strong>Goal:</strong> Eliminate known allocation and contention hotspots in the hot path.</p>
 <ul>
-<li><strong>Namespace isolation</strong>: Separate routing tables per tenant</li>
-<li><strong>Resource limits</strong>: Per-tenant connection and request limits</li>
-<li><strong>Tenant routing</strong>: Route by tenant ID or subdomain</li>
+<li>Allocation reduction and lock sharding in ingress, LB, and admission paths. Target: measurable p99 latency and CPU profile improvement under baseline load.</li>
+<li>End-to-end backpressure contract from socket accept to upstream dispatch. Overload tests must show bounded queue growth and controlled shedding.</li>
+<li>True streaming for request and response bodies with bounded buffering and flow-control correctness. Large body tests must pass memory ceilings and latency budgets.</li>
+<li>Adaptive worker and shard auto-tuning hints from runtime telemetry. Auto-tuned profile must perform within 5% of a hand-tuned baseline.</li>
 </ul>
-<h3 id="advanced-observability">Advanced Observability</h3>
+<h3 id="a10-packaging-release-and-production-operations">A10 — Packaging, Release, and Production Operations</h3>
+<p><strong>Goal:</strong> Make every release verifiable, safe to upgrade, and operationally supportable.</p>
 <ul>
-<li><strong>APM integration</strong>: Datadog, New Relic, etc.</li>
-<li><strong>Custom metrics</strong>: User-defined metric collection</li>
-<li><strong>Traffic replay</strong>: Record and replay production traffic</li>
-<li><strong>Query logs</strong>: SQL-like queries over request logs</li>
+<li>Signed binaries and container images, SBOM, and provenance attestations shipped on every release.</li>
+<li>Version compatibility matrix with automated upgrade canary tests. Two-hop upgrade and rollback must succeed.</li>
+<li>Incident runbooks for timeout spikes, backend collapse, cert failures, and reload faults — with game-day drills meeting MTTD/MTTR targets.</li>
+<li>Secure-by-default production config profile with startup hardening checks that pass an external security checklist.</li>
+<li>Reproducible benchmark harness with published raw datasets. Third-party reruns must produce comparable results.</li>
 </ul>
-<h3 id="protocol-features">Protocol Features</h3>
+<h3 id="a11-kubernetes-and-cloud-native">A11 — Kubernetes and Cloud-Native</h3>
+<p><strong>Goal:</strong> Remove adoption friction for platform teams operating in cloud-native environments.</p>
 <ul>
-<li><strong>gRPC support</strong>: Native gRPC proxying</li>
-<li><strong>WebSocket support</strong>: WebSocket over HTTP/3</li>
+<li>Official Kubernetes deployment manifests with health probes validated in CI for HA cluster deployment.</li>
+<li>Production-grade Helm charts and Terraform modules with version pinning, verified across install, upgrade, and rollback workflows.</li>
+<li>Kubernetes ingress/Gateway integration repository with mapping docs. Existing ingress definitions must migrate with minimal rewrite.</li>
+<li>Official Prometheus rules, Grafana dashboards, and OpenTelemetry collector recipes enabling one-command observability bootstrap.</li>
 </ul>
-<h3 id="high-availability">High Availability</h3>
+<h3 id="a12-test-matrix">A12 — Test Matrix</h3>
+<p><strong>Goal:</strong> Make the test suite a reliable gate — not a confidence theater.</p>
 <ul>
-<li><strong>Connection migration</strong>: Support QUIC connection migration</li>
-<li><strong>State replication</strong>: Share connection state across instances</li>
-<li><strong>Zero-downtime updates</strong>: Binary updates without connection loss</li>
-<li><strong>Multi-region support</strong>: Geographic routing and failover</li>
+<li>Strict endpoint intent tags (data plane vs control plane vs metrics) so scenarios validate the right behavior class.</li>
+<li>Dedicated harness checks for smuggling, header abuse, TLS downgrade, and mTLS failure — with intentionally vulnerable fixtures confirming the suite fails correctly.</li>
+<li>Statistical trend checks for memory, FD, CPU variance, and error drift across 24h, 72h, and 7-day soak gates.</li>
+<li>Scenario isolation hooks and environment reset contracts so test order cannot affect results.</li>
+<li>Shared parser library across all scripts to eliminate duplicated and fragile extraction logic.</li>
 </ul>
-<h2 id="phase-4-protocol-extensions">Phase 4: Protocol Extensions</h2>
-<p><strong>Goal</strong>: Support emerging protocols and optimizations.</p>
-<h3 id="http3-features">HTTP/3 Features</h3>
+<hr />
+<h2 id="part-b-differentiation-track">Part B: Differentiation Track</h2>
+<h3 id="b1-performance-leadership-h3-first-edge">B1 — Performance Leadership (H3-First Edge)</h3>
 <ul>
-<li><strong>0-RTT support</strong>: Enable 0-RTT with proper anti-replay measures</li>
-<li><strong>QUIC multipath</strong>: Support multiple network paths</li>
-<li><strong>Datagram support</strong>: QUIC DATAGRAM frames for low-latency data</li>
-<li><strong>Priority trees</strong>: HTTP/3 priority and scheduling</li>
+<li>QUIC-native fast path with low-copy and low-allocation dispatch. Target: measurably better p99 tail latency and CPU/RPS on representative production hardware.</li>
+<li>Kernel-optimized UDP ingress profiles: socket buffers, pacing, and reuse strategies.</li>
+<li>Dual-mode latency governor: throughput mode and tail-latency mode with per-route latency caps and adaptive shedding before collapse.</li>
+<li>In-process micro-profiler endpoint for live hotspot snapshots with automatic profile diffing between versions.</li>
 </ul>
-<h3 id="additional-protocols">Additional Protocols</h3>
+<h3 id="b2-simplicity-and-operator-experience-leadership">B2 — Simplicity and Operator Experience Leadership</h3>
 <ul>
-<li><strong>HTTP/1.1 support</strong>: Serve HTTP/1.1 clients</li>
-<li><strong>TCP proxy mode</strong>: Layer 4 TCP proxying</li>
-<li><strong>UDP proxy</strong>: Forward UDP traffic</li>
-<li><strong>MQTT support</strong>: IoT protocol support</li>
+<li>Opinionated production profiles: <code>edge-low-latency</code>, <code>api-gateway</code>, <code>zero-trust</code>.</li>
+<li>Guided config linter with severity levels and autofix hints.</li>
+<li><code>spooky doctor</code> command for runtime diagnostics and misconfiguration detection.</li>
+<li>Human-readable decision traces: why a request was routed to a specific backend, why a circuit opened, why a retry fired.</li>
+<li>Built-in incident timeline reconstruction correlating events, metrics, and logs into a single command evidence bundle.</li>
+<li>Safe-mode startup that auto-disables risky options in production environments with guardrails refusing known-dangerous config combinations.</li>
 </ul>
-<h3 id="optimizations">Optimizations</h3>
+<h3 id="b3-reliability-intelligence-leadership">B3 — Reliability Intelligence Leadership</h3>
 <ul>
-<li><strong>Zero-copy</strong>: Eliminate unnecessary data copies</li>
-<li><strong>Kernel bypass</strong>: AF_XDP or DPDK integration</li>
-<li><strong>Hardware offload</strong>: TLS offload to NICs</li>
-<li><strong>eBPF</strong>: Use eBPF for packet filtering and routing</li>
+<li>Predictive brownout based on trend forecasting of saturation and error growth — preventive controls that activate before outage thresholds are crossed.</li>
+<li>Adaptive retry budget and hedging controller driven by live success and latency signals.</li>
+<li>Per-route anomaly detection for sudden behavior drift.</li>
+<li>Self-healing backend scoring using a multidimensional latency/error/timeout model with automatic failback smoothing to prevent thundering herd after recovery.</li>
+<li>Runtime resilience simulation endpoint for what-if policy replay on sampled traffic with a blast-radius estimator for config changes before apply.</li>
 </ul>
-<h2 id="implementation-priorities">Implementation Priorities</h2>
-<h3 id="high-priority-next-3-months">High Priority (Next 3 months)</h3>
-<ol>
-<li>Async data plane - unblock main thread</li>
-<li>Configuration hot reload - reduce operational friction</li>
-<li>Streaming bodies - reduce memory usage</li>
-<li>mTLS operational tooling - certificate lifecycle automation</li>
-</ol>
-<h3 id="medium-priority-3-6-months">Medium Priority (3-6 months)</h3>
-<ol>
-<li>Circuit breakers - improve reliability</li>
-<li>Distributed tracing - debugging complex issues</li>
-<li>Rate limiting - protect backends </li>
-<li>Health check improvements - reduce contention</li>
-<li>Admin API - operational visibility</li>
-</ol>
-<h3 id="low-priority-6-months">Low Priority (6+ months)</h3>
-<ol>
-<li>Dynamic backend discovery - integration complexity</li>
-<li>Advanced load balancing - diminishing returns</li>
-<li>Advanced protocol features - adds complexity</li>
-<li>Protocol extensions - limited immediate value</li>
-<li>Multi-tenancy - niche use case</li>
-</ol>
-<h2 id="technical-debt">Technical Debt</h2>
-<h3 id="current-known-issues">Current Known Issues</h3>
-<ol>
-<li><strong>Blocking backend calls</strong>: Main thread blocks during HTTP/2 requests</li>
-<li><strong>Full body buffering</strong>: High memory usage for large requests/responses</li>
-<li><strong>Configuration hot reload missing</strong>: Runtime config updates still require restart</li>
-<li><strong>Dual-ingress operational complexity</strong>: Runtime serves HTTP/3 (native) plus HTTP/1.1/2 TLS bootstrap, so operators must secure and observe both paths consistently</li>
-<li><strong>Method-based route matching constraints</strong>: keep route precedence and method tie-break semantics covered by integration tests as routing rules evolve</li>
-<li><strong>Control/metrics endpoint hardening is operator-dependent</strong>: endpoints should remain network-isolated unless explicitly protected</li>
-</ol>
-<h3 id="refactoring-needs">Refactoring Needs</h3>
-<ol>
-<li><strong>Error handling</strong>: Unify error types across crates</li>
-<li><strong>Configuration</strong>: Type-safe config builders</li>
-<li><strong>Testing</strong>: Expand integration test coverage</li>
-<li><strong>Documentation</strong>: API documentation and examples</li>
-<li><strong>Logging</strong>: Reduce debug log verbosity in hot path</li>
-</ol>
+<h3 id="b4-security-leadership">B4 — Security Leadership</h3>
+<ul>
+<li>Built-in policy engine for zero-trust edge controls: identity, cert posture, and route trust levels.</li>
+<li>Native certificate lifecycle checks with proactive expiry and failure forecasting.</li>
+<li>Security posture score emitted continuously as a metric so drift is visible and actionable before incident.</li>
+<li>Request integrity policy layer: header canonicalization signatures and anti-tamper rules.</li>
+<li>Advanced abuse detection heuristics for protocol anomalies with dynamic threat response controls.</li>
+<li>Confidential runtime mode baseline with strict memory and secret handling and a built-in compliance evidence generator.</li>
+</ul>
+<h3 id="b5-observability-and-explainability-leadership">B5 — Observability and Explainability Leadership</h3>
+<ul>
+<li>Unified telemetry schema across logs, metrics, and traces with shared correlation IDs.</li>
+<li>Route-level SLO objects natively in config with automatic burn-rate output.</li>
+<li>Single-pane runtime "why" answers: why a request failed, why a backend was chosen, why a retry fired.</li>
+<li>High-cardinality telemetry safeguards with auto-downgrade policies and per-tenant cost-aware telemetry budgets.</li>
+</ul>
+<h3 id="b6-configuration-and-change-safety-leadership">B6 — Configuration and Change Safety Leadership</h3>
+<ul>
+<li>Transactional config deploys with staged percentage rollout and auto-rollback triggers. Bad config rollout impact near-zero with automatic containment.</li>
+<li>Route-level canary for config changes — not only backend canary.</li>
+<li>Built-in differential analyzer between running and candidate config.</li>
+<li>Config policy testing against replayed traffic samples before apply with approval workflow hooks for controlled environments.</li>
+</ul>
+<h3 id="b7-multi-cluster-and-fleet-leadership">B7 — Multi-Cluster and Fleet Leadership</h3>
+<ul>
+<li>Lightweight fleet control plane for policy and config fanout with a cluster capability registry.</li>
+<li>Global traffic policy overlays with local override safety and consistency guarantees.</li>
+<li>Regional failover orchestration with health-weighted routing intents.</li>
+<li>Progressive global rollout with blast-radius guardrails.</li>
+<li>Fleet-wide SLO and risk dashboards with per-cluster drilldown.</li>
+</ul>
+<h3 id="b8-benchmark-and-transparency-leadership">B8 — Benchmark and Transparency Leadership</h3>
+<ul>
+<li>Public benchmark matrix covering hardware profiles, workload classes, and TLS modes.</li>
+<li>Version-over-version performance regression leaderboard with open replay traces for independent verification.</li>
+<li>Benchmark fairness charter: same backend, same tuning class, same topology.</li>
+<li>Automatic benchmark CI on release candidates with tail latency and jitter as first-class published metrics.</li>
+</ul>
+<h3 id="b9-developer-and-ecosystem-leadership">B9 — Developer and Ecosystem Leadership</h3>
+<ul>
+<li>Stable extension API (WASM/plugin model) with strict safety boundaries, first-party extension examples for auth, transformation, policy, and telemetry.</li>
+<li>Rich migration toolkit including config translators and diff reports for teams moving from other reverse proxies.</li>
+<li>Shadow mode migration assistant to compare decisions side-by-side in production with a cutover safety score.</li>
+</ul>
+<h3 id="b10-cost-and-efficiency-leadership">B10 — Cost and Efficiency Leadership</h3>
+<ul>
+<li>Cost-per-million-requests telemetry and optimizer hints.</li>
+<li>Adaptive resource governor minimizing CPU while preserving SLO.</li>
+<li>Runtime profile advisor for instance sizing and worker/shard tuning.</li>
+<li>Automatic policy tuning recommendations from historical telemetry.</li>
+</ul>
+<h3 id="b11-governance-and-enterprise-readiness-leadership">B11 — Governance and Enterprise Readiness Leadership</h3>
+<ul>
+<li>Full audit trail for control actions, config changes, and policy decisions.</li>
+<li>RBAC/ABAC policy model for control-plane access with break-glass and just-in-time elevated access flow.</li>
+<li>Lifecycle support policy with clear LTS branches.</li>
+<li>CVE response automation and patch impact advisories.</li>
+<li>Security and reliability scorecards per release.</li>
+</ul>
+<h3 id="b12-release-validation-gates-no-miss">B12 — Release Validation Gates (No-Miss)</h3>
+<ul>
+<li>Mandatory release gate set: correctness, security, performance, soak, upgrade, rollback. Hard fail if any contract test, benchmark threshold, or security baseline fails.</li>
+<li>Signed release manifest linking artifacts, SBOM, provenance, and benchmark report.</li>
+<li>Pre-release chaos campaign with pass thresholds.</li>
+<li>Synthetic customer workload replay as a release gate.</li>
+<li>Live canary auto-revert based on burn-rate triggers.</li>
+</ul>
+<hr />
 <h2 id="non-goals">Non-Goals</h2>
-<p>Features explicitly not planned:</p>
+<p>Features explicitly not planned for the core runtime:</p>
 <ul>
-<li><strong>Full service mesh</strong>: Focus remains on edge proxying</li>
-<li><strong>Content caching</strong>: Use CDN or dedicated cache</li>
-<li><strong>WAF capabilities</strong>: Use dedicated security tools</li>
-<li><strong>Database proxying</strong>: Use specialized database proxies</li>
-<li><strong>Custom protocols</strong>: Stick to HTTP family</li>
-<li><strong>In-process plugin/extension ABI</strong>: No WASM/eBPF/Lua middleware model until a safe isolation and lifecycle model is defined</li>
+<li><strong>Full service mesh</strong> — Spooky is an edge reverse proxy, not a service mesh.</li>
+<li><strong>Content caching</strong> — use a CDN or dedicated cache layer.</li>
+<li><strong>WAF capabilities</strong> — use dedicated security tooling.</li>
+<li><strong>In-process plugin ABI</strong> — no WASM, eBPF, or Lua middleware model until a safe isolation and lifecycle model is defined.</li>
+<li><strong>Database proxying</strong> — use specialized database proxies.</li>
 </ul>
+<hr />
 <h2 id="contributing">Contributing</h2>
-<p>Contributions are welcome. See <a href="https://github.com/Supernova-Labs-Org/spooky/blob/master/CONTRIBUTING.md">contributing guide</a> for development setup and guidelines.</p>
-<p>Priority areas for contributions:</p>
+<p>Contributions are welcome. See <a href="https://github.com/Supernova-Labs-Org/spooky/blob/master/CONTRIBUTING.md">contributing guide</a> for development setup and conventions.</p>
+<p>High-value contribution areas in the current phase:</p>
 <ol>
-<li>Streaming request/response bodies</li>
-<li>Configuration hot reload</li>
-<li>Distributed tracing (OpenTelemetry)</li>
-<li>Integration tests</li>
-<li>Documentation and examples</li>
+<li>Concurrency correctness tests (Miri/Loom coverage for A1 items)</li>
+<li>Cross-protocol golden tests (A2 protocol consistency)</li>
+<li>Streaming request/response body handling (A9)</li>
+<li>Configuration hot reload (A8)</li>
+<li>OpenTelemetry distributed tracing integration (A7)</li>
+<li>Kubernetes deployment manifests and Helm charts (A11)</li>
 </ol>
   </div>
   
@@ -1257,197 +1335,181 @@
         
         
         
-        <a href="#current-status"
+        <a href="#what-is-shipped-v011-beta"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#current-status');">
-            Current Status
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#what-is-shipped-v011-beta');">
+            What Is Shipped (v0.1.1-beta)
+        </a>
+        
+
+        
+        <a href="#execution-priorities"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#execution-priorities');">
+            Execution Priorities
+        </a>
+        
+
+        
+        <a href="#part-a-hardening-track"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#part-a-hardening-track');">
+            Part A: Hardening Track
         </a>
         
         
-        <a href="#completed"
+        <a href="#a1-core-runtime-correctness-and-safety"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#completed');">
-            Completed
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#a1-core-runtime-correctness-and-safety');">
+            A1 — Core Runtime Correctness and Safety
+        </a>
+        
+        <a href="#a2-protocol-consistency-http11-http2-http3"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#a2-protocol-consistency-http11-http2-http3');">
+            A2 — Protocol Consistency (HTTP/1.1, HTTP/2, HTTP/3)
+        </a>
+        
+        <a href="#a3-routing-engine"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#a3-routing-engine');">
+            A3 — Routing Engine
+        </a>
+        
+        <a href="#a4-load-balancing"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#a4-load-balancing');">
+            A4 — Load Balancing
+        </a>
+        
+        <a href="#a5-resilience-and-fault-tolerance"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#a5-resilience-and-fault-tolerance');">
+            A5 — Resilience and Fault Tolerance
+        </a>
+        
+        <a href="#a6-security"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#a6-security');">
+            A6 — Security
+        </a>
+        
+        <a href="#a7-observability"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#a7-observability');">
+            A7 — Observability
+        </a>
+        
+        <a href="#a8-configuration-and-control-plane"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#a8-configuration-and-control-plane');">
+            A8 — Configuration and Control Plane
+        </a>
+        
+        <a href="#a9-performance-engineering"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#a9-performance-engineering');">
+            A9 — Performance Engineering
+        </a>
+        
+        <a href="#a10-packaging-release-and-production-operations"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#a10-packaging-release-and-production-operations');">
+            A10 — Packaging, Release, and Production Operations
+        </a>
+        
+        <a href="#a11-kubernetes-and-cloud-native"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#a11-kubernetes-and-cloud-native');">
+            A11 — Kubernetes and Cloud-Native
+        </a>
+        
+        <a href="#a12-test-matrix"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#a12-test-matrix');">
+            A12 — Test Matrix
         </a>
         
         
 
         
-        <a href="#phase-1-operational-hardening"
+        <a href="#part-b-differentiation-track"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#phase-1-operational-hardening');">
-            Phase 1: Operational Hardening
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#part-b-differentiation-track');">
+            Part B: Differentiation Track
         </a>
         
         
-        <a href="#performance"
+        <a href="#b1-performance-leadership-h3-first-edge"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#performance');">
-            Performance
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#b1-performance-leadership-h3-first-edge');">
+            B1 — Performance Leadership (H3-First Edge)
         </a>
         
-        <a href="#observability"
+        <a href="#b2-simplicity-and-operator-experience-leadership"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#observability');">
-            Observability
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#b2-simplicity-and-operator-experience-leadership');">
+            B2 — Simplicity and Operator Experience Leadership
         </a>
         
-        <a href="#operational"
+        <a href="#b3-reliability-intelligence-leadership"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#operational');">
-            Operational
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#b3-reliability-intelligence-leadership');">
+            B3 — Reliability Intelligence Leadership
         </a>
         
-        <a href="#reliability"
+        <a href="#b4-security-leadership"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#reliability');">
-            Reliability
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#b4-security-leadership');">
+            B4 — Security Leadership
         </a>
         
-        
-
-        
-        <a href="#phase-2-advanced-features"
+        <a href="#b5-observability-and-explainability-leadership"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#phase-2-advanced-features');">
-            Phase 2: Advanced Features
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#b5-observability-and-explainability-leadership');">
+            B5 — Observability and Explainability Leadership
         </a>
         
-        
-        <a href="#traffic-management"
+        <a href="#b6-configuration-and-change-safety-leadership"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#traffic-management');">
-            Traffic Management
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#b6-configuration-and-change-safety-leadership');">
+            B6 — Configuration and Change Safety Leadership
         </a>
         
-        <a href="#load-balancing"
+        <a href="#b7-multi-cluster-and-fleet-leadership"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#load-balancing');">
-            Load Balancing
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#b7-multi-cluster-and-fleet-leadership');">
+            B7 — Multi-Cluster and Fleet Leadership
         </a>
         
-        <a href="#security"
+        <a href="#b8-benchmark-and-transparency-leadership"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#security');">
-            Security
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#b8-benchmark-and-transparency-leadership');">
+            B8 — Benchmark and Transparency Leadership
         </a>
         
-        <a href="#deployment"
+        <a href="#b9-developer-and-ecosystem-leadership"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#deployment');">
-            Deployment
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#b9-developer-and-ecosystem-leadership');">
+            B9 — Developer and Ecosystem Leadership
         </a>
         
-        
-
-        
-        <a href="#phase-3-enterprise-features"
+        <a href="#b10-cost-and-efficiency-leadership"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#phase-3-enterprise-features');">
-            Phase 3: Enterprise Features
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#b10-cost-and-efficiency-leadership');">
+            B10 — Cost and Efficiency Leadership
         </a>
         
-        
-        <a href="#multi-tenancy"
+        <a href="#b11-governance-and-enterprise-readiness-leadership"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#multi-tenancy');">
-            Multi-Tenancy
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#b11-governance-and-enterprise-readiness-leadership');">
+            B11 — Governance and Enterprise Readiness Leadership
         </a>
         
-        <a href="#advanced-observability"
+        <a href="#b12-release-validation-gates-no-miss"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#advanced-observability');">
-            Advanced Observability
-        </a>
-        
-        <a href="#protocol-features"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#protocol-features');">
-            Protocol Features
-        </a>
-        
-        <a href="#high-availability"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#high-availability');">
-            High Availability
-        </a>
-        
-        
-
-        
-        <a href="#phase-4-protocol-extensions"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#phase-4-protocol-extensions');">
-            Phase 4: Protocol Extensions
-        </a>
-        
-        
-        <a href="#http3-features"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#http3-features');">
-            HTTP/3 Features
-        </a>
-        
-        <a href="#additional-protocols"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#additional-protocols');">
-            Additional Protocols
-        </a>
-        
-        <a href="#optimizations"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#optimizations');">
-            Optimizations
-        </a>
-        
-        
-
-        
-        <a href="#implementation-priorities"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#implementation-priorities');">
-            Implementation Priorities
-        </a>
-        
-        
-        <a href="#high-priority-next-3-months"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#high-priority-next-3-months');">
-            High Priority (Next 3 months)
-        </a>
-        
-        <a href="#medium-priority-3-6-months"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#medium-priority-3-6-months');">
-            Medium Priority (3-6 months)
-        </a>
-        
-        <a href="#low-priority-6-months"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#low-priority-6-months');">
-            Low Priority (6+ months)
-        </a>
-        
-        
-
-        
-        <a href="#technical-debt"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#technical-debt');">
-            Technical Debt
-        </a>
-        
-        
-        <a href="#current-known-issues"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#current-known-issues');">
-            Current Known Issues
-        </a>
-        
-        <a href="#refactoring-needs"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#refactoring-needs');">
-            Refactoring Needs
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#b12-release-validation-gates-no-miss');">
+            B12 — Release Validation Gates (No-Miss)
         </a>
         
         

@@ -1,204 +1,277 @@
 # Roadmap
 
-## Current Status
+Spooky's roadmap is organized into two tracks. **Part A** covers the hardening work required to reach GA across correctness, protocol coverage, routing, resilience, security, observability, configuration, and packaging. **Part B** covers the areas where Spooky is building a stronger position: performance, operator simplicity, reliability intelligence, and change safety.
 
-**Beta. Core features are functional and tested.** Spooky can terminate HTTP/3 connections, forward to HTTP/2 backends, and perform load balancing with health checks. It is pre-GA and should be deployed with production guardrails (see [Release Maturity](release-maturity.md) and Technical Debt below).
+Items ship in waves: correctness and production trust first, then migration tooling, then measurable capability leadership.
 
-### Completed
+---
 
-- HTTP/3 termination via quiche
-- HTTP/2 backend connectivity
-- Path and host-based routing
-- Multiple load balancing algorithms (random, round-robin, consistent hash, least-connections, latency-aware, sticky-cid)
-- Active health checking with automatic backend management
-- Per-upstream configuration and routing
-- Connection ID management and QUIC packet routing
-- TLS 1.3 with certificate chain loading
-- Upstream TLS peer verification enabled by default via `upstream_tls.verify_certificates`
-- Downstream mTLS (client certificate authentication) via `listen.tls.client_auth.enabled`, `listen.tls.client_auth.require_client_cert`, and `listen.tls.client_auth.ca_file`
-- Structured logging with multiple levels
-- Configuration validation at startup
-- Graceful shutdown with connection draining
+## What Is Shipped (v0.1.1-beta)
 
-## Phase 1: Operational Hardening
+- HTTP/3 termination via quiche (RFC 9114) and QUIC transport (RFC 9000)
+- HTTP/2 backend connectivity with connection pooling
+- Path prefix and host-based routing with longest-match selection
+- Six load balancing algorithms: random, round-robin, consistent hash, least-connections, latency-aware, sticky-cid
+- Active health checking with configurable thresholds and cooldown
+- Circuit breaker, retry budgets, request hedging, brownout mode, adaptive admission
+- Per-upstream and per-backend inflight caps and queue limits
+- TLS 1.3 with certificate chain loading; downstream mTLS via `listen.tls.client_auth.*`
+- Upstream TLS peer verification on by default; cleartext requires explicit opt-in
+- Prometheus metrics endpoint, control API (`/health`, `/ready`, `/admin/runtime`)
+- Structured JSON logging with standard and Spooky-themed log levels
+- Debian package with systemd unit; Docker packaging
+- Configuration validation at startup with actionable error output
 
-**Goal**: Expand operational and scalability capabilities for production deployments.
+---
 
-### Performance
+## Execution Priorities
 
-- **Async data plane**: Move backend forwarding off the main poll thread
-- **Streaming bodies**: Implement incremental request/response streaming instead of full buffering
-- **Multi-threading**: Support multi-threaded QUIC packet processing
-- **Connection pooling optimizations**: Reduce allocation overhead in HTTP/2 pool
+| Priority | Scope |
+|---|---|
+| **P0** | Correctness, safety, security hardening, test matrix integrity |
+| **P1** | Routing/LB/resilience depth, dynamic config safety, production operations, cloud-native packaging |
+| **P2** | Differentiation tracks — starting with performance leadership and operator simplicity |
 
-### Observability
+---
 
-- **Metrics export**: Prometheus endpoint live — per-route counters, latency percentiles, active-connection and queue-size gauges, full drop counter coverage across all ingress paths
-- **Resilience metrics**: Per-feature counters for retries (attempt + denial by reason), hedges (triggered/won/wasted/latency), circuit breaker rejections, and brownout state gauge
-- **Distributed tracing**: OpenTelemetry integration
-- **Request logging**: Per-request structured logs with correlation IDs
-- **Connection metrics**: Track QUIC RTT, packet loss, stream count
+## Part A: Hardening Track
 
-### Operational
+### A1 — Core Runtime Correctness and Safety
 
-- **Configuration hot reload**: Reload config on SIGHUP without dropping connections
-- **Health check improvements**: Separate client pool for probes to avoid contention
-- **TLS certificate reload**: Automatic reload on certificate rotation
-- **Admin API**: HTTP endpoint for runtime statistics and control
+**Goal:** Eliminate correctness hazards in the concurrency model, error taxonomy, and protocol handling that could cause data loss, misrouting, or silent failure.
 
-### Reliability
+- Replace relaxed atomic ordering with Acquire/Release semantics for all inter-thread coordination flags. Validate with concurrency tests covering shutdown, queue accounting, and watchdog coordination.
+- Separate error taxonomy into transport, config, and internal-runtime classes so that non-health errors do not incorrectly trigger backend health transitions.
+- Unify hop-by-hop header filter pipeline across HTTP/1.1, HTTP/2, and HTTP/3 ingress paths. The same header strip set must be validated across all three paths.
+- Add strict UTF-8 parse with explicit 4xx rejection on invalid pseudo-header bytes. Fuzz corpus must include malformed UTF-8 and pass rejection invariants.
+- Establish canonical error-class mapping so metrics and logs show identical normalized failure categories.
+- Remove dead branches and runtime checks that are unreachable given validator guarantees.
 
-- **Circuit breaker**: Per-backend circuit breakers to prevent cascading failures
-- **Retry logic**: Configurable request retry with exponential backoff
-- **Request timeouts**: Per-route timeout configuration
-- **Rate limiting**: Per-IP and per-route rate limits
+### A2 — Protocol Consistency (HTTP/1.1, HTTP/2, HTTP/3)
 
-## Phase 2: Advanced Features
+**Goal:** Guarantee that the same route and payload behaves identically across all three protocol paths.
 
-**Goal**: Add advanced traffic management and operational capabilities.
+- Protocol consistency contract covering status codes, headers, retries, and timeouts — validated by cross-protocol golden tests.
+- Documented and integration-tested ALPN/Alt-Svc upgrade state machine for the bootstrap-to-H3 upgrade path.
+- QUIC connection churn and handshake failure hardening: token bucket + handshake budgets with sustained-churn stability tests.
+- Explicit max-stream, idle timeout, and stream reset policy controls for HTTP/2 and HTTP/3, with stream-stress tests covering defined latency and error budgets.
 
-### Traffic Management
+### A3 — Routing Engine
 
-- **Weighted routing**: Route percentage of traffic to different upstreams
-- **Header-based routing**: Route by arbitrary request headers
-- **Request rewriting**: URL rewriting and header manipulation
-- **Compression**: Automatic response compression
+**Goal:** Expand the matching surface to cover the full set of conditions that reverse proxy operators expect.
 
-### Load Balancing
+- Route matching for exact path, prefix, regex, method, host, header values, and query parameters. Precedence and tie-break behavior must be deterministically specified and conformance-tested.
+- RFC 3986 normalization policy modes: strict, passthrough, and safe-normalize. Encoded slashes, dot segments, and duplicate slashes must be deterministic across all modes.
+- Route-level traffic split, mirror traffic, and staged rollout policy — with weighted distribution verified to stay within configured statistical bounds.
+- Route graph versioning with atomic swap and rollback so live updates never produce invalid route windows.
 
-- **Weighted least connection**: Combine weights with connection count
-- **Cached consistent hash**: Cache hash ring to avoid rebuilds
+### A4 — Load Balancing
 
-### Security
+**Goal:** Make selection deterministic, fair, and operationally transparent under concurrency.
 
-- **mTLS operational tooling**: Certificate rotation/revocation workflows and deployment guidance
-- **Request validation**: Size limits, header validation
-- **IP allowlist/blocklist**: Simple access control
+- Deterministic fair selection primitives with lock-aware hot path for round-robin, least-connections, weighted, and sticky algorithms.
+- Weighted round-robin and power-of-two-choices variants with target-percent drift guard, validated by 95% confidence interval checks.
+- Cookie, header, CID, and hash-based session affinity with TTL and rebalance semantics. Stickiness and failover tests must prove deterministic rebinding.
+- Latency-based and success-rate-based outlier ejection with configurable cooldown curves. Flapping backend tests must show controlled ejection and re-entry.
+- Graceful drain state with admission cutoff and inflight completion budget. Zero-downtime backend drain scenario must pass.
 
-### Deployment
+### A5 — Resilience and Fault Tolerance
 
-- **Dynamic backend discovery**: Service discovery integration (DNS SRV, Consul, etcd)
-- **Backend metadata**: Tags and labels for flexible routing
-- **A/B testing support**: Route subset of traffic to experimental backends
-- **Canary deployments**: Gradually shift traffic to new backend versions
+**Goal:** Make every resilience control safe, observable, and non-destructive under edge cases.
 
-## Phase 3: Enterprise Features
+- Policy-driven retry classifier by method, status code, and error class. POST and unsafe requests must never be retried unless explicitly permitted.
+- Circuit-breaker open/half-open/closed transition metrics and event logs per route and upstream, making transition timelines auditable.
+- Sharded or atomic fast-path queue counters to keep admission overhead bounded at peak concurrency.
+- Explicit degrade tiers: shed, partial features, static fallback — with measurable SLO preservation playbooks.
+- Bulkhead boundaries per route and upstream pool so one pool failure does not cause global latency collapse.
 
-**Goal**: Support large-scale deployments with advanced requirements.
+### A6 — Security
 
-### Multi-Tenancy
+**Goal:** Reach enterprise baseline security posture across TLS, header handling, and control plane access.
 
-- **Namespace isolation**: Separate routing tables per tenant
-- **Resource limits**: Per-tenant connection and request limits
-- **Tenant routing**: Route by tenant ID or subdomain
+- Security profiles (`strict`, `balanced`, `compat`) with explicit cipher and TLS version policy. Profile tests must verify the protocol/cipher acceptance and rejection matrix.
+- Complete mTLS negative-case coverage: cert chain, EKU, SAN, expiry, and revocation handling. Invalid, wrong-CA, and expired cert tests must reliably reject.
+- Request smuggling defense: CL/TE ambiguity rejection and malformed framing protection validated against a smuggling attack corpus.
+- Hard limits on max header size and count with clear rejection responses and no crash or latency blowup.
+- Fine-grained authorization model for control endpoints with optional mTLS for the control channel. Unauthorized access must be fully denied and audited.
+- Environment sanitization and secure command execution policy for restart hooks. Secret env variables must never be inherited.
+- Insecure upstream TLS verification must require an explicit environment gate with startup warning. The production profile must block insecure upstream verification by default.
 
-### Advanced Observability
+### A7 — Observability
 
-- **APM integration**: Datadog, New Relic, etc.
-- **Custom metrics**: User-defined metric collection
-- **Traffic replay**: Record and replay production traffic
-- **Query logs**: SQL-like queries over request logs
+**Goal:** Make Spooky's telemetry stable, machine-readable, and trustworthy under all operational conditions.
 
-### Protocol Features
+- Versioned metrics schema with deprecation windows and compatibility docs. Contract tests must enforce required metric names, labels, and types.
+- Structured JSON access logs with required fields and request correlation IDs. Log schema validator must pass across all scenario families.
+- End-to-end span propagation with consistent `traceparent` behavior. Trace continuity tests must cover retry, circuit, and failover paths.
+- SLO-driven alert packs (latency, error, saturation, availability) with burn-rate rules. Alert simulation must show high precision and actionable context.
+- Runtime event bus for reloads, drains, ejections, and policy changes. Every control-plane transition must have both event and metric evidence.
 
-- **gRPC support**: Native gRPC proxying
-- **WebSocket support**: WebSocket over HTTP/3
+### A8 — Configuration and Control Plane
 
-### High Availability
+**Goal:** Make configuration lifecycle safe, introspectable, and recoverable.
 
-- **Connection migration**: Support QUIC connection migration
-- **State replication**: Share connection state across instances
-- **Zero-downtime updates**: Binary updates without connection loss
-- **Multi-region support**: Geographic routing and failover
+- Safe dynamic config apply: validation, staging, atomic activation, and rollback. A failed config must never impact the active dataplane.
+- Semantic config versioning and built-in migration assistant. Backward-compatible minor upgrades must generate a migration report.
+- Full semantic preflight validator with actionable diagnostics. Validation error output must pinpoint field path and remediation.
+- Effective config dump, runtime counters, and active policy snapshot endpoints so operators can reconstruct the runtime decision path from API and logs.
 
-## Phase 4: Protocol Extensions
+### A9 — Performance Engineering
 
-**Goal**: Support emerging protocols and optimizations.
+**Goal:** Eliminate known allocation and contention hotspots in the hot path.
 
-### HTTP/3 Features
+- Allocation reduction and lock sharding in ingress, LB, and admission paths. Target: measurable p99 latency and CPU profile improvement under baseline load.
+- End-to-end backpressure contract from socket accept to upstream dispatch. Overload tests must show bounded queue growth and controlled shedding.
+- True streaming for request and response bodies with bounded buffering and flow-control correctness. Large body tests must pass memory ceilings and latency budgets.
+- Adaptive worker and shard auto-tuning hints from runtime telemetry. Auto-tuned profile must perform within 5% of a hand-tuned baseline.
 
-- **0-RTT support**: Enable 0-RTT with proper anti-replay measures
-- **QUIC multipath**: Support multiple network paths
-- **Datagram support**: QUIC DATAGRAM frames for low-latency data
-- **Priority trees**: HTTP/3 priority and scheduling
+### A10 — Packaging, Release, and Production Operations
 
-### Additional Protocols
+**Goal:** Make every release verifiable, safe to upgrade, and operationally supportable.
 
-- **HTTP/1.1 support**: Serve HTTP/1.1 clients
-- **TCP proxy mode**: Layer 4 TCP proxying
-- **UDP proxy**: Forward UDP traffic
-- **MQTT support**: IoT protocol support
+- Signed binaries and container images, SBOM, and provenance attestations shipped on every release.
+- Version compatibility matrix with automated upgrade canary tests. Two-hop upgrade and rollback must succeed.
+- Incident runbooks for timeout spikes, backend collapse, cert failures, and reload faults — with game-day drills meeting MTTD/MTTR targets.
+- Secure-by-default production config profile with startup hardening checks that pass an external security checklist.
+- Reproducible benchmark harness with published raw datasets. Third-party reruns must produce comparable results.
 
-### Optimizations
+### A11 — Kubernetes and Cloud-Native
 
-- **Zero-copy**: Eliminate unnecessary data copies
-- **Kernel bypass**: AF_XDP or DPDK integration
-- **Hardware offload**: TLS offload to NICs
-- **eBPF**: Use eBPF for packet filtering and routing
+**Goal:** Remove adoption friction for platform teams operating in cloud-native environments.
 
-## Implementation Priorities
+- Official Kubernetes deployment manifests with health probes validated in CI for HA cluster deployment.
+- Production-grade Helm charts and Terraform modules with version pinning, verified across install, upgrade, and rollback workflows.
+- Kubernetes ingress/Gateway integration repository with mapping docs. Existing ingress definitions must migrate with minimal rewrite.
+- Official Prometheus rules, Grafana dashboards, and OpenTelemetry collector recipes enabling one-command observability bootstrap.
 
-### High Priority (Next 3 months)
+### A12 — Test Matrix
 
-1. Async data plane - unblock main thread
-2. Configuration hot reload - reduce operational friction
-3. Streaming bodies - reduce memory usage
-4. mTLS operational tooling - certificate lifecycle automation
+**Goal:** Make the test suite a reliable gate — not a confidence theater.
 
-### Medium Priority (3-6 months)
+- Strict endpoint intent tags (data plane vs control plane vs metrics) so scenarios validate the right behavior class.
+- Dedicated harness checks for smuggling, header abuse, TLS downgrade, and mTLS failure — with intentionally vulnerable fixtures confirming the suite fails correctly.
+- Statistical trend checks for memory, FD, CPU variance, and error drift across 24h, 72h, and 7-day soak gates.
+- Scenario isolation hooks and environment reset contracts so test order cannot affect results.
+- Shared parser library across all scripts to eliminate duplicated and fragile extraction logic.
 
-1. Circuit breakers - improve reliability
-2. Distributed tracing - debugging complex issues
-3. Rate limiting - protect backends 
-4. Health check improvements - reduce contention
-5. Admin API - operational visibility
+---
 
-### Low Priority (6+ months)
+## Part B: Differentiation Track
 
-1. Dynamic backend discovery - integration complexity
-2. Advanced load balancing - diminishing returns
-3. Advanced protocol features - adds complexity
-4. Protocol extensions - limited immediate value
-5. Multi-tenancy - niche use case
+### B1 — Performance Leadership (H3-First Edge)
 
-## Technical Debt
+- QUIC-native fast path with low-copy and low-allocation dispatch. Target: measurably better p99 tail latency and CPU/RPS on representative production hardware.
+- Kernel-optimized UDP ingress profiles: socket buffers, pacing, and reuse strategies.
+- Dual-mode latency governor: throughput mode and tail-latency mode with per-route latency caps and adaptive shedding before collapse.
+- In-process micro-profiler endpoint for live hotspot snapshots with automatic profile diffing between versions.
 
-### Current Known Issues
+### B2 — Simplicity and Operator Experience Leadership
 
-1. **Blocking backend calls**: Main thread blocks during HTTP/2 requests
-2. **Full body buffering**: High memory usage for large requests/responses
-3. **Configuration hot reload missing**: Runtime config updates still require restart
-4. **Dual-ingress operational complexity**: Runtime serves HTTP/3 (native) plus HTTP/1.1/2 TLS bootstrap, so operators must secure and observe both paths consistently
-5. **Method-based route matching constraints**: keep route precedence and method tie-break semantics covered by integration tests as routing rules evolve
-6. **Control/metrics endpoint hardening is operator-dependent**: endpoints should remain network-isolated unless explicitly protected
+- Opinionated production profiles: `edge-low-latency`, `api-gateway`, `zero-trust`.
+- Guided config linter with severity levels and autofix hints.
+- `spooky doctor` command for runtime diagnostics and misconfiguration detection.
+- Human-readable decision traces: why a request was routed to a specific backend, why a circuit opened, why a retry fired.
+- Built-in incident timeline reconstruction correlating events, metrics, and logs into a single command evidence bundle.
+- Safe-mode startup that auto-disables risky options in production environments with guardrails refusing known-dangerous config combinations.
 
-### Refactoring Needs
+### B3 — Reliability Intelligence Leadership
 
-1. **Error handling**: Unify error types across crates
-2. **Configuration**: Type-safe config builders
-3. **Testing**: Expand integration test coverage
-4. **Documentation**: API documentation and examples
-5. **Logging**: Reduce debug log verbosity in hot path
+- Predictive brownout based on trend forecasting of saturation and error growth — preventive controls that activate before outage thresholds are crossed.
+- Adaptive retry budget and hedging controller driven by live success and latency signals.
+- Per-route anomaly detection for sudden behavior drift.
+- Self-healing backend scoring using a multidimensional latency/error/timeout model with automatic failback smoothing to prevent thundering herd after recovery.
+- Runtime resilience simulation endpoint for what-if policy replay on sampled traffic with a blast-radius estimator for config changes before apply.
+
+### B4 — Security Leadership
+
+- Built-in policy engine for zero-trust edge controls: identity, cert posture, and route trust levels.
+- Native certificate lifecycle checks with proactive expiry and failure forecasting.
+- Security posture score emitted continuously as a metric so drift is visible and actionable before incident.
+- Request integrity policy layer: header canonicalization signatures and anti-tamper rules.
+- Advanced abuse detection heuristics for protocol anomalies with dynamic threat response controls.
+- Confidential runtime mode baseline with strict memory and secret handling and a built-in compliance evidence generator.
+
+### B5 — Observability and Explainability Leadership
+
+- Unified telemetry schema across logs, metrics, and traces with shared correlation IDs.
+- Route-level SLO objects natively in config with automatic burn-rate output.
+- Single-pane runtime "why" answers: why a request failed, why a backend was chosen, why a retry fired.
+- High-cardinality telemetry safeguards with auto-downgrade policies and per-tenant cost-aware telemetry budgets.
+
+### B6 — Configuration and Change Safety Leadership
+
+- Transactional config deploys with staged percentage rollout and auto-rollback triggers. Bad config rollout impact near-zero with automatic containment.
+- Route-level canary for config changes — not only backend canary.
+- Built-in differential analyzer between running and candidate config.
+- Config policy testing against replayed traffic samples before apply with approval workflow hooks for controlled environments.
+
+### B7 — Multi-Cluster and Fleet Leadership
+
+- Lightweight fleet control plane for policy and config fanout with a cluster capability registry.
+- Global traffic policy overlays with local override safety and consistency guarantees.
+- Regional failover orchestration with health-weighted routing intents.
+- Progressive global rollout with blast-radius guardrails.
+- Fleet-wide SLO and risk dashboards with per-cluster drilldown.
+
+### B8 — Benchmark and Transparency Leadership
+
+- Public benchmark matrix covering hardware profiles, workload classes, and TLS modes.
+- Version-over-version performance regression leaderboard with open replay traces for independent verification.
+- Benchmark fairness charter: same backend, same tuning class, same topology.
+- Automatic benchmark CI on release candidates with tail latency and jitter as first-class published metrics.
+
+### B9 — Developer and Ecosystem Leadership
+
+- Stable extension API (WASM/plugin model) with strict safety boundaries, first-party extension examples for auth, transformation, policy, and telemetry.
+- Rich migration toolkit including config translators and diff reports for teams moving from other reverse proxies.
+- Shadow mode migration assistant to compare decisions side-by-side in production with a cutover safety score.
+
+### B10 — Cost and Efficiency Leadership
+
+- Cost-per-million-requests telemetry and optimizer hints.
+- Adaptive resource governor minimizing CPU while preserving SLO.
+- Runtime profile advisor for instance sizing and worker/shard tuning.
+- Automatic policy tuning recommendations from historical telemetry.
+
+### B11 — Governance and Enterprise Readiness Leadership
+
+- Full audit trail for control actions, config changes, and policy decisions.
+- RBAC/ABAC policy model for control-plane access with break-glass and just-in-time elevated access flow.
+- Lifecycle support policy with clear LTS branches.
+- CVE response automation and patch impact advisories.
+- Security and reliability scorecards per release.
+
+### B12 — Release Validation Gates (No-Miss)
+
+- Mandatory release gate set: correctness, security, performance, soak, upgrade, rollback. Hard fail if any contract test, benchmark threshold, or security baseline fails.
+- Signed release manifest linking artifacts, SBOM, provenance, and benchmark report.
+- Pre-release chaos campaign with pass thresholds.
+- Synthetic customer workload replay as a release gate.
+- Live canary auto-revert based on burn-rate triggers.
+
+---
 
 ## Non-Goals
 
-Features explicitly not planned:
+Features explicitly not planned for the core runtime:
 
-- **Full service mesh**: Focus remains on edge proxying
-- **Content caching**: Use CDN or dedicated cache
-- **WAF capabilities**: Use dedicated security tools
-- **Database proxying**: Use specialized database proxies
-- **Custom protocols**: Stick to HTTP family
-- **In-process plugin/extension ABI**: No WASM/eBPF/Lua middleware model until a safe isolation and lifecycle model is defined
+- **Full service mesh** — Spooky is an edge reverse proxy, not a service mesh.
+- **Content caching** — use a CDN or dedicated cache layer.
+- **WAF capabilities** — use dedicated security tooling.
+- **In-process plugin ABI** — no WASM, eBPF, or Lua middleware model until a safe isolation and lifecycle model is defined.
+- **Database proxying** — use specialized database proxies.
+
+---
 
 ## Contributing
 
-Contributions are welcome. See [contributing guide](https://github.com/Supernova-Labs-Org/spooky/blob/master/CONTRIBUTING.md) for development setup and guidelines.
+Contributions are welcome. See [contributing guide](https://github.com/Supernova-Labs-Org/spooky/blob/master/CONTRIBUTING.md) for development setup and conventions.
 
-Priority areas for contributions:
+High-value contribution areas in the current phase:
 
-1. Streaming request/response bodies
-2. Configuration hot reload
-3. Distributed tracing (OpenTelemetry)
-4. Integration tests
-5. Documentation and examples
+1. Concurrency correctness tests (Miri/Loom coverage for A1 items)
+2. Cross-protocol golden tests (A2 protocol consistency)
+3. Streaming request/response body handling (A9)
+4. Configuration hot reload (A8)
+5. OpenTelemetry distributed tracing integration (A7)
+6. Kubernetes deployment manifests and Helm charts (A11)
