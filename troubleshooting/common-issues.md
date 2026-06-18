@@ -18,7 +18,7 @@ Invalid load balancing type: 'weighted' for upstream 'api'
 - Configuration schema version mismatch
 - Unsupported protocol specification
 - Invalid log level (valid: `whisper`, `haunt`, `spooky`, `scream`, `poltergeist`, `silence`, `trace`, `debug`, `info`, `warn`, `error`, `off`)
-- Unsupported load balancing algorithm (valid: `random`, `round-robin`, `round_robin`, `rr`, `consistent-hash`, `consistent_hash`, `ch`)
+- Unsupported load balancing algorithm (valid: `random`, `round-robin`, `round_robin`, `rr`, `consistent-hash`, `consistent_hash`, `ch`, `least-connections`, `least_connections`, `lc`, `latency-aware`, `latency_aware`, `la`, `sticky-cid`, `sticky_cid`, `cid-sticky`, `cid_sticky`)
 
 **Diagnostic Commands**:
 ```bash
@@ -146,7 +146,7 @@ Health check cooldown is invalid (0) for backend 'backend1' in upstream 'api'
 ```
 
 **Root Causes**:
-- Missing or malformed backend address (must be `host:port`)
+- Missing or malformed backend address (accepted forms: `host:port`, `https://host:port`, `http://host:port`, or bare `host` — scheme-default port is inferred when omitted)
 - Zero values for weight or health check parameters
 - Invalid health check configuration
 

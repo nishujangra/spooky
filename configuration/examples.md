@@ -139,6 +139,14 @@ load_balancing:
 ```yaml
 version: 1
 
+listen:
+  protocol: http3
+  address: "0.0.0.0"
+  port: 443
+  tls:
+    cert: /etc/spooky/certs/public-fullchain.pem
+    key: /etc/spooky/certs/public-privkey.pem
+
 listeners:
   - protocol: http3
     address: "0.0.0.0"
@@ -162,7 +170,7 @@ upstream:
         address: "backend.internal.example:8443"
 ```
 
-When `listeners[]` is non-empty, the top-level `listen` block is ignored.
+The top-level `listen` field is always required by the schema. When `listeners[]` is non-empty, runtime normalization uses `listeners[]` and the top-level `listen` block is superseded.
 
 ## Example 5: Bootstrap Listener Client Auth
 

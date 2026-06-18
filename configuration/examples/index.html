@@ -1519,6 +1519,14 @@ load_balancing:
 <h2 id="example-4-multi-listener-deployment">Example 4: Multi-Listener Deployment</h2>
 <pre><code class="language-yaml">version: 1
 
+listen:
+  protocol: http3
+  address: &quot;0.0.0.0&quot;
+  port: 443
+  tls:
+    cert: /etc/spooky/certs/public-fullchain.pem
+    key: /etc/spooky/certs/public-privkey.pem
+
 listeners:
   - protocol: http3
     address: &quot;0.0.0.0&quot;
@@ -1541,7 +1549,7 @@ upstream:
       - id: &quot;backend1&quot;
         address: &quot;backend.internal.example:8443&quot;
 </code></pre>
-<p>When <code>listeners[]</code> is non-empty, the top-level <code>listen</code> block is ignored.</p>
+<p>The top-level <code>listen</code> field is always required by the schema. When <code>listeners[]</code> is non-empty, runtime normalization uses <code>listeners[]</code> and the top-level <code>listen</code> block is superseded.</p>
 <h2 id="example-5-bootstrap-listener-client-auth">Example 5: Bootstrap Listener Client Auth</h2>
 <pre><code class="language-yaml">version: 1
 

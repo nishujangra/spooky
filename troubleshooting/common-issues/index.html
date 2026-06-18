@@ -1406,7 +1406,7 @@ Invalid load balancing type: 'weighted' for upstream 'api'
 - Configuration schema version mismatch
 - Unsupported protocol specification
 - Invalid log level (valid: <code>whisper</code>, <code>haunt</code>, <code>spooky</code>, <code>scream</code>, <code>poltergeist</code>, <code>silence</code>, <code>trace</code>, <code>debug</code>, <code>info</code>, <code>warn</code>, <code>error</code>, <code>off</code>)
-- Unsupported load balancing algorithm (valid: <code>random</code>, <code>round-robin</code>, <code>round_robin</code>, <code>rr</code>, <code>consistent-hash</code>, <code>consistent_hash</code>, <code>ch</code>)</p>
+- Unsupported load balancing algorithm (valid: <code>random</code>, <code>round-robin</code>, <code>round_robin</code>, <code>rr</code>, <code>consistent-hash</code>, <code>consistent_hash</code>, <code>ch</code>, <code>least-connections</code>, <code>least_connections</code>, <code>lc</code>, <code>latency-aware</code>, <code>latency_aware</code>, <code>la</code>, <code>sticky-cid</code>, <code>sticky_cid</code>, <code>cid-sticky</code>, <code>cid_sticky</code>)</p>
 <p><strong>Diagnostic Commands</strong>:</p>
 <pre><code class="language-bash"># Validate YAML syntax
 python3 -c &quot;import yaml; yaml.safe_load(open('config.yaml'))&quot; 2&gt;&amp;1
@@ -1511,7 +1511,7 @@ Health check success threshold is invalid (0) for backend 'backend1' in upstream
 Health check cooldown is invalid (0) for backend 'backend1' in upstream 'api'
 </code></pre>
 <p><strong>Root Causes</strong>:
-- Missing or malformed backend address (must be <code>host:port</code>)
+- Missing or malformed backend address (accepted forms: <code>host:port</code>, <code>https://host:port</code>, <code>http://host:port</code>, or bare <code>host</code> — scheme-default port is inferred when omitted)
 - Zero values for weight or health check parameters
 - Invalid health check configuration</p>
 <p><strong>Diagnostic Commands</strong>:</p>

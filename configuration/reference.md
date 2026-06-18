@@ -77,7 +77,7 @@ log:
 | Key | Required | Meaning |
 | --- | --- | --- |
 | `version` | No | Schema version; defaults to `1` |
-| `listen` | Yes unless `listeners` is set | Single-listener definition |
+| `listen` | Yes | Single-listener definition |
 | `listeners` | No | Multi-listener override for the top-level `listen` block |
 | `upstream_tls` | No | Global TLS policy for HTTPS backends |
 | `upstream` | Yes | Named route and backend pools |
@@ -1186,7 +1186,7 @@ Spooky validates configuration at startup and reports errors before attempting t
 3. **Invalid values**
    - Port number out of range (1-65535)
    - Invalid IP address format
-   - Invalid backend address format (must be `host:port`)
+   - Invalid backend address format (accepted: `host:port`, `https://host:port`, `http://host:port`, or bare `host`; scheme-default port is inferred when omitted)
    - Duplicate backend IDs within a pool
 
 4. **Configuration conflicts**

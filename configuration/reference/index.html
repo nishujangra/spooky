@@ -1472,7 +1472,7 @@ log:
 </tr>
 <tr>
 <td><code>listen</code></td>
-<td>Yes unless <code>listeners</code> is set</td>
+<td>Yes</td>
 <td>Single-listener definition</td>
 </tr>
 <tr>
@@ -3583,7 +3583,7 @@ performance:
 </li>
 <li>Port number out of range (1-65535)</li>
 <li>Invalid IP address format</li>
-<li>Invalid backend address format (must be <code>host:port</code>)</li>
+<li>Invalid backend address format (accepted: <code>host:port</code>, <code>https://host:port</code>, <code>http://host:port</code>, or bare <code>host</code>; scheme-default port is inferred when omitted)</li>
 <li>
 <p>Duplicate backend IDs within a pool</p>
 </li>
