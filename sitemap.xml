@@ -33,6 +33,18 @@
          <lastmod>2026-06-18</lastmod>
     </url>
     <url>
+         <loc>https://supernova-labs-org.github.io/spooky/concepts/overview/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/concepts/security-model/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/configuration/examples/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
          <loc>https://supernova-labs-org.github.io/spooky/configuration/reference/</loc>
          <lastmod>2026-06-18</lastmod>
     </url>
@@ -50,6 +62,30 @@
     </url>
     <url>
          <loc>https://supernova-labs-org.github.io/spooky/deployment/validation/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/development/adding-features/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/development/benchmarking/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/development/codebase-map/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/development/invariants/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/development/overview/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/development/testing-strategy/</loc>
          <lastmod>2026-06-18</lastmod>
     </url>
     <url>
@@ -85,11 +121,63 @@
          <lastmod>2026-06-18</lastmod>
     </url>
     <url>
+         <loc>https://supernova-labs-org.github.io/spooky/operations/deployment-patterns/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/operations/failure-modes/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/operations/host-tuning/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/operations/overview/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/operations/production-readiness/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/operations/runbook/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/operations/sizing-and-capacity/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
          <loc>https://supernova-labs-org.github.io/spooky/protocols/http3/</loc>
          <lastmod>2026-06-18</lastmod>
     </url>
     <url>
          <loc>https://supernova-labs-org.github.io/spooky/protocols/quic/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/reference/control-api-reference/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/reference/feature-matrix/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/reference/limitations/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/reference/metrics-reference/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/reference/overview/</loc>
+         <lastmod>2026-06-18</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/reference/terminology/</loc>
          <lastmod>2026-06-18</lastmod>
     </url>
     <url>

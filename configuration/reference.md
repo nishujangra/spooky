@@ -1,135 +1,47 @@
 # Configuration Reference
 
-Complete reference for all Spooky configuration options.
+This is the canonical configuration document for Spooky. It should answer four questions for every setting:
 
----
+- what field exists
+- what values it accepts
+- what its default is
+- what runtime behavior it changes
 
-## Common Patterns
+Use [Configuration Examples](examples.md) for complete deployment patterns. Use this page when you need exact schema and semantics.
 
-Before the full reference, here are the four config shapes that cover most deployments. All options used here are documented in full below.
+## Scope Of This Reference
 
-### Single upstream, all traffic
+This page covers:
 
-```yaml
-version: 1
+- schema shape
+- default values
+- precedence and normalization rules
+- validation behavior
+- runtime meaning of major knobs
 
-listen:
-  address: "0.0.0.0"
-  port: 9889
-  tls:
-    cert: /etc/spooky/certs/fullchain.pem
-    key: /etc/spooky/certs/privkey.pem
+This page does not change the current product limits:
 
-upstream:
-  default:
-    load_balancing:
-      type: round-robin
-    route:
-      path_prefix: "/"
-    backends:
-      - id: backend-1
-        address: "10.0.1.10:8080"
-        weight: 100
-        health_check:
-          path: "/health"
-          interval: 5000
-```
+- full config hot reload is not implemented
+- certificate reload covers new handshakes only
+- upstream forwarding is centered on HTTP/2
 
-### Path-based routing to two pools
+## Reading This Reference
 
-```yaml
-upstream:
-  api:
-    load_balancing:
-      type: least-connections
-    route:
-      path_prefix: "/api"
-    backends:
-      - id: api-1
-        address: "10.0.1.10:8080"
-        weight: 100
-        health_check:
-          path: "/health"
-          interval: 5000
-
-  default:
-    load_balancing:
-      type: round-robin
-    route:
-      path_prefix: "/"
-    backends:
-      - id: web-1
-        address: "10.0.2.10:8080"
-        weight: 100
-        health_check:
-          path: "/status"
-          interval: 10000
-```
-
-Spooky uses longest-match on `path_prefix`. `/api` matches before `/` for requests starting with `/api`.
-
-### Session-sticky routing with consistent hashing
-
-```yaml
-upstream:
-  app:
-    load_balancing:
-      type: consistent-hash
-      key: "header:x-session-id"   # hash on session header; falls back to QUIC CID if absent
-    route:
-      path_prefix: "/"
-    backends:
-      - id: app-1
-        address: "10.0.1.10:8080"
-        weight: 100
-      - id: app-2
-        address: "10.0.1.11:8080"
-        weight: 100
-```
-
-### Latency-aware routing with health checks and weighted backends
-
-```yaml
-upstream:
-  app:
-    load_balancing:
-      type: latency-aware           # routes to fastest backends using EWMA scoring
-    route:
-      path_prefix: "/"
-    backends:
-      - id: primary
-        address: "10.0.1.10:8080"
-        weight: 150                 # higher weight = more traffic when latency is equal
-        health_check:
-          path: "/health"
-          interval: 3000
-          timeout_ms: 1000
-          failure_threshold: 2
-          success_threshold: 1
-      - id: secondary
-        address: "10.0.1.11:8080"
-        weight: 100
-        health_check:
-          path: "/health"
-          interval: 3000
-          timeout_ms: 1000
-          failure_threshold: 2
-          success_threshold: 1
-```
-
----
-
-The full schema reference follows.
+- Start with [Configuration Examples](examples.md) if you need a working template.
+- Read [TLS Setup](tls.md) before configuring production certificates or private trust roots.
+- Read [Production Readiness](../operations/production-readiness.md) if you are deciding whether the current operational model fits your rollout requirements.
 
 ## Configuration File Format
 
-Spooky uses YAML for configuration. Specify the configuration file using the `--config` flag:
+Spooky uses YAML configuration loaded with:
 
 ```bash
 spooky --config /path/to/config.yaml
 ```
 
-## Complete Configuration Example
+If `--config` is omitted, Spooky attempts `/etc/spooky/config.yaml`.
+
+## Canonical Top-Level Shape
 
 ```yaml
 version: 1
@@ -142,54 +54,74 @@ listen:
     cert: "/etc/spooky/certs/fullchain.pem"
     key: "/etc/spooky/certs/privkey.pem"
 
+upstream_tls:
+  verify_certificates: true
+  strict_sni: true
+
 upstream:
-  api_pool:
-    load_balancing:
-      type: "consistent-hash"
-      key: "header:x-user-id"  # Optional key source for consistent-hash/sticky-cid
-
-    route:
-      host: "api.example.com"
-      path_prefix: "/api"
-
-    backends:
-      - id: "api-01"
-        address: "10.0.1.10:8080"
-        weight: 100
-        health_check:
-          path: "/health"
-          interval: 5000
-          timeout_ms: 2000
-          failure_threshold: 3
-          success_threshold: 2
-          cooldown_ms: 5000
-
-      - id: "api-02"
-        address: "10.0.1.11:8080"
-        weight: 150
-        health_check:
-          path: "/health"
-          interval: 5000
-
-  default_pool:
-    load_balancing:
-      type: "round-robin"
-
+  default:
     route:
       path_prefix: "/"
-
     backends:
-      - id: "web-01"
-        address: "10.0.2.10:8080"
+      - id: "backend1"
+        address: "backend.internal.example:8443"
         weight: 100
-        health_check:
-          path: "/status"
-          interval: 10000
 
 log:
   level: info
   format: plain
 ```
+
+## Top-Level Keys At A Glance
+
+| Key | Required | Meaning |
+| --- | --- | --- |
+| `version` | No | Schema version; defaults to `1` |
+| `listen` | Yes unless `listeners` is set | Single-listener definition |
+| `listeners` | No | Multi-listener override for the top-level `listen` block |
+| `upstream_tls` | No | Global TLS policy for HTTPS backends |
+| `upstream` | Yes | Named route and backend pools |
+| `load_balancing` | No | Global fallback load-balancing policy |
+| `log` | No | Logging policy |
+| `performance` | No | Timeouts, limits, worker model, and buffer sizing |
+| `resilience` | No | Admission, queueing, circuit breaker, retry, brownout, and protocol policy |
+| `observability` | No | Metrics, control API, tracing, and related surfaces |
+| `security` | No | Privilege-drop behavior |
+
+## Runtime Normalization And Precedence
+
+Spooky normalizes configuration into a single runtime model before it serves traffic.
+
+Precedence and interpretation rules:
+
+1. If `listeners[]` is non-empty, it is the only effective listener set.
+2. The top-level `listen` block is used only when `listeners[]` is absent or empty.
+3. Per-upstream TLS settings override global `upstream_tls`.
+4. Per-upstream load-balancing settings override the top-level `load_balancing` fallback.
+5. Certificate reload updates listener TLS material for future handshakes; it does not rewrite the already-running route or upstream model.
+
+## Production-Safe Defaults
+
+The configuration model is intentionally safe-by-default in several important areas:
+
+- native ingress defaults to HTTP/3
+- HTTPS upstreams verify certificates by default
+- upstream SNI is enabled by default
+- bootstrap listener TLS is always tied to configured listener identity
+- request and response paths are bounded by explicit timeout and size controls
+
+Treat the following settings as high-risk when changed:
+
+- `upstream_tls.verify_certificates: false`
+- broad increases to inflight or body-size limits without capacity validation
+- enabling public exposure of the control API
+- route or listener changes that rely on restart without a drain-and-rollback plan
+
+## Complete Example Configurations
+
+For complete examples, use [Configuration Examples](examples.md).
+
+## Top-Level Configuration
 
 ## Top-Level Configuration
 
@@ -759,7 +691,7 @@ Load balancing determines how requests are distributed across healthy backends w
 
 #### random
 
-Selects a backend randomly from all healthy backends. Weight values are currently ignored (weighted random is planned for future release).
+Selects a backend randomly from all healthy backends. Weight values are currently ignored.
 
 ```yaml
 upstream:
@@ -770,7 +702,7 @@ upstream:
 
 #### round-robin
 
-Distributes requests evenly across all healthy backends in sequential order. Weight values are currently ignored (weighted round-robin is planned for future release).
+Distributes requests evenly across all healthy backends in sequential order. Weight values are currently ignored.
 
 ```yaml
 upstream:

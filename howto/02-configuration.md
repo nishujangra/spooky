@@ -2,6 +2,8 @@
 
 This guide walks through building a working `config.yaml` for Spooky as a production reverse proxy, explaining every section and its trade-offs.
 
+Use [Configuration Reference](../configuration/reference.md) for the canonical field-by-field schema and [Configuration Examples](../configuration/examples.md) for complete deployment templates.
+
 ---
 
 ## Config File Location

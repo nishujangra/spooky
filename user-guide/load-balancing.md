@@ -301,7 +301,7 @@ upstream:
 
 ## Backend Weighting
 
-Only consistent hashing respects backend weights. Round-robin and random algorithms currently ignore weights (weighted versions are planned for future release).
+Only consistent hashing respects backend weights. Round-robin and random algorithms currently ignore weights.
 
 ### Weight Configuration
 
@@ -330,9 +330,9 @@ backends:
 ```
 
 **Weight Behavior**:
-- **Round Robin**: Weight values are currently ignored (weighted round-robin planned for future release)
+- **Round Robin**: Weight values are currently ignored
 - **Consistent Hash**: Number of virtual nodes = replicas × weight (64 replicas per weight unit)
-- **Random**: Weight values are currently ignored (weighted random planned for future release)
+- **Random**: Weight values are currently ignored
 - **Minimum**: Weight values below 1 are clamped to 1
 
 ## Health Checking

@@ -1,264 +1,55 @@
-# API Reference
+# API Overview
 
-Spooky's programmatic interfaces and configuration APIs.
+This page summarizes the operator-facing programmatic surfaces. Use the linked reference pages for the canonical details.
 
-## Command Line Interface
+## CLI Surface
 
-### Basic Usage
-
-```bash
-spooky --config <CONFIG>
-```
-
-### Options
-
-| Option | Short | Type | Required | Description |
-|--------|-------|------|----------|-------------|
-| `--config` | `-c` | string | No | Path to configuration file (defaults to `/etc/spooky/config.yaml` if omitted) |
-| `--version` | `-V` | boolean | No | Show version information |
-| `--help` | `-h` | boolean | No | Show help information |
-
-### Examples
+Basic usage:
 
 ```bash
-# Start Spooky with configuration
 spooky --config /etc/spooky/config.yaml
-
-# Show version
-spooky --version
 ```
 
-## Configuration API
+Core options:
 
-### Configuration File Format
+| Option | Meaning |
+| --- | --- |
+| `--config` / `-c` | Path to config file |
+| `--version` / `-V` | Print version |
+| `--help` / `-h` | Print usage |
 
-Spooky uses YAML for configuration with the following structure:
+## Control And Metrics Surfaces
 
-```yaml
-# Top-level configuration schema
-version: 1                    # Configuration format version
-listen:                       # Listener configuration (required)
-upstream:                     # Named upstream pools (required)
-load_balancing?:              # Global load balancing (optional)
-log:                          # Logging configuration (optional, defaults applied)
-```
+Spooky exposes two main operator-facing HTTP surfaces when configured:
 
-### Type Definitions
+- a Prometheus metrics endpoint
+- a control API for liveness, readiness, runtime visibility, cert reload, and restart actions
 
-#### ListenConfig
+Use:
 
-```typescript
-interface ListenConfig {
-  protocol: "http3";     // Only HTTP/3 is supported
-  port: number;
-  address: string;
-  tls: TLSConfig;        // TLS is required for HTTP/3
-}
-```
+- [Metrics Reference](../reference/metrics-reference.md) for current metric families and first-alert guidance
+- [Control API Reference](../reference/control-api-reference.md) for current endpoint behavior and security posture
 
-#### TLSConfig
+## Configuration Surface
 
-```typescript
-interface TLSConfig {
-  cert: string;        // Path to certificate file
-  key: string;         // Path to private key file
-  client_auth?: {
-    enabled: boolean;              // Enable mTLS client authentication
-    require_client_cert: boolean;  // Reject connections without a client cert
-    ca_file: string;               // Path to CA certificate used to verify clients
-  };
-}
-```
+The canonical configuration docs live in:
 
-#### UpstreamConfig
+- [Configuration Reference](../configuration/reference.md)
+- [Configuration Examples](../configuration/examples.md)
+- [TLS Setup](../configuration/tls.md)
 
-```typescript
-interface UpstreamConfig {
-  route: RouteConfig;             // Routing rules (required)
-  load_balancing?: LoadBalancingConfig;  // Per-upstream LB algorithm
-  backends: BackendConfig[];      // Backend servers (required, at least 1)
-}
-```
+## Important Scope Note
 
-#### RouteConfig
+The control API is not a full dynamic configuration API today.
 
-```typescript
-interface RouteConfig {
-  host?: string;         // Host header to match (optional)
-  path_prefix?: string;  // Path prefix to match (optional, but at least one of host/path_prefix required)
-}
-```
+- it provides health, readiness, runtime inspection, restart hooks, and certificate reload
+- it does not provide full live route or upstream mutation
 
-#### BackendConfig
+## Related Pages
 
-```typescript
-interface BackendConfig {
-  id: string;          // Unique backend identifier
-  address: string;     // Backend address (host:port)
-  weight?: number;     // Load balancing weight (default: 100)
-  health_check?: HealthCheckConfig;
-}
-```
-
-#### HealthCheckConfig
-
-```typescript
-interface HealthCheckConfig {
-  path?: string;           // Health check endpoint (default: "/health")
-  interval?: number;       // Check interval in ms (default: 5000)
-  timeout_ms?: number;     // Request timeout in ms (default: 1000)
-  success_threshold?: number;   // Successes to mark healthy (default: 2)
-  failure_threshold?: number;   // Failures to mark unhealthy (default: 3)
-}
-```
-
-#### LoadBalancingConfig
-
-```typescript
-interface LoadBalancingConfig {
-  type: "random" | "round-robin" | "consistent-hash" | "least-connections" | "latency-aware" | "sticky-cid";
-  key?: string;  // Key source for consistent hashing. Supported sources: "header:<name>", "cookie:<name>", "query:<name>", "path", "authority", "method", "cid". Falls back to "cid" if unset or the source is absent on a request.
-}
-```
-
-
-#### LogConfig
-
-```typescript
-interface LogConfig {
-  level?: string;  // Log level (default: "info")
-}
-```
-
-Supported log levels (in order of verbosity):
-- `whisper` - Trace-level logging (most verbose)
-- `haunt` - Debug-level logging
-- `spooky` - Info-level logging (default)
-- `scream` - Warning-level logging
-- `poltergeist` - Error-level logging
-- `silence` - Logging disabled
-
-Standard log levels are also supported:
-- `trace`, `debug`, `info`, `warn`, `error`, `off`
-
-## Metrics System
-
-Spooky maintains internal performance and operational metrics tracked via atomic counters.
-
-### Current Available Metrics
-
-The following metrics are currently tracked in-memory within the `Metrics` structure:
-
-#### Request Metrics
-
-- `requests_total` (AtomicU64) - Total number of requests received and processed
-- `requests_success` (AtomicU64) - Number of requests completed successfully with 2xx responses
-- `requests_failure` (AtomicU64) - Number of requests that failed or returned error responses
-
-#### Backend Metrics
-
-- `backend_timeouts` (AtomicU64) - Number of requests that timed out waiting for backend response
-- `backend_errors` (AtomicU64) - Number of backend connection or communication errors
-
-### Metrics Implementation Details
-
-All metrics use atomic operations with relaxed ordering for high-performance lock-free increment operations. Metrics are incremented through dedicated methods:
-
-- `inc_total()` - Increment total request counter
-- `inc_success()` - Increment successful request counter
-- `inc_failure()` - Increment failed request counter
-- `inc_timeout()` - Increment backend timeout counter
-- `inc_backend_error()` - Increment backend error counter
-
-### Metrics API Endpoint
-
-**Status**: Available
-
-Spooky exposes a Prometheus-compatible metrics endpoint in the runtime control plane when metrics are enabled in configuration.
-
-#### Endpoint
-
-```
-GET /metrics
-```
-
-The metrics path is configurable (`observability.metrics.path`) and defaults to `/metrics`.
-
-#### Metric Categories
-
-- **Request metrics**: Total requests, success/failure rates, request duration histograms
-- **Connection metrics**: Active QUIC connections, HTTP/2 connection pool statistics
-- **Backend health metrics**: Backend availability, health check results, response times
-- **Load balancing metrics**: Backend selection distribution, algorithm performance
-- **System metrics**: Process resource usage, runtime statistics
-
-### Admin API
-
-**Status**: Available (control API)
-
-Administrative API endpoints are available for runtime management and observability when `observability.control_api.enabled=true`.
-
-#### Control API Endpoints
-
-- `GET /health`: Process liveness and watchdog state
-- `GET /ready`: Readiness state based on restart drain state and backend health
-- `GET /admin/runtime`: Runtime snapshot (worker count, adaptive admission state, key counters, backend health)
-- `POST /admin/runtime/restart`: Request safe restart/drain cycle via watchdog coordinator
-
-## Health Check API
-
-### Backend Health Checks
-
-Spooky performs HTTP health checks against configured backends.
-
-#### Request Format
-
-```http
-GET /health HTTP/1.1
-Host: backend.example.com:8080
-User-Agent: spooky/0.1.0
-```
-
-#### Expected Response
-
-**Healthy Response** (2xx status code):
-```http
-HTTP/1.1 200 OK
-Content-Type: application/json
-
-{"status": "healthy", "timestamp": "2024-01-01T12:00:00Z"}
-```
-
-**Unhealthy Response** (non-2xx status code):
-```http
-HTTP/1.1 503 Service Unavailable
-Content-Type: application/json
-
-{"status": "unhealthy", "reason": "database connection failed"}
-```
-
-### Spooky Health Endpoint
-
-**Status**: Available (control API)
-
-A dedicated health endpoint is exposed on the control API address/port:
-
-```http
-GET /health HTTP/1.1
-```
-
-Response format (example):
-```json
-{
-  "status": "ok",
-  "uptime_ms": 3600,
-  "watchdog": {
-    "enabled": true,
-    "degraded": false,
-    "restart_requested": false
-  }
-}
-```
+- [Metrics Reference](../reference/metrics-reference.md)
+- [Control API Reference](../reference/control-api-reference.md)
+- [Operations Runbook](../operations/runbook.md)
 
 ## Configuration Validation
 

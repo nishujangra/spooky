@@ -1,0 +1,142 @@
+# Feature Matrix
+
+This matrix describes the current feature surface from the source tree as it exists today.
+
+Legend:
+
+- `Done`: implemented and clearly present in the codebase
+- `Partial`: implemented with important caveats or limited scope
+- `Missing`: not implemented as a first-class feature
+
+## Protocols
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| Downstream HTTP/3 | `Done` | Native QUIC/H3 ingress path |
+| Downstream HTTP/1.1 | `Done` | Via bootstrap TLS listener |
+| Downstream HTTP/2 | `Done` | Via bootstrap TLS listener |
+| Upstream HTTP/2 | `Done` | Primary forwarding model |
+| Upstream HTTP/1.1 | `Missing` | No first-class forwarding path today |
+| Upstream HTTP/3 | `Missing` | Not implemented |
+| gRPC trailers | `Done` | Integration coverage exists |
+| Broad WebSocket support | `Partial` | Limited bootstrap-side behavior only |
+| General CONNECT proxying | `Partial` | Policy exists, not a broad general-purpose CONNECT platform |
+
+## Routing
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| Host routing | `Done` | Exact and wildcard matching |
+| Path-prefix routing | `Done` | Longest-prefix semantics |
+| Method-aware routing | `Done` | Deterministic tie-breaking |
+| Deterministic route selection | `Done` | Explicitly defended in implementation and tests |
+| Header-based routing | `Missing` | Not a route matcher today |
+| Query-based routing | `Missing` | Not a route matcher today |
+| Cookie-based routing | `Missing` | Not a route matcher today |
+| Weighted route splitting | `Missing` | No route-level traffic policy engine |
+
+## Load Balancing
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| Round-robin | `Done` | Implemented |
+| Random | `Done` | Implemented |
+| Consistent-hash | `Done` | Weighted ring rebuild on membership changes |
+| Least-connections | `Done` | Implemented |
+| Latency-aware | `Done` | EWMA-like scoring plus inflight signal |
+| Sticky CID | `Done` | Implemented as a selection mode |
+| Weighted backends | `Done` | Implemented |
+| Canary rollout controls | `Missing` | No first-class release traffic controls |
+| Request mirroring | `Missing` | Not implemented |
+| Fault injection | `Missing` | Not implemented |
+
+## TLS And Trust
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| Downstream TLS termination | `Done` | Core capability |
+| SNI certificate selection | `Done` | Multiple certs with fallback behavior |
+| Downstream client-auth | `Done` | Optional and required modes on bootstrap listener |
+| Upstream TLS verification | `Done` | Safe-by-default when using HTTPS backends |
+| Custom upstream CA file | `Done` | Implemented |
+| Custom upstream CA dir | `Done` | Implemented |
+| TLS cert hot reload | `Done` | New handshakes only |
+| Full TLS/runtime live reconfiguration | `Partial` | Cert reload exists, broad runtime reload does not |
+
+## Resilience And Safety
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| Active health checks | `Done` | Implemented |
+| Passive health signals | `Done` | Implemented |
+| Circuit breaker | `Done` | Implemented |
+| Retry budget | `Done` | Implemented |
+| Hedging | `Done` | Implemented with restrictions |
+| Brownout | `Done` | Implemented |
+| Adaptive admission | `Done` | Implemented |
+| Route queue caps | `Done` | Implemented |
+| Global inflight limits | `Done` | Implemented |
+| Per-upstream inflight limits | `Done` | Implemented |
+| Per-backend inflight limits | `Done` | Implemented |
+| Rate limiting | `Missing` | Overload control exists, classic rate limiting does not |
+
+## Control Plane And Discovery
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| Health endpoint | `Done` | Implemented |
+| Readiness endpoint | `Done` | Implemented |
+| Runtime status endpoint | `Done` | Implemented |
+| Restart endpoint | `Done` | Implemented |
+| Cert reload endpoint | `Done` | Implemented |
+| Full config hot reload | `Missing` | Biggest current control-plane gap |
+| Dynamic route updates | `Missing` | Requires restart or future reload model |
+| Dynamic upstream membership API | `Missing` | No first-class API |
+| DNS refresh | `Done` | Implemented for hostname-based backends |
+| Rich service discovery | `Missing` | No Kubernetes/xDS/Consul-class discovery |
+
+## Policy, Security, And Platform Features
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| Header mutation for forwarding policy | `Done` | Host and forwarded-header policy exists |
+| Generic request/response rewrite engine | `Missing` | Not a broad filter system |
+| JWT validation | `Missing` | Not implemented |
+| OIDC / auth gateway | `Missing` | Not implemented |
+| External auth integration | `Missing` | Not implemented |
+| RBAC / policy engine | `Missing` | Not implemented |
+| WAF capabilities | `Missing` | Not implemented |
+| Plugin / extension model | `Missing` | Not implemented |
+
+## Observability And Ops
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| Prometheus metrics | `Done` | Rich built-in metrics |
+| Structured logging | `Done` | Plain and JSON formats |
+| OTLP tracing hooks | `Done` | Optional |
+| Packaging for Docker | `Done` | Present |
+| Packaging for Debian/systemd | `Done` | Present |
+| Benchmark suite | `Done` | Dedicated crate and scripts |
+| Production runbook maturity | `Partial` | Present, but should be expanded and tightened |
+
+## Practical Summary
+
+Spooky is strongest today as:
+
+- an HTTP/3-first edge proxy
+- a deterministic H3-to-H2 routing and balancing layer
+- a proxy with strong resource-bound and teardown behavior
+
+Spooky is not yet strongest as:
+
+- a general-purpose legacy protocol proxy
+- a dynamic fleet-managed control-plane-driven proxy
+- a fully featured API gateway
+- a highly extensible filter platform
+
+## Related Pages
+
+- [Production Readiness](../operations/production-readiness.md)
+- [Limitations](limitations.md)
+- [Security Model](../concepts/security-model.md)

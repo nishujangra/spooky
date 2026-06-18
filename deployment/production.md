@@ -390,7 +390,7 @@ sudo systemctl status spooky.service
 # View logs
 sudo journalctl -u spooky.service -f
 
-# Restart for configuration changes (hot reload planned)
+# Restart for configuration changes
 sudo systemctl restart spooky.service
 
 # Full restart
@@ -927,7 +927,7 @@ sudo -u spooky spooky --config /etc/spooky/config.yaml.new
 sudo mv /etc/spooky/config.yaml /etc/spooky/config.yaml.backup
 sudo mv /etc/spooky/config.yaml.new /etc/spooky/config.yaml
 
-# Restart service (hot reload planned for future release)
+# Restart service after non-certificate config changes
 sudo systemctl restart spooky.service
 
 # Verify reload success
@@ -1132,7 +1132,7 @@ sudo cp /tmp/YYYYMMDD-HHMMSS/config.yaml /etc/spooky/config.yaml
 sudo chown root:spooky /etc/spooky/config.yaml
 sudo chmod 640 /etc/spooky/config.yaml
 
-# Restart service (hot reload not currently supported)
+# Restart service after non-certificate config changes
 sudo systemctl restart spooky.service
 ```
 

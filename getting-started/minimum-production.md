@@ -145,8 +145,8 @@ Work through this list top-to-bottom before pointing DNS or a load balancer at t
    Spooky removes backends that fail health checks; if every backend in a pool is unhealthy at startup, all requests to that pool return 503 immediately.
    _Verify:_ `curl -sf http://<backend-ip>:<port>/health` for each backend listed in the config — expect HTTP 200.
 
-5. **Control API is bound to loopback only (`127.0.0.1`), not `0.0.0.0`.**
-   The control API has no authentication in v0.1.x. Binding it to the public interface exposes internal state and configuration endpoints to the network.
+5. **Control API is bound to loopback only (`127.0.0.1`) unless you have a strong administrative network boundary.**
+   The control API supports bearer-token authentication, but it is still a privileged admin surface and should not be treated like a public endpoint.
    _Verify:_ Confirm `observability.control_api.address` is `127.0.0.1` in `/etc/spooky/config.yaml`, then after start: `ss -tlnp | grep 9902` — the local address column should show `127.0.0.1:9902`.
 
 6. **Metrics endpoint is reachable from your monitoring system.**

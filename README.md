@@ -13,6 +13,8 @@ Spooky is an open-source HTTP/3 (QUIC) edge reverse proxy written in Rust that t
 | [Configuration Reference](configuration/reference.md) | Every config key, type, default, and constraint in one place |
 | [TLS Setup](configuration/tls.md) | Certificate generation, mTLS client auth, key ownership and permissions |
 | [Production Deployment](deployment/production.md) | Systemd unit, privilege drop, sysctl tuning, canary rollout guidance |
+| [Production Readiness](operations/production-readiness.md) | Canonical statement of what is production-ready today and what still blocks GA |
+| [Limitations](reference/limitations.md) | The current hard product limits, without marketing language |
 
 ### Developer — understand the architecture, contribute
 
@@ -28,8 +30,11 @@ Spooky is an open-source HTTP/3 (QUIC) edge reverse proxy written in Rust that t
 | Document | What you'll find |
 |---|---|
 | [Configuration Reference](configuration/reference.md) | Authoritative schema reference for every configuration block |
+| [Feature Matrix](reference/feature-matrix.md) | Strict feature-by-feature inventory of what is done, partial, and missing |
+| [Security Model](concepts/security-model.md) | Current trust boundaries, admin-plane assumptions, and missing security layers |
+| [Terminology](reference/terminology.md) | Canonical definitions for listener, upstream, backend, route, drain, and related terms |
 | [API Overview](api/overview.md) | Metrics endpoint, control API (health, ready, runtime), bearer auth |
-| [Benchmarks](benchmarks/load.md) | Load test results: throughput, latency percentiles, test environment |
+| [Benchmarking](development/benchmarking.md) | Benchmark crate, micro/macro suites, and regression-gate workflow |
 | [Roadmap](roadmap.md) | Planned features, GA exit criteria, known limitations |
 | [Changelog](changelog.md) | Version history with added, fixed, and changed entries |
 
