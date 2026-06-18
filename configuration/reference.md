@@ -207,7 +207,30 @@ Configuration schema version.
 
 ### listen
 
-Server listening configuration. Defines the protocol, address, and port for incoming client connections.
+Server listening configuration. Defines the protocol, address, and port for incoming client connections. Used as the single listener when `listeners` is absent or empty.
+
+### listeners
+
+Optional multi-listener array. When set, overrides the top-level `listen` block. Each entry is an independent listener with its own address, port, and TLS identity. Spooky spawns a separate QUIC worker group and bootstrap TLS listener per entry.
+
+### Runtime Normalization And Precedence
+
+Spooky normalizes configuration into one canonical runtime model before any listener starts.
+
+Precedence rules:
+
+1. `listeners[]` is the only effective listener set when it is non-empty.
+2. The top-level `listen` block is only used when `listeners[]` is empty.
+3. Listener TLS fallback order is:
+   1. exact SNI match in `listen.tls.certificates`
+   2. legacy `listen.tls.cert` + `listen.tls.key` when configured
+   3. otherwise the first `listen.tls.certificates[]` entry becomes the default identity
+4. Upstream TLS precedence is:
+   1. `upstream.<name>.tls`
+   2. global `upstream_tls`
+5. Listener certificate reload updates listener TLS material for new handshakes through `observability.control_api.reload_certs_path` without restarting the process. Existing QUIC connections and existing bootstrap TLS sessions keep the certificate and client-auth state that they already negotiated.
+
+Startup rejects ambiguous or contradictory combinations, including duplicate effective listener binds, duplicate normalized route matchers, partial legacy listener cert/key pairs, invalid or duplicate SNI `server_name` entries, `host_policy.host` outside `mode: rewrite`, and `CONNECT` routing/policy conflicts.
 
 ### upstream
 
@@ -231,8 +254,9 @@ The following table lists all default configuration values used when properties 
 | `listen.protocol` | `"http3"` | Native ingress protocol (HTTP/3 over QUIC); TLS bootstrap ingress for HTTP/1.1/2 compatibility is also active |
 | `listen.port` | `9889` | Listening port |
 | `listen.address` | `"0.0.0.0"` | Listening address |
-| `listen.tls.cert` | Required | TLS certificate file path |
-| `listen.tls.key` | Required | TLS private key file path |
+| `listen.tls.cert` | optional | Legacy/default TLS certificate file path |
+| `listen.tls.key` | optional | Legacy/default TLS private key file path |
+| `listen.tls.certificates` | `[]` | Optional SNI certificate mappings (`server_name` + `cert` + `key`) |
 | `upstream[].route.path_prefix` | none | Path prefix for routing (set explicitly; use `/` for catch-all) |
 | `upstream[].backends[].weight` | `100` | Backend weight for load balancing |
 | `upstream[].backends[].health_check.path` | `"/health"` | Health check endpoint |
@@ -249,6 +273,8 @@ The following table lists all default configuration values used when properties 
 | `performance.new_connections_per_sec` | `2000` | Token-bucket refill rate for new QUIC connections (conns/sec) |
 | `performance.new_connections_burst` | `500` | Burst capacity for new QUIC connections |
 | `performance.max_active_connections` | `20000` | Hard cap on concurrently tracked active QUIC connections per worker |
+| `performance.backend_dns_refresh_enabled` | `false` | Enable periodic control-plane DNS refresh for hostname-based upstream backends |
+| `performance.backend_dns_refresh_interval_ms` | `30000` | Refresh interval for hostname-based backend DNS records |
 | `performance.quic_max_idle_timeout_ms` | `5000` | QUIC idle timeout — connection closed after this many ms of inactivity |
 | `performance.quic_initial_max_data` | `10000000` | Connection-level flow control window (bytes) |
 | `performance.quic_initial_max_stream_data` | `1000000` | Per-stream flow control window (bytes) |
@@ -279,8 +305,38 @@ Spooky also exposes a TLS bootstrap ingress for HTTP/1.1 and HTTP/2 clients. Thi
 
 | Property | Type | Required | Description |
 |----------|------|----------|-------------|
-| `cert` | string | Yes | Path to TLS certificate file (PEM format) |
-| `key` | string | Yes | Path to TLS private key file (PEM format, PKCS#8 recommended) |
+| `cert` | string | Conditionally | Legacy/default TLS certificate path. Required with `key` when no `certificates` entries are configured |
+| `key` | string | Conditionally | Legacy/default TLS private key path. Required with `cert` when no `certificates` entries are configured |
+| `certificates` | array | No | SNI certificate entries |
+| `certificates[].server_name` | string | Yes | Exact SNI hostname (DNS name) to match |
+| `certificates[].cert` | string | Yes | Certificate path for that SNI hostname |
+| `certificates[].key` | string | Yes | Private key path for that SNI hostname |
+
+Certificate selection order:
+
+1. Exact SNI match in `listen.tls.certificates`.
+2. Fallback to `listen.tls.cert`/`listen.tls.key` when configured.
+3. If legacy pair is not configured, fallback to the first entry in `listen.tls.certificates`.
+
+Operational notes:
+
+- If SNI is missing or unmatched, Spooky serves the default identity rather than rejecting the handshake.
+- `listen.tls.certificates[].server_name` must be covered by the mapped certificate SANs or startup fails.
+- Spooky exports downstream certificate expiry gauges:
+  - `spooky_downstream_tls_certificate_not_after_seconds`
+  - `spooky_downstream_tls_certificate_days_remaining`
+- Certificate reload affects new QUIC and bootstrap TLS handshakes only. Existing connections continue with the TLS session they already negotiated.
+- Downstream TLS metrics also include:
+  - `spooky_downstream_tls_handshake_failure_total{listener,reason}`
+  - `spooky_downstream_tls_certificate_selection_total{listener,selection}`
+  - `spooky_downstream_tls_alpn_total{listener,protocol}`
+- Important `reason` labels are:
+  - `missing_client_cert`
+  - `invalid_client_cert`
+  - `expired_client_cert`
+  - `unknown_issuer`
+  - `alpn`
+  - `handshake`
 
 ### Examples
 
@@ -302,7 +358,57 @@ listen:
   tls:
     cert: "certs/localhost.crt"
     key: "certs/localhost.key"
+
+# Multi-domain SNI certificates with legacy fallback
+listen:
+  protocol: http3
+  address: "0.0.0.0"
+  port: 9889
+  tls:
+    cert: "/etc/spooky/certs/default.crt"
+    key: "/etc/spooky/certs/default.key"
+    certificates:
+      - server_name: "api.example.com"
+        cert: "/etc/spooky/certs/api.crt"
+        key: "/etc/spooky/certs/api.key"
+      - server_name: "www.example.com"
+        cert: "/etc/spooky/certs/www.crt"
+        key: "/etc/spooky/certs/www.key"
 ```
+
+### Multi-Listener Configuration
+
+Use `listeners` instead of `listen` when you need multiple independent listeners — for example, a public-facing port and a private/internal port with different TLS identities.
+
+`listeners` and `listen` share the same per-entry schema. When `listeners` is set, the top-level `listen` block is ignored for runtime listener selection and listener validation.
+
+```yaml
+# Single listener — use the top-level listen block (default)
+listen:
+  protocol: http3
+  address: "0.0.0.0"
+  port: 9889
+  tls:
+    cert: "/etc/spooky/certs/fullchain.pem"
+    key: "/etc/spooky/certs/privkey.pem"
+
+# Multi-listener — independent public and internal listeners
+listeners:
+  - protocol: http3
+    address: "0.0.0.0"
+    port: 9889
+    tls:
+      cert: "/etc/spooky/certs/public-fullchain.pem"
+      key: "/etc/spooky/certs/public-privkey.pem"
+  - protocol: http3
+    address: "10.0.0.1"
+    port: 9890
+    tls:
+      cert: "/etc/spooky/certs/internal-fullchain.pem"
+      key: "/etc/spooky/certs/internal-privkey.pem"
+```
+
+Each listener entry shares the same upstream routing table — route matching, load balancing, and health checks are global across all listeners.
 
 ## Upstream Configuration
 
@@ -325,6 +431,9 @@ upstream:
 | `load_balancing` | object | No | round-robin | Per-upstream load balancing algorithm configuration |
 | `route` | object | Yes | - | Route matching criteria |
 | `backends` | array | Yes | - | List of backend servers |
+| `host_policy` | object | No | `pass-through` | Controls how the `Host`/`:authority` header is set on upstream requests |
+| `tls` | object | No | inherits `upstream_tls` | Per-upstream TLS policy override (verify_certificates, strict_sni, ca_file, ca_dir); wins over global `upstream_tls` when set |
+| `forwarded_headers` | object | No | `overwrite` | Controls `X-Forwarded-For` forwarding behavior |
 
 ### Route Matching
 
@@ -334,17 +443,24 @@ Route matching determines which upstream pool handles a request. Routes are eval
 
 | Property | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
-| `host` | string | No | - | Host header to match (e.g., `api.example.com`) |
+| `host` | string | No | - | Host matcher. Supports exact hosts (`api.example.com`) and leading-wildcard suffix patterns (`*.example.com`) |
 | `path_prefix` | string | No | - | Path prefix to match (e.g., `/api`) |
 | `method` | string | No | - | HTTP method to match (case-insensitive, e.g. `GET`, `POST`) |
 
 Route matching rules:
 
-1. If `host` is specified, the request Host header must match exactly
+1. If `host` is specified:
+   - Exact form: request Host must match exactly (case-insensitive after normalization)
+   - Wildcard form: `*.example.com` matches subdomains like `api.example.com`, but not the bare apex `example.com`
 2. If `path_prefix` is specified, the request path must start with the prefix
 3. If both are specified, both conditions must match
 4. Routes are evaluated by longest-prefix matching - the route with the most specific (longest) path prefix is selected
-5. For equal-length prefixes, ties are deterministic: host-specific routes win over host-agnostic routes, then lexicographically smaller upstream name wins
+5. For equal-length prefixes, ties are deterministic:
+   - host-specific routes win over host-agnostic routes
+   - exact-host matches win over wildcard-host matches
+   - among wildcard matches, longer suffixes win (`*.a.example.com` beats `*.example.com`)
+   - method-specific routes win over method-agnostic routes
+   - then lexicographically smaller upstream name wins
 
 #### Route Examples
 
@@ -359,6 +475,14 @@ upstream:
   web_pool:
     route:
       host: "www.example.com"
+    backends: [...]
+
+# Wildcard host routing
+upstream:
+  tenant_pool:
+    route:
+      host: "*.example.com"
+      path_prefix: "/api"
     backends: [...]
 
 # Path-based routing
@@ -482,6 +606,142 @@ backends:
     health_check:
       path: "/healthz"
       interval: 5000
+```
+
+### Host Policy
+
+Controls how the `Host` / `:authority` header is set on requests forwarded to the upstream.
+
+| Property | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `mode` | string | No | `pass-through` | Header rewrite mode: `pass-through`, `rewrite`, or `upstream` |
+| `host` | string | No | - | Static host to use when `mode: rewrite`; rejected for other modes |
+
+#### Modes
+
+| Mode | Behavior |
+|------|----------|
+| `pass-through` | Forwards the original client `Host`/`:authority` unchanged to the upstream |
+| `rewrite` | Replaces the host with the value of `host` (required when using this mode) |
+| `upstream` | Uses the backend's own authority (hostname from the `address` field) |
+
+#### Examples
+
+```yaml
+upstream:
+  # Pass client host through as-is (default)
+  api_pool:
+    host_policy:
+      mode: pass-through
+    backends: [...]
+
+  # Rewrite to a static host
+  legacy_pool:
+    host_policy:
+      mode: rewrite
+      host: "legacy-origin.internal.example"
+    backends: [...]
+
+  # Use the backend's own hostname
+  direct_pool:
+    host_policy:
+      mode: upstream
+    backends: [...]
+```
+
+### Forwarded Headers Policy
+
+Controls how `X-Forwarded-For` and related forwarding headers are set on upstream requests.
+
+| Property | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `mode` | string | No | `overwrite` | Forwarding mode: `append`, `preserve`, or `overwrite` |
+
+#### Modes
+
+| Mode | Behavior |
+|------|----------|
+| `overwrite` | Replaces any inbound `X-Forwarded-For` with the client IP only (default) |
+| `append` | Appends the client IP to the existing `X-Forwarded-For` chain |
+| `preserve` | Passes the inbound `X-Forwarded-For` chain through unchanged without adding the client IP |
+
+Use `append` in multi-hop deployments where the full client IP chain must be preserved. Use `overwrite` (default) when spooky is the first edge and inbound forwarded headers should not be trusted.
+
+#### Examples
+
+```yaml
+upstream:
+  # First edge — overwrite inbound XFF with real client IP (default)
+  public_pool:
+    forwarded_headers:
+      mode: overwrite
+    backends: [...]
+
+  # Behind another trusted proxy — append to the existing chain
+  internal_pool:
+    forwarded_headers:
+      mode: append
+    backends: [...]
+
+  # Pass the inbound chain through unchanged
+  passthrough_pool:
+    forwarded_headers:
+      mode: preserve
+    backends: [...]
+```
+
+### Per-Upstream TLS Policy
+
+Each upstream can optionally override the global `upstream_tls` settings with its own TLS profile. When `tls` is omitted, the global `upstream_tls` block applies.
+
+| Property | Type | Required | Default | Description |
+|----------|------|----------|---------|-------------|
+| `verify_certificates` | bool | No | `true` | Verify upstream TLS certificates |
+| `strict_sni` | bool | No | `true` | Send backend authority host as SNI |
+| `ca_file` | string | No | - | Path to a PEM CA bundle for this upstream |
+| `ca_dir` | string | No | - | Path to a directory of PEM CA bundles for this upstream |
+
+This is useful when backends have heterogeneous trust requirements — for example, one upstream uses a private internal CA while another uses a public CA.
+
+Verification semantics:
+
+- Hostname backends verify the upstream certificate against the configured backend hostname.
+- IP-literal backends verify against the configured IP identity.
+- `strict_sni: false` disables only the SNI extension; verification still remains enabled unless `verify_certificates: false`.
+- `verify_certificates: false` disables upstream certificate validation entirely.
+
+#### Examples
+
+```yaml
+upstream_tls:
+  verify_certificates: true   # global default
+  strict_sni: true
+
+upstream:
+  # Uses global upstream_tls — no override needed
+  public_pool:
+    route:
+      path_prefix: "/api"
+    backends: [...]
+
+  # Override: trust a private CA for this upstream only
+  internal_pool:
+    tls:
+      verify_certificates: true
+      strict_sni: true
+      ca_file: "/etc/spooky/certs/internal-ca.pem"
+    route:
+      path_prefix: "/internal"
+    backends: [...]
+
+  # Override: disable verification for a trusted dev upstream
+  dev_pool:
+    tls:
+      verify_certificates: false
+      strict_sni: false
+    route:
+      path_prefix: "/dev"
+    backends: [...]
 ```
 
 ## Load Balancing Configuration
@@ -685,6 +945,8 @@ Controls resource limits, tuning knobs, and connection-flood protection. All fie
 | `udp_send_buffer_bytes` | integer | No | `8388608` | UDP socket send buffer size (bytes) |
 | `h2_pool_max_idle_per_backend` | integer | No | `256` | Maximum idle HTTP/2 connections kept open per backend |
 | `h2_pool_idle_timeout_ms` | integer | No | `90000` | How long an idle H2 connection is kept before being closed (ms) |
+| `backend_dns_refresh_enabled` | bool | No | `false` | Enable periodic DNS refresh for hostname-based upstream backends |
+| `backend_dns_refresh_interval_ms` | integer | No | `30000` | Control-plane DNS refresh interval for hostname-based upstream backends (ms) |
 | `new_connections_per_sec` | integer | No | `2000` | Steady-state rate at which new QUIC connections are accepted (token-bucket refill, connections/sec) |
 | `new_connections_burst` | integer | No | `500` | Burst capacity above the steady-state rate; the bucket starts full so the first burst of legitimate connections always succeeds |
 | `max_active_connections` | integer | No | `20000` | Hard cap on active QUIC connections per worker; unknown `Initial` packets are dropped once this cap is reached |
@@ -855,8 +1117,18 @@ Request validation and early-data policy.
 | `max_headers_count` | integer | No | `128` | Maximum number of request headers |
 | `max_headers_bytes` | integer | No | `16384` | Maximum total size of request headers (bytes) |
 | `enforce_authority_host_match` | bool | No | `true` | Reject requests where `:authority` differs from `Host` |
+| `allow_connect` | bool | No | `false` | Enable CONNECT proxy tunneling |
+| `connect_allowed_ports` | list | No | `[]` | Optional CONNECT target port allowlist |
+| `connect_allowed_authorities` | list | No | `[]` | Optional exact CONNECT `host:port` allowlist |
 | `allowed_methods` | list | No | `[]` | Allowed HTTP methods; empty means all methods allowed |
 | `denied_path_prefixes` | list | No | `[]` | Path prefixes that are always rejected with 403 |
+
+Request-shape rules enforced by the runtime:
+
+- HTTP/3 requests are rejected when `:authority` and `Host` differ and `enforce_authority_host_match` is enabled.
+- `CONNECT` requires `:authority`/`Host` in `host:port` form and must also satisfy the CONNECT allowlists when enabled.
+- Native HTTP/3 ingress rejects `Upgrade` / `Connection: upgrade` style requests. WebSocket-style upgrades are only supported on the bootstrap HTTP/1.1 compatibility path, not on native H3.
+- `HEAD` responses terminate after headers even if the upstream attempted to send a body.
 
 ### watchdog
 
@@ -937,7 +1209,8 @@ Key fields:
 
 Key fields:
 
-- `observability.control_api.auth_token`: bearer token required for runtime and restart endpoints (`Authorization: Bearer <token>`).
+- `observability.control_api.auth_token`: bearer token required for runtime, reload-certs, and restart endpoints (`Authorization: Bearer <token>`).
+- `observability.control_api.reload_certs_path`: authenticated POST endpoint that reloads listener certificate and client-auth CA material for new handshakes.
 - `observability.control_api.max_connections` (default: `256`): concurrent connection cap.
 - `observability.control_api.connection_timeout_ms` (default: `30000`): per-connection lifetime timeout.
 
@@ -969,7 +1242,7 @@ Spooky validates configuration at startup and reports errors before attempting t
 ### Common Validation Errors
 
 1. **Missing required fields**
-   - TLS certificate or key paths not specified
+   - Neither `listen.tls.cert/key` nor `listen.tls.certificates` specified
    - Backend address or ID missing
    - Route configuration empty
 

@@ -207,6 +207,41 @@ tls:
   key: "/etc/spooky/certs/multi-domain.key"
 ```
 
+### Multi-Certificate SNI Configuration
+
+Use `listen.tls.certificates` when one listener must present different certificates by hostname:
+
+```yaml
+listen:
+  protocol: http3
+  address: "0.0.0.0"
+  port: 9889
+  tls:
+    cert: "/etc/spooky/certs/default-fullchain.pem"
+    key: "/etc/spooky/certs/default-privkey.pem"
+    certificates:
+      - server_name: "api.example.com"
+        cert: "/etc/spooky/certs/api-fullchain.pem"
+        key: "/etc/spooky/certs/api-privkey.pem"
+      - server_name: "www.example.com"
+        cert: "/etc/spooky/certs/www-fullchain.pem"
+        key: "/etc/spooky/certs/www-privkey.pem"
+```
+
+Selection order:
+
+1. Exact `server_name` match in `listen.tls.certificates`
+2. Fallback `listen.tls.cert` + `listen.tls.key`
+3. If no legacy fallback pair is configured, the first `certificates[]` entry becomes the default identity
+
+Fallback behavior details:
+
+- Both the native QUIC/HTTP/3 listener and the bootstrap TLS listener use the same selection order.
+- `server_name` matching is exact after hostname normalization. There is no wildcard SNI certificate lookup here; wildcard behavior must come from the certificate SANs themselves, not from the listener map.
+- If the client sends no SNI, Spooky always serves the default identity.
+- If the client sends an SNI hostname that is not present in `listen.tls.certificates`, Spooky serves the default identity rather than rejecting the handshake.
+- Startup rejects any `listen.tls.certificates[].server_name` mapping whose configured certificate SANs do not cover that hostname.
+
 ## File Permissions and Security
 
 ### Recommended Permissions
@@ -252,6 +287,9 @@ drwx------ 2 spooky spooky 4096 Dec 15 10:00 .
    - Monitor expiration dates
    - Set up renewal automation for Let's Encrypt
    - Implement alerting for certificates expiring within 30 days
+   - Scrape:
+     - `spooky_downstream_tls_certificate_not_after_seconds`
+     - `spooky_downstream_tls_certificate_days_remaining`
 
 ## Certificate Validation
 
@@ -328,8 +366,10 @@ sudo systemctl status certbot.timer
 # Manually renew certificates
 sudo certbot renew
 
-# Restart Spooky after renewal (hot reload planned)
-sudo systemctl restart spooky
+# Reload listener certificates for new handshakes
+curl -X POST \
+  -H "Authorization: Bearer ${SPOOKY_CONTROL_API_TOKEN}" \
+  https://127.0.0.1:9902/admin/runtime/reload-certs
 ```
 
 ### Manual Certificate Rotation
@@ -349,12 +389,47 @@ sudo cp new-server.key /etc/spooky/certs/server.key
 sudo chmod 644 /etc/spooky/certs/server.crt
 sudo chmod 600 /etc/spooky/certs/server.key
 
-# Restart Spooky (hot reload planned for future release)
-sudo systemctl restart spooky
+# Reload listener certificates for new handshakes
+curl -X POST \
+  -H "Authorization: Bearer ${SPOOKY_CONTROL_API_TOKEN}" \
+  https://127.0.0.1:9902/admin/runtime/reload-certs
 
 # Verify new certificates are loaded
 openssl s_client -connect localhost:9889 -servername localhost < /dev/null 2>/dev/null | openssl x509 -noout -dates
 ```
+
+Reload behavior:
+
+- New QUIC and bootstrap TLS handshakes use the updated certificate material immediately after reload succeeds.
+- Existing connections are not interrupted or re-handshaken.
+- Existing QUIC connections keep the certificate and client-auth policy that were negotiated when their handshake completed. The new certificate material is only visible to later QUIC Initial packets and later bootstrap TCP+TLS accepts.
+- Existing HTTP/2 streams multiplexed over an already-established bootstrap TLS session are also unaffected. Only brand-new bootstrap TLS sessions observe the reloaded certificate set.
+
+### Downstream TLS Metrics
+
+Spooky exposes downstream TLS observability through Prometheus:
+
+- `spooky_downstream_tls_handshake_failure_total{listener,reason}`
+- `spooky_downstream_tls_certificate_selection_total{listener,selection}`
+- `spooky_downstream_tls_alpn_total{listener,protocol}`
+- `spooky_downstream_tls_certificate_not_after_seconds{listener,server_name}`
+- `spooky_downstream_tls_certificate_days_remaining{listener,server_name}`
+
+Important label values:
+
+- `reason=missing_client_cert`: mTLS listener required a client cert and none was presented
+- `reason=invalid_client_cert`: client cert was present but rejected for a generic certificate validation reason
+- `reason=expired_client_cert`: client cert was expired or not yet valid
+- `reason=unknown_issuer`: client cert chain was not rooted in the configured CA set
+- `reason=alpn`: handshake failed because no acceptable application protocol could be negotiated
+- `reason=handshake`: fallback bucket for other downstream TLS handshake failures
+
+Certificate-selection labels:
+
+- `selection=exact_sni`: exact SNI match in `listen.tls.certificates`
+- `selection=fallback_unmatched_sni`: client sent SNI, but no configured mapping matched, so Spooky served the default identity
+- `selection=fallback_no_sni`: client sent no SNI and Spooky served the default identity while additional SNI identities existed
+- `selection=default_only`: listener had only one effective identity, so that certificate was always served
 
 ### Monitoring Certificate Expiry
 
