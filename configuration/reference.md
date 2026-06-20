@@ -7,17 +7,18 @@ This is the canonical configuration document for Spooky. It should answer four q
 - what its default is
 - what runtime behavior it changes
 
-Use [Configuration Examples](examples.md) for complete deployment patterns. Use this page when you need exact schema and semantics.
+Use [Configuration Defaults](defaults.md) for the exhaustive default inventory and [Configuration Examples](examples.md) for complete deployment patterns. Use this page when you need exact schema and semantics.
 
 ## Scope Of This Reference
 
 This page covers:
 
 - schema shape
-- default values
 - precedence and normalization rules
 - validation behavior
 - runtime meaning of major knobs
+
+Default coverage now lives on [Configuration Defaults](defaults.md) so the full inventory can stay centralized and easier to audit against the code.
 
 This page does not change the current product limits:
 
@@ -28,6 +29,7 @@ This page does not change the current product limits:
 ## Reading This Reference
 
 - Start with [Configuration Examples](examples.md) if you need a working template.
+- Use [Configuration Defaults](defaults.md) when you need the effective baseline for omitted fields.
 - Read [TLS Setup](tls.md) before configuring production certificates or private trust roots.
 - Read [Production Readiness](../operations/production-readiness.md) if you are deciding whether the current operational model fits your rollout requirements.
 
@@ -123,8 +125,6 @@ For complete examples, use [Configuration Examples](examples.md).
 
 ## Top-Level Configuration
 
-## Top-Level Configuration
-
 ### version
 
 Configuration schema version.
@@ -178,41 +178,15 @@ Logging configuration. Controls log level and output formatting.
 
 ## Default Values
 
-The following table lists all default configuration values used when properties are not explicitly specified:
+Spooky has a large number of defaults spread across helper functions and `Default` implementations. The central inventory now lives on [Configuration Defaults](defaults.md).
 
-| Property | Default Value | Description |
-|----------|---------------|-------------|
-| `version` | `1` | Configuration format version |
-| `listen.protocol` | `"http3"` | Native ingress protocol (HTTP/3 over QUIC); TLS bootstrap ingress for HTTP/1.1/2 compatibility is also active |
-| `listen.port` | `9889` | Listening port |
-| `listen.address` | `"0.0.0.0"` | Listening address |
-| `listen.tls.cert` | optional | Legacy/default TLS certificate file path |
-| `listen.tls.key` | optional | Legacy/default TLS private key file path |
-| `listen.tls.certificates` | `[]` | Optional SNI certificate mappings (`server_name` + `cert` + `key`) |
-| `upstream[].route.path_prefix` | none | Path prefix for routing (set explicitly; use `/` for catch-all) |
-| `upstream[].backends[].weight` | `100` | Backend weight for load balancing |
-| `upstream[].backends[].health_check.path` | `"/health"` | Health check endpoint |
-| `upstream[].backends[].health_check.interval` | `5000` | Health check interval (ms) |
-| `upstream[].backends[].health_check.timeout_ms` | `1000` | Health check timeout (ms) |
-| `upstream[].backends[].health_check.failure_threshold` | `3` | Failures to mark unhealthy |
-| `upstream[].backends[].health_check.success_threshold` | `2` | Successes to mark healthy |
-| `upstream[].backends[].health_check.cooldown_ms` | `5000` | Cooldown after failure (ms) |
-| `upstream[].load_balancing.type` | `"round-robin"` | Per-upstream load balancing algorithm |
-| `log.level` | `"info"` | Logging verbosity level |
-| `log.format` | `"plain"` | Log output format (`plain` or `json`) |
-| `log.file.enabled` | `false` | Write logs to file instead of stderr |
-| `log.file.path` | `"/var/log/spooky/spooky.log"` | Log file path (used when `log.file.enabled` is true) |
-| `performance.new_connections_per_sec` | `2000` | Token-bucket refill rate for new QUIC connections (conns/sec) |
-| `performance.new_connections_burst` | `500` | Burst capacity for new QUIC connections |
-| `performance.max_active_connections` | `20000` | Hard cap on concurrently tracked active QUIC connections per worker |
-| `performance.backend_dns_refresh_enabled` | `false` | Enable periodic control-plane DNS refresh for hostname-based upstream backends |
-| `performance.backend_dns_refresh_interval_ms` | `30000` | Refresh interval for hostname-based backend DNS records |
-| `performance.quic_max_idle_timeout_ms` | `5000` | QUIC idle timeout — connection closed after this many ms of inactivity |
-| `performance.quic_initial_max_data` | `10000000` | Connection-level flow control window (bytes) |
-| `performance.quic_initial_max_stream_data` | `1000000` | Per-stream flow control window (bytes) |
-| `performance.quic_initial_max_streams_bidi` | `100` | Max concurrent bidirectional streams per connection |
-| `performance.quic_initial_max_streams_uni` | `100` | Max concurrent unidirectional streams per connection |
-| `performance.max_response_body_bytes` | `104857600` | Hard cap on upstream response body bytes per stream (100 MiB); streams exceeding this return 503 (`upstream response body too large`) |
+Use that page when you need:
+
+- the full list of fields that may be omitted
+- the exact value applied for omitted fields
+- the difference between `null`, empty collections, empty strings, and structured section defaults
+
+This reference page keeps the schema and semantics, while [Configuration Defaults](defaults.md) owns the exhaustive default matrix.
 
 ## Listen Configuration
 

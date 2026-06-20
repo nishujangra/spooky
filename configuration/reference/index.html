@@ -1,16 +1,20 @@
 <!DOCTYPE html>
 
 <html lang="en">
+
 <head>
-<script>
-        const base_url = "https://supernova-labs-org.github.io/spooky/"; /* for search plugin notably */
+    <script>
+        /* const base_url = "https://supernova-labs-org.github.io/spooky/"; */
+        const base_url = (new URL("../..", window.location)).href.replace(/\/+$/, ""); /* for search plugin notably */
+        /* const root_relative_url = "../.."; */
     </script>
     <script integrity="sha384-m6cZ+Whl1ci89lidlu8DH4C+sZLNOYBvImtjUIhUK+iaNffXhqtbYgBVuuPfRsa0" src="../../js/dark.js"></script>
 
 
-    <meta charset="utf-8"/>
-<meta content="width=device-width, initial-scale=1" name="viewport"/>
+    <meta charset="utf-8" />
+    <meta content="width=device-width, initial-scale=1" name="viewport" />
 
+    
     
 
 
@@ -55,10 +59,11 @@
 
 
 
-    <link href="../../img/favicon.ico" rel="icon"/>
+    
+    <link href="../../img/favicon.ico" rel="icon" />
 
-    <link href="../../css/base.css" rel="stylesheet"/>
-<link href="../../css/geist.css" rel="stylesheet"/>
+    <link href="../../css/base.css" rel="stylesheet" />
+    <link href="../../css/geist.css" rel="stylesheet" />
 
     
 
@@ -67,11 +72,12 @@
             --theme-accent: oklch(62.3% 0.214 259.815);
         }
     </style>
-    <link href="../../stylesheets/extra.css" rel="stylesheet"/>
+    <link href="../../stylesheets/extra.css" rel="stylesheet" />
 
     
 
-    <script integrity="sha384-V2jkXRy811qODUbfkLlkVJYBbf4h6XHAEjcU6ReASBPrJvTrlYh4GrI4t6GCju6n" src="../../js/callbacks.js"></script>
+    <script integrity="sha384-V2jkXRy811qODUbfkLlkVJYBbf4h6XHAEjcU6ReASBPrJvTrlYh4GrI4t6GCju6n"
+        src="../../js/callbacks.js"></script>
 
     
 
@@ -101,8 +107,10 @@
     
     
 </head>
-<body class="text-foreground group/body overscroll-none font-sans antialiased [--footer-height:calc(var(--spacing)*14)] [--header-height:calc(var(--spacing)*14)] xl:[--footer-height:calc(var(--spacing)*24)] theme-default">
-<div class="bg-background relative z-10 flex min-h-svh flex-col" id="inner-body">
+
+<body
+    class="text-foreground group/body overscroll-none font-sans antialiased [--footer-height:calc(var(--spacing)*14)] [--header-height:calc(var(--spacing)*14)] xl:[--footer-height:calc(var(--spacing)*24)] theme-default">
+    <div class="bg-background relative z-10 flex min-h-svh flex-col" id="inner-body">
         <header class="bg-background sticky top-0 z-50 w-full" view-transition-name="header">
     <div class="container-wrapper 3xl:fixed:px-0 px-6">
         <div class="3xl:fixed:container flex h-(--header-height) items-center gap-2 **:data-[slot=separator]:!h-4">
@@ -207,6 +215,7 @@
                 <div data-orientation="vertical" role="none" data-slot="separator"
                     class="bg-border shrink-0 data-[orientation=horizontal]:h-px data-[orientation=horizontal]:w-full data-[orientation=vertical]:h-full data-[orientation=vertical]:w-px 3xl:flex hidden">
                 </div>
+                
                 <button data-slot="button"
                     class="items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive hover:bg-accent hover:text-accent-foreground dark:hover:bg-accent/50 size-8 3xl:flex hidden"
                     title="Toggle layout" onclick="toggleLayout(event)">
@@ -242,15 +251,21 @@
     </div>
 </header>
         <main class="flex flex-1 flex-col">
-<div class="container-wrapper flex flex-1 flex-col px-2">
-<div class="group/sidebar-wrapper has-data-[variant=inset]:bg-sidebar flex w-full 3xl:fixed:container 3xl:fixed:px-3 min-h-min flex-1 items-start px-0 [--sidebar-width:220px] [--top-spacing:0] lg:grid lg:grid-cols-[var(--sidebar-width)_minmax(0,1fr)] lg:[--sidebar-width:240px] lg:[--top-spacing:calc(var(--spacing)*4)]" data-slot="sidebar-wrapper" style="--sidebar-width:calc(var(--spacing) * 72);--sidebar-width-icon:3rem;">
-<div class="w-(--sidebar-width) flex-col text-sidebar-foreground sticky top-[calc(var(--header-height)+0.6rem)] z-30 hidden h-[calc(100svh-10rem)] overscroll-none bg-transparent [--sidebar-menu-width:--spacing(56)] lg:flex" data-slot="sidebar">
-<div class="h-9"></div>
-<div class="absolute top-8 z-10 h-8 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-b from-background via-background/80 to-background/50 blur-xs">
-</div>
-<div class="absolute top-12 right-2 bottom-0 hidden h-full w-px bg-gradient-to-b from-transparent via-border to-transparent lg:flex">
-</div>
-<div class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden mx-auto no-scrollbar w-(--sidebar-menu-width) overflow-x-hidden px-2" data-sidebar="content" data-slot="sidebar-content" view-transition-name="sidebar">
+            <div class="container-wrapper flex flex-1 flex-col px-2">
+                <div class="group/sidebar-wrapper has-data-[variant=inset]:bg-sidebar flex w-full 3xl:fixed:container 3xl:fixed:px-3 min-h-min flex-1 items-start px-0 [--sidebar-width:220px] [--top-spacing:0] lg:grid lg:grid-cols-[var(--sidebar-width)_minmax(0,1fr)] lg:[--sidebar-width:240px] lg:[--top-spacing:calc(var(--spacing)*4)]"
+                    data-slot="sidebar-wrapper"
+                    style="--sidebar-width:calc(var(--spacing) * 72);--sidebar-width-icon:3rem;">
+                    <div class="w-(--sidebar-width) flex-col text-sidebar-foreground sticky top-[calc(var(--header-height)+0.6rem)] z-30 hidden h-[calc(100svh-10rem)] overscroll-none bg-transparent [--sidebar-menu-width:--spacing(56)] lg:flex"
+                        data-slot="sidebar">
+                        <div class="h-9"></div>
+                        <div
+                            class="absolute top-8 z-10 h-8 w-(--sidebar-menu-width) shrink-0 bg-gradient-to-b from-background via-background/80 to-background/50 blur-xs">
+                        </div>
+                        <div
+                            class="absolute top-12 right-2 bottom-0 hidden h-full w-px bg-gradient-to-b from-transparent via-border to-transparent lg:flex">
+                        </div>
+                        <div class="flex min-h-0 flex-1 flex-col gap-2 overflow-auto group-data-[collapsible=icon]:overflow-hidden mx-auto no-scrollbar w-(--sidebar-menu-width) overflow-x-hidden px-2"
+                            data-sidebar="content" data-slot="sidebar-content" view-transition-name="sidebar">
                             
 
 
@@ -659,6 +674,25 @@
 
         
         Configuration Reference
+        
+
+        
+
+        
+
+        
+    </a>
+</li>
+            
+            
+            
+            <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../defaults/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative h-[30px] w-fit overflow-visible border border-transparent text-[0.8rem] font-medium after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+        Configuration Defaults
         
 
         
@@ -1328,12 +1362,16 @@
 <div
     class="sticky -bottom-1 z-10 h-16 shrink-0 bg-gradient-to-t from-background via-background/80 to-background/50 blur-xs">
 </div>
+
                         </div>
-</div>
-<div class="h-full w-full">
-<div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
-<div class="flex min-w-0 flex-1 flex-col">
-<div class="h-(--top-spacing) shrink-0"></div>
+                    </div>
+                    <div class="h-full w-full">
+                        <div class="flex items-stretch text-[1.05rem] sm:text-[15px] xl:w-full" data-slot="docs">
+
+                            <div class="flex min-w-0 flex-1 flex-col">
+                                <div class="h-(--top-spacing) shrink-0"></div>
+                                
+                                
                                 <article class="w-full" view-transition-name="page">
   <div class="flex flex-col gap-2">
     <div class="flex flex-col gap-2">
@@ -1372,7 +1410,7 @@
           
           <a data-slot="button" id="next-button"
             class="inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 extend-touch-target size-8 shadow-none md:size-7"
-            href="../examples/">
+            href="../defaults/">
             <span class="sr-only">Next</span>
             <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
@@ -1400,16 +1438,16 @@
 <li>what its default is</li>
 <li>what runtime behavior it changes</li>
 </ul>
-<p>Use <a href="../examples/">Configuration Examples</a> for complete deployment patterns. Use this page when you need exact schema and semantics.</p>
+<p>Use <a href="../defaults/">Configuration Defaults</a> for the exhaustive default inventory and <a href="../examples/">Configuration Examples</a> for complete deployment patterns. Use this page when you need exact schema and semantics.</p>
 <h2 id="scope-of-this-reference">Scope Of This Reference</h2>
 <p>This page covers:</p>
 <ul>
 <li>schema shape</li>
-<li>default values</li>
 <li>precedence and normalization rules</li>
 <li>validation behavior</li>
 <li>runtime meaning of major knobs</li>
 </ul>
+<p>Default coverage now lives on <a href="../defaults/">Configuration Defaults</a> so the full inventory can stay centralized and easier to audit against the code.</p>
 <p>This page does not change the current product limits:</p>
 <ul>
 <li>full config hot reload is not implemented</li>
@@ -1419,6 +1457,7 @@
 <h2 id="reading-this-reference">Reading This Reference</h2>
 <ul>
 <li>Start with <a href="../examples/">Configuration Examples</a> if you need a working template.</li>
+<li>Use <a href="../defaults/">Configuration Defaults</a> when you need the effective baseline for omitted fields.</li>
 <li>Read <a href="../tls/">TLS Setup</a> before configuring production certificates or private trust roots.</li>
 <li>Read <a href="../../operations/production-readiness/">Production Readiness</a> if you are deciding whether the current operational model fits your rollout requirements.</li>
 </ul>
@@ -1551,7 +1590,6 @@ log:
 <h2 id="complete-example-configurations">Complete Example Configurations</h2>
 <p>For complete examples, use <a href="../examples/">Configuration Examples</a>.</p>
 <h2 id="top-level-configuration">Top-Level Configuration</h2>
-<h2 id="top-level-configuration_1">Top-Level Configuration</h2>
 <h3 id="version">version</h3>
 <p>Configuration schema version.</p>
 <ul>
@@ -1606,173 +1644,14 @@ log:
 <h3 id="log">log</h3>
 <p>Logging configuration. Controls log level and output formatting.</p>
 <h2 id="default-values">Default Values</h2>
-<p>The following table lists all default configuration values used when properties are not explicitly specified:</p>
-<div class="table-wrapper"><table>
-<thead>
-<tr>
-<th>Property</th>
-<th>Default Value</th>
-<th>Description</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>version</code></td>
-<td><code>1</code></td>
-<td>Configuration format version</td>
-</tr>
-<tr>
-<td><code>listen.protocol</code></td>
-<td><code>"http3"</code></td>
-<td>Native ingress protocol (HTTP/3 over QUIC); TLS bootstrap ingress for HTTP/1.1/2 compatibility is also active</td>
-</tr>
-<tr>
-<td><code>listen.port</code></td>
-<td><code>9889</code></td>
-<td>Listening port</td>
-</tr>
-<tr>
-<td><code>listen.address</code></td>
-<td><code>"0.0.0.0"</code></td>
-<td>Listening address</td>
-</tr>
-<tr>
-<td><code>listen.tls.cert</code></td>
-<td>optional</td>
-<td>Legacy/default TLS certificate file path</td>
-</tr>
-<tr>
-<td><code>listen.tls.key</code></td>
-<td>optional</td>
-<td>Legacy/default TLS private key file path</td>
-</tr>
-<tr>
-<td><code>listen.tls.certificates</code></td>
-<td><code>[]</code></td>
-<td>Optional SNI certificate mappings (<code>server_name</code> + <code>cert</code> + <code>key</code>)</td>
-</tr>
-<tr>
-<td><code>upstream[].route.path_prefix</code></td>
-<td>none</td>
-<td>Path prefix for routing (set explicitly; use <code>/</code> for catch-all)</td>
-</tr>
-<tr>
-<td><code>upstream[].backends[].weight</code></td>
-<td><code>100</code></td>
-<td>Backend weight for load balancing</td>
-</tr>
-<tr>
-<td><code>upstream[].backends[].health_check.path</code></td>
-<td><code>"/health"</code></td>
-<td>Health check endpoint</td>
-</tr>
-<tr>
-<td><code>upstream[].backends[].health_check.interval</code></td>
-<td><code>5000</code></td>
-<td>Health check interval (ms)</td>
-</tr>
-<tr>
-<td><code>upstream[].backends[].health_check.timeout_ms</code></td>
-<td><code>1000</code></td>
-<td>Health check timeout (ms)</td>
-</tr>
-<tr>
-<td><code>upstream[].backends[].health_check.failure_threshold</code></td>
-<td><code>3</code></td>
-<td>Failures to mark unhealthy</td>
-</tr>
-<tr>
-<td><code>upstream[].backends[].health_check.success_threshold</code></td>
-<td><code>2</code></td>
-<td>Successes to mark healthy</td>
-</tr>
-<tr>
-<td><code>upstream[].backends[].health_check.cooldown_ms</code></td>
-<td><code>5000</code></td>
-<td>Cooldown after failure (ms)</td>
-</tr>
-<tr>
-<td><code>upstream[].load_balancing.type</code></td>
-<td><code>"round-robin"</code></td>
-<td>Per-upstream load balancing algorithm</td>
-</tr>
-<tr>
-<td><code>log.level</code></td>
-<td><code>"info"</code></td>
-<td>Logging verbosity level</td>
-</tr>
-<tr>
-<td><code>log.format</code></td>
-<td><code>"plain"</code></td>
-<td>Log output format (<code>plain</code> or <code>json</code>)</td>
-</tr>
-<tr>
-<td><code>log.file.enabled</code></td>
-<td><code>false</code></td>
-<td>Write logs to file instead of stderr</td>
-</tr>
-<tr>
-<td><code>log.file.path</code></td>
-<td><code>"/var/log/spooky/spooky.log"</code></td>
-<td>Log file path (used when <code>log.file.enabled</code> is true)</td>
-</tr>
-<tr>
-<td><code>performance.new_connections_per_sec</code></td>
-<td><code>2000</code></td>
-<td>Token-bucket refill rate for new QUIC connections (conns/sec)</td>
-</tr>
-<tr>
-<td><code>performance.new_connections_burst</code></td>
-<td><code>500</code></td>
-<td>Burst capacity for new QUIC connections</td>
-</tr>
-<tr>
-<td><code>performance.max_active_connections</code></td>
-<td><code>20000</code></td>
-<td>Hard cap on concurrently tracked active QUIC connections per worker</td>
-</tr>
-<tr>
-<td><code>performance.backend_dns_refresh_enabled</code></td>
-<td><code>false</code></td>
-<td>Enable periodic control-plane DNS refresh for hostname-based upstream backends</td>
-</tr>
-<tr>
-<td><code>performance.backend_dns_refresh_interval_ms</code></td>
-<td><code>30000</code></td>
-<td>Refresh interval for hostname-based backend DNS records</td>
-</tr>
-<tr>
-<td><code>performance.quic_max_idle_timeout_ms</code></td>
-<td><code>5000</code></td>
-<td>QUIC idle timeout — connection closed after this many ms of inactivity</td>
-</tr>
-<tr>
-<td><code>performance.quic_initial_max_data</code></td>
-<td><code>10000000</code></td>
-<td>Connection-level flow control window (bytes)</td>
-</tr>
-<tr>
-<td><code>performance.quic_initial_max_stream_data</code></td>
-<td><code>1000000</code></td>
-<td>Per-stream flow control window (bytes)</td>
-</tr>
-<tr>
-<td><code>performance.quic_initial_max_streams_bidi</code></td>
-<td><code>100</code></td>
-<td>Max concurrent bidirectional streams per connection</td>
-</tr>
-<tr>
-<td><code>performance.quic_initial_max_streams_uni</code></td>
-<td><code>100</code></td>
-<td>Max concurrent unidirectional streams per connection</td>
-</tr>
-<tr>
-<td><code>performance.max_response_body_bytes</code></td>
-<td><code>104857600</code></td>
-<td>Hard cap on upstream response body bytes per stream (100 MiB); streams exceeding this return 503 (<code>upstream response body too large</code>)</td>
-</tr>
-</tbody>
-</table></div>
+<p>Spooky has a large number of defaults spread across helper functions and <code>Default</code> implementations. The central inventory now lives on <a href="../defaults/">Configuration Defaults</a>.</p>
+<p>Use that page when you need:</p>
+<ul>
+<li>the full list of fields that may be omitted</li>
+<li>the exact value applied for omitted fields</li>
+<li>the difference between <code>null</code>, empty collections, empty strings, and structured section defaults</li>
+</ul>
+<p>This reference page keeps the schema and semantics, while <a href="../defaults/">Configuration Defaults</a> owns the exhaustive default matrix.</p>
 <h2 id="listen-configuration">Listen Configuration</h2>
 <p>Configures the listening interface for incoming client connections. HTTP/3 requires TLS configuration.</p>
 <h3 id="properties">Properties</h3>
@@ -3682,8 +3561,8 @@ log:
     
     <a data-slot="button"
         class="inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all disabled:pointer-events-none disabled:opacity-50 [&amp;_svg]:pointer-events-none [&amp;_svg:not([class*='size-'])]:size-4 shrink-0 [&amp;_svg]:shrink-0 outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive bg-secondary text-secondary-foreground hover:bg-secondary/80 h-8 rounded-md gap-1.5 px-3 has-[&gt;svg]:px-2.5 ml-auto shadow-none"
-        href="../examples/">
-        <span class="max-[500px]:hidden">Configuration Examples</span>
+        href="../defaults/">
+        <span class="max-[500px]:hidden">Configuration Defaults</span>
         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
             class="tabler-icon tabler-icon-arrow-right ">
@@ -3694,7 +3573,11 @@ log:
     </a>
     
 </div>
-                                <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="bg-transparent"
+                                
+                                
+                            </div>
+                            
+                            <dialog id="bottom-sidebar" onclick="onBottomSidebarDialogClick(event)" class="bg-transparent"
     style="position: fixed; left: 0px; top: 0px; transform: translate(0px, 58px); min-width: max-content; --radix-popper-transform-origin: 0% 0px; will-change: transform; z-index: 50; --radix-popper-available-width: 504px; --radix-popper-available-height: 857px; --radix-popper-anchor-width: 72.94999694824219px; --radix-popper-anchor-height: 32px;">
     <div data-side="bottom" data-align="start" data-state="open" role="dialog" data-slot="popover-content"
         class="text-popover-foreground data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 z-50 origin-(--radix-popover-content-transform-origin) border outline-hidden bg-background/90 no-scrollbar h-(--radix-popper-available-height) w-(--radix-popper-available-width) overflow-y-auto rounded-none border-none p-0 shadow-none backdrop-blur duration-100"
@@ -3851,6 +3734,12 @@ log:
                         <a class="text-2xl font-medium" href="./">
                             
                             Configuration Reference
+                            
+                        </a>
+                        
+                        <a class="text-2xl font-medium" href="../defaults/">
+                            
+                            Configuration Defaults
                             
                         </a>
                         
@@ -4084,9 +3973,11 @@ log:
         </div>
     </div>
 </dialog>
-                            </div>
-<div class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
-<div class="h-(--top-spacing) shrink-0"></div>
+                            <div
+                                class="sticky top-[calc(var(--header-height)+1px)] ml-auto hidden h-[calc(100svh-var(--header-height)-var(--footer-height))] w-72 flex-col gap-4 overflow-hidden overscroll-none pb-8 xl:flex">
+                                <div class="h-(--top-spacing) shrink-0"></div>
+                                
+                                
                                 <div id="toc" view-transition-name="toc" class="no-scrollbar overflow-y-auto px-8">
     <div class="flex flex-col gap-2 p-4 pt-0 text-sm">
         <p class="text-muted-foreground bg-background sticky top-0 h-6 text-xs">On This Page</p>
@@ -4161,14 +4052,6 @@ log:
         <a href="#top-level-configuration"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#top-level-configuration');">
-            Top-Level Configuration
-        </a>
-        
-
-        
-        <a href="#top-level-configuration_1"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#top-level-configuration_1');">
             Top-Level Configuration
         </a>
         
@@ -4550,12 +4433,15 @@ log:
     <div class="h-12"></div>
 
 </div>
+                                
+                                
                             </div>
-</div>
-</div>
-</div>
-</div>
-</main>
+
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
         <footer view-transition-name="footer"
     class="group-has-[.section-soft]/body:bg-surface/40 3xl:fixed:bg-transparent dark:bg-transparent">
     <div class="container-wrapper px-4 xl:px-6">
@@ -4580,10 +4466,13 @@ log:
 
     
 
-    <script integrity="sha384-JLNLRFGzvOp0up707XKgSnAjjt1w5BF/+lbeLQvlf6mNwf0m89IXFdpNAk4t6Hcs" src="../../js/copy-button.js"></script>
-<script integrity="sha384-JBx6cBEiyhK1KPwZgBHiI6GDaAmvlOxMQFyWAZTEpW5Ifo5XQ2LBcJ61GVOumwF1" src="../../js/sidebar.js"></script>
-<script integrity="sha384-fNURFMRt0p/HqXnQnV4+CT9dX1GiU5F0fC3pFbg7gfoANytoUMErSW7suWSBkSuF" src="../../js/slider.js"></script>
-<script>updatePygmentsStylesheet();</script>
+    <script integrity="sha384-JLNLRFGzvOp0up707XKgSnAjjt1w5BF/+lbeLQvlf6mNwf0m89IXFdpNAk4t6Hcs"
+        src="../../js/copy-button.js"></script>
+    <script integrity="sha384-JBx6cBEiyhK1KPwZgBHiI6GDaAmvlOxMQFyWAZTEpW5Ifo5XQ2LBcJ61GVOumwF1"
+        src="../../js/sidebar.js"></script>
+    <script integrity="sha384-fNURFMRt0p/HqXnQnV4+CT9dX1GiU5F0fC3pFbg7gfoANytoUMErSW7suWSBkSuF"
+        src="../../js/slider.js"></script>
+    <script>updatePygmentsStylesheet();</script>
     
     <script>fetchStargazers("https://github.com/Supernova-Labs-Org/spooky");</script>
     
@@ -4601,4 +4490,5 @@ log:
 }
 </script>
 </body>
+
 </html>
