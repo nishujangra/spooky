@@ -1437,7 +1437,7 @@
 <p>Spooky is <strong>not yet a fully mature general-purpose reverse proxy platform</strong>. The main constraints are:</p>
 <ul>
 <li>full configuration hot reload is not implemented</li>
-<li>the upstream forwarding model is centered on HTTP/2</li>
+<li>upstream forwarding is scheme-driven: HTTP/2 for <code>https://</code> backends, HTTP/1.1 for <code>http://</code> backends</li>
 <li>dynamic control-plane capability is limited</li>
 <li>first-class auth, rate-limiting, and policy features are not yet present</li>
 <li>service discovery is limited to DNS refresh rather than a richer orchestration-native model</li>
@@ -1447,7 +1447,7 @@
 <ul>
 <li>downstream HTTP/3 ingress over QUIC</li>
 <li>downstream HTTP/1.1 and HTTP/2 bootstrap ingress</li>
-<li>upstream HTTP/2 forwarding</li>
+<li>upstream HTTP/2 forwarding (<code>https://</code> backends) and HTTP/1.1 forwarding (<code>http://</code> backends)</li>
 <li>deterministic host/path/method routing</li>
 <li>active and passive backend health handling</li>
 <li>load balancing with round-robin, random, consistent-hash, least-connections, latency-aware, and sticky-CID behavior</li>
@@ -1473,7 +1473,6 @@
 <ul>
 <li>no full config hot reload for routes, upstreams, limits, or policies</li>
 <li>no transactional config apply, staged activation, or rollback API</li>
-<li>no first-class upstream HTTP/1.1 forwarding mode</li>
 <li>no upstream HTTP/3 forwarding mode</li>
 <li>no broad request mirroring, canary traffic splitting, or advanced traffic policy engine</li>
 <li>no first-class rate limiting framework</li>
@@ -1485,7 +1484,7 @@
 <p>Use Spooky today when all of the following are true:</p>
 <ul>
 <li>you want an HTTP/3-first edge proxy</li>
-<li>your upstream model fits HTTP/2</li>
+<li>your backends speak HTTP/2 (<code>https://</code>) or HTTP/1.1 (<code>http://</code>), or a mix of both</li>
 <li>you are comfortable with staged rollout and explicit rollback procedures</li>
 <li>you do not require a large dynamic control plane yet</li>
 <li>you can keep close operational visibility on the system</li>

@@ -1,6 +1,6 @@
 # Common Issues and Solutions
 
-Technical reference for diagnosing and resolving operational issues in Spooky HTTP/3 to HTTP/2 gateway deployments.
+Technical reference for diagnosing and resolving operational issues in Spooky HTTP/3 edge proxy deployments.
 
 ## Configuration Errors
 
@@ -408,7 +408,7 @@ unknown backend: 10.0.1.10:8080
 **Root Causes**:
 - Request path/host does not match any configured upstream route
 - Upstream pool not properly initialized
-- Backend not registered in H2 connection pool
+- Backend not registered in the upstream transport pool
 - Route matching logic precedence issue
 
 **Diagnostic Commands**:
@@ -419,7 +419,7 @@ yq '.upstream[] | {route}' config.yaml
 # Test route matching
 journalctl -u spooky -f | grep "No route found"
 
-# Verify H2 pool initialization
+# Verify transport pool initialization
 journalctl -u spooky --since "10 minutes ago" | grep -i "pool"
 
 # Check backend registration
@@ -448,30 +448,34 @@ upstream:
     backends: [...]
 ```
 
-### HTTP/2 Connection Pool Errors
+### Upstream Connection Pool Errors
 
 **Error Messages**:
 ```
-Transport error: send: connection error detected: frame with invalid size
-Transport error: send: connection closed
-Transport error: body: stream error received: stream no longer needed
+pool error: send: connection error detected: frame with invalid size
+pool error: send: connection closed
+pool error: body: stream error received: stream no longer needed
 Backend timeout
 ```
 
 **Root Causes**:
-- Backend closed HTTP/2 connection unexpectedly
-- H2 frame size violation
+- Backend closed the connection unexpectedly
+- H2 frame size violation (HTTPS backends only)
 - Backend service crashed or restarted
 - Connection pool exhaustion (>64 inflight requests per backend)
 - Network timeout (2s default in Spooky)
+- Transport mismatch: backend expects HTTP/1.1 but is addressed as `https://`, or vice versa
 
 **Diagnostic Commands**:
 ```bash
-# Monitor H2 connection errors
-journalctl -u spooky -f | grep "Transport error"
+# Monitor upstream pool errors
+journalctl -u spooky -f | grep "pool error"
 
-# Check backend H2 support
-curl -I --http2 http://10.0.1.10:8080/
+# Verify backend scheme matches backend capability
+# For https:// backends — check H2 support:
+curl -I --http2 https://10.0.1.10:8080/
+# For http:// backends — check plain HTTP/1.1:
+curl -v http://10.0.1.10:8080/health
 
 # Test backend health endpoint
 curl -v http://10.0.1.10:8080/health

@@ -9,7 +9,7 @@ Spooky is a **beta HTTP/3 edge reverse proxy** with a strong core data plane, br
 Spooky is **not yet a fully mature general-purpose reverse proxy platform**. The main constraints are:
 
 - full configuration hot reload is not implemented
-- the upstream forwarding model is centered on HTTP/2
+- upstream forwarding is scheme-driven: HTTP/2 for `https://` backends, HTTP/1.1 for `http://` backends
 - dynamic control-plane capability is limited
 - first-class auth, rate-limiting, and policy features are not yet present
 - service discovery is limited to DNS refresh rather than a richer orchestration-native model
@@ -20,7 +20,7 @@ The following areas are considered strong enough for controlled production use:
 
 - downstream HTTP/3 ingress over QUIC
 - downstream HTTP/1.1 and HTTP/2 bootstrap ingress
-- upstream HTTP/2 forwarding
+- upstream HTTP/2 forwarding (`https://` backends) and HTTP/1.1 forwarding (`http://` backends)
 - deterministic host/path/method routing
 - active and passive backend health handling
 - load balancing with round-robin, random, consistent-hash, least-connections, latency-aware, and sticky-CID behavior
@@ -49,7 +49,6 @@ The following gaps are the most important reasons Spooky is not yet at general-a
 
 - no full config hot reload for routes, upstreams, limits, or policies
 - no transactional config apply, staged activation, or rollback API
-- no first-class upstream HTTP/1.1 forwarding mode
 - no upstream HTTP/3 forwarding mode
 - no broad request mirroring, canary traffic splitting, or advanced traffic policy engine
 - no first-class rate limiting framework
@@ -62,7 +61,7 @@ The following gaps are the most important reasons Spooky is not yet at general-a
 Use Spooky today when all of the following are true:
 
 - you want an HTTP/3-first edge proxy
-- your upstream model fits HTTP/2
+- your backends speak HTTP/2 (`https://`) or HTTP/1.1 (`http://`), or a mix of both
 - you are comfortable with staged rollout and explicit rollback procedures
 - you do not require a large dynamic control plane yet
 - you can keep close operational visibility on the system

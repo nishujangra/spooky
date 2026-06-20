@@ -1587,24 +1587,24 @@ Connection: keep-alive
 </tbody>
 </table></div>
 <h2 id="http3-implementation-in-spooky">HTTP/3 Implementation in Spooky</h2>
-<p>Spooky implements HTTP/3 termination at the edge, accepting HTTP/3 client connections and translating them to HTTP/2 for backend forwarding. This approach enables HTTP/3 client support without requiring backend infrastructure changes.</p>
+<p>Spooky implements HTTP/3 termination at the edge, accepting HTTP/3 client connections and forwarding them to backends over HTTP/2 or HTTP/1.1 depending on the backend scheme. <code>https://</code> backends are reached over HTTP/2; <code>http://</code> backends are reached over HTTP/1.1. This is entirely a client-facing concern — backends only need to speak their own transport protocol.</p>
 <h3 id="protocol-conversion">Protocol Conversion</h3>
-<p>The Spooky bridge component handles bidirectional translation between HTTP/3 and HTTP/2:</p>
+<p>The Spooky bridge component handles bidirectional translation between HTTP/3 and the backend transport:</p>
 <ol>
 <li>
-<p><strong>Request path</strong>: HTTP/3 HEADERS and DATA frames are parsed, decompressed via QPACK, and re-encoded as HTTP/2 frames with HPACK compression for backend transmission.</p>
+<p><strong>Request path</strong>: HTTP/3 HEADERS and DATA frames are parsed and decompressed via QPACK. For <code>https://</code> backends the request is re-encoded as HTTP/2 with HPACK compression. For <code>http://</code> backends the request is serialized as HTTP/1.1.</p>
 </li>
 <li>
-<p><strong>Response path</strong>: HTTP/2 responses from backends are decoded, headers are converted to QPACK format, and frames are transmitted over the client's HTTP/3 stream.</p>
+<p><strong>Response path</strong>: Backend responses are decoded and headers are converted to QPACK format for transmission over the client's HTTP/3 stream.</p>
 </li>
 </ol>
 <h3 id="stream-mapping">Stream Mapping</h3>
-<p>Each HTTP/3 client stream maps to a corresponding HTTP/2 stream on a backend connection. Stream lifecycle events (creation, data transfer, closure) are synchronized between protocols.</p>
+<p>Each HTTP/3 client stream maps to a corresponding backend request. For HTTP/2 backends this is a stream on a pooled H2 connection. For HTTP/1.1 backends this is a single request on a pooled keep-alive connection. Stream lifecycle events (creation, data transfer, closure) are synchronized between protocols.</p>
 <h3 id="connection-management">Connection Management</h3>
-<p>Spooky maintains separate connection pools for client-facing HTTP/3 sessions and backend HTTP/2 connections. QUIC connection state is managed by the edge component, while HTTP/2 connection pooling is handled by the transport layer.</p>
+<p>Spooky maintains separate connection pools for client-facing HTTP/3 sessions and backend connections. QUIC connection state is managed by the edge component, while backend transport pooling (H2 or H1) is handled by the transport layer.</p>
 <h3 id="feature-support">Feature Support</h3>
 <ul>
-<li><strong>Header compression</strong>: Full QPACK support for clients, HPACK for backends</li>
+<li><strong>Header compression</strong>: Full QPACK support for clients, HPACK for HTTP/2 backends</li>
 <li><strong>Flow control</strong>: QUIC stream and connection flow control enforced</li>
 <li><strong>Server push</strong>: Not currently implemented (client-to-proxy only)</li>
 <li><strong>Priority signaling</strong>: HTTP/3 priority frames are mapped to HTTP/2 priority when supported by backends</li>

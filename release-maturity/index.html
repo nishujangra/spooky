@@ -1434,7 +1434,7 @@
     <h2 id="current-stage-beta">Current Stage: Beta</h2>
 <p>Spooky is currently <strong>beta</strong>. That means:</p>
 <ul>
-<li>the core H3 edge to H2 upstream flow is implemented and heavily exercised</li>
+<li>the core H3 edge to upstream flow (H2 and H1) is implemented and heavily exercised</li>
 <li>the project has meaningful operational and correctness work in place</li>
 <li>broader platform maturity, control-plane depth, and production-history confidence are still incomplete</li>
 </ul>
@@ -1461,7 +1461,7 @@
 <ul>
 <li>downstream HTTP/3 ingress</li>
 <li>downstream bootstrap HTTP/1.1 and HTTP/2 support</li>
-<li>upstream HTTP/2 forwarding</li>
+<li>upstream HTTP/2 forwarding (<code>https://</code> backends) and HTTP/1.1 forwarding (<code>http://</code> backends)</li>
 <li>deterministic routing</li>
 <li>multiple load-balancing strategies</li>
 <li>strong teardown and resource-bound behavior</li>
@@ -1472,7 +1472,7 @@
 <ul>
 <li>full config hot reload</li>
 <li>richer dynamic control plane</li>
-<li>broader upstream protocol support</li>
+<li>upstream HTTP/3 forwarding and broader upstream protocol support</li>
 <li>stronger service-discovery integrations</li>
 <li>auth, policy, and rate-limiting feature depth</li>
 <li>broader ecosystem and long-horizon production history</li>

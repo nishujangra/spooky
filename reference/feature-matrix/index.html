@@ -1466,12 +1466,12 @@
 <tr>
 <td>Upstream HTTP/2</td>
 <td><code>Done</code></td>
-<td>Primary forwarding model</td>
+<td>Used for <code>https://</code> backends</td>
 </tr>
 <tr>
 <td>Upstream HTTP/1.1</td>
-<td><code>Missing</code></td>
-<td>No first-class forwarding path today</td>
+<td><code>Done</code></td>
+<td>Used for <code>http://</code> backends; mixed H1/H2 pools supported</td>
 </tr>
 <tr>
 <td>Upstream HTTP/3</td>
@@ -1898,7 +1898,7 @@
 <p>Spooky is strongest today as:</p>
 <ul>
 <li>an HTTP/3-first edge proxy</li>
-<li>a deterministic H3-to-H2 routing and balancing layer</li>
+<li>a deterministic routing and balancing layer with scheme-driven H1/H2 upstream transport</li>
 <li>a proxy with strong resource-bound and teardown behavior</li>
 </ul>
 <p>Spooky is not yet strongest as:</p>

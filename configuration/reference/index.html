@@ -1452,7 +1452,7 @@
 <ul>
 <li>full config hot reload is not implemented</li>
 <li>certificate reload covers new handshakes only</li>
-<li>upstream forwarding is centered on HTTP/2</li>
+<li>backend transport is scheme-driven: <code>https://</code> backends use HTTP/2, <code>http://</code> backends use HTTP/1.1</li>
 </ul>
 <h2 id="reading-this-reference">Reading This Reference</h2>
 <ul>
@@ -2055,7 +2055,7 @@ upstream:
 <p><strong>Address format notes:</strong>
 - <code>host:port</code> or <code>host</code> — shorthand, treated as <code>https://host:port</code> (port defaults to <code>443</code>)
 - <code>https://host[:port]</code> — TLS upstream; port defaults to <code>443</code> if omitted
-- <code>http://host[:port]</code> — cleartext upstream over h2c; port defaults to <code>80</code> if omitted. HTTP/1.1 upstream is not yet supported.</p>
+- <code>http://host[:port]</code> — cleartext HTTP/1.1 upstream; port defaults to <code>80</code> if omitted. Mixed <code>http://</code> and <code>https://</code> backends are supported within the same upstream pool.</p>
 <h4 id="health-check-configuration">Health Check Configuration</h4>
 <p>Health checks monitor backend availability and automatically remove unhealthy backends from the pool.</p>
 <div class="table-wrapper"><table>

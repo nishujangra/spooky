@@ -15,8 +15,8 @@ Legend:
 | Downstream HTTP/3 | `Done` | Native QUIC/H3 ingress path |
 | Downstream HTTP/1.1 | `Done` | Via bootstrap TLS listener |
 | Downstream HTTP/2 | `Done` | Via bootstrap TLS listener |
-| Upstream HTTP/2 | `Done` | Primary forwarding model |
-| Upstream HTTP/1.1 | `Missing` | No first-class forwarding path today |
+| Upstream HTTP/2 | `Done` | Used for `https://` backends |
+| Upstream HTTP/1.1 | `Done` | Used for `http://` backends; mixed H1/H2 pools supported |
 | Upstream HTTP/3 | `Missing` | Not implemented |
 | gRPC trailers | `Done` | Integration coverage exists |
 | Broad WebSocket support | `Partial` | Limited bootstrap-side behavior only |
@@ -125,7 +125,7 @@ Legend:
 Spooky is strongest today as:
 
 - an HTTP/3-first edge proxy
-- a deterministic H3-to-H2 routing and balancing layer
+- a deterministic routing and balancing layer with scheme-driven H1/H2 upstream transport
 - a proxy with strong resource-bound and teardown behavior
 
 Spooky is not yet strongest as:

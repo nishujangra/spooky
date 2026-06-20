@@ -4,7 +4,7 @@
 
 Spooky is currently **beta**. That means:
 
-- the core H3 edge to H2 upstream flow is implemented and heavily exercised
+- the core H3 edge to upstream flow (H2 and H1) is implemented and heavily exercised
 - the project has meaningful operational and correctness work in place
 - broader platform maturity, control-plane depth, and production-history confidence are still incomplete
 
@@ -32,7 +32,7 @@ Operators should **not** assume:
 
 - downstream HTTP/3 ingress
 - downstream bootstrap HTTP/1.1 and HTTP/2 support
-- upstream HTTP/2 forwarding
+- upstream HTTP/2 forwarding (`https://` backends) and HTTP/1.1 forwarding (`http://` backends)
 - deterministic routing
 - multiple load-balancing strategies
 - strong teardown and resource-bound behavior
@@ -43,7 +43,7 @@ Operators should **not** assume:
 
 - full config hot reload
 - richer dynamic control plane
-- broader upstream protocol support
+- upstream HTTP/3 forwarding and broader upstream protocol support
 - stronger service-discovery integrations
 - auth, policy, and rate-limiting feature depth
 - broader ecosystem and long-horizon production history

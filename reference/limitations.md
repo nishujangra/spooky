@@ -4,7 +4,7 @@ This page lists the most important current product limits so operators and contr
 
 ## Architectural Limits
 
-- Spooky is centered on **HTTP/3 downstream and HTTP/2 upstream**.
+- Spooky is centered on **HTTP/3 downstream** with scheme-driven upstream transport: `https://` backends use HTTP/2, `http://` backends use HTTP/1.1. Mixed deployments are supported.
 - It is not yet a broad multi-protocol reverse proxy in the same class as older general-purpose incumbents.
 - It is not yet a dynamic control-plane-driven proxy platform.
 
@@ -17,7 +17,6 @@ This page lists the most important current product limits so operators and contr
 
 ## Protocol Limits
 
-- Upstream HTTP/1.1 forwarding is not implemented as a first-class path.
 - Upstream HTTP/3 forwarding is not implemented.
 - CONNECT support exists only as a constrained policy feature, not as a broad proxy capability.
 - WebSocket and upgrade handling are limited and are not yet a full-feature parity surface.
@@ -55,7 +54,7 @@ This page lists the most important current product limits so operators and contr
 Spooky is a strong candidate when:
 
 - HTTP/3 edge performance and correctness are primary goals
-- the upstream environment is compatible with HTTP/2
+- the upstream environment speaks HTTP/2 (`https://` backends) or HTTP/1.1 (`http://` backends), or a mix of both
 - rollout discipline and restarts are acceptable for config changes
 - the deployment does not require rich traffic policy or auth gateway features
 

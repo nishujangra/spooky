@@ -24,7 +24,7 @@ This page does not change the current product limits:
 
 - full config hot reload is not implemented
 - certificate reload covers new handshakes only
-- upstream forwarding is centered on HTTP/2
+- backend transport is scheme-driven: `https://` backends use HTTP/2, `http://` backends use HTTP/1.1
 
 ## Reading This Reference
 
@@ -439,7 +439,7 @@ Each backend represents an upstream server that can handle requests.
 **Address format notes:**
 - `host:port` or `host` — shorthand, treated as `https://host:port` (port defaults to `443`)
 - `https://host[:port]` — TLS upstream; port defaults to `443` if omitted
-- `http://host[:port]` — cleartext upstream over h2c; port defaults to `80` if omitted. HTTP/1.1 upstream is not yet supported.
+- `http://host[:port]` — cleartext HTTP/1.1 upstream; port defaults to `80` if omitted. Mixed `http://` and `https://` backends are supported within the same upstream pool.
 
 #### Health Check Configuration
 
