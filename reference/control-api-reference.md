@@ -12,7 +12,20 @@ Current endpoint family:
 - readiness
 - runtime snapshot
 - certificate reload
+- full config reload
 - restart request
+
+## Protocol
+
+The control API uses **HTTP/1.1 over TLS**. HTTP/2 is not supported.
+
+When using curl, pass `--http1.1` explicitly — curl negotiates h2 by default when connecting to a TLS endpoint and the server will reject the connection:
+
+```bash
+curl -k --http1.1 https://<address>:<port>/...
+```
+
+The `-k` flag skips certificate verification for self-signed certs.
 
 ## Security Expectations
 
@@ -74,6 +87,29 @@ Expected use:
 - rollout validation
 - incident response
 
+### `POST /admin/runtime/reload`
+
+Purpose:
+
+- reload the full config from disk and apply changes to upstreams, backends, policies, and timeouts
+
+Important scope note:
+
+- listener bind addresses, control API bind, and metrics bind cannot change without a restart
+- in-flight requests on the old config complete normally; new requests use the new config immediately
+
+Expected use:
+
+- adding or removing backends
+- changing load balancing, timeouts, resilience, or routing policy at runtime
+
+Example:
+
+```bash
+curl -k --http1.1 -X POST https://127.0.0.1:9890/admin/runtime/reload \
+  -H "Authorization: Bearer <token>"
+```
+
 ### `POST /admin/runtime/reload-certs`
 
 Purpose:
@@ -104,8 +140,10 @@ Expected use:
 ## Operator Notes
 
 - use cert reload for cert-only changes
-- use drain-and-restart for route, upstream, timeout, or policy changes
+- use full config reload for backend, policy, timeout, or routing changes that don't require rebinding listeners
+- use drain-and-restart when listener addresses or control API/metrics bind must change
 - keep rollback available before using restart-triggering control-plane actions in production
+- all curl invocations must use `--http1.1` — the control API does not support HTTP/2
 
 ## Related Pages
 

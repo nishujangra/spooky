@@ -1440,8 +1440,15 @@
 <li>readiness</li>
 <li>runtime snapshot</li>
 <li>certificate reload</li>
+<li>full config reload</li>
 <li>restart request</li>
 </ul>
+<h2 id="protocol">Protocol</h2>
+<p>The control API uses <strong>HTTP/1.1 over TLS</strong>. HTTP/2 is not supported.</p>
+<p>When using curl, pass <code>--http1.1</code> explicitly — curl negotiates h2 by default when connecting to a TLS endpoint and the server will reject the connection:</p>
+<pre><code class="language-bash">curl -k --http1.1 https://&lt;address&gt;:&lt;port&gt;/...
+</code></pre>
+<p>The <code>-k</code> flag skips certificate verification for self-signed certs.</p>
 <h2 id="security-expectations">Security Expectations</h2>
 <ul>
 <li>bind to loopback or a strongly isolated admin network whenever possible</li>
@@ -1493,6 +1500,25 @@
 <li>rollout validation</li>
 <li>incident response</li>
 </ul>
+<h3 id="post-adminruntimereload"><code>POST /admin/runtime/reload</code></h3>
+<p>Purpose:</p>
+<ul>
+<li>reload the full config from disk and apply changes to upstreams, backends, policies, and timeouts</li>
+</ul>
+<p>Important scope note:</p>
+<ul>
+<li>listener bind addresses, control API bind, and metrics bind cannot change without a restart</li>
+<li>in-flight requests on the old config complete normally; new requests use the new config immediately</li>
+</ul>
+<p>Expected use:</p>
+<ul>
+<li>adding or removing backends</li>
+<li>changing load balancing, timeouts, resilience, or routing policy at runtime</li>
+</ul>
+<p>Example:</p>
+<pre><code class="language-bash">curl -k --http1.1 -X POST https://127.0.0.1:9890/admin/runtime/reload \
+  -H &quot;Authorization: Bearer &lt;token&gt;&quot;
+</code></pre>
 <h3 id="post-adminruntimereload-certs"><code>POST /admin/runtime/reload-certs</code></h3>
 <p>Purpose:</p>
 <ul>
@@ -1521,8 +1547,10 @@
 <h2 id="operator-notes">Operator Notes</h2>
 <ul>
 <li>use cert reload for cert-only changes</li>
-<li>use drain-and-restart for route, upstream, timeout, or policy changes</li>
+<li>use full config reload for backend, policy, timeout, or routing changes that don't require rebinding listeners</li>
+<li>use drain-and-restart when listener addresses or control API/metrics bind must change</li>
 <li>keep rollback available before using restart-triggering control-plane actions in production</li>
+<li>all curl invocations must use <code>--http1.1</code> — the control API does not support HTTP/2</li>
 </ul>
 <h2 id="related-pages">Related Pages</h2>
 <ul>
@@ -1988,6 +2016,14 @@
         
 
         
+        <a href="#protocol"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#protocol');">
+            Protocol
+        </a>
+        
+
+        
         <a href="#security-expectations"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#security-expectations');">
@@ -2027,6 +2063,12 @@
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#get-adminruntime');">
             GET /admin/runtime
+        </a>
+        
+        <a href="#post-adminruntimereload"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#post-adminruntimereload');">
+            POST /admin/runtime/reload
         </a>
         
         <a href="#post-adminruntimereload-certs"
