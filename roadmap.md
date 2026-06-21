@@ -70,7 +70,7 @@ These areas make Spooky far more competitive as a general production reverse pro
 
 ### 5. Broader Upstream Compatibility
 
-- first-class upstream HTTP/1.1 support
+- first-class upstream HTTP/1.1 support (shipped in v0.3.0-beta)
 - better CONNECT handling
 - broader WebSocket and upgrade support
 
