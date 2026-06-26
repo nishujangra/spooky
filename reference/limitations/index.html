@@ -1440,8 +1440,8 @@
 </ul>
 <h2 id="configuration-and-control-plane-limits">Configuration And Control Plane Limits</h2>
 <ul>
-<li>Full configuration hot reload is not implemented.</li>
-<li>Dynamic route updates are not implemented as a first-class runtime feature.</li>
+<li>Full configuration hot reload exists for runtime-managed settings, but some startup-owned changes still require a restart.</li>
+<li>Dynamic route updates are not implemented as a first-class runtime feature outside config reload.</li>
 <li>Dynamic upstream membership changes are limited to DNS refresh rather than a richer control-plane API.</li>
 <li>There is no transactional apply, generation diff, rollback, or staged config activation model.</li>
 </ul>
@@ -1484,12 +1484,12 @@
 <ul>
 <li>HTTP/3 edge performance and correctness are primary goals</li>
 <li>the upstream environment speaks HTTP/2 (<code>https://</code> backends) or HTTP/1.1 (<code>http://</code> backends), or a mix of both</li>
-<li>rollout discipline and restarts are acceptable for config changes</li>
+<li>the deployment can tolerate occasional restarts for startup-owned config changes</li>
 <li>the deployment does not require rich traffic policy or auth gateway features</li>
 </ul>
 <p>Spooky is a poor fit today when:</p>
 <ul>
-<li>live config mutation is mandatory</li>
+<li>every config field must be live-reloadable with no restart boundary</li>
 <li>upstream protocol breadth is required</li>
 <li>advanced API gateway behavior is required</li>
 <li>a rich dynamic control plane is expected</li>
