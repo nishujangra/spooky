@@ -24,8 +24,8 @@
 Download and install the `.deb` from [GitHub Releases](https://github.com/Supernova-Labs-Org/spooky/releases):
 
 ```bash
-wget https://github.com/Supernova-Labs-Org/spooky/releases/download/v0.3.0-beta/spooky_0.3.0-beta_amd64.deb
-sudo dpkg -i spooky_0.3.0-beta_amd64.deb
+wget https://github.com/Supernova-Labs-Org/spooky/releases/download/v0.3.1-beta/spooky_0.3.1-beta_amd64.deb
+sudo dpkg -i spooky_0.3.1-beta_amd64.deb
 ```
 
 The package installs:
