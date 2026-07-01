@@ -73,8 +73,9 @@ Configuration validation is performed automatically at startup before the QUIC l
 **Valid Configuration**:
 ```
 Configuration validation successful
-Spooky is starting
-Listening on 0.0.0.0:9889
+Spooky startup phase=begin
+Spooky listener topology listeners=1 packet_shards_per_worker=1 reuseport=true pin_workers=false
+Listener 0 binds udp=0.0.0.0:9889 tcp_bootstrap=0.0.0.0:9889
 ```
 
 **Invalid Configuration**:
@@ -113,8 +114,10 @@ Spooky uses the `env_logger` logging implementation with timestamped output. All
 ### Log Output Examples
 
 ```
-[2026-02-18 14:23:45] [INFO] [spooky] Spooky is starting
-[2026-02-18 14:23:45] [DEBUG] [spooky_edge::quic_listener] Listening on 0.0.0.0:9889
+[2026-02-18 14:23:45] [INFO] [spooky::listener_group] Spooky startup phase=begin
+[2026-02-18 14:23:45] [INFO] [spooky::listener_group] Spooky listener topology listeners=1 packet_shards_per_worker=1 reuseport=true pin_workers=false
+[2026-02-18 14:23:45] [INFO] [spooky::listener_group] Listener 0 binds udp=0.0.0.0:9889 tcp_bootstrap=0.0.0.0:9889
+[2026-02-18 14:23:45] [INFO] [spooky_edge::quic_listener] Runtime performance concurrency worker_threads=1 control_plane_threads=2 packet_shards_per_worker=1 reuseport=true pin_workers=false
 [2026-02-18 14:23:45] [DEBUG] [spooky_edge::quic_listener] Certificate loaded successfully
 [2026-02-18 14:23:50] [INFO] [spooky_edge::quic_listener] Length of data received: 1200
 [2026-02-18 14:23:50] [DEBUG] [spooky_edge::quic_listener] Packet DCID (len=8): [00 01 02 03 04 05 06 07], type: Initial, active connections: 1

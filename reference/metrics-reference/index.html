@@ -1475,6 +1475,87 @@
 </tr>
 </tbody>
 </table></div>
+<h2 id="request-breakdown-metrics">Request Breakdown Metrics</h2>
+<p>These families are the primary source for production dashboards because they preserve request totals while adding low-cardinality dimensions.</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Type</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>spooky_upstream_requests_total{upstream,status_class,outcome}</code></td>
+<td>counter</td>
+<td>Completed requests grouped by upstream, response status class, and final outcome</td>
+</tr>
+<tr>
+<td><code>spooky_backend_requests_total{upstream,backend,status_class,outcome}</code></td>
+<td>counter</td>
+<td>Completed requests grouped by upstream and selected backend</td>
+</tr>
+</tbody>
+</table></div>
+<p>Expected label values:</p>
+<ul>
+<li><code>status_class</code>: <code>1xx</code>, <code>2xx</code>, <code>3xx</code>, <code>4xx</code>, <code>5xx</code>, <code>other</code>, <code>unknown</code></li>
+<li><code>outcome</code>: <code>success</code>, <code>failure</code>, <code>timeout</code>, <code>backend_error</code>, <code>overload_shed</code></li>
+</ul>
+<p>Use these for questions like:</p>
+<ul>
+<li>which upstream is producing 5xx responses?</li>
+<li>which backend is taking most of the failed traffic?</li>
+<li>are failures mostly timeouts, backend errors, or overload shedding?</li>
+</ul>
+<h2 id="latency-metrics">Latency Metrics</h2>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Type</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>spooky_upstream_request_latency_ms_bucket{upstream,outcome,le}</code></td>
+<td>histogram bucket</td>
+<td>End-to-end request latency grouped by upstream and final outcome</td>
+</tr>
+<tr>
+<td><code>spooky_upstream_request_latency_ms_sum{upstream,outcome}</code></td>
+<td>histogram sum</td>
+<td>Sum of request latency observations in milliseconds</td>
+</tr>
+<tr>
+<td><code>spooky_upstream_request_latency_ms_count{upstream,outcome}</code></td>
+<td>histogram count</td>
+<td>Count of latency observations</td>
+</tr>
+<tr>
+<td><code>spooky_route_latency_ms_p50{route}</code></td>
+<td>gauge</td>
+<td>Approximate p50 route latency</td>
+</tr>
+<tr>
+<td><code>spooky_route_latency_ms_p95{route}</code></td>
+<td>gauge</td>
+<td>Approximate p95 route latency</td>
+</tr>
+<tr>
+<td><code>spooky_route_latency_ms_p99{route}</code></td>
+<td>gauge</td>
+<td>Approximate p99 route latency</td>
+</tr>
+</tbody>
+</table></div>
+<p>Practical note:</p>
+<ul>
+<li>if you only grep <code>spooky_requests_total</code> and <code>spooky_requests_success</code>, you are looking at the coarse top-level counters rather than the richer labeled families above</li>
+<li>for Grafana and Prometheus alerting, prefer the labeled upstream/backend metrics and the histogram family</li>
+</ul>
 <h2 id="early-data-metrics">Early Data Metrics</h2>
 <div class="table-wrapper"><table>
 <thead>
@@ -1866,6 +1947,8 @@
 <h2 id="golden-signals-to-watch-first">Golden Signals To Watch First</h2>
 <ul>
 <li>request success/failure counters</li>
+<li>request totals by upstream and backend outcome</li>
+<li>upstream request latency histogram percentiles from PromQL</li>
 <li>route latency percentiles</li>
 <li>overload shed counts by reason</li>
 <li>backend timeout and backend error counters</li>
@@ -1875,6 +1958,9 @@
 </ul>
 <h2 id="first-alerts-to-add">First Alerts To Add</h2>
 <ul>
+<li><code>sum by (upstream) (rate(spooky_upstream_requests_total{status_class="5xx"}[5m]))</code></li>
+<li><code>sum by (backend) (rate(spooky_backend_requests_total{outcome="backend_error"}[5m]))</code></li>
+<li><code>histogram_quantile(0.95, sum by (le, upstream) (rate(spooky_upstream_request_latency_ms_bucket[5m])))</code></li>
 <li>sustained growth in <code>spooky_overload_shed_by_reason_total</code></li>
 <li>rising <code>spooky_backend_timeouts</code></li>
 <li>rising <code>spooky_downstream_tls_handshake_failure_total</code></li>
@@ -2348,6 +2434,22 @@
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#core-request-metrics');">
             Core Request Metrics
+        </a>
+        
+
+        
+        <a href="#request-breakdown-metrics"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#request-breakdown-metrics');">
+            Request Breakdown Metrics
+        </a>
+        
+
+        
+        <a href="#latency-metrics"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#latency-metrics');">
+            Latency Metrics
         </a>
         
 

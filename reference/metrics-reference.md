@@ -18,6 +18,42 @@ This page documents the major built-in Prometheus metrics families currently exp
 | `spooky_request_validation_rejects` | counter | Requests rejected by protocol validation |
 | `spooky_policy_denied` | counter | Requests denied by runtime method/path policy |
 
+## Request Breakdown Metrics
+
+These families are the primary source for production dashboards because they preserve request totals while adding low-cardinality dimensions.
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `spooky_upstream_requests_total{upstream,status_class,outcome}` | counter | Completed requests grouped by upstream, response status class, and final outcome |
+| `spooky_backend_requests_total{upstream,backend,status_class,outcome}` | counter | Completed requests grouped by upstream and selected backend |
+
+Expected label values:
+
+- `status_class`: `1xx`, `2xx`, `3xx`, `4xx`, `5xx`, `other`, `unknown`
+- `outcome`: `success`, `failure`, `timeout`, `backend_error`, `overload_shed`
+
+Use these for questions like:
+
+- which upstream is producing 5xx responses?
+- which backend is taking most of the failed traffic?
+- are failures mostly timeouts, backend errors, or overload shedding?
+
+## Latency Metrics
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `spooky_upstream_request_latency_ms_bucket{upstream,outcome,le}` | histogram bucket | End-to-end request latency grouped by upstream and final outcome |
+| `spooky_upstream_request_latency_ms_sum{upstream,outcome}` | histogram sum | Sum of request latency observations in milliseconds |
+| `spooky_upstream_request_latency_ms_count{upstream,outcome}` | histogram count | Count of latency observations |
+| `spooky_route_latency_ms_p50{route}` | gauge | Approximate p50 route latency |
+| `spooky_route_latency_ms_p95{route}` | gauge | Approximate p95 route latency |
+| `spooky_route_latency_ms_p99{route}` | gauge | Approximate p99 route latency |
+
+Practical note:
+
+- if you only grep `spooky_requests_total` and `spooky_requests_success`, you are looking at the coarse top-level counters rather than the richer labeled families above
+- for Grafana and Prometheus alerting, prefer the labeled upstream/backend metrics and the histogram family
+
 ## Early Data Metrics
 
 | Metric | Type | Meaning |
@@ -122,6 +158,8 @@ This page documents the major built-in Prometheus metrics families currently exp
 ## Golden Signals To Watch First
 
 - request success/failure counters
+- request totals by upstream and backend outcome
+- upstream request latency histogram percentiles from PromQL
 - route latency percentiles
 - overload shed counts by reason
 - backend timeout and backend error counters
@@ -131,6 +169,9 @@ This page documents the major built-in Prometheus metrics families currently exp
 
 ## First Alerts To Add
 
+- `sum by (upstream) (rate(spooky_upstream_requests_total{status_class="5xx"}[5m]))`
+- `sum by (backend) (rate(spooky_backend_requests_total{outcome="backend_error"}[5m]))`
+- `histogram_quantile(0.95, sum by (le, upstream) (rate(spooky_upstream_request_latency_ms_bucket[5m])))`
 - sustained growth in `spooky_overload_shed_by_reason_total`
 - rising `spooky_backend_timeouts`
 - rising `spooky_downstream_tls_handshake_failure_total`

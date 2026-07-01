@@ -239,7 +239,7 @@ When Spooky starts, it follows this order:
 8. Drops privileges if running as root and `security.privileges.enabled=true`
 9. Spawns worker threads (data plane)
 10. Spawns control-plane tasks (health checks, metrics)
-11. Logs "Spooky is starting" — ready to accept connections
+11. Emits structured startup logs for topology, worker layout, and runtime settings — ready to accept connections
 
 ---
 

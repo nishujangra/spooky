@@ -1609,7 +1609,7 @@ docker compose logs -f spooky
 <li>Drops privileges if running as root and <code>security.privileges.enabled=true</code></li>
 <li>Spawns worker threads (data plane)</li>
 <li>Spawns control-plane tasks (health checks, metrics)</li>
-<li>Logs "Spooky is starting" — ready to accept connections</li>
+<li>Emits structured startup logs for topology, worker layout, and runtime settings — ready to accept connections</li>
 </ol>
 <hr />
 <h2 id="health-and-readiness-checks">Health and Readiness Checks</h2>
