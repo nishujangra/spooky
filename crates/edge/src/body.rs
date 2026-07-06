@@ -1,38 +1,113 @@
-use bytes::Bytes;
-use hyper::body::{Body, Frame};
-use std::{
-    convert::Infallible,
-    pin::Pin,
-    task::{Context, Poll},
-};
-use tokio::sync::mpsc;
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+    use std::pin::Pin;
+    use std::task::{Context, Poll};
 
-/// A streaming HTTP body backed by a tokio mpsc channel.
-/// The quiche Data handler sends chunks through the sender;
-/// hyper reads them from the receiver as the H2 request body.
-pub struct ChannelBody {
-    rx: mpsc::Receiver<Bytes>,
-}
+    #[tokio::test]
+    async fn test_channel_body_multiple_chunks() {
+        let (tx, mut body) = ChannelBody::channel(16);
 
-impl ChannelBody {
-    pub fn channel(buffer: usize) -> (mpsc::Sender<Bytes>, Self) {
-        let (tx, rx) = mpsc::channel(buffer);
-        (tx, Self { rx })
+        let chunk1 = Bytes::from("hello");
+        let chunk2 = Bytes::from("world");
+
+        tx.send(chunk1.clone()).await.unwrap();
+        tx.send(chunk2.clone()).await.unwrap();
+        drop(tx);
+
+        let mut cx = Context::from_waker(std::task::Waker::noop().into());
+        let mut body = Pin::new(&mut body);
+
+        let frame1 = hyper::body::Frame::data(chunk1);
+        let frame2 = hyper::body::Frame::data(chunk2);
+
+        match body.as_mut().poll_frame(&mut cx) {
+            Poll::Ready(Some(Ok(frame))) => assert_eq!(frame, frame1),
+            _ => panic!("Expected first frame"),
+        }
+
+        match body.as_mut().poll_frame(&mut cx) {
+            Poll::Ready(Some(Ok(frame))) => assert_eq!(frame, frame2),
+            _ => panic!("Expected second frame"),
+        }
+
+        match body.as_mut().poll_frame(&mut cx) {
+            Poll::Ready(None) => {}
+            _ => panic!("Expected end of stream"),
+        }
     }
-}
 
-impl Body for ChannelBody {
-    type Data = Bytes;
-    type Error = Infallible;
+    #[tokio::test]
+    async fn test_channel_body_sender_dropped() {
+        let (tx, mut body) = ChannelBody::channel(16);
+        drop(tx);
 
-    fn poll_frame(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
-        match self.rx.poll_recv(cx) {
-            Poll::Ready(Some(chunk)) => Poll::Ready(Some(Ok(Frame::data(chunk)))),
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
+        let mut cx = Context::from_waker(std::task::Waker::noop().into());
+        let mut body = Pin::new(&mut body);
+
+        match body.as_mut().poll_frame(&mut cx) {
+            Poll::Ready(None) => {}
+            _ => panic!("Expected Poll::Ready(None) when sender is dropped"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_channel_body_empty() {
+        let (_tx, mut body) = ChannelBody::channel(16);
+
+        let mut cx = Context::from_waker(std::task::Waker::noop().into());
+        let mut body = Pin::new(&mut body);
+
+        match body.as_mut().poll_frame(&mut cx) {
+            Poll::Pending => {}
+            _ => panic!("Expected Poll::Pending when no data and sender is alive"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_channel_body_large_chunks() {
+        let (tx, mut body) = ChannelBody::channel(64);
+
+        let large_chunk = Bytes::from(vec![0u8; 1000]);
+        let frame = hyper::body::Frame::data(large_chunk.clone());
+        tx.send(large_chunk).await.unwrap();
+        drop(tx);
+
+        let mut cx = Context::from_waker(std::task::Waker::noop().into());
+        let mut body = Pin::new(&mut body);
+
+        match body.as_mut().poll_frame(&mut cx) {
+            Poll::Ready(Some(Ok(f))) => assert_eq!(f, frame),
+            _ => panic!("Expected large chunk frame"),
+        }
+
+        match body.as_mut().poll_frame(&mut cx) {
+            Poll::Ready(None) => {}
+            _ => panic!("Expected end of stream"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_channel_body_multiple_chunks_with_drop() {
+        let (tx, mut body) = ChannelBody::channel(16);
+
+        let chunk1 = Bytes::from("first");
+        let frame1 = hyper::body::Frame::data(chunk1.clone());
+        tx.send(chunk1).await.unwrap();
+        drop(tx);
+
+        let mut cx = Context::from_waker(std::task::Waker::noop().into());
+        let mut body = Pin::new(&mut body);
+
+        match body.as_mut().poll_frame(&mut cx) {
+            Poll::Ready(Some(Ok(frame))) => assert_eq!(frame, frame1),
+            _ => panic!("Expected first frame"),
+        }
+
+        match body.as_mut().poll_frame(&mut cx) {
+            Poll::Ready(None) => {}
+            _ => panic!("Expected end of stream after sender dropped"),
         }
     }
 }
