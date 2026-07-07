@@ -1439,7 +1439,7 @@
 <li>full configuration hot reload is not implemented</li>
 <li>upstream forwarding is scheme-driven: HTTP/2 for <code>https://</code> backends, HTTP/1.1 for <code>http://</code> backends</li>
 <li>dynamic control-plane capability is limited</li>
-<li>first-class auth, rate-limiting, and policy features are not yet present</li>
+<li>auth is limited to API key, local JWT, and per-upstream external auth (HTTP/OIDC); there is no generic policy engine, rate-limiting framework, or JWKS-based token validation</li>
 <li>service discovery is limited to DNS refresh rather than a richer orchestration-native model</li>
 </ul>
 <h2 id="production-ready-today">Production-Ready Today</h2>
@@ -1457,6 +1457,8 @@
 <li>overload handling through inflight limits, queue caps, adaptive admission, and brownout logic</li>
 <li>graceful drain and bounded shutdown behavior</li>
 <li>Prometheus metrics and control-plane health/readiness/runtime endpoints</li>
+<li>per-upstream API key and local JWT authentication, with scope/role checks</li>
+<li>per-upstream async external auth (HTTP subrequest or OIDC discovery/introspection), non-blocking against the H3 loop, with configurable fail-open/fail-closed behavior and response-header allowlisting</li>
 </ul>
 <h2 id="production-capable-with-caveats">Production-Capable With Caveats</h2>
 <p>The following capabilities exist, but operators should treat them as features that still need careful rollout discipline:</p>
@@ -1476,7 +1478,7 @@
 <li>no upstream HTTP/3 forwarding mode</li>
 <li>no broad request mirroring, canary traffic splitting, or advanced traffic policy engine</li>
 <li>no first-class rate limiting framework</li>
-<li>no built-in JWT, OIDC, external auth, API key, or RBAC layer</li>
+<li>no JWKS-based JWT validation, interactive OIDC login/session-cookie flows, or generic RBAC/policy engine beyond scope/role checks on JWT claims</li>
 <li>no broad plugin or extension system</li>
 <li>no orchestration-native service discovery beyond DNS polling</li>
 </ul>
@@ -1503,7 +1505,7 @@
 <li>Dynamic route and upstream updates without restart.</li>
 <li>Refactoring of the oversized edge runtime into smaller subsystems.</li>
 <li>Fuzzing and deeper parser/protocol hardening.</li>
-<li>First-class rate limiting and auth/policy features.</li>
+<li>First-class rate limiting and a generic policy engine (auth now covers API key, local JWT, and external/OIDC checks).</li>
 <li>Better operator guidance for rollout, recovery, and ongoing operations.</li>
 </ol>
 <h2 id="related-pages">Related Pages</h2>

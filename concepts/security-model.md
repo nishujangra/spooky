@@ -91,14 +91,28 @@ Spooky includes multiple defensive layers intended to limit blast radius from ab
 
 These features are part of the project’s security posture because they reduce denial-of-service amplification inside the process.
 
+## Request Authentication And Authorization Model
+
+Spooky supports per-upstream request authentication, checked in this order:
+
+- **API key**: a configured header is compared against a static key list. Local, synchronous, no network call.
+- **JWT**: local HS256 signature and claim validation (issuer, audience, clock skew), plus optional scope/role checks against token claims. Local, synchronous, no network call.
+- **External auth**: an async HTTP subrequest (generic HTTP or OIDC-shaped) sent to a configured auth endpoint, gated before upstream admission so the request never reaches the backend while auth is pending. Only one external auth provider is supported per upstream, and it cannot be combined with API key or JWT in the current version.
+
+External auth details:
+
+- The auth call runs on a dedicated HTTP client, isolated from upstream backend transport, inflight accounting, and health state — an auth outage cannot degrade backend routing.
+- A decision maps to `Allow`, `Deny`, `Redirect`, or `Challenge`; only headers on an explicit allowlist are copied from the auth server's response into the response sent to the client.
+- Failure mode (fail-open or fail-closed) is configured per provider. The default is fail-closed: a timeout or transport error denies the request rather than silently admitting it.
+- OIDC mode uses discovery and token introspection to validate bearer tokens. It does not fetch or validate against JWKS, does not cache the discovery document (refetched per request), and does not implement interactive login or session-cookie flows.
+
 ## What Spooky Does Not Currently Provide
 
 Spooky does not currently provide first-class:
 
-- JWT validation
-- OIDC login flows
-- external auth delegation
-- RBAC policy evaluation
+- JWKS-based JWT validation or key rotation
+- OIDC login flows (interactive/browser SSO) or session-cookie handling
+- a generic RBAC/policy engine beyond scope/role checks on JWT claims
 - WAF behavior
 - deep content inspection
 - extensible third-party auth/policy modules

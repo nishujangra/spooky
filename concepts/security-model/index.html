@@ -1511,13 +1511,26 @@
 <li>adaptive admission and brownout controls</li>
 </ul>
 <p>These features are part of the project’s security posture because they reduce denial-of-service amplification inside the process.</p>
+<h2 id="request-authentication-and-authorization-model">Request Authentication And Authorization Model</h2>
+<p>Spooky supports per-upstream request authentication, checked in this order:</p>
+<ul>
+<li><strong>API key</strong>: a configured header is compared against a static key list. Local, synchronous, no network call.</li>
+<li><strong>JWT</strong>: local HS256 signature and claim validation (issuer, audience, clock skew), plus optional scope/role checks against token claims. Local, synchronous, no network call.</li>
+<li><strong>External auth</strong>: an async HTTP subrequest (generic HTTP or OIDC-shaped) sent to a configured auth endpoint, gated before upstream admission so the request never reaches the backend while auth is pending. Only one external auth provider is supported per upstream, and it cannot be combined with API key or JWT in the current version.</li>
+</ul>
+<p>External auth details:</p>
+<ul>
+<li>The auth call runs on a dedicated HTTP client, isolated from upstream backend transport, inflight accounting, and health state — an auth outage cannot degrade backend routing.</li>
+<li>A decision maps to <code>Allow</code>, <code>Deny</code>, <code>Redirect</code>, or <code>Challenge</code>; only headers on an explicit allowlist are copied from the auth server's response into the response sent to the client.</li>
+<li>Failure mode (fail-open or fail-closed) is configured per provider. The default is fail-closed: a timeout or transport error denies the request rather than silently admitting it.</li>
+<li>OIDC mode uses discovery and token introspection to validate bearer tokens. It does not fetch or validate against JWKS, does not cache the discovery document (refetched per request), and does not implement interactive login or session-cookie flows.</li>
+</ul>
 <h2 id="what-spooky-does-not-currently-provide">What Spooky Does Not Currently Provide</h2>
 <p>Spooky does not currently provide first-class:</p>
 <ul>
-<li>JWT validation</li>
-<li>OIDC login flows</li>
-<li>external auth delegation</li>
-<li>RBAC policy evaluation</li>
+<li>JWKS-based JWT validation or key rotation</li>
+<li>OIDC login flows (interactive/browser SSO) or session-cookie handling</li>
+<li>a generic RBAC/policy engine beyond scope/role checks on JWT claims</li>
 <li>WAF behavior</li>
 <li>deep content inspection</li>
 <li>extensible third-party auth/policy modules</li>
@@ -2051,6 +2064,14 @@
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#resource-exhaustion-defense-model');">
             Resource-Exhaustion Defense Model
+        </a>
+        
+
+        
+        <a href="#request-authentication-and-authorization-model"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#request-authentication-and-authorization-model');">
+            Request Authentication And Authorization Model
         </a>
         
 

@@ -30,10 +30,10 @@ This page lists the most important current product limits so operators and contr
 
 ## Security And Policy Limits
 
-- No JWT validation.
-- No OIDC or full auth gateway feature set.
-- No external authorization filter.
-- No RBAC or generic policy engine.
+- JWT validation is local (HS256) and per-upstream; there is no external JWKS fetch or key rotation support.
+- RBAC is limited to scope/role checks against JWT claims; there is no generic policy engine.
+- External auth (HTTP subrequest and OIDC) is implemented as a non-blocking async check per upstream, with configurable fail-open/fail-closed behavior; there is no interactive login or session-cookie flow.
+- OIDC support covers discovery and token introspection only; there is no JWKS fetch or local token signature validation, and the discovery document is refetched on every request rather than cached.
 - No WAF or advanced request-inspection layer.
 
 ## Platform And Ecosystem Limits

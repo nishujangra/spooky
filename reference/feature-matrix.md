@@ -101,10 +101,11 @@ Legend:
 | --- | --- | --- |
 | Header mutation for forwarding policy | `Done` | Host and forwarded-header policy exists |
 | Generic request/response rewrite engine | `Missing` | Not a broad filter system |
-| JWT validation | `Missing` | Not implemented |
-| OIDC / auth gateway | `Missing` | Not implemented |
-| External auth integration | `Missing` | Not implemented |
-| RBAC / policy engine | `Missing` | Not implemented |
+| API key auth | `Done` | Per-upstream, local fast path |
+| JWT validation | `Done` | Local HS256 validation, per-upstream |
+| RBAC / policy engine | `Partial` | Scope/role requirements enforced against JWT claims only |
+| External auth integration | `Done` | Async HTTP subrequest per upstream; non-blocking, fail-open/fail-closed configurable |
+| OIDC / auth gateway | `Partial` | Discovery + token introspection; no JWKS/local signature validation, no interactive login/session-cookie flows |
 | WAF capabilities | `Missing` | Not implemented |
 | Plugin / extension model | `Missing` | Not implemented |
 

@@ -1816,24 +1816,29 @@
 <td>Not a broad filter system</td>
 </tr>
 <tr>
+<td>API key auth</td>
+<td><code>Done</code></td>
+<td>Per-upstream, local fast path</td>
+</tr>
+<tr>
 <td>JWT validation</td>
-<td><code>Missing</code></td>
-<td>Not implemented</td>
-</tr>
-<tr>
-<td>OIDC / auth gateway</td>
-<td><code>Missing</code></td>
-<td>Not implemented</td>
-</tr>
-<tr>
-<td>External auth integration</td>
-<td><code>Missing</code></td>
-<td>Not implemented</td>
+<td><code>Done</code></td>
+<td>Local HS256 validation, per-upstream</td>
 </tr>
 <tr>
 <td>RBAC / policy engine</td>
-<td><code>Missing</code></td>
-<td>Not implemented</td>
+<td><code>Partial</code></td>
+<td>Scope/role requirements enforced against JWT claims only</td>
+</tr>
+<tr>
+<td>External auth integration</td>
+<td><code>Done</code></td>
+<td>Async HTTP subrequest per upstream; non-blocking, fail-open/fail-closed configurable</td>
+</tr>
+<tr>
+<td>OIDC / auth gateway</td>
+<td><code>Partial</code></td>
+<td>Discovery + token introspection; no JWKS/local signature validation, no interactive login/session-cookie flows</td>
 </tr>
 <tr>
 <td>WAF capabilities</td>
