@@ -40,7 +40,7 @@ cargo build --release
 spooky --config /etc/spooky/config.yaml
 ```
 
-### Validate config without starting
+### Validate config without starting (Current version of spooky does not support validate flag) (planned feature)
 
 ```bash
 spooky --config /etc/spooky/config.yaml --validate
@@ -249,13 +249,13 @@ If `observability.control_api.enabled=true`:
 
 ```bash
 # Liveness — is the process alive?
-curl http://127.0.0.1:9902/health
+curl -k https://127.0.0.1:9902/health
 
 # Readiness — is Spooky ready to serve traffic?
-curl http://127.0.0.1:9902/ready
+curl -k https://127.0.0.1:9902/ready
 
 # Runtime info (requires auth token)
-curl -H "Authorization: Bearer <token>" http://127.0.0.1:9902/admin/runtime
+curl -k -H "Authorization: Bearer <token>" https://127.0.0.1:9902/admin/runtime
 ```
 
 ---

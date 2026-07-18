@@ -404,8 +404,8 @@ observability:
 
 Check readiness:
 ```bash
-curl http://127.0.0.1:9902/ready
-curl http://127.0.0.1:9902/health
+curl -k https://127.0.0.1:9902/ready
+curl -k https://127.0.0.1:9902/health
 ```
 
 Reload listener certificates without restarting the process:

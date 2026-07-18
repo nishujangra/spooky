@@ -20,10 +20,13 @@ This page covers:
 
 Default coverage now lives on [Configuration Defaults](defaults.md) so the full inventory can stay centralized and easier to audit against the code.
 
-This page does not change the current product limits:
+This page does not change the current product behavior:
 
-- full config hot reload is not implemented
-- certificate reload covers new handshakes only
+- configuration hot reload is supported via `POST /admin/runtime/reload`: the full config is
+  re-read, validated, and applied through an atomic runtime swap (routes, upstreams, backends,
+  timeouts, limits, and resilience policies). Only startup-owned settings (log, tracing, thread
+  counts) and listener removal / bind-address changes still require a restart.
+- certificate reload (`POST /admin/runtime/reload-certs`) covers new handshakes only
 - backend transport is scheme-driven: `https://` backends use HTTP/2, `http://` backends use HTTP/1.1
 
 ## Reading This Reference
@@ -838,9 +841,13 @@ Controls resource limits, tuning knobs, and connection-flood protection. All fie
 | `control_plane_threads` | integer | No | `2` | Tokio worker threads for the control-plane runtime (startup, health checks, metrics, and other async control tasks) |
 | `reuseport` | bool | No | `true` | Enable `SO_REUSEPORT`; required when `worker_threads > 1` |
 | `pin_workers` | bool | No | `false` | Pin each worker thread to a dedicated CPU core |
+| `packet_shards_per_worker` | integer | No | `1` | Packet-processing shards per bound UDP worker socket; `1` preserves single-loop behavior, values >1 enable parallel shard workers |
+| `packet_shard_queue_capacity` | integer | No | `2048` | Capacity of the bounded ingress queue per shard |
+| `packet_shard_queue_max_bytes` | integer | No | `67108864` | Memory-aware cap (bytes) for queued datagram bytes per ingress shard dispatch queue |
 | `global_inflight_limit` | integer | No | `4096` | Maximum concurrent in-flight requests across all upstreams |
 | `per_upstream_inflight_limit` | integer | No | `1024` | Maximum concurrent in-flight requests per upstream pool |
 | `per_backend_inflight_limit` | integer | No | `64` | Maximum concurrent in-flight requests per backend |
+| `inflight_acquire_wait_ms` | integer | No | `0` | Optional micro-wait (ms) before shedding on global/upstream inflight permit acquisition; `0` sheds immediately |
 | `backend_timeout_ms` | integer | No | `2000` | Initial backend response timeout (ms) |
 | `backend_connect_timeout_ms` | integer | No | `500` | Backend TCP/TLS handshake timeout (ms); must be ≤ `backend_timeout_ms` |
 | `backend_body_idle_timeout_ms` | integer | No | `2000` | Idle timeout while streaming response body (ms); must be ≥ `backend_timeout_ms` |
@@ -862,6 +869,10 @@ Controls resource limits, tuning knobs, and connection-flood protection. All fie
 | `quic_initial_max_streams_bidi` | integer | No | `100` | Maximum concurrent bidirectional QUIC streams per connection |
 | `quic_initial_max_streams_uni` | integer | No | `100` | Maximum concurrent unidirectional QUIC streams per connection |
 | `max_response_body_bytes` | integer | No | `104857600` | Hard cap on upstream response body bytes per stream; streams exceeding this return 503 (`upstream response body too large`) |
+| `max_request_body_bytes` | integer | No | `1000000` | Hard cap on request body bytes per stream; requests exceeding this are rejected with 413. Must be ≤ `quic_initial_max_stream_data` |
+| `request_buffer_global_cap_bytes` | integer | No | `67108864` | Global cap (bytes) for data buffered in request backpressure queues across a worker |
+| `unknown_length_response_prebuffer_bytes` | integer | No | `2097152` | Max bytes buffered for unknown-length upstream responses before headers are emitted; responses exceeding this are terminated with an overload response |
+| `client_body_idle_timeout_ms` | integer | No | `10000` | Idle timeout (ms) for request-body upload progress; the stream is failed if no body bytes arrive within this period |
 
 ### Connection flood protection
 
@@ -1038,7 +1049,7 @@ Request-shape rules enforced by the runtime:
 
 ### watchdog
 
-Monitors worker health and triggers a restart hook when error rates or stall conditions exceed thresholds.
+Monitors worker health and triggers a restart command when error rates or stall conditions exceed thresholds.
 
 | Property | Type | Required | Default | Description |
 |----------|------|----------|---------|-------------|
@@ -1048,10 +1059,11 @@ Monitors worker health and triggers a restart hook when error rates or stall con
 | `timeout_error_rate_percent` | integer | No | `60` | Trigger if timeout errors exceed this % of requests in a window |
 | `min_requests_per_window` | integer | No | `20` | Minimum requests in a window before error-rate check applies |
 | `overload_inflight_percent` | integer | No | `95` | Trigger if in-flight % exceeds this threshold |
-| `unhealthy_consecutive_windows` | integer | No | `3` | Consecutive unhealthy windows before invoking the restart hook |
+| `unhealthy_consecutive_windows` | integer | No | `3` | Consecutive unhealthy windows before invoking the restart command |
 | `drain_grace_ms` | integer | No | `8000` | Grace period (ms) to drain connections before restarting |
-| `restart_cooldown_ms` | integer | No | `120000` | Minimum time (ms) between restart hook invocations |
-| `restart_hook` | string | No | `null` | Shell command invoked on restart trigger |
+| `restart_cooldown_ms` | integer | No | `120000` | Minimum time (ms) between restart command invocations |
+| `restart_command` | list of strings | No | `[]` | Command invoked on restart trigger; first element is the executable, the rest are args. Avoids shell evaluation. |
+| `restart_hook` | string | No | `null` | **Deprecated and rejected at startup** — setting it is a hard config error. Use `restart_command` instead. |
 
 ### Startup Validation Errors
 
@@ -1115,7 +1127,8 @@ Key fields:
 
 Key fields:
 
-- `observability.control_api.auth_token`: bearer token required for runtime, reload-certs, and restart endpoints (`Authorization: Bearer <token>`).
+- `observability.control_api.auth_token`: bearer token required for runtime, reload, reload-certs, and restart endpoints (`Authorization: Bearer <token>`).
+- `observability.control_api.reload_path` (default: `/admin/runtime/reload`): authenticated POST endpoint that re-reads the config file and applies the full configuration via an atomic runtime swap (routes, upstreams, backends, timeouts, limits, resilience policies). Startup-owned settings and listener bind/removal changes are rejected and still require a restart.
 - `observability.control_api.reload_certs_path`: authenticated POST endpoint that reloads listener certificate and client-auth CA material for new handshakes.
 - `observability.control_api.max_connections` (default: `256`): concurrent connection cap.
 - `observability.control_api.connection_timeout_ms` (default: `30000`): per-connection lifetime timeout.

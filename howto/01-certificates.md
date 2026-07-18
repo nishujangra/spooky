@@ -3,7 +3,7 @@
 Spooky requires TLS certificates for both the QUIC/HTTP3 listener and the HTTP/1.1+HTTP/2 bootstrap TLS listener.
 
 - **Certificate format:** PEM X.509 (`-----BEGIN CERTIFICATE-----`)
-- **Key format:** PKCS#8 PEM (`-----BEGIN PRIVATE KEY-----`)
+- **Key format:** PEM private key — both PKCS#8 (`-----BEGIN PRIVATE KEY-----`) and PKCS#1 (`-----BEGIN RSA PRIVATE KEY-----`) are accepted
 - Both are validated at startup — spooky exits if either is missing or malformed
 
 ---
@@ -130,13 +130,13 @@ openssl x509 -in /etc/spooky/certs/fullchain.pem -noout -issuer -subject -dates
 openssl x509 -noout -modulus -in /etc/spooky/certs/fullchain.pem | openssl md5
 openssl pkey -noout -modulus -in /etc/spooky/certs/privkey.pem   | openssl md5
 
-# Check key format (must show PRIVATE KEY, not RSA PRIVATE KEY)
+# Check key format — both PKCS#8 and PKCS#1 PEM keys are accepted
 head -1 /etc/spooky/certs/privkey.pem
-# Good:    -----BEGIN PRIVATE KEY-----
-# Bad:     -----BEGIN RSA PRIVATE KEY-----  (PKCS#1 — needs conversion)
+# PKCS#8:  -----BEGIN PRIVATE KEY-----      (accepted)
+# PKCS#1:  -----BEGIN RSA PRIVATE KEY-----  (also accepted)
 ```
 
-If the key is PKCS#1, convert it:
+Both key encodings load fine. If you nonetheless want to normalize a PKCS#1 key to PKCS#8:
 ```bash
 openssl pkcs8 -topk8 -nocrypt -in old-privkey.pem -out /etc/spooky/certs/privkey.pem
 ```
@@ -148,7 +148,7 @@ openssl pkcs8 -topk8 -nocrypt -in old-privkey.pem -out /etc/spooky/certs/privkey
 | Error | Cause | Fix |
 |-------|-------|-----|
 | `Cannot open listen.tls.cert` | Wrong path or permissions | `chown ubuntu:ubuntu /etc/spooky/certs/*` |
-| `no private key found` | Key is PKCS#1 not PKCS#8 | Convert with `openssl pkcs8 -topk8 -nocrypt` |
+| `Cannot parse PEM private key` | Key file is malformed or not a PEM private key | Ensure the file is a valid PEM key (PKCS#8 or PKCS#1 both work) |
 | `NET::ERR_CERT_AUTHORITY_INVALID` | Self-signed cert | Use Let's Encrypt cert (Options 1–3 above) |
 | `NET::ERR_CERT_COMMON_NAME_INVALID` | Cert domain doesn't match | Issue cert for the exact domain being served |
 | `HSTS` blocks bypass | Domain has HSTS preloaded | Must use a valid trusted cert — no bypass possible |

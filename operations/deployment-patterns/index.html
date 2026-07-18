@@ -1466,11 +1466,14 @@
 <li>there is no broad policy engine</li>
 </ul>
 <h3 id="general-api-gateway-replacement">General API Gateway Replacement</h3>
-<p>Weaker fit today because:</p>
+<p>Partial fit today. Per-upstream auth is implemented and enforced — API-key, local HS256 JWT with
+scope/role RBAC, and external auth (HTTP subrequest or OIDC) — and scoped rate limiting
+(route/client/tenant/token) ships. It is weaker than a full API gateway because:</p>
 <ul>
-<li>JWT and auth features are missing</li>
-<li>broad rate limiting is missing</li>
-<li>rich request transformation is missing</li>
+<li>JWT validation is HS256-only (no RS256/ES256 or JWKS-backed rotation)</li>
+<li>rate limiting is per-instance and scope-based (no distributed/cross-instance rate limiting)</li>
+<li>rich request/response transformation is missing</li>
+<li>there is no generic policy engine or auth-provider chaining</li>
 </ul>
 <h3 id="broad-legacy-upstream-compatibility-proxy">Broad Legacy Upstream Compatibility Proxy</h3>
 <p>Weaker fit today because:</p>

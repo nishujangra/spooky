@@ -1459,7 +1459,7 @@ cargo build --release
 <h3 id="basic-start">Basic start</h3>
 <pre><code class="language-bash">spooky --config /etc/spooky/config.yaml
 </code></pre>
-<h3 id="validate-config-without-starting">Validate config without starting</h3>
+<h3 id="validate-config-without-starting-current-version-of-spooky-does-not-support-validate-flag-planned-feature">Validate config without starting (Current version of spooky does not support validate flag) (planned feature)</h3>
 <pre><code class="language-bash">spooky --config /etc/spooky/config.yaml --validate
 </code></pre>
 <p>Spooky exits 0 on success, 1 on validation failure, with a descriptive error message.</p>
@@ -1615,13 +1615,13 @@ docker compose logs -f spooky
 <h2 id="health-and-readiness-checks">Health and Readiness Checks</h2>
 <p>If <code>observability.control_api.enabled=true</code>:</p>
 <pre><code class="language-bash"># Liveness — is the process alive?
-curl http://127.0.0.1:9902/health
+curl -k https://127.0.0.1:9902/health
 
 # Readiness — is Spooky ready to serve traffic?
-curl http://127.0.0.1:9902/ready
+curl -k https://127.0.0.1:9902/ready
 
 # Runtime info (requires auth token)
-curl -H &quot;Authorization: Bearer &lt;token&gt;&quot; http://127.0.0.1:9902/admin/runtime
+curl -k -H &quot;Authorization: Bearer &lt;token&gt;&quot; https://127.0.0.1:9902/admin/runtime
 </code></pre>
 <hr />
 <h2 id="graceful-shutdown">Graceful Shutdown</h2>
@@ -2181,10 +2181,10 @@ curl --http3-only -k https://api.example.com/health
             Basic start
         </a>
         
-        <a href="#validate-config-without-starting"
+        <a href="#validate-config-without-starting-current-version-of-spooky-does-not-support-validate-flag-planned-feature"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#validate-config-without-starting');">
-            Validate config without starting
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#validate-config-without-starting-current-version-of-spooky-does-not-support-validate-flag-planned-feature');">
+            Validate config without starting (Current version of spooky does not support validate flag) (planned feature)
         </a>
         
         <a href="#foreground-with-debug-logging-development"

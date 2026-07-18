@@ -38,40 +38,55 @@ struct Cli {
 
 ### Main Flow
 
+The data plane is **multi-worker** (one `SO_REUSEPORT` socket + OS thread per worker, optionally
+sub-sharded into packet-shard threads). The primary thread does not run a `poll()` loop; it builds
+a shared runtime bundle, spawns one managed listener group per configured listener, and then runs a
+supervisory reconcile/collect loop.
+
 ```rust
-#[tokio::main]
-async fn main() {
-    // 1. Parse CLI arguments
-    let cli = Cli::parse();
+fn main() {
+    app::main_entry(); // parse CLI, load + validate config, init logger, drop-privilege prep
+}
 
-    // 2. Load configuration
-    let config = spooky_config::loader::read_config(&config_path)?;
+async fn run(runtime_config: RuntimeConfig, log: Log, uid: libc::uid_t, config_path: String) {
+    // 1. Build the shared runtime state + atomically-swappable RuntimeBundleHandle
+    let bundle = QUICListener::build_runtime_bundle(config_path, log, &runtime_config)?;
+    let shared_state = Arc::clone(&bundle.shared_state);
+    let runtime_bundle = Arc::new(RuntimeBundleHandle::new(bundle));
 
-    // 3. Initialize logger
-    spooky_utils::logger::init_logger(&config.log.level);
+    // 2. Spawn control-plane tasks (health checks, metrics/control API, watchdog, DNS refresh)
+    QUICListener::spawn_control_plane_tasks_with_runtime_bundle(&runtime_config, &shared_state,
+        Arc::clone(&runtime_bundle), effective_worker_count)?;
 
-    // 4. Validate configuration
-    spooky_config::validator::validate(&config);
-
-    // 5. Create QUIC listener
-    let mut listener = spooky_edge::QUICListener::new(config)?;
-
-    // 6. Setup shutdown handler
+    // 3. Install the shutdown signal handler
     let shutdown = Arc::new(AtomicBool::new(false));
-    tokio::spawn(signal_handler(shutdown.clone()));
+    tokio::spawn(/* wait_for_shutdown_signal → shutdown.store(true) */);
 
-    // 7. Main event loop
+    // 4. Spawn one managed listener group per configured listener
+    //    (each group owns its SO_REUSEPORT worker/shard threads)
+    let mut listener_groups = Vec::new();
+    for listener_config in runtime_config.listener_runtime_configs() {
+        listener_groups.push(spawn_managed_listener_group(
+            listener_config, Arc::clone(&shared_state), Arc::clone(&runtime_bundle), base)?);
+    }
+    apply_privilege_drop(uid, &runtime_config);
+
+    // 5. Supervisory loop on the primary thread: reap finished groups + reconcile
+    //    listener topology against hot-reloaded config (NOT a packet poll loop)
     while !shutdown.load(Ordering::Relaxed) {
-        listener.poll();
+        collect_finished_listener_groups(&mut listener_groups, &mut worker_failed);
+        reconcile_listener_groups(&runtime_bundle, &mut listener_groups);
+        if worker_failed { break; }
+        tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
-    // 8. Graceful shutdown
-    listener.start_draining();
-    while !listener.drain_complete() {
-        listener.poll();
-    }
+    // 6. Graceful drain of all listener groups
+    shutdown_listener_groups(&mut listener_groups, &mut worker_failed).await;
 }
 ```
+
+Each worker/shard thread runs its own `recv_from` → feed-quiche → poll-HTTP/3-events loop
+internally; that per-worker loop is where packets are actually processed.
 
 ### Dependencies
 
@@ -95,21 +110,35 @@ async fn main() {
 
 ### Key Types
 
+The listener is constructed per worker/shard from shared runtime state (not one monolithic owner).
+Fields shown are abbreviated — the real struct (`crates/edge/src/runtime/listener.rs`) carries the
+full set of timeout/limit fields and connection-routing maps.
+
 ```rust
 pub struct QUICListener {
     pub socket: UdpSocket,
-    pub config: Config,
+    pub local_addr: SocketAddr,
+    pub config: ListenerRuntimeConfig,          // not the raw Config
+    pub runtime_bundle: Option<Arc<RuntimeBundleHandle>>, // atomically-swappable runtime (hot reload)
     pub quic_config: quiche::Config,
     pub h3_config: Arc<quiche::h3::Config>,
-    pub h2_pool: Arc<H2Pool>,
-    pub upstream_pools: HashMap<String, Arc<Mutex<UpstreamPool>>>,
-    pub load_balancer: LoadBalancing,
-    pub metrics: Metrics,
+    pub transport_pool: Arc<UpstreamTransportPool>,       // per-backend H1/H2 pools
+    pub upstream_pools: HashMap<String, Arc<RwLock<UpstreamPool>>>,
+    pub upstream_inflight: HashMap<String, Arc<Semaphore>>,
+    pub global_inflight: Arc<Semaphore>,
+    pub routing_index: Arc<RouteIndex>,          // deterministic trie router (no owned LoadBalancing field)
+    pub metrics: Arc<Metrics>,                   // shared across all workers
+    pub resilience: Arc<RuntimeResilience>,      // brownout, circuit breakers, admission, rate limits
+    pub watchdog: Arc<WatchdogCoordinator>,
     pub draining: bool,
     pub drain_start: Option<Instant>,
-    pub recv_buf: [u8; 65535],
-    pub send_buf: [u8; 65535],
-    pub connections: HashMap<Vec<u8>, QuicConnection>,
+    // … plus backend/client timeout + body/buffer limit fields …
+    recv_buf: Box<[u8; MAX_DATAGRAM_SIZE_BYTES]>, // heap-boxed, not inline [u8; 65535]
+    send_buf: Box<[u8; MAX_DATAGRAM_SIZE_BYTES]>,
+    connections: HashMap<Arc<[u8]>, QuicConnection>, // keyed by SCID (Arc<[u8]>)
+    cid_routes: HashMap<Arc<[u8]>, Arc<[u8]>>,
+    peer_routes: HashMap<SocketAddr, Arc<[u8]>>,
+    conn_rate_limiter: TokenBucket,              // new-connection admission
 }
 
 pub struct QuicConnection {
@@ -121,21 +150,39 @@ pub struct QuicConnection {
     pub last_activity: Instant,
 }
 
+// RequestEnvelope streams the body via an mpsc channel with a bounded overflow buffer —
+// it does NOT hold the whole body as a Vec<u8>. Abbreviated; the real struct also carries
+// tracing, routing-decision, admission-permit, and async-auth/handoff fields.
 pub struct RequestEnvelope {
+    pub request_id: u64,
     pub method: String,
     pub path: String,
     pub authority: Option<String>,
-    pub headers: Vec<(Vec<u8>, Vec<u8>)>,
-    pub body: Vec<u8>,
+    pub body_tx: Option<mpsc::Sender<Bytes>>,   // sender half; dropping it signals EOF to hyper
+    pub body_buf: VecDeque<Bytes>,              // bounded overflow before the channel has capacity
+    pub body_buf_bytes: usize,
+    pub body_bytes_received: usize,
+    pub bodyless_mode: bool,
     pub start: Instant,
+    // … routing decision, inflight/admission permits, async external-auth handoff, phase state …
 }
 
+// Metrics has ~70 AtomicU64 counters/gauges plus label-keyed maps and latency histograms —
+// far more than the five request counters. A representative subset:
 pub struct Metrics {
     pub requests_total: AtomicU64,
     pub requests_success: AtomicU64,
     pub requests_failure: AtomicU64,
+    pub request_validation_rejects: AtomicU64,
+    pub external_auth_allowed: AtomicU64,        // + denied/timeout/error
+    pub request_rate_limited: AtomicU64,
+    pub circuit_breaker_rejected_total: AtomicU64,
+    pub brownout_active: AtomicU64,
+    pub active_connections: AtomicU64,
     pub backend_timeouts: AtomicU64,
     pub backend_errors: AtomicU64,
+    // … overload-shed-by-reason, hedge, retry, health-check, DNS-refresh, ingress, watchdog
+    //   counters, plus per-route / per-worker label maps and latency histograms …
 }
 ```
 
@@ -156,12 +203,18 @@ impl QUICListener {
     pub fn drain_complete(&self) -> bool;
 }
 
+// Metrics exposes one increment/observe helper per counter/gauge/histogram (dozens total),
+// plus render_prometheus() to serialize the whole set in Prometheus text format. Examples:
 impl Metrics {
     pub fn inc_total(&self);
     pub fn inc_success(&self);
     pub fn inc_failure(&self);
     pub fn inc_timeout(&self);
     pub fn inc_backend_error(&self);
+    pub fn inc_circuit_breaker_rejected(&self);
+    pub fn inc_request_rate_limited(&self);
+    // … one per metric family; see crates/edge/src/metrics/ …
+    pub fn render_prometheus(&self) -> String;
 }
 ```
 

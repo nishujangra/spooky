@@ -1590,8 +1590,8 @@ upstream:
   https://proxy.example.com:9889/health
 </code></pre>
 <p><strong>Check health and readiness</strong> (control API, default port 9902):</p>
-<pre><code class="language-bash">curl http://127.0.0.1:9902/health
-curl http://127.0.0.1:9902/ready
+<pre><code class="language-bash">curl -k https://127.0.0.1:9902/health
+curl -k https://127.0.0.1:9902/ready
 </code></pre>
 <h3 id="log-levels">Log levels</h3>
 <p>Spooky accepts both its own names and the standard equivalents in <code>log.level</code> or <code>RUST_LOG</code>.</p>

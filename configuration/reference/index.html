@@ -1448,10 +1448,13 @@
 <li>runtime meaning of major knobs</li>
 </ul>
 <p>Default coverage now lives on <a href="../defaults/">Configuration Defaults</a> so the full inventory can stay centralized and easier to audit against the code.</p>
-<p>This page does not change the current product limits:</p>
+<p>This page does not change the current product behavior:</p>
 <ul>
-<li>full config hot reload is not implemented</li>
-<li>certificate reload covers new handshakes only</li>
+<li>configuration hot reload is supported via <code>POST /admin/runtime/reload</code>: the full config is
+  re-read, validated, and applied through an atomic runtime swap (routes, upstreams, backends,
+  timeouts, limits, and resilience policies). Only startup-owned settings (log, tracing, thread
+  counts) and listener removal / bind-address changes still require a restart.</li>
+<li>certificate reload (<code>POST /admin/runtime/reload-certs</code>) covers new handshakes only</li>
 <li>backend transport is scheme-driven: <code>https://</code> backends use HTTP/2, <code>http://</code> backends use HTTP/1.1</li>
 </ul>
 <h2 id="reading-this-reference">Reading This Reference</h2>
@@ -2628,6 +2631,27 @@ log:
 <td>Pin each worker thread to a dedicated CPU core</td>
 </tr>
 <tr>
+<td><code>packet_shards_per_worker</code></td>
+<td>integer</td>
+<td>No</td>
+<td><code>1</code></td>
+<td>Packet-processing shards per bound UDP worker socket; <code>1</code> preserves single-loop behavior, values &gt;1 enable parallel shard workers</td>
+</tr>
+<tr>
+<td><code>packet_shard_queue_capacity</code></td>
+<td>integer</td>
+<td>No</td>
+<td><code>2048</code></td>
+<td>Capacity of the bounded ingress queue per shard</td>
+</tr>
+<tr>
+<td><code>packet_shard_queue_max_bytes</code></td>
+<td>integer</td>
+<td>No</td>
+<td><code>67108864</code></td>
+<td>Memory-aware cap (bytes) for queued datagram bytes per ingress shard dispatch queue</td>
+</tr>
+<tr>
 <td><code>global_inflight_limit</code></td>
 <td>integer</td>
 <td>No</td>
@@ -2647,6 +2671,13 @@ log:
 <td>No</td>
 <td><code>64</code></td>
 <td>Maximum concurrent in-flight requests per backend</td>
+</tr>
+<tr>
+<td><code>inflight_acquire_wait_ms</code></td>
+<td>integer</td>
+<td>No</td>
+<td><code>0</code></td>
+<td>Optional micro-wait (ms) before shedding on global/upstream inflight permit acquisition; <code>0</code> sheds immediately</td>
 </tr>
 <tr>
 <td><code>backend_timeout_ms</code></td>
@@ -2794,6 +2825,34 @@ log:
 <td>No</td>
 <td><code>104857600</code></td>
 <td>Hard cap on upstream response body bytes per stream; streams exceeding this return 503 (<code>upstream response body too large</code>)</td>
+</tr>
+<tr>
+<td><code>max_request_body_bytes</code></td>
+<td>integer</td>
+<td>No</td>
+<td><code>1000000</code></td>
+<td>Hard cap on request body bytes per stream; requests exceeding this are rejected with 413. Must be ≤ <code>quic_initial_max_stream_data</code></td>
+</tr>
+<tr>
+<td><code>request_buffer_global_cap_bytes</code></td>
+<td>integer</td>
+<td>No</td>
+<td><code>67108864</code></td>
+<td>Global cap (bytes) for data buffered in request backpressure queues across a worker</td>
+</tr>
+<tr>
+<td><code>unknown_length_response_prebuffer_bytes</code></td>
+<td>integer</td>
+<td>No</td>
+<td><code>2097152</code></td>
+<td>Max bytes buffered for unknown-length upstream responses before headers are emitted; responses exceeding this are terminated with an overload response</td>
+</tr>
+<tr>
+<td><code>client_body_idle_timeout_ms</code></td>
+<td>integer</td>
+<td>No</td>
+<td><code>10000</code></td>
+<td>Idle timeout (ms) for request-body upload progress; the stream is failed if no body bytes arrive within this period</td>
 </tr>
 </tbody>
 </table></div>
@@ -3219,7 +3278,7 @@ performance:
 <li><code>HEAD</code> responses terminate after headers even if the upstream attempted to send a body.</li>
 </ul>
 <h3 id="watchdog">watchdog</h3>
-<p>Monitors worker health and triggers a restart hook when error rates or stall conditions exceed thresholds.</p>
+<p>Monitors worker health and triggers a restart command when error rates or stall conditions exceed thresholds.</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -3278,7 +3337,7 @@ performance:
 <td>integer</td>
 <td>No</td>
 <td><code>3</code></td>
-<td>Consecutive unhealthy windows before invoking the restart hook</td>
+<td>Consecutive unhealthy windows before invoking the restart command</td>
 </tr>
 <tr>
 <td><code>drain_grace_ms</code></td>
@@ -3292,14 +3351,21 @@ performance:
 <td>integer</td>
 <td>No</td>
 <td><code>120000</code></td>
-<td>Minimum time (ms) between restart hook invocations</td>
+<td>Minimum time (ms) between restart command invocations</td>
+</tr>
+<tr>
+<td><code>restart_command</code></td>
+<td>list of strings</td>
+<td>No</td>
+<td><code>[]</code></td>
+<td>Command invoked on restart trigger; first element is the executable, the rest are args. Avoids shell evaluation.</td>
 </tr>
 <tr>
 <td><code>restart_hook</code></td>
 <td>string</td>
 <td>No</td>
 <td><code>null</code></td>
-<td>Shell command invoked on restart trigger</td>
+<td><strong>Deprecated and rejected at startup</strong> — setting it is a hard config error. Use <code>restart_command</code> instead.</td>
 </tr>
 </tbody>
 </table></div>
@@ -3384,7 +3450,8 @@ performance:
 <h3 id="control-api-endpoint">Control API Endpoint</h3>
 <p>Key fields:</p>
 <ul>
-<li><code>observability.control_api.auth_token</code>: bearer token required for runtime, reload-certs, and restart endpoints (<code>Authorization: Bearer &lt;token&gt;</code>).</li>
+<li><code>observability.control_api.auth_token</code>: bearer token required for runtime, reload, reload-certs, and restart endpoints (<code>Authorization: Bearer &lt;token&gt;</code>).</li>
+<li><code>observability.control_api.reload_path</code> (default: <code>/admin/runtime/reload</code>): authenticated POST endpoint that re-reads the config file and applies the full configuration via an atomic runtime swap (routes, upstreams, backends, timeouts, limits, resilience policies). Startup-owned settings and listener bind/removal changes are rejected and still require a restart.</li>
 <li><code>observability.control_api.reload_certs_path</code>: authenticated POST endpoint that reloads listener certificate and client-auth CA material for new handshakes.</li>
 <li><code>observability.control_api.max_connections</code> (default: <code>256</code>): concurrent connection cap.</li>
 <li><code>observability.control_api.connection_timeout_ms</code> (default: <code>30000</code>): per-connection lifetime timeout.</li>

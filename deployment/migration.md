@@ -6,7 +6,7 @@ This guide is for platform and SRE engineers who already operate NGINX or Envoy 
 
 ## Before You Start
 
-**What Spooky is and is not.** Spooky is a QUIC-native edge reverse proxy. It terminates HTTP/3 connections over QUIC, forwards to upstream backends over HTTP/2 (`https://` backends) or HTTP/1.1 (`http://` backends), and handles upstream pool management with named pools, path- and host-based routing, and per-upstream health checks. Mixed HTTP/1.1 and HTTP/2 backend deployments are supported in the same config. It is not a full API gateway: there is no built-in rate limiting by key, no JWT validation, no request transformation pipeline. It is not a service mesh control plane: it does not speak xDS, does not distribute config to sidecars, and does not manage mTLS between services. It is not a WAF: it has no request inspection, no ModSecurity integration, no bot detection. If your current NGINX or Envoy setup relies on any of those capabilities, read the "Things That Don't Translate Directly" section before proceeding — you will need to keep those concerns handled elsewhere in your stack.
+**What Spooky is and is not.** Spooky is a QUIC-native edge reverse proxy. It terminates HTTP/3 connections over QUIC, forwards to upstream backends over HTTP/2 (`https://` backends) or HTTP/1.1 (`http://` backends), and handles upstream pool management with named pools, path- and host-based routing, and per-upstream health checks. Mixed HTTP/1.1 and HTTP/2 backend deployments are supported in the same config. It is not a full API gateway, but it does include scoped rate limiting (by route/client/tenant/token), per-upstream API-key and local HS256-JWT auth (with scope/role checks), and external auth via HTTP subrequest or OIDC. What it lacks is a request/response transformation pipeline, JWKS/asymmetric-JWT validation, and a generic policy engine. It is not a service mesh control plane: it does not speak xDS, does not distribute config to sidecars, and does not manage mTLS between services. It is not a WAF: it has no request inspection, no ModSecurity integration, no bot detection. If your current NGINX or Envoy setup relies on any of those capabilities, read the "Things That Don't Translate Directly" section before proceeding — you will need to keep those concerns handled elsewhere in your stack.
 
 **Two migration patterns.** This document covers two approaches. Pattern A is additive: Spooky sits in front of your existing proxy and acts as an HTTP/3 ingress layer, while NGINX or Envoy continues to handle all the routing and backend logic it currently handles. This is the lowest-risk starting point and requires no changes to your existing proxy config or your backends. Pattern B is a replacement: Spooky takes over routing duties route by route, and you eventually decommission your old proxy entirely. Pattern B is recommended for teams who want to move fully to Spooky, but it should be done incrementally — one route at a time — never as a big-bang cutover.
 
@@ -31,41 +31,35 @@ The following is a complete working config for Pattern A, assuming your existing
 ```yaml
 # /etc/spooky/config.yaml — Pattern A: Spooky as HTTP/3 ingress in front of NGINX/Envoy
 
+# A single `listen` block defines the QUIC/HTTP-3 listener. Spooky automatically starts a
+# TCP+TLS bootstrap listener on the SAME address/port for HTTP/1.1 and HTTP/2 clients and
+# advertises `Alt-Svc: h3` so they upgrade to HTTP/3 — there is no separate TCP listener entry.
 listen:
-  - address: "0.0.0.0:9889"
-    protocol: quic          # HTTP/3 over QUIC (UDP)
-    tls:
-      cert: /etc/spooky/tls/fullchain.pem
-      key: /etc/spooky/tls/privkey.pem
+  protocol: http3           # the only valid value; QUIC (UDP) + auto TCP bootstrap
+  address: "0.0.0.0"        # host only — NOT combined with the port
+  port: 9889
+  tls:
+    cert: /etc/spooky/tls/fullchain.pem
+    key: /etc/spooky/tls/privkey.pem
 
-  - address: "0.0.0.0:9889"
-    protocol: tcp           # Bootstrap path for HTTP/1.1 and HTTP/2 clients
-    tls:
-      cert: /etc/spooky/tls/fullchain.pem
-      key: /etc/spooky/tls/privkey.pem
-
-upstreams:
-  - name: existing-proxy
-    backends:
-      - address: "127.0.0.1:443"
-        protocol: https
-        health_check:
-          path: /healthz
-          interval: 10s
-          timeout: 3s
-          healthy_threshold: 2
-          unhealthy_threshold: 3
+# `upstream` is a MAP keyed by pool name (not a `upstreams:` list, and no `name:` field).
+# The route match lives inside the pool entry — there is no top-level `routes:` list.
+upstream:
+  existing-proxy:
     load_balancing:
       type: round-robin
-
-routes:
-  - match:
-      host: "*.example.com"
-    upstream: existing-proxy
-
-  - match:
+    route:
+      host: "*.example.com" # host and/or path_prefix; matched to this pool
       path_prefix: "/"
-    upstream: existing-proxy
+    backends:
+      - id: existing-proxy-1
+        address: "https://127.0.0.1:443"  # scheme in the address: https:// = HTTP/2 upstream
+        health_check:
+          path: /healthz
+          interval: 10000     # milliseconds (integer), not "10s"
+          timeout_ms: 3000
+          failure_threshold: 3
+          success_threshold: 2
 ```
 
 > **TLS note.** Spooky must present a certificate that your clients trust. If your existing proxy terminates TLS with a cert from Let's Encrypt or your CA, use the same cert and key here — or provision a new one for the Spooky host. Spooky forwards to your existing proxy over HTTPS; if your existing proxy uses a self-signed cert on the loopback interface you may need to configure trust appropriately or use HTTP on the loopback leg.
@@ -127,61 +121,57 @@ The key principle is that every request must have a destination. Model your exis
 ```yaml
 # /etc/spooky/config.yaml — Pattern B: incremental route migration
 
+# Single QUIC/HTTP-3 listener; the TCP bootstrap listener is started automatically on the
+# same address/port (see Pattern A note above).
 listen:
-  - address: "0.0.0.0:9889"
-    protocol: quic
-    tls:
-      cert: /etc/spooky/tls/fullchain.pem
-      key: /etc/spooky/tls/privkey.pem
-  - address: "0.0.0.0:9889"
-    protocol: tcp
-    tls:
-      cert: /etc/spooky/tls/fullchain.pem
-      key: /etc/spooky/tls/privkey.pem
+  protocol: http3
+  address: "0.0.0.0"
+  port: 9889
+  tls:
+    cert: /etc/spooky/tls/fullchain.pem
+    key: /etc/spooky/tls/privkey.pem
 
-upstreams:
+# `upstream` is a map keyed by pool name. Routing is expressed by each pool's own `route:`
+# block; there is no separate top-level `routes:` list. Longest-prefix wins, so a pool with
+# `path_prefix: /static` takes precedence over the `path_prefix: /` catch-all pool.
+upstream:
   # The first route migrated to Spooky — static asset backend
-  - name: static-origin
-    backends:
-      - address: "10.0.1.20:8080"
-        protocol: http
-        health_check:
-          path: /healthz
-          interval: 10s
-          timeout: 3s
-          healthy_threshold: 2
-          unhealthy_threshold: 3
+  static-origin:
     load_balancing:
       type: round-robin
-
-  # Everything else still goes to your existing proxy
-  - name: legacy-proxy
+    route:
+      path_prefix: "/static"   # more specific → matched first
     backends:
-      - address: "127.0.0.1:443"
-        protocol: https
+      - id: static-origin-1
+        address: "http://10.0.1.20:8080"   # http:// = HTTP/1.1 upstream
         health_check:
           path: /healthz
-          interval: 15s
-          timeout: 5s
-          healthy_threshold: 1
-          unhealthy_threshold: 2
+          interval: 10000
+          timeout_ms: 3000
+          failure_threshold: 3
+          success_threshold: 2
+
+  # Everything else still goes to your existing proxy (catch-all via path_prefix "/")
+  legacy-proxy:
     load_balancing:
       type: round-robin
-
-routes:
-  # Migrated route — explicit path prefix match comes first
-  - match:
-      path_prefix: "/static"
-    upstream: static-origin
-
-  # Fallback — all unmatched traffic goes to the old proxy
-  # Add migrated routes above this line; shrink this as migration progresses
-  - match:
-      path_prefix: "/"
-    upstream: legacy-proxy
+    route:
+      path_prefix: "/"         # least specific → the fallback
+    backends:
+      - id: legacy-proxy-1
+        address: "https://127.0.0.1:443"   # https:// = HTTP/2 upstream
+        health_check:
+          path: /healthz
+          interval: 15000
+          timeout_ms: 5000
+          failure_threshold: 2
+          success_threshold: 1
 ```
 
-As you migrate each subsequent route, add a new upstream pool for its backend and insert a new route block above the `legacy-proxy` fallback. When the fallback pool has no traffic, remove it and decommission the old proxy.
+As you migrate each subsequent route, add a new upstream pool (with its own more-specific
+`route.path_prefix`) for its backend. Longest-prefix matching routes those paths to the new pool
+while everything else keeps falling through to the `legacy-proxy` pool. When the fallback pool has
+no traffic, remove it and decommission the old proxy.
 
 ---
 
@@ -189,13 +179,13 @@ As you migrate each subsequent route, add a new upstream pool for its backend an
 
 | NGINX directive | Spooky equivalent |
 |---|---|
-| `upstream mypool { server 10.0.0.1:8080; }` | An entry in `upstreams:` with `name: mypool` and a `backends:` list containing `address: "10.0.0.1:8080"` |
-| `proxy_pass http://mypool` | `upstream: mypool` on a route block; Spooky resolves the name to the upstream pool |
-| `location /api { ... }` | `routes: - match: path_prefix: "/api"` |
-| `proxy_next_upstream error timeout http_502` | Per-backend `health_check:` config with `unhealthy_threshold` controlling how many consecutive failures remove a backend from rotation; retries on connection error are automatic |
-| `least_conn` | `load_balancing: type: least-connections` inside the upstream pool |
-| `ip_hash` | `load_balancing: type: consistent-hash` (hashes on client address by default) |
-| `keepalive 32` | Spooky maintains a connection pool to upstream backends automatically; the pool size is not separately configurable in v0.1.x |
+| `upstream mypool { server 10.0.0.1:8080; }` | A `mypool:` key under the `upstream:` map with a `backends:` list containing `id:` + `address: "http://10.0.0.1:8080"` |
+| `proxy_pass http://mypool` | The `mypool:` pool's own `route:` block (`host`/`path_prefix`); there is no separate name reference — the match lives on the pool |
+| `location /api { ... }` | `route: { path_prefix: "/api" }` inside the relevant upstream pool |
+| `proxy_next_upstream error timeout http_502` | Per-backend `health_check:` config with `failure_threshold` controlling how many consecutive failures remove a backend from rotation; retries on connection error are automatic |
+| `least_conn` | `load_balancing: { type: least-connections }` inside the upstream pool |
+| `ip_hash` | `load_balancing: { type: consistent-hash }` (hashes on client address by default) |
+| `keepalive 32` | Spooky maintains a connection pool to upstream backends automatically; the pool size is not separately configurable |
 | `ssl_certificate /path/cert.pem` | `listen.tls.cert: /path/cert.pem` under the relevant listener |
 | `ssl_certificate_key /path/key.pem` | `listen.tls.key: /path/key.pem` under the relevant listener |
 
@@ -207,7 +197,7 @@ The following NGINX and Envoy features have no equivalent in Spooky v0.1.x. This
 
 **NGINX dynamic modules (ModSecurity, gzip, Brotli, etc.)** are not available. Spooky has no module system and no request/response body processing pipeline. If you rely on ModSecurity for WAF rules, you must keep a WAF in the chain — either in front of Spooky or as a sidecar on the backend. For gzip/Brotli: serve pre-compressed assets from your origin, or keep an NGINX instance in the chain for compression.
 
-**Envoy's xDS dynamic control plane** does not apply to Spooky. Spooky uses a static YAML config and currently requires a controlled restart workflow for non-certificate config changes. If your current setup relies on Envoy's ADS/EDS for dynamic backend discovery (e.g., service discovery via Consul or a service mesh), you cannot replicate that behavior with Spooky today. Alternatives: use a configuration management tool to render Spooky's config and restart on change, or continue using Envoy for the service mesh interior and put Spooky only at the edge.
+**Envoy's xDS dynamic control plane** does not apply to Spooky. Spooky uses a file-based YAML config; changes are applied by editing the file and calling `POST /admin/runtime/reload`, which hot-swaps routes, upstreams, backends, and policies live (only startup-owned settings and listener bind/removal changes need a restart). There is no push-based config distribution to sidecars. If your current setup relies on Envoy's ADS/EDS for dynamic backend discovery (e.g., service discovery via Consul or a service mesh), you cannot replicate that behavior with Spooky today. Alternatives: use a configuration management tool to render Spooky's config and restart on change, or continue using Envoy for the service mesh interior and put Spooky only at the edge.
 
 **Lua scripting and WASM filters** are not supported. Envoy's Lua filter and WASM extension model, and NGINX's `lua-nginx-module`, have no equivalent in Spooky. Any per-request logic (custom header inspection, A/B routing logic, request signing) must move to the application layer or to a middleware service in front of Spooky.
 
@@ -215,7 +205,7 @@ The following NGINX and Envoy features have no equivalent in Spooky v0.1.x. This
 
 **Response header manipulation** (`add_header`, `proxy_hide_header`, `more_set_headers` in NGINX; `response_headers_to_add` in Envoy) is not available. Spooky passes response headers from the upstream to the client unmodified. Workaround: set headers at the origin service, or use a thin middleware layer (e.g., a simple HTTP wrapper service) for routes where specific headers are required.
 
-**Per-IP rate limiting** (`limit_req_zone` / `limit_conn_zone` in NGINX; rate limit filter in Envoy) is not available in v0.1.x. Spooky supports admission control at the global level and per-upstream pool level, but not keyed by client IP or any request attribute. Workaround: place a dedicated rate-limiting layer (e.g., a Redis-backed rate limiter, or a cloud provider's WAF/shield service) in front of Spooky, or keep NGINX in the chain for routes that require per-IP throttling.
+**Per-IP rate limiting** (`limit_req_zone` / `limit_conn_zone` in NGINX; rate limit filter in Envoy). Spooky has scoped rate limiting (`resilience.scoped_rate_limits`) keyed by route, client, tenant, or token, plus global and per-upstream admission control — but not the full breadth of NGINX/Envoy rate-limit expressions, and no distributed/cross-instance rate limiting. For advanced or cross-instance throttling, place a dedicated rate-limiting layer (e.g., a Redis-backed rate limiter, or a cloud provider's WAF/shield service) in front of Spooky, or keep NGINX in the chain for routes that require per-IP throttling.
 
 ---
 

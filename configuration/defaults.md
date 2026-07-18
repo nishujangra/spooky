@@ -284,6 +284,7 @@ These apply when a backend provides a `health_check` object and omits individual
 | `observability.control_api.ready_path` | `"/ready"` | Readiness endpoint path |
 | `observability.control_api.runtime_path` | `"/admin/runtime"` | Runtime summary path |
 | `observability.control_api.restart_path` | `"/admin/runtime/restart"` | Restart control path |
+| `observability.control_api.reload_path` | `"/admin/runtime/reload"` | Full config hot-reload path |
 | `observability.control_api.reload_certs_path` | `"/admin/runtime/reload-certs"` | Certificate reload path |
 | `observability.control_api.auth_token` | `null` | Must be set when the control API is enabled |
 | `observability.control_api.max_connections` | `256` | Concurrent control API connections cap |

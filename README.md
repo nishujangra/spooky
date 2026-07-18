@@ -98,8 +98,8 @@ curl --http3-only -k \
 
 **Check health and readiness** (control API, default port 9902):
 ```bash
-curl http://127.0.0.1:9902/health
-curl http://127.0.0.1:9902/ready
+curl -k https://127.0.0.1:9902/health
+curl -k https://127.0.0.1:9902/ready
 ```
 
 ### Log levels

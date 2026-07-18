@@ -1589,17 +1589,22 @@
 - Cooperative task scheduling</p>
 <h3 id="state-management">State Management</h3>
 <p>Shared state is managed carefully:
-- <code>Arc&lt;T&gt;</code> for shared ownership
-- <code>Mutex&lt;T&gt;</code> for mutable shared state (upstream pools)
+- <code>Arc&lt;T&gt;</code> for shared ownership (including <code>Arc&lt;Metrics&gt;</code> shared across all workers)
+- <code>RwLock&lt;T&gt;</code> for mutable shared state (upstream pools)
 - <code>AtomicU64</code> for lock-free counters (metrics)
-- Single-threaded UDP socket polling (no lock contention)</p>
+- A <code>RuntimeBundleHandle</code> provides an atomically swappable snapshot of runtime state, enabling
+  config hot reload without restarting the process</p>
 <h3 id="task-structure">Task Structure</h3>
-<p>The main event loop runs on the primary thread:
-- <code>poll()</code> processes UDP packets synchronously
-- QUIC connections are managed in-process
-- Backend requests spawn async tasks via Tokio
-- Graceful shutdown coordinated via AtomicBool</p>
-<p>This design avoids thread synchronization overhead on the packet processing path while leveraging Tokio's async capabilities for backend I/O.</p>
+<p>The data plane is <strong>multi-worker</strong>, not a single primary-thread loop:
+- One UDP socket is bound per worker via <code>SO_REUSEPORT</code>, and one OS thread is spawned per socket
+  (<code>spooky-data-plane-{idx}</code>); worker count comes from <code>performance.worker_threads</code>.
+- Each worker can be further sub-sharded into <code>performance.packet_shards_per_worker</code> packet-shard
+  threads, fed via bounded <code>mpsc</code> channels. Packets are hashed by peer address so a given peer
+  always lands on the same shard/connection state.
+- Each worker/shard runs its own <code>recv_from</code> → QUIC-poll loop; connections are managed in-process.
+- Backend requests spawn async tasks via Tokio; graceful drain/shutdown is coordinated per group.</p>
+<p>This design scales UDP ingress across cores while keeping each connection pinned to one thread's
+state, and leverages Tokio's async capabilities for backend I/O.</p>
 <h2 id="error-handling-strategy">Error Handling Strategy</h2>
 <h3 id="error-categories">Error Categories</h3>
 <p><strong>Configuration Errors:</strong>
@@ -1663,7 +1668,7 @@
 <p>Current configuration is immutable at runtime:
 - Loaded once at startup
 - Shared via Arc across components
-- Hot reload not yet implemented (requires atomic swap)</p>
+- Hot reload implemented with atomic swap</p>
 <h2 id="security-considerations">Security Considerations</h2>
 <h3 id="transport-security">Transport Security</h3>
 <ul>
@@ -1675,7 +1680,7 @@
 <h3 id="backend-communication">Backend Communication</h3>
 <ul>
 <li>Currently plaintext HTTP/2</li>
-<li>Mutual TLS to backends (planned)</li>
+<li>upstream TLS shipped, verify-on by default (server-side; note true mTLS/client-cert to backends is the actual gap)</li>
 <li>Connection reuse reduces handshake overhead</li>
 </ul>
 <h3 id="attack-surface">Attack Surface</h3>
@@ -1698,13 +1703,13 @@
 - <code>requests_failure</code>: failed requests
 - <code>backend_timeouts</code>: timed out backend requests
 - <code>backend_errors</code>: backend error responses</p>
-<p>Metrics export via Prometheus format (planned).</p>
+<p>Metrics export via Prometheus format (shipped).</p>
 <h3 id="tracing">Tracing</h3>
 <p>Request-level tracing:
 - <code>RequestEnvelope</code> tracks start time
 - Duration calculated on completion
 - Logged with request details</p>
-<p>Distributed tracing via OpenTelemetry (planned).</p>
+<p>Distributed tracing via OpenTelemetry (shipped).</p>
 <h2 id="performance-characteristics">Performance Characteristics</h2>
 <h3 id="latency">Latency</h3>
 <ul>
@@ -1730,15 +1735,14 @@
 <h2 id="future-enhancements">Future Enhancements</h2>
 <h3 id="planned-features">Planned Features</h3>
 <ul>
-<li>Hot configuration reload without restart (planned)</li>
-<li>Prometheus metrics endpoint</li>
-<li>OpenTelemetry distributed tracing</li>
-<li>Mutual TLS to backends</li>
-<li>Active health check probes (TCP/HTTP)</li>
-<li>Rate limiting per client</li>
-<li>Circuit breaker pattern for failing backends</li>
-<li>Admin API for runtime inspection</li>
+<li>Mutual TLS (client certificates) <strong>to backends</strong> — upstream TLS with certificate verification is
+  already implemented; client-cert authentication toward backends is the remaining gap</li>
+<li>Upstream HTTP/3 forwarding</li>
+<li>Richer service-discovery integrations</li>
 </ul>
+<p><em>Already shipped (previously listed here as planned): active HTTP health-check probes, per-client
+scoped rate limiting, per-backend circuit breakers, and the admin/control API for runtime
+inspection and hot reload.</em></p>
 <h3 id="architectural-improvements">Architectural Improvements</h3>
 <ul>
 <li>Lock-free routing table</li>

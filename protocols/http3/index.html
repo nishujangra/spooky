@@ -1607,7 +1607,7 @@ Connection: keep-alive
 <li><strong>Header compression</strong>: Full QPACK support for clients, HPACK for HTTP/2 backends</li>
 <li><strong>Flow control</strong>: QUIC stream and connection flow control enforced</li>
 <li><strong>Server push</strong>: Not currently implemented (client-to-proxy only)</li>
-<li><strong>Priority signaling</strong>: HTTP/3 priority frames are mapped to HTTP/2 priority when supported by backends</li>
+<li><strong>Priority signaling</strong>: Not currently implemented — HTTP/3 <code>PRIORITY_UPDATE</code> frames are accepted but ignored (no mapping to HTTP/2 priority)</li>
 </ul>
 <h2 id="performance-characteristics">Performance Characteristics</h2>
 <p>HTTP/3 offers several performance advantages over HTTP/2:</p>

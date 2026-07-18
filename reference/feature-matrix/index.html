@@ -1656,8 +1656,8 @@
 </tr>
 <tr>
 <td>Full TLS/runtime live reconfiguration</td>
-<td><code>Partial</code></td>
-<td>Cert reload exists, broad runtime reload does not</td>
+<td><code>Done</code></td>
+<td>Cert reload &amp; broad runtime exists</td>
 </tr>
 </tbody>
 </table></div>
@@ -1728,8 +1728,8 @@
 </tr>
 <tr>
 <td>Rate limiting</td>
-<td><code>Missing</code></td>
-<td>Overload control exists, classic rate limiting does not</td>
+<td><code>Done</code></td>
+<td>scoped (Route/Client/Tenant/Token), returns 429</td>
 </tr>
 </tbody>
 </table></div>
@@ -1770,13 +1770,13 @@
 </tr>
 <tr>
 <td>Full config hot reload</td>
-<td><code>Missing</code></td>
-<td>Biggest current control-plane gap</td>
+<td><code>Partial</code></td>
+<td>Startup-owned settings + listner removal, bind still need restart</td>
 </tr>
 <tr>
 <td>Dynamic route updates</td>
-<td><code>Missing</code></td>
-<td>Requires restart or future reload model</td>
+<td><code>Done via config reload</code></td>
+<td>routing index rebuilt + swapped</td>
 </tr>
 <tr>
 <td>Dynamic upstream membership API</td>

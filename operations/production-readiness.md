@@ -8,9 +8,9 @@ Spooky is a **beta HTTP/3 edge reverse proxy** with a strong core data plane, br
 
 Spooky is **not yet a fully mature general-purpose reverse proxy platform**. The main constraints are:
 
-- full configuration hot reload is not implemented
+- config hot reload covers most runtime settings but not all: startup-owned settings (log, tracing, thread counts) and listener removal/bind-address changes still require a restart
 - upstream forwarding is scheme-driven: HTTP/2 for `https://` backends, HTTP/1.1 for `http://` backends
-- dynamic control-plane capability is limited
+- dynamic control-plane capability is file-reload based, not a granular per-object mutation API
 - auth is limited to API key, local JWT, and per-upstream external auth (HTTP/OIDC); there is no generic policy engine, rate-limiting framework, or JWKS-based token validation
 - service discovery is limited to DNS refresh rather than a richer orchestration-native model
 
@@ -37,7 +37,7 @@ The following areas are considered strong enough for controlled production use:
 
 The following capabilities exist, but operators should treat them as features that still need careful rollout discipline:
 
-- certificate reload for new handshakes, without a full process restart
+- full configuration hot reload via `POST /admin/runtime/reload` (atomic runtime swap of routes, upstreams, backends, timeouts, limits, and resilience policies), and certificate-only reload for new handshakes — both without a full process restart
 - watchdog-driven recovery hooks
 - DNS-based backend refresh and backend client rotation
 - retry budget, circuit breaker, and hedging controls
@@ -49,7 +49,7 @@ These areas are usable, but their surrounding operational model is not yet as ma
 
 The following gaps are the most important reasons Spooky is not yet at general-availability maturity:
 
-- no full config hot reload for routes, upstreams, limits, or policies
+- config reload cannot change startup-owned settings (log, tracing, thread counts) or remove/rebind listeners without a restart
 - no transactional config apply, staged activation, or rollback API
 - no upstream HTTP/3 forwarding mode
 - no broad request mirroring, canary traffic splitting, or advanced traffic policy engine
@@ -79,8 +79,8 @@ Do not position Spooky today as:
 
 The most important gates before calling the project broadly production-grade are:
 
-1. Full configuration hot reload.
-2. Dynamic route and upstream updates without restart.
+1. Transactional config apply: staged activation, config-diff visibility, and a rollback API on top of the existing reload endpoint (base config hot reload — including live route and upstream updates — already ships).
+2. Live reconfiguration of the remaining restart-only settings (startup-owned log/tracing/thread counts, listener removal/bind changes).
 3. Refactoring of the oversized edge runtime into smaller subsystems.
 4. Fuzzing and deeper parser/protocol hardening.
 5. First-class rate limiting and a generic policy engine (auth now covers API key, local JWT, and external/OIDC checks).

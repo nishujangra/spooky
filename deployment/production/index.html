@@ -1723,8 +1723,11 @@ Group=spooky
 
 # Binary and configuration
 ExecStart=/usr/local/bin/spooky --config /etc/spooky/config.yaml
-# Note: Hot reload not currently supported, use restart instead
-# ExecReload=/bin/kill -HUP $MAINPID
+# Hot reload: config is reloaded via the control API, not a signal.
+# `systemctl reload spooky` POSTs to the reload endpoint (control API is HTTPS + bearer-auth).
+# Applies routes/upstreams/backends/limits/policies live; startup-owned settings and listener
+# bind/removal changes still require a full restart.
+ExecReload=/usr/bin/curl -sf -k -X POST -H &quot;Authorization: Bearer ${SPOOKY_ADMIN_TOKEN}&quot; https://127.0.0.1:9902/admin/runtime/reload
 
 # Restart policy
 Restart=always
@@ -1862,11 +1865,12 @@ sudo chmod 644 /etc/spooky/certs/fullchain.pem
 <h2 id="monitoring-and-observability">Monitoring and Observability</h2>
 <h3 id="metrics-exposition">Metrics Exposition</h3>
 <p>Spooky exposes a Prometheus-compatible metrics endpoint. Configure it in <code>config.yaml</code>:</p>
-<pre><code class="language-yaml">metrics:
-  enabled: true
-  address: &quot;127.0.0.1&quot;
-  port: 9090
-  path: &quot;/metrics&quot;
+<pre><code class="language-yaml">observability:
+  metrics:
+    enabled: true
+    address: &quot;127.0.0.1&quot;
+    port: 9901
+    path: &quot;/metrics&quot;
 </code></pre>
 <p>Scrape it with Prometheus:</p>
 <pre><code class="language-yaml"># prometheus.yml
@@ -1876,7 +1880,7 @@ scrape_configs:
     scrape_timeout: 10s
     metrics_path: '/metrics'
     static_configs:
-      - targets: ['spooky-01.internal:9090', 'spooky-02.internal:9090']
+      - targets: ['spooky-01.internal:9901', 'spooky-02.internal:9901']
         labels:
           environment: 'production'
           service: 'proxy'

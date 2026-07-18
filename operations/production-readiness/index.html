@@ -1436,9 +1436,9 @@
 <p>Spooky is a <strong>beta HTTP/3 edge reverse proxy</strong> with a strong core data plane, broad correctness and regression coverage, and clear operational ambition. It is suitable for <strong>controlled production rollout</strong> when the operator keeps rollback, monitoring, and staged traffic expansion in place.</p>
 <p>Spooky is <strong>not yet a fully mature general-purpose reverse proxy platform</strong>. The main constraints are:</p>
 <ul>
-<li>full configuration hot reload is not implemented</li>
+<li>config hot reload covers most runtime settings but not all: startup-owned settings (log, tracing, thread counts) and listener removal/bind-address changes still require a restart</li>
 <li>upstream forwarding is scheme-driven: HTTP/2 for <code>https://</code> backends, HTTP/1.1 for <code>http://</code> backends</li>
-<li>dynamic control-plane capability is limited</li>
+<li>dynamic control-plane capability is file-reload based, not a granular per-object mutation API</li>
 <li>auth is limited to API key, local JWT, and per-upstream external auth (HTTP/OIDC); there is no generic policy engine, rate-limiting framework, or JWKS-based token validation</li>
 <li>service discovery is limited to DNS refresh rather than a richer orchestration-native model</li>
 </ul>
@@ -1463,7 +1463,7 @@
 <h2 id="production-capable-with-caveats">Production-Capable With Caveats</h2>
 <p>The following capabilities exist, but operators should treat them as features that still need careful rollout discipline:</p>
 <ul>
-<li>certificate reload for new handshakes, without a full process restart</li>
+<li>full configuration hot reload via <code>POST /admin/runtime/reload</code> (atomic runtime swap of routes, upstreams, backends, timeouts, limits, and resilience policies), and certificate-only reload for new handshakes — both without a full process restart</li>
 <li>watchdog-driven recovery hooks</li>
 <li>DNS-based backend refresh and backend client rotation</li>
 <li>retry budget, circuit breaker, and hedging controls</li>
@@ -1473,7 +1473,7 @@
 <h2 id="not-yet-production-complete">Not Yet Production-Complete</h2>
 <p>The following gaps are the most important reasons Spooky is not yet at general-availability maturity:</p>
 <ul>
-<li>no full config hot reload for routes, upstreams, limits, or policies</li>
+<li>config reload cannot change startup-owned settings (log, tracing, thread counts) or remove/rebind listeners without a restart</li>
 <li>no transactional config apply, staged activation, or rollback API</li>
 <li>no upstream HTTP/3 forwarding mode</li>
 <li>no broad request mirroring, canary traffic splitting, or advanced traffic policy engine</li>
@@ -1501,8 +1501,8 @@
 <h2 id="readiness-gates-before-broader-adoption">Readiness Gates Before Broader Adoption</h2>
 <p>The most important gates before calling the project broadly production-grade are:</p>
 <ol>
-<li>Full configuration hot reload.</li>
-<li>Dynamic route and upstream updates without restart.</li>
+<li>Transactional config apply: staged activation, config-diff visibility, and a rollback API on top of the existing reload endpoint (base config hot reload — including live route and upstream updates — already ships).</li>
+<li>Live reconfiguration of the remaining restart-only settings (startup-owned log/tracing/thread counts, listener removal/bind changes).</li>
 <li>Refactoring of the oversized edge runtime into smaller subsystems.</li>
 <li>Fuzzing and deeper parser/protocol hardening.</li>
 <li>First-class rate limiting and a generic policy engine (auth now covers API key, local JWT, and external/OIDC checks).</li>

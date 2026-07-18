@@ -1455,7 +1455,7 @@
 <ul>
 <li>every interface is frozen</li>
 <li>every deployment shape has been equally hardened</li>
-<li>a restart-free config workflow exists</li>
+<li>a fully restart-free config workflow exists — most config applies live via <code>POST /admin/runtime/reload</code>, but startup-owned settings (log, tracing, thread counts) and listener removal/bind-address changes still require a restart</li>
 </ul>
 <h2 id="current-strong-areas">Current Strong Areas</h2>
 <ul>
@@ -1490,7 +1490,9 @@
 <ul>
 <li>use canaries or bounded traffic first</li>
 <li>keep rollback warm and tested</li>
-<li>treat non-certificate config changes as drain-and-restart operations</li>
+<li>apply most config changes live via <code>POST /admin/runtime/reload</code> (routes, upstreams, backends,
+  timeouts, limits, resilience policies); drain-and-restart only for startup-owned settings
+  (log, tracing, thread counts) and listener removal / bind-address changes</li>
 <li>read release notes before upgrade</li>
 <li>pin to tagged versions, not moving branches</li>
 </ul>

@@ -61,7 +61,7 @@ Legend:
 | Custom upstream CA file | `Done` | Implemented |
 | Custom upstream CA dir | `Done` | Implemented |
 | TLS cert hot reload | `Done` | New handshakes only |
-| Full TLS/runtime live reconfiguration | `Partial` | Cert reload exists, broad runtime reload does not |
+| Full TLS/runtime live reconfiguration | `Done` | Cert reload & broad runtime exists |
 
 ## Resilience And Safety
 
@@ -78,7 +78,7 @@ Legend:
 | Global inflight limits | `Done` | Implemented |
 | Per-upstream inflight limits | `Done` | Implemented |
 | Per-backend inflight limits | `Done` | Implemented |
-| Rate limiting | `Missing` | Overload control exists, classic rate limiting does not |
+| Rate limiting | `Done` | scoped (Route/Client/Tenant/Token), returns 429 |
 
 ## Control Plane And Discovery
 
@@ -89,8 +89,8 @@ Legend:
 | Runtime status endpoint | `Done` | Implemented |
 | Restart endpoint | `Done` | Implemented |
 | Cert reload endpoint | `Done` | Implemented |
-| Full config hot reload | `Missing` | Biggest current control-plane gap |
-| Dynamic route updates | `Missing` | Requires restart or future reload model |
+| Full config hot reload | `Partial` | Startup-owned settings + listner removal, bind still need restart |
+| Dynamic route updates | `Done via config reload` | routing index rebuilt + swapped |
 | Dynamic upstream membership API | `Missing` | No first-class API |
 | DNS refresh | `Done` | Implemented for hostname-based backends |
 | Rich service discovery | `Missing` | No Kubernetes/xDS/Consul-class discovery |

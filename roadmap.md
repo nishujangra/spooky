@@ -21,16 +21,14 @@ Spooky is not yet strongest today as:
 
 These are the highest-value areas for the next phase of maturity.
 
-### 1. Full Configuration Hot Reload
+### 1. Complete Configuration Hot Reload
 
-Add safe live update support for:
+Full config hot reload is **shipped** (`POST /admin/runtime/reload`): routes, upstreams, backends,
+timeouts and limits, resilience policies, and observability endpoint changes apply live via an
+atomic runtime swap. The remaining work is to close the restart-only gaps:
 
-- listeners
-- routes
-- upstreams
-- timeouts and limits
-- resilience policies
-- observability settings
+- listener removal and bind-address changes (listener *addition* is already live)
+- startup-owned settings: log level/file/format, tracing config, control-plane thread counts
 
 ### 2. Dynamic Config Safety
 
@@ -83,16 +81,18 @@ These areas make Spooky far more competitive as a general production reverse pro
 
 ### 7. Operator Features
 
-- first-class rate limiting
+- distributed / cross-instance rate limiting (scoped per-instance rate limiting already ships)
 - stronger capacity guidance
 - more complete runbooks and alerts
 - better runtime visibility for why requests were shed, retried, or rerouted
 
 ### 8. Auth And Policy Features
 
-- JWT validation
-- external auth integration
-- stronger route-level policy controls
+- JWKS / asymmetric JWT validation (RS256/ES256) — local JWT validation ships today but is HS256-only
+- stronger route-level policy controls and layered/chained auth providers
+
+_Already shipped (previously listed here as future): scoped rate limiting (route/client/tenant/token),
+local HS256 JWT validation with scope/role RBAC, and external auth via HTTP subrequest or OIDC._
 
 ## Longer-Term Competitive Priorities
 

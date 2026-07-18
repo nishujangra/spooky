@@ -1755,7 +1755,7 @@
 </tbody>
 </table></div>
 <h2 id="backend-weighting">Backend Weighting</h2>
-<p>Only consistent hashing respects backend weights. Round-robin and random algorithms currently ignore weights.</p>
+<p>Consistent hashing and sticky-CID respect backend weights (sticky-CID wraps consistent hashing and uses the same weighted hash ring). Round-robin, random, least-connections, and latency-aware currently ignore weights.</p>
 <h3 id="weight-configuration">Weight Configuration</h3>
 <pre><code class="language-yaml">backends:
   - id: &quot;small-instance&quot;
@@ -1780,9 +1780,12 @@
       interval: 5000
 </code></pre>
 <p><strong>Weight Behavior</strong>:
-- <strong>Round Robin</strong>: Weight values are currently ignored
 - <strong>Consistent Hash</strong>: Number of virtual nodes = replicas × weight (64 replicas per weight unit)
+- <strong>Sticky CID</strong>: Honors weight (wraps consistent hashing, same weighted ring)
+- <strong>Round Robin</strong>: Weight values are currently ignored
 - <strong>Random</strong>: Weight values are currently ignored
+- <strong>Least Connections</strong>: Weight values are currently ignored
+- <strong>Latency Aware</strong>: Weight values are currently ignored
 - <strong>Minimum</strong>: Weight values below 1 are clamped to 1</p>
 <h2 id="health-checking">Health Checking</h2>
 <p>Spooky performs active health checks on all backends. Unhealthy backends are automatically removed from rotation.</p>
@@ -2034,9 +2037,13 @@ curl --http3-only -H &quot;X-User-ID: test123&quot; https://localhost:9889/
 </code></pre>
 <p><strong>Solutions</strong>:
 - Ensure load_balancing.type is "consistent-hash"
-- Note: Hash key is automatically derived from request (authority → path → method)
-- For session affinity, ensure requests include consistent authority or path components
-- Configurable key sources are planned for future implementation</p>
+- Set <code>load_balancing.key</code> to choose the hash source explicitly — supported specs include <code>path</code>,
+  <code>authority</code>, <code>method</code>, <code>cid</code>/<code>sticky-cid</code>, <code>peer_ip</code>/<code>client_ip</code>, <code>bearer_token</code>,
+  <code>header:&lt;name&gt;</code>, <code>cookie:&lt;name&gt;</code>, and <code>query:&lt;name&gt;</code> (see the <code>key:</code> field earlier in this guide)
+- When no <code>key</code> is configured, the hash key falls back to being derived from the request
+  (authority → path → method)
+- For session affinity, either set an explicit <code>key</code> or ensure requests include consistent
+  authority or path components</p>
 <h3 id="frequent-health-check-failures">Frequent Health Check Failures</h3>
 <p><strong>Symptoms</strong>: Backends repeatedly marked unhealthy despite being functional</p>
 <p><strong>Diagnosis</strong>:</p>

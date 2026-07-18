@@ -23,7 +23,7 @@ Core options:
 Spooky exposes two main operator-facing HTTP surfaces when configured:
 
 - a Prometheus metrics endpoint
-- a control API for liveness, readiness, runtime visibility, cert reload, and restart actions
+- a control API for liveness, readiness, runtime visibility, full config reload, cert reload, and restart actions
 
 Use:
 
@@ -40,10 +40,13 @@ The canonical configuration docs live in:
 
 ## Important Scope Note
 
-The control API is not a full dynamic configuration API today.
+The control API applies configuration through a file-reload model, not a granular per-object API.
 
-- it provides health, readiness, runtime inspection, restart hooks, and certificate reload
-- it does not provide full live route or upstream mutation
+- it provides health, readiness, runtime inspection, restart actions, certificate reload, and full
+  config reload (`POST /admin/runtime/reload`)
+- config reload re-reads the config file and applies it live via an atomic runtime swap, including
+  route, upstream, and backend changes — it is not a per-object mutation API (you edit the file and
+  reload), and startup-owned settings and listener bind/removal changes still require a restart
 
 ## Related Pages
 

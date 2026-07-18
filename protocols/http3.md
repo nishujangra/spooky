@@ -173,7 +173,7 @@ Spooky maintains separate connection pools for client-facing HTTP/3 sessions and
 - **Header compression**: Full QPACK support for clients, HPACK for HTTP/2 backends
 - **Flow control**: QUIC stream and connection flow control enforced
 - **Server push**: Not currently implemented (client-to-proxy only)
-- **Priority signaling**: HTTP/3 priority frames are mapped to HTTP/2 priority when supported by backends
+- **Priority signaling**: Not currently implemented — HTTP/3 `PRIORITY_UPDATE` frames are accepted but ignored (no mapping to HTTP/2 priority)
 
 ## Performance Characteristics
 

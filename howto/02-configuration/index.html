@@ -1758,8 +1758,8 @@ forwarded_headers:
     reload_certs_path: &quot;/admin/runtime/reload-certs&quot;
 </code></pre>
 <p>Check readiness:</p>
-<pre><code class="language-bash">curl http://127.0.0.1:9902/ready
-curl http://127.0.0.1:9902/health
+<pre><code class="language-bash">curl -k https://127.0.0.1:9902/ready
+curl -k https://127.0.0.1:9902/health
 </code></pre>
 <p>Reload listener certificates without restarting the process:</p>
 <pre><code class="language-bash">curl -X POST \

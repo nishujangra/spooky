@@ -281,19 +281,27 @@ Spooky uses the `quiche` QUIC library for connection management and HTTP/3 frami
 
 ### TLS Integration
 
-TLS 1.3 is mandatory for QUIC. Spooky loads certificate chains and private keys at startup:
+TLS 1.3 is mandatory for QUIC. The QUIC path builds its TLS context with **BoringSSL** (via
+`quiche`), not rustls — it constructs a `SslContextBuilder` and hands it to quiche, loading the
+certificate chain and private key from files, and supports SNI multi-certificate selection and
+optional/required client-auth:
 
 ```rust
-let tls_config = rustls::ServerConfig::builder()
-    .with_safe_defaults()
-    .with_no_client_auth()
-    .with_single_cert(certs, private_key)?;
+let mut tls_ctx = boring::ssl::SslContextBuilder::new(boring::ssl::SslMethod::tls())?;
+tls_ctx.set_certificate_chain_file(cert_path)?;
+tls_ctx.set_private_key_file(key_path, boring::ssl::SslFiletype::PEM)?;
+let mut quic_config =
+    quiche::Config::with_boring_ssl_ctx_builder(quiche::PROTOCOL_VERSION, tls_ctx)?;
 ```
 
-ALPN (Application-Layer Protocol Negotiation) is configured to advertise "h3" for HTTP/3:
+> The `rustls::ServerConfig` path exists only for the TCP+TLS **bootstrap** (HTTP/2 + HTTP/1.1)
+> acceptor, where ALPN is `h2` / `http/1.1` and certificates are supplied via a cert resolver.
+
+ALPN for the QUIC/HTTP-3 path is set through quiche, which advertises all supported h3
+identifiers:
 
 ```rust
-tls_config.alpn_protocols = vec![b"h3".to_vec()];
+quic_config.set_application_protos(quiche::h3::APPLICATION_PROTOCOL)?;
 ```
 
 ### Stream Handling
@@ -316,7 +324,7 @@ Spooky configures QUIC transport parameters to balance memory usage and throughp
 
 ### Congestion Control
 
-Spooky uses the default NewReno congestion control provided by `quiche`. This choice balances fairness with TCP flows and predictable behavior across network conditions.
+Spooky uses `quiche`'s default congestion controller, which is **CUBIC** (Spooky does not call `set_cc_algorithm`, so quiche's default applies). CUBIC balances fairness with TCP flows and predictable behavior across network conditions.
 
 ## Performance Considerations
 

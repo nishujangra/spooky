@@ -1462,7 +1462,7 @@
 <p>After starting Spooky against the new config (in a staging environment, or as a canary instance before routing real traffic), verify that all upstream backends have been probed and are healthy before you shift traffic to the instance.</p>
 <h3 id="1-poll-adminruntime">1. Poll /admin/runtime</h3>
 <p>The <code>/admin/runtime</code> endpoint returns the current runtime state of every upstream pool, including per-backend health status. Query it within the first 30 seconds of startup:</p>
-<pre><code class="language-bash">curl -s http://127.0.0.1:9000/admin/runtime | jq .
+<pre><code class="language-bash">curl -sk https://127.0.0.1:9902/admin/runtime | jq .
 </code></pre>
 <p>A healthy response looks like this:</p>
 <pre><code class="language-json">{
@@ -1503,8 +1503,9 @@
 <p>Before routing traffic, every backend should show <code>"healthy": true</code> and <code>"consecutive_failures": 0</code>. If any backend shows <code>healthy: false</code>, do not route traffic to this instance until you understand why.</p>
 <p>A pool where <code>healthy_count</code> is less than <code>total_count</code> indicates partial degradation. Spooky will route to the remaining healthy backends, but the pool is operating below capacity. Determine whether that is acceptable before proceeding.</p>
 <h3 id="2-watch-health-check-logs-at-debug-level">2. Watch health check logs at debug level</h3>
-<p>During the first 30 seconds after startup, run Spooky at debug log level (or tail its logs if already running with structured output) and watch for health probe results:</p>
-<pre><code class="language-bash">SPOOKY_LOG=debug spooky --config /etc/spooky/config-new.yaml 2&gt;&amp;1 | grep -i &quot;health\|probe\|backend&quot;
+<p>During the first 30 seconds after startup, run Spooky at debug log level (or tail its logs if already running with structured output) and watch for health probe results. The log level is set in the config file via <code>log.level: debug</code> (there is no <code>SPOOKY_LOG</code>/<code>RUST_LOG</code> environment variable):</p>
+<pre><code class="language-bash"># set `log.level: debug` in config-new.yaml, then:
+spooky --config /etc/spooky/config-new.yaml 2&gt;&amp;1 | grep -i &quot;health\|probe\|backend&quot;
 </code></pre>
 <p>You are looking for probe success messages for every backend. Any repeated probe failure for a backend that should be reachable is a signal to stop and investigate before the instance takes traffic.</p>
 <h3 id="3-manual-backend-health-check">3. Manual backend health check</h3>
@@ -1566,8 +1567,9 @@ ls -la /etc/spooky/certs/example.com.key
 <pre><code class="language-bash"># Production instance (already running)
 # Config: /etc/spooky/config.yaml, port 443
 
-# Canary instance
-spooky --config /etc/spooky/config-new.yaml --listen 0.0.0.0:8443
+# Canary instance — the CLI only accepts --config/-c; set the bind address in the config file.
+# Use config-new.yaml with `listen.address`/`listen.port` set to the canary port (e.g. 8443).
+spooky --config /etc/spooky/config-new.yaml
 </code></pre>
 <p>Alternatively, use a separate unit file if running under systemd:</p>
 <pre><code class="language-bash">systemctl start spooky-canary
@@ -1583,42 +1585,47 @@ spooky --config /etc/spooky/config-new.yaml --listen 0.0.0.0:8443
 <h3 id="3-compare-metrics-between-old-and-canary-instances">3. Compare metrics between old and canary instances</h3>
 <p>Use the Prometheus queries below to compare the two instances side by side. Substitute <code>instance="&lt;host&gt;:&lt;port&gt;"</code> with the actual scrape labels for each instance.</p>
 <p><strong>Request success rate (should be equal between instances):</strong></p>
-<pre><code class="language-promql">rate(spooky_requests_success_total{instance=&quot;host:9090&quot;}[5m])
+<pre><code class="language-promql">rate(spooky_requests_success{instance=&quot;host:9090&quot;}[5m])
 /
 rate(spooky_requests_total{instance=&quot;host:9090&quot;}[5m])
 </code></pre>
 <p>Run the same query for the canary instance and compare. A lower success rate on the canary indicates the new config is causing failures.</p>
 <p><strong>p99 request latency (compare between instances):</strong></p>
 <pre><code class="language-promql">histogram_quantile(0.99,
-  rate(spooky_request_duration_seconds_bucket{instance=&quot;host:9090&quot;}[5m])
+  rate(spooky_upstream_request_latency_ms_bucket{instance=&quot;host:9901&quot;}[5m])
 )
 </code></pre>
-<p>A p99 latency increase on the canary instance (but not the production instance) points to backend latency regression or a timeout misconfiguration in the new config.</p>
-<p><strong>Backend health gauge (should be 1 for all backends on both instances):</strong></p>
-<pre><code class="language-promql">spooky_backend_healthy{instance=&quot;host:9090&quot;}
+<p>This histogram is in <strong>milliseconds</strong> (buckets are <code>_ms</code>), and carries <code>upstream</code>/<code>outcome</code>/<code>le</code>
+labels. A p99 latency increase on the canary instance (but not the production instance) points to
+backend latency regression or a timeout misconfiguration in the new config.</p>
+<p><strong>Backend health (compare health-check success/failure between instances):</strong></p>
+<p>Spooky does not export a per-backend boolean health gauge. Use the health-check counters instead:</p>
+<pre><code class="language-promql">rate(spooky_health_checks_failure{instance=&quot;host:9901&quot;}[5m])
 </code></pre>
-<p>Any backend showing <code>0</code> on the canary but <code>1</code> on the production instance confirms a backend reachability or config problem specific to the new config.</p>
+<p>A rising health-check failure rate on the canary but not the production instance confirms a backend
+reachability or config problem specific to the new config. (Live per-backend health is also visible
+in the <code>/admin/runtime</code> snapshot.)</p>
 <h3 id="4-promote-or-roll-back">4. Promote or roll back</h3>
 <p>If all three metrics are comparable between instances after 10-15 minutes at canary weight, increase the canary to 50%, watch for another 10 minutes, then promote fully by restarting the production instance with the new config.</p>
 <p>If any metric diverges unfavorably, route all traffic back to the production instance and stop the canary. The production instance has been running throughout, so no rollback is required on the production side.</p>
 <hr />
 <h2 id="what-to-watch-after-deploy">What to Watch After Deploy</h2>
 <p>After restarting Spooky with a new config or new binary, watch the following five signals for the first 30 minutes. Set up dashboard panels or alert inhibitions before the restart so you can observe cleanly.</p>
-<p><strong>1. <code>spooky_requests_success_total</code> rate</strong></p>
-<pre><code class="language-promql">rate(spooky_requests_success_total[2m])
+<p><strong>1. <code>spooky_requests_success</code> rate</strong></p>
+<pre><code class="language-promql">rate(spooky_requests_success[2m])
 </code></pre>
 <p>This should match the pre-deploy baseline within 1-2 minutes of restart (after QUIC connections re-establish). A sustained drop below baseline indicates requests are failing. Compare against the same window from yesterday or the previous week to account for traffic volume changes.</p>
-<p><strong>2. <code>spooky_backend_errors_total</code> rate</strong></p>
-<pre><code class="language-promql">rate(spooky_backend_errors_total[2m])
+<p><strong>2. <code>spooky_backend_errors</code> rate</strong></p>
+<pre><code class="language-promql">rate(spooky_backend_errors[2m])
 </code></pre>
 <p>Any sudden increase after restart indicates Spooky is reaching backends but backends are returning errors. This points to a routing misconfiguration (requests sent to wrong backend), a backend environment mismatch, or an application-level problem triggered by the new routing.</p>
-<p><strong>3. <code>spooky_backend_timeouts_total</code> rate</strong></p>
-<pre><code class="language-promql">rate(spooky_backend_timeouts_total[2m])
+<p><strong>3. <code>spooky_backend_timeouts</code> rate</strong></p>
+<pre><code class="language-promql">rate(spooky_backend_timeouts[2m])
 </code></pre>
 <p>A timeout spike after restart is a strong signal that backend addresses changed to something unreachable, or that connection timeout values in the config are now too low for the backend's actual response time. Distinguish from backend errors: errors indicate a response was received (and was a failure); timeouts indicate no timely response at all.</p>
 <p><strong>4. Backend health state via /admin/runtime</strong></p>
 <p>Poll this endpoint repeatedly in the first few minutes after restart:</p>
-<pre><code class="language-bash">watch -n 5 'curl -s http://127.0.0.1:9000/admin/runtime | jq &quot;.upstreams | to_entries[] | {pool: .key, healthy: .value.healthy_count, total: .value.total_count}&quot;'
+<pre><code class="language-bash">watch -n 5 'curl -sk https://127.0.0.1:9902/admin/runtime | jq &quot;.upstreams | to_entries[] | {pool: .key, healthy: .value.healthy_count, total: .value.total_count}&quot;'
 </code></pre>
 <p>Any pool where <code>healthy</code> is less than <code>total</code> after 60 seconds of uptime should be investigated. If a backend was healthy before the restart and is now unhealthy, the new config is likely pointing to a wrong address or using a different TLS mode that the backend does not expect.</p>
 <p><strong>5. Process RSS memory</strong></p>
@@ -1668,7 +1675,7 @@ chmod +x /usr/local/bin/spooky-new
 <p>Expected: <code>Active: active (running)</code>. If the service enters a failed state, check <code>journalctl -u spooky -n 50</code> for the startup error.</p>
 <p><strong>7. Confirm /health returns 200 within 5 seconds of restart.</strong></p>
 <pre><code class="language-bash">for i in $(seq 1 10); do
-  STATUS=$(curl -o /dev/null -s -w &quot;%{http_code}&quot; http://127.0.0.1:9000/health)
+  STATUS=$(curl -o /dev/null -sk -w &quot;%{http_code}&quot; https://127.0.0.1:9902/health)
   echo &quot;$(date +%T) /health: $STATUS&quot;
   [ &quot;$STATUS&quot; = &quot;200&quot; ] &amp;&amp; break
   sleep 0.5

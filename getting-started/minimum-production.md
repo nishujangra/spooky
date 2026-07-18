@@ -217,7 +217,7 @@ sudo systemctl status spooky.service
 sudo journalctl -u spooky.service -n 50 --no-pager
 
 # 3. Confirm Spooky is reachable and at least one backend is healthy
-curl -sf http://127.0.0.1:9902/health
+curl -skf https://127.0.0.1:9902/health
 ```
 
 The control API `/health` endpoint returns HTTP 200 when the process is up. It does not verify backend health — use the metrics endpoint (`spooky_health_checks_success`) for that.

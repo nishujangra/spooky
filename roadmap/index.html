@@ -1435,15 +1435,13 @@
 </ul>
 <h2 id="near-term-priorities">Near-Term Priorities</h2>
 <p>These are the highest-value areas for the next phase of maturity.</p>
-<h3 id="1-full-configuration-hot-reload">1. Full Configuration Hot Reload</h3>
-<p>Add safe live update support for:</p>
+<h3 id="1-complete-configuration-hot-reload">1. Complete Configuration Hot Reload</h3>
+<p>Full config hot reload is <strong>shipped</strong> (<code>POST /admin/runtime/reload</code>): routes, upstreams, backends,
+timeouts and limits, resilience policies, and observability endpoint changes apply live via an
+atomic runtime swap. The remaining work is to close the restart-only gaps:</p>
 <ul>
-<li>listeners</li>
-<li>routes</li>
-<li>upstreams</li>
-<li>timeouts and limits</li>
-<li>resilience policies</li>
-<li>observability settings</li>
+<li>listener removal and bind-address changes (listener <em>addition</em> is already live)</li>
+<li>startup-owned settings: log level/file/format, tracing config, control-plane thread counts</li>
 </ul>
 <h3 id="2-dynamic-config-safety">2. Dynamic Config Safety</h3>
 <p>Add a stronger control-plane model with:</p>
@@ -1491,17 +1489,18 @@
 </ul>
 <h3 id="7-operator-features">7. Operator Features</h3>
 <ul>
-<li>first-class rate limiting</li>
+<li>distributed / cross-instance rate limiting (scoped per-instance rate limiting already ships)</li>
 <li>stronger capacity guidance</li>
 <li>more complete runbooks and alerts</li>
 <li>better runtime visibility for why requests were shed, retried, or rerouted</li>
 </ul>
 <h3 id="8-auth-and-policy-features">8. Auth And Policy Features</h3>
 <ul>
-<li>JWT validation</li>
-<li>external auth integration</li>
-<li>stronger route-level policy controls</li>
+<li>JWKS / asymmetric JWT validation (RS256/ES256) — local JWT validation ships today but is HS256-only</li>
+<li>stronger route-level policy controls and layered/chained auth providers</li>
 </ul>
+<p><em>Already shipped (previously listed here as future): scoped rate limiting (route/client/tenant/token),
+local HS256 JWT validation with scope/role RBAC, and external auth via HTTP subrequest or OIDC.</em></p>
 <h2 id="longer-term-competitive-priorities">Longer-Term Competitive Priorities</h2>
 <p>These areas are what move Spooky from “strong specialized edge proxy” toward “top-tier proxy platform.”</p>
 <h3 id="9-discovery-and-platform-integration">9. Discovery And Platform Integration</h3>
@@ -1987,10 +1986,10 @@
         </a>
         
         
-        <a href="#1-full-configuration-hot-reload"
+        <a href="#1-complete-configuration-hot-reload"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#1-full-configuration-hot-reload');">
-            1. Full Configuration Hot Reload
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#1-complete-configuration-hot-reload');">
+            1. Complete Configuration Hot Reload
         </a>
         
         <a href="#2-dynamic-config-safety"

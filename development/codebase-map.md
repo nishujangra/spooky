@@ -90,7 +90,7 @@ Contributors should treat the following areas as high-risk:
 | --- | --- |
 | New config field | `crates/config` |
 | New runtime limit/timeout | `crates/config` and `crates/edge` |
-| New routing matcher | `crates/config` and `crates/edge/route_index.rs` |
+| New routing matcher | `crates/config` and `crates/edge/src/routing/` (`index.rs`, `route.rs`, `trie.rs`, `matcher.rs`) |
 | New LB algorithm | `crates/lb` |
 | New upstream transport behavior | `crates/transport` |
 | New request-header forwarding policy | `crates/bridge` |

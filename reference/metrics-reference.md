@@ -30,7 +30,7 @@ These families are the primary source for production dashboards because they pre
 Expected label values:
 
 - `status_class`: `1xx`, `2xx`, `3xx`, `4xx`, `5xx`, `other`, `unknown`
-- `outcome`: `success`, `failure`, `timeout`, `backend_error`, `overload_shed`
+- `outcome`: `success`, `failure`, `timeout`, `backend_error`, `overload_shed`, `rate_limited`
 
 Use these for questions like:
 

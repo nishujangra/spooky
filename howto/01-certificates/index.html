@@ -1434,7 +1434,7 @@
     <p>Spooky requires TLS certificates for both the QUIC/HTTP3 listener and the HTTP/1.1+HTTP/2 bootstrap TLS listener.</p>
 <ul>
 <li><strong>Certificate format:</strong> PEM X.509 (<code>-----BEGIN CERTIFICATE-----</code>)</li>
-<li><strong>Key format:</strong> PKCS#8 PEM (<code>-----BEGIN PRIVATE KEY-----</code>)</li>
+<li><strong>Key format:</strong> PEM private key — both PKCS#8 (<code>-----BEGIN PRIVATE KEY-----</code>) and PKCS#1 (<code>-----BEGIN RSA PRIVATE KEY-----</code>) are accepted</li>
 <li>Both are validated at startup — spooky exits if either is missing or malformed</li>
 </ul>
 <hr />
@@ -1533,12 +1533,12 @@ openssl x509 -in /etc/spooky/certs/fullchain.pem -noout -issuer -subject -dates
 openssl x509 -noout -modulus -in /etc/spooky/certs/fullchain.pem | openssl md5
 openssl pkey -noout -modulus -in /etc/spooky/certs/privkey.pem   | openssl md5
 
-# Check key format (must show PRIVATE KEY, not RSA PRIVATE KEY)
+# Check key format — both PKCS#8 and PKCS#1 PEM keys are accepted
 head -1 /etc/spooky/certs/privkey.pem
-# Good:    -----BEGIN PRIVATE KEY-----
-# Bad:     -----BEGIN RSA PRIVATE KEY-----  (PKCS#1 — needs conversion)
+# PKCS#8:  -----BEGIN PRIVATE KEY-----      (accepted)
+# PKCS#1:  -----BEGIN RSA PRIVATE KEY-----  (also accepted)
 </code></pre>
-<p>If the key is PKCS#1, convert it:</p>
+<p>Both key encodings load fine. If you nonetheless want to normalize a PKCS#1 key to PKCS#8:</p>
 <pre><code class="language-bash">openssl pkcs8 -topk8 -nocrypt -in old-privkey.pem -out /etc/spooky/certs/privkey.pem
 </code></pre>
 <hr />
@@ -1558,9 +1558,9 @@ head -1 /etc/spooky/certs/privkey.pem
 <td><code>chown ubuntu:ubuntu /etc/spooky/certs/*</code></td>
 </tr>
 <tr>
-<td><code>no private key found</code></td>
-<td>Key is PKCS#1 not PKCS#8</td>
-<td>Convert with <code>openssl pkcs8 -topk8 -nocrypt</code></td>
+<td><code>Cannot parse PEM private key</code></td>
+<td>Key file is malformed or not a PEM private key</td>
+<td>Ensure the file is a valid PEM key (PKCS#8 or PKCS#1 both work)</td>
 </tr>
 <tr>
 <td><code>NET::ERR_CERT_AUTHORITY_INVALID</code></td>

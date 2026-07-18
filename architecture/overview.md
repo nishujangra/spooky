@@ -195,20 +195,25 @@ Spooky uses Tokio as its asynchronous runtime:
 ### State Management
 
 Shared state is managed carefully:
-- `Arc<T>` for shared ownership
-- `Mutex<T>` for mutable shared state (upstream pools)
+- `Arc<T>` for shared ownership (including `Arc<Metrics>` shared across all workers)
+- `RwLock<T>` for mutable shared state (upstream pools)
 - `AtomicU64` for lock-free counters (metrics)
-- Single-threaded UDP socket polling (no lock contention)
+- A `RuntimeBundleHandle` provides an atomically swappable snapshot of runtime state, enabling
+  config hot reload without restarting the process
 
 ### Task Structure
 
-The main event loop runs on the primary thread:
-- `poll()` processes UDP packets synchronously
-- QUIC connections are managed in-process
-- Backend requests spawn async tasks via Tokio
-- Graceful shutdown coordinated via AtomicBool
+The data plane is **multi-worker**, not a single primary-thread loop:
+- One UDP socket is bound per worker via `SO_REUSEPORT`, and one OS thread is spawned per socket
+  (`spooky-data-plane-{idx}`); worker count comes from `performance.worker_threads`.
+- Each worker can be further sub-sharded into `performance.packet_shards_per_worker` packet-shard
+  threads, fed via bounded `mpsc` channels. Packets are hashed by peer address so a given peer
+  always lands on the same shard/connection state.
+- Each worker/shard runs its own `recv_from` → QUIC-poll loop; connections are managed in-process.
+- Backend requests spawn async tasks via Tokio; graceful drain/shutdown is coordinated per group.
 
-This design avoids thread synchronization overhead on the packet processing path while leveraging Tokio's async capabilities for backend I/O.
+This design scales UDP ingress across cores while keeping each connection pinned to one thread's
+state, and leverages Tokio's async capabilities for backend I/O.
 
 ## Error Handling Strategy
 
@@ -291,7 +296,7 @@ Configuration validation occurs before runtime:
 Current configuration is immutable at runtime:
 - Loaded once at startup
 - Shared via Arc across components
-- Hot reload not yet implemented (requires atomic swap)
+- Hot reload implemented with atomic swap
 
 ## Security Considerations
 
@@ -305,7 +310,7 @@ Current configuration is immutable at runtime:
 ### Backend Communication
 
 - Currently plaintext HTTP/2
-- Mutual TLS to backends (planned)
+- upstream TLS shipped, verify-on by default (server-side; note true mTLS/client-cert to backends is the actual gap)
 - Connection reuse reduces handshake overhead
 
 ### Attack Surface
@@ -333,7 +338,7 @@ Atomic counters for key metrics:
 - `backend_timeouts`: timed out backend requests
 - `backend_errors`: backend error responses
 
-Metrics export via Prometheus format (planned).
+Metrics export via Prometheus format (shipped).
 
 ### Tracing
 
@@ -342,7 +347,7 @@ Request-level tracing:
 - Duration calculated on completion
 - Logged with request details
 
-Distributed tracing via OpenTelemetry (planned).
+Distributed tracing via OpenTelemetry (shipped).
 
 ## Performance Characteristics
 
@@ -371,14 +376,14 @@ Distributed tracing via OpenTelemetry (planned).
 
 ### Planned Features
 
-- Hot configuration reload without restart (planned)
-- Prometheus metrics endpoint
-- OpenTelemetry distributed tracing
-- Mutual TLS to backends
-- Active health check probes (TCP/HTTP)
-- Rate limiting per client
-- Circuit breaker pattern for failing backends
-- Admin API for runtime inspection
+- Mutual TLS (client certificates) **to backends** — upstream TLS with certificate verification is
+  already implemented; client-cert authentication toward backends is the remaining gap
+- Upstream HTTP/3 forwarding
+- Richer service-discovery integrations
+
+_Already shipped (previously listed here as planned): active HTTP health-check probes, per-client
+scoped rate limiting, per-backend circuit breakers, and the admin/control API for runtime
+inspection and hot reload._
 
 ### Architectural Improvements
 

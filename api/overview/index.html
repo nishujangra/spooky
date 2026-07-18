@@ -1463,7 +1463,7 @@
 <p>Spooky exposes two main operator-facing HTTP surfaces when configured:</p>
 <ul>
 <li>a Prometheus metrics endpoint</li>
-<li>a control API for liveness, readiness, runtime visibility, cert reload, and restart actions</li>
+<li>a control API for liveness, readiness, runtime visibility, full config reload, cert reload, and restart actions</li>
 </ul>
 <p>Use:</p>
 <ul>
@@ -1478,10 +1478,13 @@
 <li><a href="../../configuration/tls/">TLS Setup</a></li>
 </ul>
 <h2 id="important-scope-note">Important Scope Note</h2>
-<p>The control API is not a full dynamic configuration API today.</p>
+<p>The control API applies configuration through a file-reload model, not a granular per-object API.</p>
 <ul>
-<li>it provides health, readiness, runtime inspection, restart hooks, and certificate reload</li>
-<li>it does not provide full live route or upstream mutation</li>
+<li>it provides health, readiness, runtime inspection, restart actions, certificate reload, and full
+  config reload (<code>POST /admin/runtime/reload</code>)</li>
+<li>config reload re-reads the config file and applies it live via an atomic runtime swap, including
+  route, upstream, and backend changes — it is not a per-object mutation API (you edit the file and
+  reload), and startup-owned settings and listener bind/removal changes still require a restart</li>
 </ul>
 <h2 id="related-pages">Related Pages</h2>
 <ul>
