@@ -1503,11 +1503,12 @@
 <h3 id="post-adminruntimereload"><code>POST /admin/runtime/reload</code></h3>
 <p>Purpose:</p>
 <ul>
-<li>reload the full config from disk and apply changes to upstreams, backends, policies, and timeouts</li>
+<li>reload the full config from disk and apply changes to upstreams, backends, policies, timeouts, and <code>log.level</code></li>
 </ul>
 <p>Important scope note:</p>
 <ul>
 <li>listener bind addresses, control API bind, and metrics bind cannot change without a restart</li>
+<li>log format/file settings, tracing config (<code>observability.tracing.*</code>), and <code>performance.control_plane_threads</code> also require a restart (a reload changing them is rejected); <code>log.level</code>, however, is applied live</li>
 <li>in-flight requests on the old config complete normally; new requests use the new config immediately</li>
 </ul>
 <p>Expected use:</p>

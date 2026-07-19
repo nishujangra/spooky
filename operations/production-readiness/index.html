@@ -1436,7 +1436,7 @@
 <p>Spooky is a <strong>beta HTTP/3 edge reverse proxy</strong> with a strong core data plane, broad correctness and regression coverage, and clear operational ambition. It is suitable for <strong>controlled production rollout</strong> when the operator keeps rollback, monitoring, and staged traffic expansion in place.</p>
 <p>Spooky is <strong>not yet a fully mature general-purpose reverse proxy platform</strong>. The main constraints are:</p>
 <ul>
-<li>config hot reload covers most runtime settings but not all: startup-owned settings (log, tracing, thread counts) and listener removal/bind-address changes still require a restart</li>
+<li>config hot reload covers most runtime settings, including live <code>log.level</code> changes, but not all: log format/file settings, tracing config, control-plane thread counts, and listener removal/bind-address changes still require a restart</li>
 <li>upstream forwarding is scheme-driven: HTTP/2 for <code>https://</code> backends, HTTP/1.1 for <code>http://</code> backends</li>
 <li>dynamic control-plane capability is file-reload based, not a granular per-object mutation API</li>
 <li>auth is limited to API key, local JWT, and per-upstream external auth (HTTP/OIDC); there is no generic policy engine, rate-limiting framework, or JWKS-based token validation</li>
@@ -1473,7 +1473,7 @@
 <h2 id="not-yet-production-complete">Not Yet Production-Complete</h2>
 <p>The following gaps are the most important reasons Spooky is not yet at general-availability maturity:</p>
 <ul>
-<li>config reload cannot change startup-owned settings (log, tracing, thread counts) or remove/rebind listeners without a restart</li>
+<li>config reload cannot change log format/file settings, tracing config, or control-plane thread counts, and cannot remove/rebind listeners, without a restart (<code>log.level</code> reloads live)</li>
 <li>no transactional config apply, staged activation, or rollback API</li>
 <li>no upstream HTTP/3 forwarding mode</li>
 <li>no broad request mirroring, canary traffic splitting, or advanced traffic policy engine</li>
@@ -1502,7 +1502,7 @@
 <p>The most important gates before calling the project broadly production-grade are:</p>
 <ol>
 <li>Transactional config apply: staged activation, config-diff visibility, and a rollback API on top of the existing reload endpoint (base config hot reload — including live route and upstream updates — already ships).</li>
-<li>Live reconfiguration of the remaining restart-only settings (startup-owned log/tracing/thread counts, listener removal/bind changes).</li>
+<li>Live reconfiguration of the remaining restart-only settings (log format/file, tracing config, thread counts, listener removal/bind changes; <code>log.level</code> already reloads live).</li>
 <li>Refactoring of the oversized edge runtime into smaller subsystems.</li>
 <li>Fuzzing and deeper parser/protocol hardening.</li>
 <li>First-class rate limiting and a generic policy engine (auth now covers API key, local JWT, and external/OIDC checks).</li>

@@ -28,7 +28,8 @@ timeouts and limits, resilience policies, and observability endpoint changes app
 atomic runtime swap. The remaining work is to close the restart-only gaps:
 
 - listener removal and bind-address changes (listener *addition* is already live)
-- startup-owned settings: log level/file/format, tracing config, control-plane thread counts
+- startup-owned settings: log file/format, tracing config, control-plane thread counts
+  (`log.level` already reloads live)
 
 ### 2. Dynamic Config Safety
 

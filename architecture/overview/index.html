@@ -1695,7 +1695,7 @@ state, and leverages Tokio's async capabilities for backend I/O.</p>
 <p>Structured logging via Rust's log crate:
 - Levels: trace, debug, info, warn, error
 - Context includes: connection ID, stream ID, backend, duration
-- Configurable log level at startup</p>
+- Configurable log level, adjustable live via config reload (no restart)</p>
 <h3 id="metrics">Metrics</h3>
 <p>Atomic counters for key metrics:
 - <code>requests_total</code>: all requests received

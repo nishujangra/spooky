@@ -46,7 +46,8 @@ The control API applies configuration through a file-reload model, not a granula
   config reload (`POST /admin/runtime/reload`)
 - config reload re-reads the config file and applies it live via an atomic runtime swap, including
   route, upstream, and backend changes — it is not a per-object mutation API (you edit the file and
-  reload), and startup-owned settings and listener bind/removal changes still require a restart
+  reload). `log.level` applies live; log format/file settings, tracing config, control-plane thread
+  counts, and listener bind/removal changes still require a restart
 
 ## Related Pages
 

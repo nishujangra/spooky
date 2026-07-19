@@ -91,11 +91,12 @@ Expected use:
 
 Purpose:
 
-- reload the full config from disk and apply changes to upstreams, backends, policies, and timeouts
+- reload the full config from disk and apply changes to upstreams, backends, policies, timeouts, and `log.level`
 
 Important scope note:
 
 - listener bind addresses, control API bind, and metrics bind cannot change without a restart
+- log format/file settings, tracing config (`observability.tracing.*`), and `performance.control_plane_threads` also require a restart (a reload changing them is rejected); `log.level`, however, is applied live
 - in-flight requests on the old config complete normally; new requests use the new config immediately
 
 Expected use:

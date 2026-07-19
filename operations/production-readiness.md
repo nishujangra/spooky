@@ -8,7 +8,7 @@ Spooky is a **beta HTTP/3 edge reverse proxy** with a strong core data plane, br
 
 Spooky is **not yet a fully mature general-purpose reverse proxy platform**. The main constraints are:
 
-- config hot reload covers most runtime settings but not all: startup-owned settings (log, tracing, thread counts) and listener removal/bind-address changes still require a restart
+- config hot reload covers most runtime settings, including live `log.level` changes, but not all: log format/file settings, tracing config, control-plane thread counts, and listener removal/bind-address changes still require a restart
 - upstream forwarding is scheme-driven: HTTP/2 for `https://` backends, HTTP/1.1 for `http://` backends
 - dynamic control-plane capability is file-reload based, not a granular per-object mutation API
 - auth is limited to API key, local JWT, and per-upstream external auth (HTTP/OIDC); there is no generic policy engine, rate-limiting framework, or JWKS-based token validation
@@ -49,7 +49,7 @@ These areas are usable, but their surrounding operational model is not yet as ma
 
 The following gaps are the most important reasons Spooky is not yet at general-availability maturity:
 
-- config reload cannot change startup-owned settings (log, tracing, thread counts) or remove/rebind listeners without a restart
+- config reload cannot change log format/file settings, tracing config, or control-plane thread counts, and cannot remove/rebind listeners, without a restart (`log.level` reloads live)
 - no transactional config apply, staged activation, or rollback API
 - no upstream HTTP/3 forwarding mode
 - no broad request mirroring, canary traffic splitting, or advanced traffic policy engine
@@ -80,7 +80,7 @@ Do not position Spooky today as:
 The most important gates before calling the project broadly production-grade are:
 
 1. Transactional config apply: staged activation, config-diff visibility, and a rollback API on top of the existing reload endpoint (base config hot reload — including live route and upstream updates — already ships).
-2. Live reconfiguration of the remaining restart-only settings (startup-owned log/tracing/thread counts, listener removal/bind changes).
+2. Live reconfiguration of the remaining restart-only settings (log format/file, tracing config, thread counts, listener removal/bind changes; `log.level` already reloads live).
 3. Refactoring of the oversized edge runtime into smaller subsystems.
 4. Fuzzing and deeper parser/protocol hardening.
 5. First-class rate limiting and a generic policy engine (auth now covers API key, local JWT, and external/OIDC checks).

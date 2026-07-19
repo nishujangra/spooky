@@ -1452,8 +1452,9 @@
 <ul>
 <li>configuration hot reload is supported via <code>POST /admin/runtime/reload</code>: the full config is
   re-read, validated, and applied through an atomic runtime swap (routes, upstreams, backends,
-  timeouts, limits, and resilience policies). Only startup-owned settings (log, tracing, thread
-  counts) and listener removal / bind-address changes still require a restart.</li>
+  timeouts, limits, resilience policies, and <code>log.level</code>). Only log format/file settings, tracing
+  config, control-plane thread counts, and listener removal / bind-address changes still require a
+  restart.</li>
 <li>certificate reload (<code>POST /admin/runtime/reload-certs</code>) covers new handshakes only</li>
 <li>backend transport is scheme-driven: <code>https://</code> backends use HTTP/2, <code>http://</code> backends use HTTP/1.1</li>
 </ul>

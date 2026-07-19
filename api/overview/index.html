@@ -1484,7 +1484,8 @@
   config reload (<code>POST /admin/runtime/reload</code>)</li>
 <li>config reload re-reads the config file and applies it live via an atomic runtime swap, including
   route, upstream, and backend changes — it is not a per-object mutation API (you edit the file and
-  reload), and startup-owned settings and listener bind/removal changes still require a restart</li>
+  reload). <code>log.level</code> applies live; log format/file settings, tracing config, control-plane thread
+  counts, and listener bind/removal changes still require a restart</li>
 </ul>
 <h2 id="related-pages">Related Pages</h2>
 <ul>

@@ -233,10 +233,10 @@ Spooky supports **full configuration hot reload** via `POST /admin/runtime/reloa
 certificate-only reload for new handshakes. When planning operations:
 
 - use full config reload (`/admin/runtime/reload`) for route, upstream, backend, timeout, limit,
-  and resilience-policy changes — these apply live via an atomic runtime swap, no restart
+  resilience-policy, and `log.level` changes — these apply live via an atomic runtime swap, no restart
 - use cert reload (`/admin/runtime/reload-certs`) for listener certificate replacement
-- plan a drain-and-restart workflow only for startup-owned settings (log, tracing, thread counts)
-  and listener removal or bind-address changes, which the reload endpoint rejects
+- plan a drain-and-restart workflow only for log format/file settings, tracing config, control-plane
+  thread counts, and listener removal or bind-address changes, which the reload endpoint rejects
 - keep rollback and staged rollout procedures ready
 
 ## Related Pages

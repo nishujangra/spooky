@@ -327,7 +327,7 @@ Current configuration is immutable at runtime:
 Structured logging via Rust's log crate:
 - Levels: trace, debug, info, warn, error
 - Context includes: connection ID, stream ID, backend, duration
-- Configurable log level at startup
+- Configurable log level, adjustable live via config reload (no restart)
 
 ### Metrics
 

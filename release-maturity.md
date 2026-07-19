@@ -26,7 +26,7 @@ Operators should **not** assume:
 
 - every interface is frozen
 - every deployment shape has been equally hardened
-- a fully restart-free config workflow exists — most config applies live via `POST /admin/runtime/reload`, but startup-owned settings (log, tracing, thread counts) and listener removal/bind-address changes still require a restart
+- a fully restart-free config workflow exists — most config applies live via `POST /admin/runtime/reload` (including `log.level`), but log format/file settings, tracing config, control-plane thread counts, and listener removal/bind-address changes still require a restart
 
 ## Current Strong Areas
 
@@ -63,8 +63,9 @@ The most important maturity gates before a broader GA-style claim are:
 - use canaries or bounded traffic first
 - keep rollback warm and tested
 - apply most config changes live via `POST /admin/runtime/reload` (routes, upstreams, backends,
-  timeouts, limits, resilience policies); drain-and-restart only for startup-owned settings
-  (log, tracing, thread counts) and listener removal / bind-address changes
+  timeouts, limits, resilience policies, and `log.level`); drain-and-restart only for log
+  format/file settings, tracing config, control-plane thread counts, and listener removal /
+  bind-address changes
 - read release notes before upgrade
 - pin to tagged versions, not moving branches
 

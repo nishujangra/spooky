@@ -1641,10 +1641,10 @@ upstream:
 certificate-only reload for new handshakes. When planning operations:</p>
 <ul>
 <li>use full config reload (<code>/admin/runtime/reload</code>) for route, upstream, backend, timeout, limit,
-  and resilience-policy changes — these apply live via an atomic runtime swap, no restart</li>
+  resilience-policy, and <code>log.level</code> changes — these apply live via an atomic runtime swap, no restart</li>
 <li>use cert reload (<code>/admin/runtime/reload-certs</code>) for listener certificate replacement</li>
-<li>plan a drain-and-restart workflow only for startup-owned settings (log, tracing, thread counts)
-  and listener removal or bind-address changes, which the reload endpoint rejects</li>
+<li>plan a drain-and-restart workflow only for log format/file settings, tracing config, control-plane
+  thread counts, and listener removal or bind-address changes, which the reload endpoint rejects</li>
 <li>keep rollback and staged rollout procedures ready</li>
 </ul>
 <h2 id="related-pages">Related Pages</h2>
