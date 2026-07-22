@@ -113,8 +113,8 @@ pub fn escape_forwarded_host(host: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_forwarded_header_values, escape_forwarded_host, forwarded_for_value,
-        merge_forwarded_chain, ForwardedHeaderChains,
+        ForwardedHeaderChains, build_forwarded_header_values, escape_forwarded_host,
+        forwarded_for_value, merge_forwarded_chain,
     };
     use spooky_config::config::{ForwardedHeaderPolicy, ForwardedHeaderPolicyMode};
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
@@ -147,22 +147,16 @@ mod tests {
         let inbound = vec![b"for=1.1.1.1".to_vec()];
         let current = b"for=2.2.2.2";
 
-        let preserved = merge_forwarded_chain(
-            ForwardedHeaderPolicyMode::Preserve,
-            &inbound,
-            Some(current),
-        )
-        .unwrap()
-        .unwrap();
+        let preserved =
+            merge_forwarded_chain(ForwardedHeaderPolicyMode::Preserve, &inbound, Some(current))
+                .unwrap()
+                .unwrap();
         assert_eq!(preserved.as_bytes(), b"for=1.1.1.1");
 
-        let appended = merge_forwarded_chain(
-            ForwardedHeaderPolicyMode::Append,
-            &inbound,
-            Some(current),
-        )
-        .unwrap()
-        .unwrap();
+        let appended =
+            merge_forwarded_chain(ForwardedHeaderPolicyMode::Append, &inbound, Some(current))
+                .unwrap()
+                .unwrap();
         assert_eq!(appended.as_bytes(), b"for=1.1.1.1, for=2.2.2.2");
 
         let overwritten = merge_forwarded_chain(
@@ -191,8 +185,8 @@ mod tests {
             x_forwarded_host: &inbound_xfh,
         };
         let ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10));
-        let out = build_forwarded_header_values(&policy, inbound, ip, "app.example")
-            .expect("build");
+        let out =
+            build_forwarded_header_values(&policy, inbound, ip, "app.example").expect("build");
 
         assert_eq!(out.x_forwarded_for.unwrap().as_bytes(), b"203.0.113.10");
         assert_eq!(out.x_forwarded_proto.unwrap().as_bytes(), b"https");
@@ -218,12 +212,8 @@ mod tests {
             x_forwarded_host: &[],
         };
         let ip = IpAddr::V4(Ipv4Addr::new(2, 2, 2, 2));
-        let out = build_forwarded_header_values(&policy, inbound, ip, "h")
-            .expect("build");
-        assert_eq!(
-            out.x_forwarded_for.unwrap().as_bytes(),
-            b"1.1.1.1, 2.2.2.2"
-        );
+        let out = build_forwarded_header_values(&policy, inbound, ip, "h").expect("build");
+        assert_eq!(out.x_forwarded_for.unwrap().as_bytes(), b"1.1.1.1, 2.2.2.2");
     }
 
     #[test]
@@ -239,8 +229,7 @@ mod tests {
             x_forwarded_host: &[],
         };
         let ip = IpAddr::V4(Ipv4Addr::new(1, 2, 3, 4));
-        let out = build_forwarded_header_values(&policy, inbound, ip, "h")
-            .expect("build");
+        let out = build_forwarded_header_values(&policy, inbound, ip, "h").expect("build");
         // Preserve keeps only inbound chain values for XFF
         assert_eq!(out.x_forwarded_for.unwrap().as_bytes(), b"8.8.8.8");
     }
