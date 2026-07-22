@@ -109,3 +109,35 @@ pub fn forwarded_for_value(ip: IpAddr) -> String {
 pub fn escape_forwarded_host(host: &str) -> String {
     host.replace('\\', "\\\\").replace('"', "\\\"")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{escape_forwarded_host, forwarded_for_value};
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    #[test]
+    fn escape_forwarded_host_escapes_backslash_and_quote() {
+        assert_eq!(escape_forwarded_host(r#"ex"ample.com"#), r#"ex\"ample.com"#);
+        assert_eq!(escape_forwarded_host(r"foo\bar"), r"foo\\bar");
+        assert_eq!(
+            escape_forwarded_host(r#"a\"b"#),
+            r#"a\\\"b"#
+        );
+        // plain host unchanged
+        assert_eq!(escape_forwarded_host("example.com"), "example.com");
+    }
+
+    #[test]
+    fn forwarded_for_value_ipv4_is_bare() {
+        let ip = IpAddr::V4(Ipv4Addr::new(203, 0, 113, 10));
+        assert_eq!(forwarded_for_value(ip), "203.0.113.10");
+    }
+
+    #[test]
+    fn forwarded_for_value_ipv6_is_quoted_bracket_form() {
+        let ip = IpAddr::V6(Ipv6Addr::LOCALHOST);
+        assert_eq!(forwarded_for_value(ip), "\"[::1]\"");
+        let ip = IpAddr::V6("2001:db8::1".parse().unwrap());
+        assert_eq!(forwarded_for_value(ip), "\"[2001:db8::1]\"");
+    }
+}
