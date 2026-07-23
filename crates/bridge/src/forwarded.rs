@@ -192,7 +192,9 @@ mod tests {
         assert_eq!(out.x_forwarded_proto.unwrap().as_bytes(), b"https");
         assert_eq!(out.x_forwarded_host.unwrap().as_bytes(), b"app.example");
 
-        let s = std::str::from_utf8(out.forwarded.unwrap().as_bytes()).unwrap();
+        // Bind the Bytes so the temporary is not dropped while `s` is borrowed (E0716).
+        let forwarded = out.forwarded.unwrap();
+        let s = std::str::from_utf8(forwarded.as_bytes()).unwrap();
         assert!(s.contains("for=203.0.113.10"));
         assert!(s.contains("proto=https"));
         assert!(s.contains("host=\"app.example\""));
