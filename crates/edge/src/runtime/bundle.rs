@@ -93,11 +93,43 @@ impl RuntimeBundleHandle {
         }
     }
 
+    /// Return the active generation's bundle.
+    ///
+    /// # Poisoning policy (Phase 5)
+    ///
+    /// This is on the hot poll path and cannot return an error to its callers, so
+    /// it must not panic on a poisoned lock. Read-lock poisoning is recovered from
+    /// rather than propagated, which is safe here by construction:
+    ///
+    /// - The only writer is [`Self::replace`], whose critical section is a single
+    ///   `mem::replace` of an `Arc<RuntimeBundle>` — it runs no fallible or
+    ///   panic-prone code while holding the write guard, so a panic *inside* the
+    ///   critical section cannot occur.
+    /// - A poisoned guard still references a fully-constructed, immutable
+    ///   `Arc<RuntimeBundle>`; recovering it yields the last consistently-published
+    ///   generation. There is no torn or partially-written state to observe.
+    ///
+    /// Recovering therefore preserves liveness (the data plane keeps serving the
+    /// active generation) without masking a real corruption risk.
     pub fn current(&self) -> Arc<RuntimeBundle> {
-        self.inner
+        let guard = self
+            .inner
             .read()
-            .map(|bundle| Arc::clone(&*bundle))
-            .unwrap_or_else(|_| panic!("runtime bundle lock poisoned"))
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Arc::clone(&guard)
+    }
+
+    /// Test-only: deliberately poison the internal lock so poison-recovery paths
+    /// can be exercised. Poisoning leaves the stored `Arc<RuntimeBundle>` intact.
+    #[cfg(test)]
+    pub fn poison_for_test(&self) {
+        let inner = Arc::clone(&self.inner);
+        // Panic while holding the write guard, in a thread whose unwind we catch,
+        // so the process survives but the lock is marked poisoned.
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = inner.write().expect("lock not yet poisoned");
+            panic!("intentional poison for test");
+        }));
     }
 
     pub fn current_view(&self) -> ActiveRuntimeGeneration {
@@ -142,6 +174,10 @@ impl RuntimeBundleHandle {
         let generation = bundle.generation;
         let next_tasks = Arc::clone(&bundle.shared_state.generation_state().generation_tasks);
         let previous = {
+            // Poisoning cannot actually occur (the critical section runs no
+            // panic-prone code — see `current()`), but the reload path can safely
+            // return an error, so fail closed here rather than recover: abort the
+            // staged generation's tasks and leave the active generation intact.
             let mut guard = match self.inner.write() {
                 Ok(guard) => guard,
                 Err(_) => {

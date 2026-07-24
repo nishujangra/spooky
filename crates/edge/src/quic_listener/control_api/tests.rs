@@ -293,6 +293,25 @@ fn control_api_state_sees_the_active_runtime_generation_after_bundle_replace() {
 }
 
 #[test]
+fn current_recovers_from_poisoned_bundle_lock_without_panicking() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config = test_config(cert, key);
+    let bundle = runtime_bundle_from_config("current.yaml", &config);
+    let expected_generation = bundle.generation;
+
+    let handle = RuntimeBundleHandle::new(bundle);
+    handle.poison_for_test();
+
+    // Phase 5: a poisoned bundle lock must not panic the hot read path; it
+    // recovers the last consistently-published generation.
+    let recovered = handle.current();
+    assert_eq!(recovered.generation, expected_generation);
+    // And it keeps working on subsequent reads.
+    assert_eq!(handle.current_generation(), expected_generation);
+}
+
+#[test]
 fn validate_control_api_reload_compatibility_allows_bind_change_when_socket_is_free() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");

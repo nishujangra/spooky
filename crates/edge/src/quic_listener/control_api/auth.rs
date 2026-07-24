@@ -82,7 +82,20 @@ impl QUICListener {
                 "accepted": false,
                 "error": "unauthorized",
             }),
-            ControlApiRoute::Health | ControlApiRoute::Ready => unreachable!(),
+            // Health/Ready return `false` from `requires_authorization()`, so the
+            // early return above already handled them and this arm is unreachable.
+            // Phase 5: rather than `unreachable!()` (a production panic if that
+            // invariant is ever changed), fail closed with a generic unauthorized
+            // body and assert the invariant only in debug/test builds.
+            ControlApiRoute::Health | ControlApiRoute::Ready => {
+                debug_assert!(
+                    false,
+                    "unauthenticated route {route:?} reached the authorization-rejection path"
+                );
+                json!({
+                    "error": "unauthorized",
+                })
+            }
         };
         Err(Box::new(Self::json_response(
             StatusCode::UNAUTHORIZED,
