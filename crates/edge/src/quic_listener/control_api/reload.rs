@@ -3,6 +3,7 @@ use http_body_util::Full;
 
 use super::*;
 use crate::runtime::bundle::{ActiveRuntimeGeneration, RuntimeBundleHandle};
+use crate::runtime::policy::TransitionRejection;
 
 pub(super) struct RuntimeReloadPlan {
     pub(super) next_runtime: RuntimeBundle,
@@ -401,9 +402,12 @@ impl QUICListener {
         T: PartialEq + std::fmt::Debug,
     {
         if current != next {
-            issues.push(format!(
-                "runtime reload rejected: {field} changed from {current:?} to {next:?}; restart required"
-            ));
+            // Phase 1: route the rejection through the typed operational-policy
+            // vocabulary. `TransitionRejection`'s `Display` reproduces the legacy
+            // wording byte-for-byte, so this is a no-semantic-change refactor —
+            // Phase 2 will surface the typed value itself instead of the string.
+            let rejection = TransitionRejection::restart_required(field, current, next);
+            issues.push(rejection.to_string());
         }
     }
 
