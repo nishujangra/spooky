@@ -3,6 +3,7 @@ use std::{
     time::Duration,
 };
 
+use log::{info, warn};
 use spooky_config::runtime::{ListenerRuntimeConfig, RuntimeConfig};
 use spooky_errors::ProxyError;
 
@@ -11,6 +12,7 @@ use crate::runtime::{
         RuntimeGenerationState, RuntimeGenerationView, RuntimeSharedServices,
         StartupOwnedRuntimeState,
     },
+    policy::RuntimeLifecycleState,
     shared_state::SharedRuntimeState,
 };
 
@@ -84,13 +86,27 @@ impl ActiveRuntimeGeneration {
 #[derive(Clone)]
 pub struct RuntimeBundleHandle {
     inner: Arc<RwLock<Arc<RuntimeBundle>>>,
+    lifecycle: Arc<RuntimeLifecycleState>,
 }
 
 impl RuntimeBundleHandle {
     pub fn new(bundle: RuntimeBundle) -> Self {
+        // The handle is constructed only once the first generation has been built
+        // and is about to be published, so the process is `Running` from the
+        // handle's perspective. Drain/shutdown transitions move it forward from
+        // here (see `begin_drain`/`begin_shutdown`).
+        let lifecycle = RuntimeLifecycleState::new();
+        let _ = lifecycle.mark_running();
         Self {
             inner: Arc::new(RwLock::new(Arc::new(bundle))),
+            lifecycle: Arc::new(lifecycle),
         }
+    }
+
+    /// The shared process lifecycle state machine (Phase 6). All clones of this
+    /// handle observe the same phase.
+    pub fn lifecycle(&self) -> &RuntimeLifecycleState {
+        &self.lifecycle
     }
 
     /// Return the active generation's bundle.
@@ -170,9 +186,27 @@ impl RuntimeBundleHandle {
     ///
     /// The active generation is only mutated at the single `mem::replace`; every
     /// failure path before it leaves the running generation intact.
+    ///
+    /// # Lifecycle gate (Phase 6)
+    ///
+    /// A reload commit is only legal while the process is `Running`. If a drain or
+    /// shutdown has begun, the swap is rejected before touching the active
+    /// generation, so a reload cannot race a shutdown into ambiguous state.
     pub fn replace(&self, bundle: RuntimeBundle) -> Result<u64, ProxyError> {
         let generation = bundle.generation;
         let next_tasks = Arc::clone(&bundle.shared_state.generation_state().generation_tasks);
+
+        if let Some(rejection) = self.lifecycle.check_reload_allowed().rejection() {
+            next_tasks.abort_generation();
+            warn!(
+                "runtime reload commit rejected in lifecycle phase {:?}: refusing to install generation {}",
+                self.lifecycle.phase(),
+                generation
+            );
+            return Err(ProxyError::Transport(rejection.to_string()));
+        }
+
+        let previous_generation = self.current().generation;
         let previous = {
             // Poisoning cannot actually occur (the critical section runs no
             // panic-prone code — see `current()`), but the reload path can safely
@@ -200,6 +234,12 @@ impl RuntimeBundleHandle {
             .generation_tasks
             .retire_generation(Duration::from_secs(5));
         // --- old-generation teardown boundary: END ---
+        info!(
+            "runtime generation swap committed: {} -> {} (lifecycle phase {:?})",
+            previous_generation,
+            generation,
+            self.lifecycle.phase()
+        );
         Ok(generation)
     }
 }

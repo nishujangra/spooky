@@ -293,6 +293,29 @@ fn control_api_state_sees_the_active_runtime_generation_after_bundle_replace() {
 }
 
 #[test]
+fn reload_commit_is_rejected_after_shutdown_begins() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config = test_config(cert, key);
+    let bundle = runtime_bundle_from_config("current.yaml", &config);
+    let next = runtime_bundle_from_config("next.yaml", &config);
+    let generation_before = bundle.generation;
+
+    let handle = RuntimeBundleHandle::new(bundle);
+    // Phase 6: once shutdown has begun, a reload commit must be rejected and the
+    // active generation left untouched.
+    handle.lifecycle().begin_shutdown();
+
+    let result = handle.replace(next);
+    assert!(result.is_err(), "reload during shutdown must be rejected");
+    assert_eq!(
+        handle.current_generation(),
+        generation_before,
+        "active generation must be unchanged after a rejected reload"
+    );
+}
+
+#[test]
 fn current_recovers_from_poisoned_bundle_lock_without_panicking() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");

@@ -312,6 +312,253 @@ impl RuntimeTransitionDecision {
     }
 }
 
+/// The process-level runtime lifecycle phase.
+///
+/// Phase 6 makes runtime transitions deterministic by tracking which phase the
+/// process is in and rejecting illegal transitions (e.g. reload while shutting
+/// down) explicitly instead of relying on ordering assumptions. The phases form a
+/// forward-only progression once shutdown begins; reload/drain are only legal
+/// while `Running`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RuntimeLifecyclePhase {
+    /// The process is booting and has not yet activated the first generation.
+    Starting,
+    /// The first generation is active and serving; reloads and drains are legal.
+    Running,
+    /// A drain has been requested (e.g. watchdog restart); the active generation
+    /// still serves in-flight work but no reload may commit.
+    Draining,
+    /// Process shutdown has been requested; no reload or drain-start is legal.
+    ShuttingDown,
+    /// The process has finished shutting down; a terminal phase.
+    Terminated,
+}
+
+impl RuntimeLifecyclePhase {
+    /// Whether a reload may be committed from this phase.
+    pub fn allows_reload(self) -> bool {
+        matches!(self, Self::Running)
+    }
+
+    /// Whether a drain may be started from this phase. `Draining` is included so
+    /// a repeated drain-start is idempotent rather than an error.
+    pub fn allows_drain_start(self) -> bool {
+        matches!(self, Self::Running | Self::Draining)
+    }
+
+    /// Whether the phase is terminal (no further transitions).
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Terminated)
+    }
+}
+
+/// The result of attempting a lifecycle transition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LifecycleTransitionResult {
+    /// The transition moved the phase from `from` to `to`.
+    Applied {
+        from: RuntimeLifecyclePhase,
+        to: RuntimeLifecyclePhase,
+    },
+    /// The transition was a no-op because the phase already satisfied it
+    /// (idempotent repeat, e.g. drain-start while already draining).
+    NoOp { phase: RuntimeLifecyclePhase },
+    /// The transition is illegal from the current phase.
+    Rejected(TransitionRejection),
+}
+
+impl LifecycleTransitionResult {
+    /// Whether the transition was accepted (applied or a no-op) rather than
+    /// rejected.
+    pub fn is_accepted(&self) -> bool {
+        !matches!(self, Self::Rejected(_))
+    }
+
+    /// The rejection, if the transition was rejected.
+    pub fn rejection(&self) -> Option<&TransitionRejection> {
+        match self {
+            Self::Rejected(rejection) => Some(rejection),
+            _ => None,
+        }
+    }
+}
+
+/// The authoritative, thread-safe holder of the runtime lifecycle phase.
+///
+/// All process-level transitions (startup activation, reload commit, drain start,
+/// shutdown) go through this type so their legality is decided in one place from
+/// a single transition table, and repeated safe operations are idempotent.
+#[derive(Debug)]
+pub struct RuntimeLifecycleState {
+    phase: std::sync::atomic::AtomicU8,
+}
+
+impl Default for RuntimeLifecycleState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl RuntimeLifecycleState {
+    const STARTING: u8 = 0;
+    const RUNNING: u8 = 1;
+    const DRAINING: u8 = 2;
+    const SHUTTING_DOWN: u8 = 3;
+    const TERMINATED: u8 = 4;
+
+    /// Create a state machine in the `Starting` phase.
+    pub fn new() -> Self {
+        Self {
+            phase: std::sync::atomic::AtomicU8::new(Self::STARTING),
+        }
+    }
+
+    fn decode(raw: u8) -> RuntimeLifecyclePhase {
+        match raw {
+            Self::STARTING => RuntimeLifecyclePhase::Starting,
+            Self::RUNNING => RuntimeLifecyclePhase::Running,
+            Self::DRAINING => RuntimeLifecyclePhase::Draining,
+            Self::SHUTTING_DOWN => RuntimeLifecyclePhase::ShuttingDown,
+            _ => RuntimeLifecyclePhase::Terminated,
+        }
+    }
+
+    fn encode(phase: RuntimeLifecyclePhase) -> u8 {
+        match phase {
+            RuntimeLifecyclePhase::Starting => Self::STARTING,
+            RuntimeLifecyclePhase::Running => Self::RUNNING,
+            RuntimeLifecyclePhase::Draining => Self::DRAINING,
+            RuntimeLifecyclePhase::ShuttingDown => Self::SHUTTING_DOWN,
+            RuntimeLifecyclePhase::Terminated => Self::TERMINATED,
+        }
+    }
+
+    /// The current lifecycle phase.
+    pub fn phase(&self) -> RuntimeLifecyclePhase {
+        Self::decode(self.phase.load(std::sync::atomic::Ordering::Acquire))
+    }
+
+    fn reject(&self, attempted: RuntimeTransitionKind) -> LifecycleTransitionResult {
+        let phase = self.phase();
+        LifecycleTransitionResult::Rejected(TransitionRejection {
+            kind: TransitionRejectionKind::IllegalTransition,
+            field_path: None,
+            current_mode: Some(format!("{phase:?}")),
+            requested_mode: Some(format!("{attempted:?}")),
+            operator_action:
+                "wait for the current lifecycle phase to complete; the requested transition is not legal now",
+            verbatim: None,
+        })
+    }
+
+    /// Attempt to move to `target`, but only if the machine is still in `expected`.
+    /// Returns `NoOp` when already at `target`, `Applied` on success, and
+    /// `Rejected` when the current phase is neither `expected` nor `target`.
+    fn transition(
+        &self,
+        expected: RuntimeLifecyclePhase,
+        target: RuntimeLifecyclePhase,
+        attempted: RuntimeTransitionKind,
+    ) -> LifecycleTransitionResult {
+        use std::sync::atomic::Ordering;
+        let current = self.phase();
+        if current == target {
+            return LifecycleTransitionResult::NoOp { phase: current };
+        }
+        if current != expected {
+            return self.reject(attempted);
+        }
+        match self.phase.compare_exchange(
+            Self::encode(expected),
+            Self::encode(target),
+            Ordering::AcqRel,
+            Ordering::Acquire,
+        ) {
+            Ok(_) => LifecycleTransitionResult::Applied {
+                from: expected,
+                to: target,
+            },
+            // Lost a race; re-evaluate against the phase that won.
+            Err(actual) if Self::decode(actual) == target => {
+                LifecycleTransitionResult::NoOp { phase: target }
+            }
+            Err(_) => self.reject(attempted),
+        }
+    }
+
+    /// Mark the first generation active: `Starting` -> `Running`.
+    pub fn mark_running(&self) -> LifecycleTransitionResult {
+        self.transition(
+            RuntimeLifecyclePhase::Starting,
+            RuntimeLifecyclePhase::Running,
+            RuntimeTransitionKind::Startup,
+        )
+    }
+
+    /// Check whether a reload commit is legal right now, returning a typed
+    /// rejection if not. The phase is unchanged either way (reload commit does not
+    /// move the lifecycle phase; it only requires `Running`).
+    pub fn check_reload_allowed(&self) -> LifecycleTransitionResult {
+        let phase = self.phase();
+        if phase.allows_reload() {
+            LifecycleTransitionResult::NoOp { phase }
+        } else {
+            self.reject(RuntimeTransitionKind::ReloadCommit)
+        }
+    }
+
+    /// Begin draining: `Running` -> `Draining`. Idempotent while already draining.
+    /// Rejected once shutdown has begun.
+    pub fn begin_drain(&self) -> LifecycleTransitionResult {
+        self.transition(
+            RuntimeLifecyclePhase::Running,
+            RuntimeLifecyclePhase::Draining,
+            RuntimeTransitionKind::DrainStart,
+        )
+    }
+
+    /// Begin shutdown from `Running` or `Draining`. Idempotent once shutting down
+    /// or terminated.
+    pub fn begin_shutdown(&self) -> LifecycleTransitionResult {
+        use std::sync::atomic::Ordering;
+        let current = self.phase();
+        match current {
+            RuntimeLifecyclePhase::ShuttingDown | RuntimeLifecyclePhase::Terminated => {
+                LifecycleTransitionResult::NoOp { phase: current }
+            }
+            RuntimeLifecyclePhase::Running | RuntimeLifecyclePhase::Draining => {
+                match self.phase.compare_exchange(
+                    Self::encode(current),
+                    Self::SHUTTING_DOWN,
+                    Ordering::AcqRel,
+                    Ordering::Acquire,
+                ) {
+                    Ok(_) => LifecycleTransitionResult::Applied {
+                        from: current,
+                        to: RuntimeLifecyclePhase::ShuttingDown,
+                    },
+                    // Another thread advanced us; shutdown is monotonic so treat
+                    // any resulting shutting-down/terminated phase as a no-op.
+                    Err(_) => LifecycleTransitionResult::NoOp {
+                        phase: self.phase(),
+                    },
+                }
+            }
+            RuntimeLifecyclePhase::Starting => self.reject(RuntimeTransitionKind::ShutdownStart),
+        }
+    }
+
+    /// Complete shutdown: `ShuttingDown` -> `Terminated`. Idempotent once
+    /// terminated.
+    pub fn finish_shutdown(&self) -> LifecycleTransitionResult {
+        self.transition(
+            RuntimeLifecyclePhase::ShuttingDown,
+            RuntimeLifecyclePhase::Terminated,
+            RuntimeTransitionKind::ShutdownFinish,
+        )
+    }
+}
+
 /// A single runtime-managed resource or config domain, described by its ownership
 /// class and reload capability. One row per operational domain identified in
 /// Phase 0.
@@ -711,6 +958,118 @@ mod tests {
         assert!(!StartupOwnedRuntimeState::is_swappable_by_generation());
         assert!(!RuntimeSharedServices::is_swappable_by_generation());
         assert!(RuntimeGenerationState::is_swappable_by_generation());
+    }
+
+    #[test]
+    fn lifecycle_happy_path_startup_to_shutdown() {
+        let state = RuntimeLifecycleState::new();
+        assert_eq!(state.phase(), RuntimeLifecyclePhase::Starting);
+
+        assert!(matches!(
+            state.mark_running(),
+            LifecycleTransitionResult::Applied {
+                from: RuntimeLifecyclePhase::Starting,
+                to: RuntimeLifecyclePhase::Running,
+            }
+        ));
+        assert!(state.check_reload_allowed().is_accepted());
+
+        assert!(matches!(
+            state.begin_drain(),
+            LifecycleTransitionResult::Applied {
+                to: RuntimeLifecyclePhase::Draining,
+                ..
+            }
+        ));
+        assert!(matches!(
+            state.begin_shutdown(),
+            LifecycleTransitionResult::Applied {
+                to: RuntimeLifecyclePhase::ShuttingDown,
+                ..
+            }
+        ));
+        assert!(matches!(
+            state.finish_shutdown(),
+            LifecycleTransitionResult::Applied {
+                to: RuntimeLifecyclePhase::Terminated,
+                ..
+            }
+        ));
+        assert!(state.phase().is_terminal());
+    }
+
+    #[test]
+    fn lifecycle_repeated_transitions_are_idempotent() {
+        let state = RuntimeLifecycleState::new();
+        state.mark_running();
+
+        // drain twice -> second is a no-op, not a rejection
+        assert!(matches!(
+            state.begin_drain(),
+            LifecycleTransitionResult::Applied { .. }
+        ));
+        assert!(matches!(
+            state.begin_drain(),
+            LifecycleTransitionResult::NoOp {
+                phase: RuntimeLifecyclePhase::Draining
+            }
+        ));
+
+        // shutdown twice -> second is a no-op
+        assert!(matches!(
+            state.begin_shutdown(),
+            LifecycleTransitionResult::Applied { .. }
+        ));
+        assert!(matches!(
+            state.begin_shutdown(),
+            LifecycleTransitionResult::NoOp { .. }
+        ));
+        // finishing twice is idempotent
+        assert!(matches!(
+            state.finish_shutdown(),
+            LifecycleTransitionResult::Applied { .. }
+        ));
+        assert!(matches!(
+            state.finish_shutdown(),
+            LifecycleTransitionResult::NoOp { .. }
+        ));
+    }
+
+    #[test]
+    fn lifecycle_rejects_illegal_transitions() {
+        // reload while shutting down is rejected
+        let state = RuntimeLifecycleState::new();
+        state.mark_running();
+        state.begin_shutdown();
+        let rejected = state.check_reload_allowed();
+        assert!(!rejected.is_accepted());
+        assert_eq!(
+            rejected.rejection().map(|r| r.kind),
+            Some(TransitionRejectionKind::IllegalTransition)
+        );
+
+        // drain-start after shutdown is rejected
+        assert!(!state.begin_drain().is_accepted());
+
+        // shutdown from Starting (no active generation) is rejected
+        let fresh = RuntimeLifecycleState::new();
+        assert!(!fresh.begin_shutdown().is_accepted());
+        // and reload before running is rejected too
+        assert!(!fresh.check_reload_allowed().is_accepted());
+    }
+
+    #[test]
+    fn lifecycle_shutdown_directly_from_running() {
+        let state = RuntimeLifecycleState::new();
+        state.mark_running();
+        // Skipping drain is legal: Running -> ShuttingDown.
+        assert!(matches!(
+            state.begin_shutdown(),
+            LifecycleTransitionResult::Applied {
+                from: RuntimeLifecyclePhase::Running,
+                to: RuntimeLifecyclePhase::ShuttingDown,
+            }
+        ));
     }
 
     #[test]
