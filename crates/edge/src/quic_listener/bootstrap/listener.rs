@@ -252,6 +252,11 @@ pub(in crate::quic_listener) fn spawn_bootstrap_tls_listener(
                                 Err(response) => return Ok(*response),
                             };
 
+                            // Phase 11: assign the request id before policy
+                            // evaluation so every terminal outcome — including
+                            // pre-dispatch rejections — can be observed with it.
+                            let request_id = REQUEST_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+
                             let policy_intake = BootstrapRequestIntake {
                                 method: method.clone(),
                                 path: path.clone(),
@@ -269,7 +274,9 @@ pub(in crate::quic_listener) fn spawn_bootstrap_tls_listener(
                                 },
                             ) {
                                 Ok(prepared) => prepared,
-                                Err(terminal) => return Ok(terminal.into_response()),
+                                Err(terminal) => {
+                                    return Ok(terminal.into_observed_response(request_id));
+                                }
                             };
 
                             let request_path = if path.is_empty() { "/" } else { &path };
@@ -323,11 +330,10 @@ pub(in crate::quic_listener) fn spawn_bootstrap_tls_listener(
                                                 )))
                                             }),
                                     )
-                                    .into_response(),
+                                    .into_observed_response(request_id),
                                 );
                             }
 
-                            let request_id = REQUEST_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
                             let traceparent = req
                                 .headers()
                                 .get("traceparent")
@@ -392,7 +398,7 @@ pub(in crate::quic_listener) fn spawn_bootstrap_tls_listener(
                                                         ))
                                                     }),
                                             )
-                                            .into_response(),
+                                            .into_observed_response(request_id),
                                         );
                                 }
                             };
@@ -411,7 +417,9 @@ pub(in crate::quic_listener) fn spawn_bootstrap_tls_listener(
                                 .await
                                 {
                                     Ok(resp) => resp,
-                                    Err(terminal) => return Ok(terminal.into_response()),
+                                    Err(terminal) => {
+                                        return Ok(terminal.into_observed_response(request_id));
+                                    }
                                 };
 
                             let writeback = write_bootstrap_response(BootstrapWritebackInput {
@@ -422,6 +430,15 @@ pub(in crate::quic_listener) fn spawn_bootstrap_tls_listener(
                                 request_mode,
                                 client_upgrade,
                             })?;
+                            // Phase 11: observe the writeback terminal outcome so the
+                            // success/reject path is traceable, not just the errors.
+                            if !writeback.terminal.is_accepted() {
+                                log::debug!(
+                                    "bootstrap request {} write-response terminal outcome={}",
+                                    request_id,
+                                    writeback.terminal.slug()
+                                );
+                            }
                             Ok(writeback.response)
                         })
                     },
