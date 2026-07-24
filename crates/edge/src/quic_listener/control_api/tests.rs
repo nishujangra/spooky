@@ -293,6 +293,92 @@ fn control_api_state_sees_the_active_runtime_generation_after_bundle_replace() {
 }
 
 #[test]
+fn live_reloadable_upstream_change_is_accepted() {
+    // Phase 9 (#1): a generation-owned change (upstream/route table) must pass
+    // reload compatibility — it is live-reloadable, not restart-required.
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let current = test_config(cert, key);
+
+    let mut next = current.clone();
+    next.upstream
+        .get_mut("api")
+        .expect("api upstream")
+        .backends
+        .push(Backend {
+            id: "b2".to_string(),
+            address: "http://127.0.0.1:7002".to_string(),
+            weight: 1,
+            health_check: None,
+        });
+
+    let current_bundle = runtime_bundle_from_config("current.yaml", &current);
+    let next_bundle = runtime_bundle_from_config("next.yaml", &next);
+    let current_active = RuntimeBundleHandle::new(current_bundle).current_view();
+
+    let result =
+        QUICListener::evaluate_runtime_reload_compatibility(&current_active, &next_bundle);
+    assert!(
+        result.is_ok(),
+        "generation-owned upstream change must be live-reloadable, got: {result:?}"
+    );
+}
+
+#[test]
+fn restart_required_change_rejects_before_touching_active_generation() {
+    // Phase 9 (#4): a failed validation must leave the active generation unchanged.
+    // A restart-required change (control_plane_threads) is rejected by the
+    // compatibility evaluation, which runs entirely on the candidate bundle and
+    // never mutates the live handle.
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let current = test_config(cert, key);
+
+    let mut next = current.clone();
+    next.performance.control_plane_threads = current.performance.control_plane_threads + 3;
+
+    let current_bundle = runtime_bundle_from_config("current.yaml", &current);
+    let next_bundle = runtime_bundle_from_config("next.yaml", &next);
+
+    let handle = RuntimeBundleHandle::new(current_bundle);
+    let generation_before = handle.current_generation();
+    let active = handle.current_view();
+
+    let result = QUICListener::evaluate_runtime_reload_compatibility(&active, &next_bundle);
+    let rejections = result.expect_err("restart-required change must be rejected");
+    assert!(
+        rejections
+            .iter()
+            .any(|r| r.to_string().contains("performance.control_plane_threads")
+                && r.requires_restart()),
+        "expected a restart-required rejection, got: {rejections:?}"
+    );
+    // The active generation is untouched by the rejected evaluation.
+    assert_eq!(handle.current_generation(), generation_before);
+}
+
+#[test]
+fn accepted_reload_advances_the_active_generation() {
+    // Phase 9 (#1/#4 positive path): a valid reload committed through the handle
+    // advances the active generation atomically.
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let current = test_config(cert, key);
+    let next = current.clone();
+
+    let current_bundle = runtime_bundle_from_config("current.yaml", &current);
+    let mut next_bundle = runtime_bundle_from_config("next.yaml", &next);
+    next_bundle.generation = current_bundle.generation + 1;
+
+    let handle = RuntimeBundleHandle::new(current_bundle);
+    let before = handle.current_generation();
+
+    let committed = handle.replace(next_bundle).expect("valid reload commits");
+    assert_eq!(committed, before + 1);
+    assert_eq!(handle.current_generation(), before + 1);
+}
+
+#[test]
 fn reload_commit_is_rejected_after_shutdown_begins() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
