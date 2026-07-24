@@ -134,6 +134,12 @@ impl QUICListener {
             }
         };
         if let Err(err) = Self::validate_runtime_reload_plan(&runtime, &plan.next_runtime) {
+            // Phase 8: API response and logs communicate the same core reason.
+            warn!(
+                "runtime reload rejected at generation {}; active runtime unchanged: {}",
+                runtime.generation(),
+                err
+            );
             return Self::json_response(
                 StatusCode::CONFLICT,
                 json!({
@@ -318,16 +324,18 @@ impl QUICListener {
             }
             if worker_count > 1 {
                 if let Err(err) = Self::bind_reuseport_sockets(listener_config, worker_count) {
-                    return Some(TransitionRejection::raw_resource_message(format!(
-                        "runtime reload rejected: failed to preflight QUIC listener {}: {}",
-                        label, err
-                    )));
+                    return Some(TransitionRejection::resource_preflight_failed(
+                        "QUIC listener",
+                        label,
+                        err.to_string(),
+                    ));
                 }
             } else if let Err(err) = Self::bind_socket(listener_config, false) {
-                return Some(TransitionRejection::raw_resource_message(format!(
-                    "runtime reload rejected: failed to preflight QUIC listener {}: {}",
-                    label, err
-                )));
+                return Some(TransitionRejection::resource_preflight_failed(
+                    "QUIC listener",
+                    label,
+                    err.to_string(),
+                ));
             }
 
             let bind = format!(
@@ -335,10 +343,11 @@ impl QUICListener {
                 listener_config.listen.listen.address, listener_config.listen.listen.port
             );
             if let Err(err) = Self::probe_tcp_bind(&bind, "bootstrap TLS listener") {
-                return Some(TransitionRejection::raw_resource_message(format!(
-                    "runtime reload rejected: failed to preflight bootstrap listener {}: {}",
-                    label, err
-                )));
+                return Some(TransitionRejection::resource_preflight_failed(
+                    "bootstrap TLS listener",
+                    label,
+                    err,
+                ));
             }
         }
         None
@@ -379,7 +388,11 @@ impl QUICListener {
         if bind_changed {
             let bind = format!("{}:{}", next_control_api.address, next_control_api.port);
             if let Err(err) = Self::probe_tcp_bind(&bind, "control API endpoint") {
-                return Some(TransitionRejection::raw_resource_message(err));
+                return Some(TransitionRejection::resource_preflight_failed(
+                    "control API endpoint",
+                    bind,
+                    err,
+                ));
             }
         }
         None
@@ -401,7 +414,11 @@ impl QUICListener {
         if bind_changed {
             let bind = format!("{}:{}", next_metrics.address, next_metrics.port);
             if let Err(err) = Self::probe_tcp_bind(&bind, "metrics endpoint") {
-                return Some(TransitionRejection::raw_resource_message(err));
+                return Some(TransitionRejection::resource_preflight_failed(
+                    "metrics endpoint",
+                    bind,
+                    err,
+                ));
             }
         }
         None

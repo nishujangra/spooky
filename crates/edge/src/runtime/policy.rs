@@ -141,11 +141,16 @@ pub struct TransitionRejection {
     pub requested_mode: Option<String>,
     /// A fixed, human-readable instruction telling the operator what to do next.
     pub operator_action: &'static str,
+    /// Whether the active runtime was changed by the attempt that produced this
+    /// rejection. For reload rejections this is always `false` — the swap is gated
+    /// so a rejected reload never mutates the running generation. Phase 8 surfaces
+    /// this explicitly so operators never have to guess whether a failed reload
+    /// left the process in a half-applied state.
+    pub active_runtime_changed: bool,
     /// A fully preformatted operator message. When set, [`fmt::Display`] emits it
-    /// verbatim instead of composing one from the fields above. Used where an
-    /// underlying probe (e.g. `probe_tcp_bind`) already produced the exact string
-    /// operators have historically seen, so centralizing the check does not change
-    /// the wording.
+    /// verbatim instead of composing one from the fields above. Reserved for
+    /// wording that must be reproduced exactly; new call sites should prefer the
+    /// structured fields so messages stay consistent.
     pub verbatim: Option<String>,
 }
 
@@ -157,6 +162,9 @@ impl TransitionRejection {
             current_mode: None,
             requested_mode: None,
             operator_action,
+            // Every reload rejection leaves the active runtime intact; call sites
+            // that genuinely mutated state set this to true explicitly.
+            active_runtime_changed: false,
             verbatim: None,
         }
     }
@@ -225,6 +233,32 @@ impl TransitionRejection {
         }
     }
 
+    /// Build a structured `ResourcePreparationFailed` rejection for a preflight
+    /// step that could not prepare a resource (Phase 8).
+    ///
+    /// Unlike [`Self::raw_resource_message`], this composes a consistent message
+    /// from its parts — attempted action, the specific resource that failed, and
+    /// the underlying reason — and its `Display` states that the active runtime is
+    /// unchanged, so every preflight failure reads the same way.
+    ///
+    /// - `resource_kind`: what was being prepared, e.g. `"QUIC listener"`.
+    /// - `resource_id`: the stable identifier, e.g. the listener label or bind.
+    /// - `reason`: the underlying error.
+    pub fn resource_preflight_failed(
+        resource_kind: &'static str,
+        resource_id: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Self {
+        Self {
+            field_path: Some(format!("{resource_kind} '{}'", resource_id.into())),
+            requested_mode: Some(reason.into()),
+            ..Self::new(
+                TransitionRejectionKind::ResourcePreparationFailed,
+                "resolve the resource conflict (e.g. free the address/port) and retry the reload",
+            )
+        }
+    }
+
     /// Build an `InvalidConfiguration` rejection carrying the underlying message.
     pub fn invalid_configuration(reason: impl Into<String>) -> Self {
         Self {
@@ -260,6 +294,21 @@ impl fmt::Display for TransitionRejection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if let Some(verbatim) = &self.verbatim {
             return f.write_str(verbatim);
+        }
+        // Structured Phase 8 rendering for preflight failures: attempted action,
+        // the resource, the reason, and the explicit runtime-unchanged status.
+        if self.kind == TransitionRejectionKind::ResourcePreparationFailed
+            && let (Some(field), Some(detail)) = (&self.field_path, &self.requested_mode)
+        {
+            return write!(
+                f,
+                "runtime reload rejected: could not prepare {field}: {detail}; active runtime unchanged ({})",
+                if self.active_runtime_changed {
+                    "state may be partially applied"
+                } else {
+                    "no change applied"
+                }
+            );
         }
         match (&self.field_path, &self.current_mode, &self.requested_mode) {
             (Some(field), Some(current), Some(requested))
@@ -447,6 +496,7 @@ impl RuntimeLifecycleState {
             requested_mode: Some(format!("{attempted:?}")),
             operator_action:
                 "wait for the current lifecycle phase to complete; the requested transition is not legal now",
+            active_runtime_changed: false,
             verbatim: None,
         })
     }
@@ -922,6 +972,26 @@ mod tests {
             "runtime reload rejected: listener 'edge-primary' was removed or its bind address changed; restart required"
         );
         assert!(rejection.requires_restart());
+    }
+
+    #[test]
+    fn resource_preflight_failure_is_structured_and_states_runtime_unchanged() {
+        let rejection = TransitionRejection::resource_preflight_failed(
+            "control API endpoint",
+            "0.0.0.0:9443",
+            "address already in use",
+        );
+        assert_eq!(rejection.kind, TransitionRejectionKind::ResourcePreparationFailed);
+        assert!(!rejection.requires_restart());
+        assert!(!rejection.active_runtime_changed);
+        // Phase 8: consistent structure — attempted action, the specific resource,
+        // the reason, and the explicit runtime-unchanged status.
+        assert_eq!(
+            rejection.to_string(),
+            "runtime reload rejected: could not prepare control API endpoint '0.0.0.0:9443': address already in use; active runtime unchanged (no change applied)"
+        );
+        // And it carries an actionable next step.
+        assert!(rejection.operator_action.contains("retry the reload"));
     }
 
     #[test]
