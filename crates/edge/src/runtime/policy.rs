@@ -206,20 +206,6 @@ impl TransitionRejection {
         }
     }
 
-    /// Build a `ResourcePreparationFailed` rejection whose message is composed
-    /// from a field path and a reason, e.g.
-    /// `runtime reload rejected: <field>: <reason>`.
-    pub fn resource_preparation_failed(field_path: impl Into<String>, reason: impl Into<String>) -> Self {
-        Self {
-            field_path: Some(field_path.into()),
-            requested_mode: Some(reason.into()),
-            ..Self::new(
-                TransitionRejectionKind::ResourcePreparationFailed,
-                "fix the reported resource conflict and retry the reload",
-            )
-        }
-    }
-
     /// Build a `ResourcePreparationFailed` rejection carrying a fully preformatted
     /// operator message verbatim (used where an underlying probe already produced
     /// the exact string operators have historically seen).
