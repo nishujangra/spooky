@@ -151,6 +151,90 @@ pub enum BackendDnsRefreshApplication {
     },
 }
 
+/// The unified, operator-facing classification of a backend refresh outcome
+/// (Phase 7).
+///
+/// Every internal [`BackendDnsRefreshApplication`] variant maps onto exactly one
+/// of these so operators, logs, and metrics read a single result model instead of
+/// recomputing intent from the specific variant. It also makes the safety
+/// invariant explicit: no classification ever leaves partial hidden state — a
+/// failure always preserves the existing resolution and keeps traffic on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendRefreshClassification {
+    /// The backend's resolved addresses changed and were applied.
+    Refreshed,
+    /// The refresh ran but the resolved addresses were unchanged.
+    Unchanged,
+    /// The refresh produced no usable answer (empty result); the previous
+    /// resolution is retained and serving.
+    Rejected,
+    /// The refresh failed; the active generation's resolution is preserved and
+    /// still serving traffic.
+    FailedActivePreserved,
+}
+
+impl BackendRefreshClassification {
+    /// Whether traffic continues on the existing (pre-refresh) resolution.
+    /// True for every non-`Refreshed` outcome — the whole point of the model is
+    /// that a failed or empty refresh never drops the backend.
+    pub fn traffic_continues_on_existing(self) -> bool {
+        !matches!(self, Self::Refreshed)
+    }
+
+    /// Whether this classification represents a failure operators should act on.
+    pub fn is_failure(self) -> bool {
+        matches!(self, Self::Rejected | Self::FailedActivePreserved)
+    }
+
+    /// A stable, machine-readable slug for metric labels and structured logs.
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Refreshed => "refreshed",
+            Self::Unchanged => "unchanged",
+            Self::Rejected => "rejected_empty_answer",
+            Self::FailedActivePreserved => "failed_active_preserved",
+        }
+    }
+}
+
+impl BackendDnsRefreshApplication {
+    /// The backend identity (canonical address) this outcome concerns.
+    pub fn backend_addr(&self) -> &str {
+        match self {
+            Self::Updated { backend_addr, .. }
+            | Self::Unchanged { backend_addr, .. }
+            | Self::EmptyAnswerRetained { backend_addr, .. }
+            | Self::LookupFailed { backend_addr, .. } => backend_addr,
+        }
+    }
+
+    /// The authority host (upstream hostname) this outcome concerns.
+    pub fn authority_host(&self) -> &str {
+        match self {
+            Self::Updated { authority_host, .. }
+            | Self::Unchanged { authority_host, .. }
+            | Self::EmptyAnswerRetained { authority_host, .. }
+            | Self::LookupFailed { authority_host, .. } => authority_host,
+        }
+    }
+
+    /// The unified operator-facing classification of this outcome.
+    pub fn classification(&self) -> BackendRefreshClassification {
+        match self {
+            Self::Updated { .. } => BackendRefreshClassification::Refreshed,
+            Self::Unchanged { .. } => BackendRefreshClassification::Unchanged,
+            Self::EmptyAnswerRetained { .. } => BackendRefreshClassification::Rejected,
+            Self::LookupFailed { .. } => BackendRefreshClassification::FailedActivePreserved,
+        }
+    }
+
+    /// Whether traffic continues on the existing resolution after this outcome.
+    #[cfg(test)]
+    pub fn traffic_continues_on_existing(&self) -> bool {
+        self.classification().traffic_continues_on_existing()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct BackendLifecycleCoordinator {
     resolution_store: Arc<RuntimeBackendResolutionStore>,
@@ -482,6 +566,19 @@ pub(crate) fn observe_backend_dns_refresh(
     metrics: &Metrics,
     outcome: &BackendDnsRefreshApplication,
 ) {
+    // Phase 7: emit the unified classification so operators can read one result
+    // model, and record whether traffic still flows on the existing resolution.
+    let classification = outcome.classification();
+    if classification.is_failure() {
+        debug!(
+            "backend refresh classification for '{}' (backend '{}'): {} traffic_continues_on_existing={}",
+            outcome.authority_host(),
+            outcome.backend_addr(),
+            classification.slug(),
+            classification.traffic_continues_on_existing()
+        );
+    }
+
     match outcome {
         BackendDnsRefreshApplication::Updated {
             backend_addr,
@@ -575,8 +672,11 @@ pub(crate) fn log_backend_dns_refresh(outcome: &BackendDnsRefreshApplication) {
             retained_addrs,
         } => {
             warn!(
-                "backend DNS refresh returned no addresses for '{}' (backend '{}'); retaining {:?}",
-                authority_host, backend_addr, retained_addrs
+                "backend DNS refresh returned no addresses for '{}' (backend '{}') [{}]; retaining {:?}; traffic continues on existing resolution (no manual action required unless persistent)",
+                authority_host,
+                backend_addr,
+                BackendRefreshClassification::Rejected.slug(),
+                retained_addrs
             );
         }
         BackendDnsRefreshApplication::LookupFailed {
@@ -586,8 +686,12 @@ pub(crate) fn log_backend_dns_refresh(outcome: &BackendDnsRefreshApplication) {
             error,
         } => {
             warn!(
-                "backend DNS refresh failed for '{}' (backend '{}'): {}; retaining {:?}",
-                authority_host, backend_addr, error, retained_addrs
+                "backend DNS refresh failed for '{}' (backend '{}') [{}]: {}; retaining {:?}; traffic continues on existing resolution (fix DNS/upstream if persistent)",
+                authority_host,
+                backend_addr,
+                BackendRefreshClassification::FailedActivePreserved.slug(),
+                error,
+                retained_addrs
             );
         }
     }
@@ -605,6 +709,65 @@ mod tests {
 
     use super::*;
     use crate::runtime::backend::event::{BackendHealthObservationOutcome, BackendRequestFeedback};
+
+    #[test]
+    fn refresh_classification_maps_every_variant_and_preserves_traffic_on_failure() {
+        let updated = BackendDnsRefreshApplication::Updated {
+            backend_addr: "http://backend:8080".to_string(),
+            authority_host: "backend".to_string(),
+            previous_addrs: vec![],
+            current_addrs: vec!["10.0.0.1:8080".parse().expect("addr")],
+            generation: 1,
+            refreshed_at: SystemTime::UNIX_EPOCH,
+            client_rotation: ClientRotationOutcome::Rotated,
+        };
+        assert_eq!(
+            updated.classification(),
+            BackendRefreshClassification::Refreshed
+        );
+        assert!(!updated.traffic_continues_on_existing());
+
+        let unchanged = BackendDnsRefreshApplication::Unchanged {
+            backend_addr: "http://backend:8080".to_string(),
+            authority_host: "backend".to_string(),
+            current_addrs: vec!["10.0.0.1:8080".parse().expect("addr")],
+            generation: 1,
+            refreshed_at: SystemTime::UNIX_EPOCH,
+        };
+        assert_eq!(
+            unchanged.classification(),
+            BackendRefreshClassification::Unchanged
+        );
+        assert!(unchanged.traffic_continues_on_existing());
+
+        let empty = BackendDnsRefreshApplication::EmptyAnswerRetained {
+            backend_addr: "http://backend:8080".to_string(),
+            authority_host: "backend".to_string(),
+            retained_addrs: vec!["10.0.0.1:8080".parse().expect("addr")],
+        };
+        assert_eq!(
+            empty.classification(),
+            BackendRefreshClassification::Rejected
+        );
+        assert!(empty.traffic_continues_on_existing());
+        assert!(empty.classification().is_failure());
+
+        let failed = BackendDnsRefreshApplication::LookupFailed {
+            backend_addr: "http://backend:8080".to_string(),
+            authority_host: "backend".to_string(),
+            retained_addrs: vec!["10.0.0.1:8080".parse().expect("addr")],
+            error: "nxdomain".to_string(),
+        };
+        assert_eq!(
+            failed.classification(),
+            BackendRefreshClassification::FailedActivePreserved
+        );
+        // The core Phase 7 safety invariant: a failure never drops the backend.
+        assert!(failed.traffic_continues_on_existing());
+        assert!(failed.classification().is_failure());
+        assert_eq!(failed.backend_addr(), "http://backend:8080");
+        assert_eq!(failed.authority_host(), "backend");
+    }
 
     #[test]
     fn rotation_failure_is_metered_and_does_not_hide_refresh_success() {
