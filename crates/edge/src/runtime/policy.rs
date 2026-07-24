@@ -141,9 +141,26 @@ pub struct TransitionRejection {
     pub requested_mode: Option<String>,
     /// A fixed, human-readable instruction telling the operator what to do next.
     pub operator_action: &'static str,
+    /// A fully preformatted operator message. When set, [`fmt::Display`] emits it
+    /// verbatim instead of composing one from the fields above. Used where an
+    /// underlying probe (e.g. `probe_tcp_bind`) already produced the exact string
+    /// operators have historically seen, so centralizing the check does not change
+    /// the wording.
+    pub verbatim: Option<String>,
 }
 
 impl TransitionRejection {
+    fn new(kind: TransitionRejectionKind, operator_action: &'static str) -> Self {
+        Self {
+            kind,
+            field_path: None,
+            current_mode: None,
+            requested_mode: None,
+            operator_action,
+            verbatim: None,
+        }
+    }
+
     /// Build a `RestartRequired` rejection for a field that changed at runtime.
     ///
     /// This mirrors the existing `note_restart_required_change` behavior in
@@ -155,45 +172,78 @@ impl TransitionRejection {
         requested_mode: impl fmt::Debug,
     ) -> Self {
         Self {
-            kind: TransitionRejectionKind::RestartRequired,
             field_path: Some(field_path.into()),
             current_mode: Some(format!("{current_mode:?}")),
             requested_mode: Some(format!("{requested_mode:?}")),
-            operator_action: "restart the process to apply this change",
+            ..Self::new(
+                TransitionRejectionKind::RestartRequired,
+                "restart the process to apply this change",
+            )
         }
     }
 
-    /// Build a `ResourcePreparationFailed` rejection (e.g. a preflight bind
-    /// failed). The active generation is unaffected.
+    /// Build a `RestartRequired` rejection for a listener that was removed or had
+    /// its bind address changed. Reproduces the legacy listener-removal message
+    /// verbatim.
+    pub fn listener_bind_changed(label: impl fmt::Display) -> Self {
+        Self {
+            field_path: Some(format!("listeners['{label}']")),
+            verbatim: Some(format!(
+                "runtime reload rejected: listener '{label}' was removed or its bind address changed; restart required"
+            )),
+            ..Self::new(
+                TransitionRejectionKind::RestartRequired,
+                "restart the process to apply this change",
+            )
+        }
+    }
+
+    /// Build a `ResourcePreparationFailed` rejection whose message is composed
+    /// from a field path and a reason, e.g.
+    /// `runtime reload rejected: <field>: <reason>`.
     pub fn resource_preparation_failed(field_path: impl Into<String>, reason: impl Into<String>) -> Self {
         Self {
-            kind: TransitionRejectionKind::ResourcePreparationFailed,
             field_path: Some(field_path.into()),
-            current_mode: None,
             requested_mode: Some(reason.into()),
-            operator_action: "fix the reported resource conflict and retry the reload",
+            ..Self::new(
+                TransitionRejectionKind::ResourcePreparationFailed,
+                "fix the reported resource conflict and retry the reload",
+            )
+        }
+    }
+
+    /// Build a `ResourcePreparationFailed` rejection carrying a fully preformatted
+    /// operator message verbatim (used where an underlying probe already produced
+    /// the exact string operators have historically seen).
+    pub fn raw_resource_message(message: impl Into<String>) -> Self {
+        Self {
+            verbatim: Some(message.into()),
+            ..Self::new(
+                TransitionRejectionKind::ResourcePreparationFailed,
+                "fix the reported resource conflict and retry the reload",
+            )
         }
     }
 
     /// Build an `InvalidConfiguration` rejection carrying the underlying message.
     pub fn invalid_configuration(reason: impl Into<String>) -> Self {
         Self {
-            kind: TransitionRejectionKind::InvalidConfiguration,
-            field_path: None,
-            current_mode: None,
             requested_mode: Some(reason.into()),
-            operator_action: "fix the configuration and retry the reload",
+            ..Self::new(
+                TransitionRejectionKind::InvalidConfiguration,
+                "fix the configuration and retry the reload",
+            )
         }
     }
 
     /// Build a `RuntimeStateUnavailable` rejection.
     pub fn runtime_state_unavailable(reason: impl Into<String>) -> Self {
         Self {
-            kind: TransitionRejectionKind::RuntimeStateUnavailable,
-            field_path: None,
-            current_mode: None,
             requested_mode: Some(reason.into()),
-            operator_action: "inspect process state; the reload could not be evaluated",
+            ..Self::new(
+                TransitionRejectionKind::RuntimeStateUnavailable,
+                "inspect process state; the reload could not be evaluated",
+            )
         }
     }
 
@@ -208,6 +258,9 @@ impl fmt::Display for TransitionRejection {
     /// to the current free-form strings so that migrating a call site does not
     /// change what an operator reads.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(verbatim) = &self.verbatim {
+            return f.write_str(verbatim);
+        }
         match (&self.field_path, &self.current_mode, &self.requested_mode) {
             (Some(field), Some(current), Some(requested))
                 if self.kind == TransitionRejectionKind::RestartRequired =>
@@ -426,6 +479,94 @@ pub fn resource_domain(field_path: &str) -> Option<&'static ResourceDomain> {
     RESOURCE_DOMAINS.iter().find(|d| d.field_path == field_path)
 }
 
+/// The single authority that decides reload compatibility.
+///
+/// It accumulates typed [`TransitionRejection`]s as a validator walks the config
+/// domains, so that "what can reload live" and the rejection wording for each
+/// class of problem live in exactly one place. Call sites that own runtime types
+/// (`RuntimeBundle`, `QUICListener`) feed it the *outcome* of each per-domain
+/// comparison or preflight; the authority owns the *rule* (which
+/// [`ReloadCapability`] applies) and the *message*.
+///
+/// This replaces the scattered `Option<String>`/`Vec<String>` checks that
+/// previously each formatted their own rejection strings.
+#[derive(Debug, Default)]
+pub struct ReloadCompatibilityAuthority {
+    rejections: Vec<TransitionRejection>,
+}
+
+impl ReloadCompatibilityAuthority {
+    /// Start with no rejections recorded.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record that a restart-required field changed. No-op when the values are
+    /// equal, matching the legacy `note_restart_required_change` semantics.
+    ///
+    /// The `field_path` should exist in [`RESOURCE_DOMAINS`] with
+    /// [`ReloadCapability::RestartRequired`]; in debug builds this is asserted so
+    /// the table and the call sites cannot silently drift apart.
+    pub fn note_restart_required_change<T>(&mut self, field_path: &'static str, current: &T, next: &T)
+    where
+        T: PartialEq + fmt::Debug,
+    {
+        debug_assert!(
+            resource_domain(field_path).is_none_or(ResourceDomain::requires_restart),
+            "field_path {field_path:?} is recorded as live-reloadable but used as restart-required"
+        );
+        if current != next {
+            self.rejections
+                .push(TransitionRejection::restart_required(field_path, current, next));
+        }
+    }
+
+    /// Record that a listener was removed or had its bind address changed
+    /// (restart-required).
+    pub fn note_listener_bind_changed(&mut self, label: impl fmt::Display) {
+        self.rejections
+            .push(TransitionRejection::listener_bind_changed(label));
+    }
+
+    /// Record an already-formed rejection (e.g. a preflight-bind failure whose
+    /// message came from an underlying probe).
+    pub fn note_rejection(&mut self, rejection: TransitionRejection) {
+        self.rejections.push(rejection);
+    }
+
+    /// Whether any rejection has been recorded.
+    pub fn is_rejected(&self) -> bool {
+        !self.rejections.is_empty()
+    }
+
+    /// The recorded rejections, in the order they were noted.
+    pub fn rejections(&self) -> &[TransitionRejection] {
+        &self.rejections
+    }
+
+    /// Consume the authority into `Ok(())` when compatible, or `Err(rejections)`
+    /// carrying every typed rejection recorded.
+    pub fn into_result(self) -> Result<(), Vec<TransitionRejection>> {
+        if self.rejections.is_empty() {
+            Ok(())
+        } else {
+            Err(self.rejections)
+        }
+    }
+}
+
+/// Render a slice of rejections into the single legacy operator string:
+/// each rejection's `Display`, joined with `"; "`. This is how a typed rejection
+/// set is surfaced through the existing string-based handler boundary without
+/// changing the bytes an operator sees.
+pub fn render_rejections(rejections: &[TransitionRejection]) -> String {
+    rejections
+        .iter()
+        .map(TransitionRejection::to_string)
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -474,6 +615,55 @@ mod tests {
         assert!(routes.is_generation_owned());
         assert!(routes.is_live_reloadable());
         assert!(!routes.requires_restart());
+    }
+
+    #[test]
+    fn authority_collects_and_renders_like_legacy_join() {
+        let mut authority = ReloadCompatibilityAuthority::new();
+        // Equal values record nothing.
+        authority.note_restart_required_change("log.format", &"text", &"text");
+        assert!(!authority.is_rejected());
+        // Changed values record a restart-required rejection.
+        authority.note_restart_required_change("log.format", &"text", &"json");
+        authority.note_restart_required_change(
+            "performance.control_plane_threads",
+            &2usize,
+            &4usize,
+        );
+        assert!(authority.is_rejected());
+        assert_eq!(authority.rejections().len(), 2);
+
+        let rendered = render_rejections(authority.rejections());
+        // Byte-identical to the pre-Phase-2 `issues.join("; ")` output.
+        assert_eq!(
+            rendered,
+            "runtime reload rejected: log.format changed from \"text\" to \"json\"; restart required; \
+             runtime reload rejected: performance.control_plane_threads changed from 2 to 4; restart required"
+        );
+
+        let err = authority.into_result().unwrap_err();
+        assert!(err.iter().all(TransitionRejection::requires_restart));
+    }
+
+    #[test]
+    fn listener_bind_changed_matches_legacy_wording() {
+        let rejection = TransitionRejection::listener_bind_changed("edge-primary");
+        assert_eq!(
+            rejection.to_string(),
+            "runtime reload rejected: listener 'edge-primary' was removed or its bind address changed; restart required"
+        );
+        assert!(rejection.requires_restart());
+    }
+
+    #[test]
+    fn raw_resource_message_is_emitted_verbatim() {
+        let rejection =
+            TransitionRejection::raw_resource_message("failed to bind metrics endpoint 0.0.0.0:9100: in use");
+        assert_eq!(
+            rejection.to_string(),
+            "failed to bind metrics endpoint 0.0.0.0:9100: in use"
+        );
+        assert!(!rejection.requires_restart());
     }
 
     #[test]

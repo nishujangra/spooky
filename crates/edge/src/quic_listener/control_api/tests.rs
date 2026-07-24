@@ -13,6 +13,18 @@ use tempfile::tempdir;
 
 use super::{state::ControlApiState, *};
 
+/// Render the typed startup-owned compatibility result into the flat list of
+/// operator strings the assertions below were written against.
+fn startup_owned_issue_strings(
+    current: &RuntimeBundle,
+    next: &RuntimeBundle,
+) -> Vec<String> {
+    match QUICListener::validate_startup_owned_reload_compatibility(current, next) {
+        Ok(()) => Vec::new(),
+        Err(rejections) => rejections.iter().map(|r| r.to_string()).collect(),
+    }
+}
+
 fn write_test_cert_for_name(dir: &Path, cert_name: &str, dns_name: &str) -> (String, String) {
     use rcgen::{Certificate, CertificateParams, SanType};
 
@@ -294,8 +306,8 @@ fn validate_control_api_reload_compatibility_allows_bind_change_when_socket_is_f
 
     let current_bundle = runtime_bundle_from_config("current.yaml", &current);
     let next_bundle = runtime_bundle_from_config("next.yaml", &next);
-    let result =
-        QUICListener::validate_control_api_reload_compatibility(&current_bundle, &next_bundle);
+    let result = QUICListener::validate_control_api_reload_compatibility(&current_bundle, &next_bundle)
+        .map(|rejection| rejection.to_string());
     if result
         .as_deref()
         .is_some_and(|err| err.contains("Operation not permitted"))
@@ -322,7 +334,8 @@ fn validate_metrics_reload_compatibility_allows_bind_change_when_socket_is_free(
 
     let current_bundle = runtime_bundle_from_config("current.yaml", &current);
     let next_bundle = runtime_bundle_from_config("next.yaml", &next);
-    let result = QUICListener::validate_metrics_reload_compatibility(&current_bundle, &next_bundle);
+    let result = QUICListener::validate_metrics_reload_compatibility(&current_bundle, &next_bundle)
+        .map(|rejection| rejection.to_string());
     if result
         .as_deref()
         .is_some_and(|err| err.contains("Operation not permitted"))
@@ -346,8 +359,7 @@ fn validate_startup_owned_reload_compatibility_allows_log_level_change() {
 
     let current_bundle = runtime_bundle_from_config("current.yaml", &current);
     let next_bundle = runtime_bundle_from_config("next.yaml", &next);
-    let issues =
-        QUICListener::validate_startup_owned_reload_compatibility(&current_bundle, &next_bundle);
+    let issues = startup_owned_issue_strings(&current_bundle, &next_bundle);
 
     assert!(
         issues.iter().all(|issue| !issue.contains("log.level")),
@@ -366,8 +378,7 @@ fn validate_startup_owned_reload_compatibility_rejects_log_format_change() {
 
     let current_bundle = runtime_bundle_from_config("current.yaml", &current);
     let next_bundle = runtime_bundle_from_config("next.yaml", &next);
-    let issues =
-        QUICListener::validate_startup_owned_reload_compatibility(&current_bundle, &next_bundle);
+    let issues = startup_owned_issue_strings(&current_bundle, &next_bundle);
 
     assert!(
         issues
@@ -388,8 +399,7 @@ fn validate_startup_owned_reload_compatibility_allows_worker_topology_change() {
 
     let current_bundle = runtime_bundle_from_config("current.yaml", &current);
     let next_bundle = runtime_bundle_from_config("next.yaml", &next);
-    let issues =
-        QUICListener::validate_startup_owned_reload_compatibility(&current_bundle, &next_bundle);
+    let issues = startup_owned_issue_strings(&current_bundle, &next_bundle);
 
     assert!(issues.is_empty());
 }
@@ -408,7 +418,8 @@ fn validate_runtime_reload_compatibility_allows_listener_addition_when_binds_are
     let current_bundle = runtime_bundle_from_config("current.yaml", &current);
     let next_bundle = runtime_bundle_from_config("next.yaml", &next);
 
-    let result = QUICListener::validate_runtime_reload_compatibility(&current_bundle, &next_bundle);
+    let result = QUICListener::validate_runtime_reload_compatibility(&current_bundle, &next_bundle)
+        .map(|rejection| rejection.to_string());
     if result
         .as_deref()
         .is_some_and(|err| err.contains("Operation not permitted"))
@@ -437,7 +448,8 @@ fn validate_runtime_reload_compatibility_rejects_listener_removal() {
     let current_bundle = runtime_bundle_from_config("current.yaml", &current);
     let next_bundle = runtime_bundle_from_config("next.yaml", &next);
 
-    let err = QUICListener::validate_runtime_reload_compatibility(&current_bundle, &next_bundle);
+    let err = QUICListener::validate_runtime_reload_compatibility(&current_bundle, &next_bundle)
+        .map(|rejection| rejection.to_string());
     assert!(
         err.as_deref()
             .is_some_and(|e| e.contains("restart required")),
@@ -458,7 +470,8 @@ fn validate_runtime_reload_compatibility_rejects_listener_bind_change() {
     let current_bundle = runtime_bundle_from_config("current.yaml", &current);
     let next_bundle = runtime_bundle_from_config("next.yaml", &next);
 
-    let err = QUICListener::validate_runtime_reload_compatibility(&current_bundle, &next_bundle);
+    let err = QUICListener::validate_runtime_reload_compatibility(&current_bundle, &next_bundle)
+        .map(|rejection| rejection.to_string());
     assert!(
         err.as_deref()
             .is_some_and(|e| e.contains("restart required")),
@@ -478,8 +491,7 @@ fn validate_startup_owned_reload_compatibility_rejects_control_plane_thread_chan
 
     let current_bundle = runtime_bundle_from_config("current.yaml", &current);
     let next_bundle = runtime_bundle_from_config("next.yaml", &next);
-    let issues =
-        QUICListener::validate_startup_owned_reload_compatibility(&current_bundle, &next_bundle);
+    let issues = startup_owned_issue_strings(&current_bundle, &next_bundle);
 
     assert!(
         issues
@@ -520,10 +532,8 @@ async fn runtime_bundle_cert_reload_ignores_unrelated_config_drift_and_bundle_sw
         live.performance.control_plane_threads.saturating_add(1);
     let drifted_bundle = runtime_bundle_from_config("drifted.yaml", &drifted);
     let current_runtime = runtime_handle.current_view();
-    let full_reload_issues = QUICListener::validate_startup_owned_reload_compatibility(
-        current_runtime.bundle(),
-        &drifted_bundle,
-    );
+    let full_reload_issues =
+        startup_owned_issue_strings(current_runtime.bundle(), &drifted_bundle);
     assert!(
         full_reload_issues
             .iter()
