@@ -651,6 +651,14 @@ impl Metrics {
             self.backend_client_rotations.load(Ordering::Relaxed)
         ));
         out.push_str(
+            "# HELP spooky_backend_client_rotation_failures_total Total backend client rotations that failed after a DNS address-set change (stale pooled connections may persist).\n",
+        );
+        out.push_str("# TYPE spooky_backend_client_rotation_failures_total counter\n");
+        out.push_str(&format!(
+            "spooky_backend_client_rotation_failures_total {}\n",
+            self.backend_client_rotation_failures.load(Ordering::Relaxed)
+        ));
+        out.push_str(
             "# HELP spooky_backend_dns_last_refresh_success_seconds Unix timestamp of the last successful backend DNS refresh.\n",
         );
         out.push_str("# TYPE spooky_backend_dns_last_refresh_success_seconds gauge\n");
