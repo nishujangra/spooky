@@ -118,6 +118,26 @@ impl RuntimeBundleHandle {
         self.with_current_generation(|current| f(current.view()))
     }
 
+    /// Atomically install `bundle` as the active generation, returning its
+    /// generation number.
+    ///
+    /// # Ownership boundary (Phase 3)
+    ///
+    /// The swap replaces the whole [`RuntimeBundle`] pointer. By ownership class
+    /// (see [`crate::runtime::policy::OwnedRuntimeState`]):
+    ///
+    /// - **Generation-owned** ([`RuntimeGenerationState`]): fully replaced. The
+    ///   old generation's state is retired below.
+    /// - **Startup-owned** ([`StartupOwnedRuntimeState`]): the caller
+    ///   (`build_runtime_reload_plan`) carries the current values forward, and the
+    ///   reload validator has already rejected any startup-owned change as
+    ///   restart-required, so the swap must not observe a change here.
+    /// - **Process-shared** ([`RuntimeSharedServices`]): logically one instance
+    ///   per process; in the current implementation the reload rebuilds it (see
+    ///   the note on `RuntimeSharedServices`).
+    ///
+    /// The active generation is only mutated at the single `mem::replace`; every
+    /// failure path before it leaves the running generation intact.
     pub fn replace(&self, bundle: RuntimeBundle) -> Result<u64, ProxyError> {
         let generation = bundle.generation;
         let next_tasks = Arc::clone(&bundle.shared_state.generation_state().generation_tasks);
@@ -131,13 +151,19 @@ impl RuntimeBundleHandle {
                     ));
                 }
             };
+            // --- old-generation teardown boundary: BEGIN ---
+            // The previous bundle's generation-owned state is now unreachable to
+            // new readers; existing readers keep their clone until it drains.
             std::mem::replace(&mut *guard, Arc::new(bundle))
         };
+        // Retire only the previous generation's generation-owned background tasks.
+        // Startup-owned and process-shared resources are not torn down here.
         previous
             .shared_state
             .generation_state()
             .generation_tasks
             .retire_generation(Duration::from_secs(5));
+        // --- old-generation teardown boundary: END ---
         Ok(generation)
     }
 }

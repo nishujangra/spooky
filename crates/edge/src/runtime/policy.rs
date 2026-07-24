@@ -354,6 +354,28 @@ impl ResourceDomain {
     }
 }
 
+/// Marks a runtime state struct with the ownership class that governs its
+/// lifetime, making the startup-owned / generation-owned / process-shared
+/// distinction a compile-visible property of the type rather than tribal
+/// knowledge in the swap code.
+///
+/// Implemented by the three runtime state structs in
+/// [`crate::runtime::generation`]. A reader can answer "may the generation swap
+/// replace this?" from `T::OWNERSHIP` alone.
+pub trait OwnedRuntimeState {
+    /// The ownership class of every resource this struct holds.
+    const OWNERSHIP: OperationalOwnership;
+
+    /// Whether the generation swap is allowed to replace an instance of this
+    /// struct. Only generation-owned state may be swapped wholesale; startup-owned
+    /// and process-shared state must be carried across (or, in the current
+    /// implementation, rebuilt identically — see the swap boundary in
+    /// `runtime::bundle`).
+    fn is_swappable_by_generation() -> bool {
+        matches!(Self::OWNERSHIP, OperationalOwnership::GenerationOwned)
+    }
+}
+
 /// The single source of truth mapping config/runtime domains to their ownership
 /// class and reload capability. Phase 2 will make the reload validators *decide*
 /// from this table; Phase 1 only records it so the rules are readable in one
@@ -664,6 +686,31 @@ mod tests {
             "failed to bind metrics endpoint 0.0.0.0:9100: in use"
         );
         assert!(!rejection.requires_restart());
+    }
+
+    #[test]
+    fn only_generation_owned_state_is_swappable() {
+        use crate::runtime::generation::{
+            RuntimeGenerationState, RuntimeSharedServices, StartupOwnedRuntimeState,
+        };
+
+        assert_eq!(
+            StartupOwnedRuntimeState::OWNERSHIP,
+            OperationalOwnership::StartupOwned
+        );
+        assert_eq!(
+            RuntimeSharedServices::OWNERSHIP,
+            OperationalOwnership::ProcessShared
+        );
+        assert_eq!(
+            RuntimeGenerationState::OWNERSHIP,
+            OperationalOwnership::GenerationOwned
+        );
+
+        // The generation swap may replace only generation-owned state.
+        assert!(!StartupOwnedRuntimeState::is_swappable_by_generation());
+        assert!(!RuntimeSharedServices::is_swappable_by_generation());
+        assert!(RuntimeGenerationState::is_swappable_by_generation());
     }
 
     #[test]
