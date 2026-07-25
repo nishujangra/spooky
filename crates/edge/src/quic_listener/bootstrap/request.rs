@@ -40,6 +40,11 @@ use super::{
 };
 use crate::runtime::connection::outcome::AdmissionOutcomeClass;
 
+/// The bootstrap request lifecycle stages, mirroring the QUIC data path so the
+/// same reasoning applies. Some stages (`Intake`, `WriteResponse`, `Terminalize`)
+/// name the full model for completeness but do not currently emit a distinct
+/// terminal *rejection* — intake failures return earlier and successful writeback
+/// is not an error terminal — so they are not yet constructed.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::quic_listener) enum BootstrapLifecycleStage {
@@ -50,6 +55,20 @@ pub(in crate::quic_listener) enum BootstrapLifecycleStage {
     Dispatch,
     WriteResponse,
     Terminalize,
+}
+
+impl BootstrapLifecycleStage {
+    pub(in crate::quic_listener) fn slug(self) -> &'static str {
+        match self {
+            Self::Intake => "intake",
+            Self::Validate => "validate",
+            Self::ResolveRoute => "resolve_route",
+            Self::AdmitOrReject => "admit_or_reject",
+            Self::Dispatch => "dispatch",
+            Self::WriteResponse => "write_response",
+            Self::Terminalize => "terminalize",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +100,9 @@ pub(in crate::quic_listener) enum BootstrapBackendFailureReason {
     DispatchFailed,
 }
 
+/// Bootstrap timeout classification. `ResponseBody` names the model's
+/// response-body-phase timeout for parity with the QUIC data path; bootstrap does
+/// not yet detect that phase distinctly, so only `Upstream` is currently emitted.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::quic_listener) enum BootstrapTimeoutReason {
@@ -97,7 +119,45 @@ pub(in crate::quic_listener) enum BootstrapTerminalOutcome {
     TimedOut(BootstrapTimeoutReason),
 }
 
-#[allow(dead_code)]
+impl BootstrapTerminalOutcome {
+    /// Whether this terminal outcome represents an accepted (non-error) response,
+    /// mirroring the QUIC data path's success terminals.
+    pub(in crate::quic_listener) fn is_accepted(self) -> bool {
+        matches!(
+            self,
+            Self::AcceptedStandardResponse | Self::AcceptedWebsocketUpgrade
+        )
+    }
+
+    /// A stable slug naming the terminal classification, aligned with the
+    /// terminal-state names used in the QUIC data path.
+    pub(in crate::quic_listener) fn slug(self) -> &'static str {
+        match self {
+            Self::AcceptedStandardResponse => "accepted_standard_response",
+            Self::AcceptedWebsocketUpgrade => "accepted_websocket_upgrade",
+            Self::Rejected(reason) => match reason {
+                BootstrapRejectionReason::ValidationFailed => "rejected_validation",
+                BootstrapRejectionReason::AuthDenied => "rejected_auth_denied",
+                BootstrapRejectionReason::RateLimited => "rejected_rate_limited",
+                BootstrapRejectionReason::Overloaded => "rejected_overloaded",
+                BootstrapRejectionReason::RequestBodyTooLarge => "rejected_request_body_too_large",
+            },
+            Self::BackendFailed(reason) => match reason {
+                BootstrapBackendFailureReason::RouteResolutionFailed => {
+                    "backend_failed_route_resolution"
+                }
+                BootstrapBackendFailureReason::MissingEndpoint => "backend_failed_missing_endpoint",
+                BootstrapBackendFailureReason::RequestBuildFailed => "backend_failed_request_build",
+                BootstrapBackendFailureReason::DispatchFailed => "backend_failed_dispatch",
+            },
+            Self::TimedOut(reason) => match reason {
+                BootstrapTimeoutReason::Upstream => "timed_out_upstream",
+                BootstrapTimeoutReason::ResponseBody => "timed_out_response_body",
+            },
+        }
+    }
+}
+
 pub(in crate::quic_listener) struct BootstrapTerminalResponse {
     pub(in crate::quic_listener) stage: BootstrapLifecycleStage,
     pub(in crate::quic_listener) outcome: BootstrapTerminalOutcome,
@@ -118,6 +178,25 @@ impl BootstrapTerminalResponse {
     }
 
     pub(in crate::quic_listener) fn into_response(self) -> Response<BoxBody<Bytes, Infallible>> {
+        self.response
+    }
+
+    /// Log the terminal state at the terminalization boundary, then return the
+    /// response. Phase 11: the terminal outcome is now *observed* rather than a
+    /// dead byproduct, so bootstrap terminalization is traceable the same way the
+    /// QUIC data path's terminal states are.
+    pub(in crate::quic_listener) fn into_observed_response(
+        self,
+        request_id: u64,
+    ) -> Response<BoxBody<Bytes, Infallible>> {
+        if !self.outcome.is_accepted() {
+            log::debug!(
+                "bootstrap request {} terminalized at stage={} outcome={}",
+                request_id,
+                self.stage.slug(),
+                self.outcome.slug()
+            );
+        }
         self.response
     }
 }
@@ -538,5 +617,65 @@ pub(in crate::quic_listener) fn build_bootstrap_upstream_request(
                 input.traceparent,
             ),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_outcome_accepted_classification() {
+        assert!(BootstrapTerminalOutcome::AcceptedStandardResponse.is_accepted());
+        assert!(BootstrapTerminalOutcome::AcceptedWebsocketUpgrade.is_accepted());
+        assert!(
+            !BootstrapTerminalOutcome::Rejected(BootstrapRejectionReason::AuthDenied).is_accepted()
+        );
+        assert!(
+            !BootstrapTerminalOutcome::BackendFailed(BootstrapBackendFailureReason::DispatchFailed)
+                .is_accepted()
+        );
+        assert!(
+            !BootstrapTerminalOutcome::TimedOut(BootstrapTimeoutReason::Upstream).is_accepted()
+        );
+    }
+
+    #[test]
+    fn terminal_outcome_slugs_are_distinct_and_stable() {
+        let outcomes = [
+            BootstrapTerminalOutcome::AcceptedStandardResponse,
+            BootstrapTerminalOutcome::AcceptedWebsocketUpgrade,
+            BootstrapTerminalOutcome::Rejected(BootstrapRejectionReason::ValidationFailed),
+            BootstrapTerminalOutcome::Rejected(BootstrapRejectionReason::AuthDenied),
+            BootstrapTerminalOutcome::Rejected(BootstrapRejectionReason::RateLimited),
+            BootstrapTerminalOutcome::Rejected(BootstrapRejectionReason::Overloaded),
+            BootstrapTerminalOutcome::Rejected(BootstrapRejectionReason::RequestBodyTooLarge),
+            BootstrapTerminalOutcome::BackendFailed(
+                BootstrapBackendFailureReason::RouteResolutionFailed,
+            ),
+            BootstrapTerminalOutcome::BackendFailed(BootstrapBackendFailureReason::MissingEndpoint),
+            BootstrapTerminalOutcome::BackendFailed(
+                BootstrapBackendFailureReason::RequestBuildFailed,
+            ),
+            BootstrapTerminalOutcome::BackendFailed(BootstrapBackendFailureReason::DispatchFailed),
+            BootstrapTerminalOutcome::TimedOut(BootstrapTimeoutReason::Upstream),
+            BootstrapTerminalOutcome::TimedOut(BootstrapTimeoutReason::ResponseBody),
+        ];
+        let mut slugs: Vec<&str> = outcomes.iter().map(|o| o.slug()).collect();
+        let count = slugs.len();
+        slugs.sort_unstable();
+        slugs.dedup();
+        assert_eq!(slugs.len(), count, "terminal outcome slugs must be unique");
+        // Accepted outcomes carry accepted-prefixed slugs; everything else names its failure class.
+        assert_eq!(
+            BootstrapTerminalOutcome::TimedOut(BootstrapTimeoutReason::Upstream).slug(),
+            "timed_out_upstream"
+        );
+    }
+
+    #[test]
+    fn websocket_upgrade_is_a_request_mode_state() {
+        assert!(BootstrapRequestMode::WebsocketUpgrade.is_websocket_upgrade());
+        assert!(!BootstrapRequestMode::Standard.is_websocket_upgrade());
     }
 }

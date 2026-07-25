@@ -69,7 +69,6 @@ pub(in crate::quic_listener) enum BootstrapStreamingTerminal {
     UpstreamBodyFailed,
 }
 
-#[allow(dead_code)]
 pub(in crate::quic_listener) struct BootstrapWritebackOutcome {
     pub(in crate::quic_listener) response: Response<BoxBody<Bytes, Infallible>>,
     pub(in crate::quic_listener) terminal: BootstrapTerminalOutcome,

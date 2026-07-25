@@ -50,7 +50,6 @@ pub enum TunnelMode {
     Websocket,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestMode {
     Normal,
@@ -60,22 +59,7 @@ pub enum RequestMode {
     WebsocketTunnel,
 }
 
-#[allow(dead_code)]
 impl RequestMode {
-    pub fn from_legacy_flags(tunnel_mode: TunnelMode, method: &str, bodyless_mode: bool) -> Self {
-        match tunnel_mode {
-            TunnelMode::Connect => Self::ConnectTunnel,
-            TunnelMode::Websocket => Self::WebsocketTunnel,
-            TunnelMode::None if bodyless_mode && method.eq_ignore_ascii_case("GET") => {
-                Self::Bodyless
-            }
-            TunnelMode::None if bodyless_mode && method.eq_ignore_ascii_case("HEAD") => {
-                Self::HeadLike
-            }
-            TunnelMode::None => Self::Normal,
-        }
-    }
-
     pub fn from_intake(
         tunnel_mode: TunnelMode,
         method: &str,

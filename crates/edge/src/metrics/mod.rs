@@ -93,6 +93,7 @@ pub struct Metrics {
     pub backend_dns_refresh_failure: AtomicU64,
     pub backend_dns_refresh_address_changes: AtomicU64,
     pub backend_client_rotations: AtomicU64,
+    pub backend_client_rotation_failures: AtomicU64,
     route_latency_sample_every: u64,
     route_latency_sample_counter: AtomicU64,
     route_labels: Vec<String>,
@@ -481,6 +482,7 @@ impl Metrics {
             backend_dns_refresh_failure: AtomicU64::new(0),
             backend_dns_refresh_address_changes: AtomicU64::new(0),
             backend_client_rotations: AtomicU64::new(0),
+            backend_client_rotation_failures: AtomicU64::new(0),
             route_latency_sample_every,
             route_latency_sample_counter: AtomicU64::new(0),
             route_labels: route_labels_dedup,
@@ -764,6 +766,14 @@ impl Metrics {
         if let Ok(mut guard) = self.backend_rotation_state.write() {
             guard.entry(backend.to_string()).or_default().rotations += 1;
         }
+    }
+
+    /// Count a failed attempt to rotate pooled clients after a backend resolution
+    /// change. The DNS refresh itself still succeeded; this surfaces that stale
+    /// pooled connections may persist until they idle out.
+    pub fn inc_backend_client_rotation_failure(&self) {
+        self.backend_client_rotation_failures
+            .fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn record_backend_connect(

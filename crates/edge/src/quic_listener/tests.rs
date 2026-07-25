@@ -623,6 +623,62 @@ fn quic_listener_syncs_drain_timeout_and_connection_rate_limiter_after_reload() 
 }
 
 #[test]
+fn start_draining_is_idempotent_and_drain_completes_when_idle() {
+    // Phase 9 (#5): draining is idempotent — repeated start_draining() must not
+    // reset the drain deadline, and drain_complete() is safe to call repeatedly.
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let mut startup = tls_test_config(cert, key, Vec::new());
+    startup.listen.port = 0;
+    startup.performance.shutdown_drain_timeout_ms = 5_000;
+
+    let startup_runtime = RuntimeConfig::from_config(&startup).expect("startup runtime");
+    let startup_bundle = super::QUICListener::build_runtime_bundle(
+        "startup.yaml".to_string(),
+        startup.log.clone(),
+        &startup_runtime,
+    )
+    .expect("startup bundle");
+    let listener_config = startup_bundle
+        .runtime_config
+        .primary_listener_runtime_config()
+        .expect("listener runtime config");
+    let socket = match super::QUICListener::bind_socket(&listener_config, false) {
+        Ok(socket) => socket,
+        Err(spooky_errors::ProxyError::Transport(message))
+            if message.contains("Operation not permitted") =>
+        {
+            return;
+        }
+        Err(err) => panic!("bind socket: {err:?}"),
+    };
+    let mut listener = super::QUICListener::new_with_socket_and_shared_state(
+        listener_config,
+        socket,
+        Arc::clone(&startup_bundle.shared_state),
+    )
+    .expect("listener");
+
+    assert!(!listener.draining);
+    listener.start_draining();
+    assert!(listener.draining);
+    let first_start = listener.drain_start.expect("drain_start set");
+
+    // Second call is a no-op: still draining, deadline not reset.
+    listener.start_draining();
+    assert!(listener.draining);
+    assert_eq!(
+        listener.drain_start.expect("drain_start still set"),
+        first_start,
+        "repeated start_draining must not reset the drain deadline"
+    );
+
+    // With no connections, drain is complete and remains complete on repeat calls.
+    assert!(listener.drain_complete());
+    assert!(listener.drain_complete());
+}
+
+#[test]
 fn build_server_tls_acceptor_rejects_mismatched_sni_certificate_mapping() {
     let dir = tempdir().expect("tempdir");
     let (api_cert, api_key) = write_test_cert_for_name(dir.path(), "api", "api.example.com");

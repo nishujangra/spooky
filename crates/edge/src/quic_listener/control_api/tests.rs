@@ -13,6 +13,15 @@ use tempfile::tempdir;
 
 use super::{state::ControlApiState, *};
 
+/// Render the typed startup-owned compatibility result into the flat list of
+/// operator strings the assertions below were written against.
+fn startup_owned_issue_strings(current: &RuntimeBundle, next: &RuntimeBundle) -> Vec<String> {
+    match QUICListener::validate_startup_owned_reload_compatibility(current, next) {
+        Ok(()) => Vec::new(),
+        Err(rejections) => rejections.iter().map(|r| r.to_string()).collect(),
+    }
+}
+
 fn write_test_cert_for_name(dir: &Path, cert_name: &str, dns_name: &str) -> (String, String) {
     use rcgen::{Certificate, CertificateParams, SanType};
 
@@ -281,6 +290,237 @@ fn control_api_state_sees_the_active_runtime_generation_after_bundle_replace() {
 }
 
 #[test]
+fn reload_preserves_process_scoped_watchdog_and_dns_resolver() {
+    // Regression: process-shared services must be carried across a reload, not
+    // rebuilt. Rebuilding the watchdog silently discards an in-flight
+    // restart/drain; rebuilding the DNS resolver drops its cache.
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let mut config = test_config(cert, key);
+    // Enable the watchdog so request_restart takes effect.
+    config.resilience.watchdog.enabled = true;
+    let runtime_config = RuntimeConfig::from_config(&config).expect("runtime config");
+
+    let current = QUICListener::build_shared_state(&runtime_config).expect("current shared state");
+
+    // Simulate an in-flight watchdog restart on the active generation.
+    assert!(
+        current.shared_services().watchdog.request_restart("test"),
+        "watchdog restart should be accepted when enabled"
+    );
+    assert!(current.shared_services().watchdog.restart_requested());
+
+    // Reload: carry the process-scoped services forward.
+    let carried = crate::runtime::generation::CarriedProcessSharedServices::from_active(
+        current.shared_services(),
+    );
+    let next = QUICListener::build_shared_state_with_carried(&runtime_config, Some(carried))
+        .expect("reloaded shared state");
+
+    // Same watchdog instance, and its in-flight restart survived the swap.
+    assert!(
+        Arc::ptr_eq(
+            &current.shared_services().watchdog,
+            &next.shared_services().watchdog
+        ),
+        "watchdog must be the same instance across a reload"
+    );
+    assert!(
+        next.shared_services().watchdog.restart_requested(),
+        "in-flight watchdog restart must survive a reload"
+    );
+
+    // The carried services expose the same DNS resolver handle, so its cache is
+    // preserved rather than rebuilt cold on every reload.
+    let carried_again = crate::runtime::generation::CarriedProcessSharedServices::from_active(
+        current.shared_services(),
+    );
+    let seeded = carried_again
+        .backend_dns_resolver
+        .cached_addrs("never-resolved.example");
+    assert_eq!(
+        seeded,
+        next.shared_services()
+            .backend_dns_resolver
+            .cached_addrs("never-resolved.example"),
+        "carried DNS resolver must be the same cache view as the reloaded generation"
+    );
+}
+
+#[test]
+fn live_reloadable_upstream_change_is_accepted() {
+    // Phase 9 (#1): a generation-owned change (upstream/route table) must pass
+    // reload compatibility — it is live-reloadable, not restart-required.
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let current = test_config(cert, key);
+
+    let mut next = current.clone();
+    next.upstream
+        .get_mut("api")
+        .expect("api upstream")
+        .backends
+        .push(Backend {
+            id: "b2".to_string(),
+            address: "http://127.0.0.1:7002".to_string(),
+            weight: 1,
+            health_check: None,
+        });
+
+    let current_bundle = runtime_bundle_from_config("current.yaml", &current);
+    let next_bundle = runtime_bundle_from_config("next.yaml", &next);
+    let current_active = RuntimeBundleHandle::new(current_bundle).current_view();
+
+    let result = QUICListener::evaluate_runtime_reload_compatibility(&current_active, &next_bundle);
+    assert!(
+        result.is_ok(),
+        "generation-owned upstream change must be live-reloadable, got: {result:?}"
+    );
+}
+
+#[test]
+fn restart_required_change_rejects_before_touching_active_generation() {
+    // Phase 9 (#4): a failed validation must leave the active generation unchanged.
+    // A restart-required change (control_plane_threads) is rejected by the
+    // compatibility evaluation, which runs entirely on the candidate bundle and
+    // never mutates the live handle.
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let current = test_config(cert, key);
+
+    let mut next = current.clone();
+    next.performance.control_plane_threads = current.performance.control_plane_threads + 3;
+
+    let current_bundle = runtime_bundle_from_config("current.yaml", &current);
+    let next_bundle = runtime_bundle_from_config("next.yaml", &next);
+
+    let handle = RuntimeBundleHandle::new(current_bundle);
+    let generation_before = handle.current_generation();
+    let active = handle.current_view();
+
+    let result = QUICListener::evaluate_runtime_reload_compatibility(&active, &next_bundle);
+    let rejections = result.expect_err("restart-required change must be rejected");
+    assert!(
+        rejections.iter().any(
+            |r| r.to_string().contains("performance.control_plane_threads") && r.requires_restart()
+        ),
+        "expected a restart-required rejection, got: {rejections:?}"
+    );
+    // The active generation is untouched by the rejected evaluation.
+    assert_eq!(handle.current_generation(), generation_before);
+}
+
+#[test]
+fn accepted_reload_advances_the_active_generation() {
+    // Phase 9 (#1/#4 positive path): a valid reload committed through the handle
+    // advances the active generation atomically.
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let current = test_config(cert, key);
+    let next = current.clone();
+
+    let current_bundle = runtime_bundle_from_config("current.yaml", &current);
+    let mut next_bundle = runtime_bundle_from_config("next.yaml", &next);
+    next_bundle.generation = current_bundle.generation + 1;
+
+    let handle = RuntimeBundleHandle::new(current_bundle);
+    let before = handle.current_generation();
+
+    let committed = handle.replace(next_bundle).expect("valid reload commits");
+    assert_eq!(committed, before + 1);
+    assert_eq!(handle.current_generation(), before + 1);
+}
+
+#[test]
+fn handle_drives_full_lifecycle_transition_table() {
+    use crate::runtime::policy::{LifecycleTransitionResult, RuntimeLifecyclePhase};
+
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config = test_config(cert, key);
+    let bundle = runtime_bundle_from_config("current.yaml", &config);
+    let handle = RuntimeBundleHandle::new(bundle);
+
+    // The handle publishes into `Running`.
+    assert_eq!(handle.lifecycle().phase(), RuntimeLifecyclePhase::Running);
+
+    // Running -> Draining (as the supervisor does on a watchdog restart request).
+    assert!(matches!(
+        handle.lifecycle().begin_drain(),
+        LifecycleTransitionResult::Applied {
+            to: RuntimeLifecyclePhase::Draining,
+            ..
+        }
+    ));
+
+    // Draining -> ShuttingDown (as the shutdown-signal handler does).
+    assert!(matches!(
+        handle.lifecycle().begin_shutdown(),
+        LifecycleTransitionResult::Applied {
+            to: RuntimeLifecyclePhase::ShuttingDown,
+            ..
+        }
+    ));
+    // Idempotent second call (the app calls begin_shutdown again before draining).
+    assert!(matches!(
+        handle.lifecycle().begin_shutdown(),
+        LifecycleTransitionResult::NoOp { .. }
+    ));
+
+    // ShuttingDown -> Terminated (after workers are drained and joined).
+    assert!(matches!(
+        handle.lifecycle().finish_shutdown(),
+        LifecycleTransitionResult::Applied {
+            to: RuntimeLifecyclePhase::Terminated,
+            ..
+        }
+    ));
+    assert!(handle.lifecycle().phase().is_terminal());
+}
+
+#[test]
+fn reload_commit_is_rejected_after_shutdown_begins() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config = test_config(cert, key);
+    let bundle = runtime_bundle_from_config("current.yaml", &config);
+    let next = runtime_bundle_from_config("next.yaml", &config);
+    let generation_before = bundle.generation;
+
+    let handle = RuntimeBundleHandle::new(bundle);
+    // Phase 6: once shutdown has begun, a reload commit must be rejected and the
+    // active generation left untouched.
+    handle.lifecycle().begin_shutdown();
+
+    let result = handle.replace(next);
+    assert!(result.is_err(), "reload during shutdown must be rejected");
+    assert_eq!(
+        handle.current_generation(),
+        generation_before,
+        "active generation must be unchanged after a rejected reload"
+    );
+}
+
+#[test]
+fn current_recovers_from_poisoned_bundle_lock_without_panicking() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config = test_config(cert, key);
+    let bundle = runtime_bundle_from_config("current.yaml", &config);
+    let expected_generation = bundle.generation;
+
+    let handle = RuntimeBundleHandle::new(bundle);
+    handle.poison_for_test();
+
+    // Phase 5: a poisoned bundle lock must not panic the hot read path; it
+    // recovers the last consistently-published generation.
+    let recovered = handle.current();
+    assert_eq!(recovered.generation, expected_generation);
+    // And it keeps working on subsequent reads.
+    assert_eq!(handle.current_generation(), expected_generation);
+}
+
+#[test]
 fn validate_control_api_reload_compatibility_allows_bind_change_when_socket_is_free() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
@@ -295,7 +535,8 @@ fn validate_control_api_reload_compatibility_allows_bind_change_when_socket_is_f
     let current_bundle = runtime_bundle_from_config("current.yaml", &current);
     let next_bundle = runtime_bundle_from_config("next.yaml", &next);
     let result =
-        QUICListener::validate_control_api_reload_compatibility(&current_bundle, &next_bundle);
+        QUICListener::validate_control_api_reload_compatibility(&current_bundle, &next_bundle)
+            .map(|rejection| rejection.to_string());
     if result
         .as_deref()
         .is_some_and(|err| err.contains("Operation not permitted"))
@@ -322,7 +563,8 @@ fn validate_metrics_reload_compatibility_allows_bind_change_when_socket_is_free(
 
     let current_bundle = runtime_bundle_from_config("current.yaml", &current);
     let next_bundle = runtime_bundle_from_config("next.yaml", &next);
-    let result = QUICListener::validate_metrics_reload_compatibility(&current_bundle, &next_bundle);
+    let result = QUICListener::validate_metrics_reload_compatibility(&current_bundle, &next_bundle)
+        .map(|rejection| rejection.to_string());
     if result
         .as_deref()
         .is_some_and(|err| err.contains("Operation not permitted"))
@@ -346,8 +588,7 @@ fn validate_startup_owned_reload_compatibility_allows_log_level_change() {
 
     let current_bundle = runtime_bundle_from_config("current.yaml", &current);
     let next_bundle = runtime_bundle_from_config("next.yaml", &next);
-    let issues =
-        QUICListener::validate_startup_owned_reload_compatibility(&current_bundle, &next_bundle);
+    let issues = startup_owned_issue_strings(&current_bundle, &next_bundle);
 
     assert!(
         issues.iter().all(|issue| !issue.contains("log.level")),
@@ -366,8 +607,7 @@ fn validate_startup_owned_reload_compatibility_rejects_log_format_change() {
 
     let current_bundle = runtime_bundle_from_config("current.yaml", &current);
     let next_bundle = runtime_bundle_from_config("next.yaml", &next);
-    let issues =
-        QUICListener::validate_startup_owned_reload_compatibility(&current_bundle, &next_bundle);
+    let issues = startup_owned_issue_strings(&current_bundle, &next_bundle);
 
     assert!(
         issues
@@ -388,8 +628,7 @@ fn validate_startup_owned_reload_compatibility_allows_worker_topology_change() {
 
     let current_bundle = runtime_bundle_from_config("current.yaml", &current);
     let next_bundle = runtime_bundle_from_config("next.yaml", &next);
-    let issues =
-        QUICListener::validate_startup_owned_reload_compatibility(&current_bundle, &next_bundle);
+    let issues = startup_owned_issue_strings(&current_bundle, &next_bundle);
 
     assert!(issues.is_empty());
 }
@@ -408,7 +647,8 @@ fn validate_runtime_reload_compatibility_allows_listener_addition_when_binds_are
     let current_bundle = runtime_bundle_from_config("current.yaml", &current);
     let next_bundle = runtime_bundle_from_config("next.yaml", &next);
 
-    let result = QUICListener::validate_runtime_reload_compatibility(&current_bundle, &next_bundle);
+    let result = QUICListener::validate_runtime_reload_compatibility(&current_bundle, &next_bundle)
+        .map(|rejection| rejection.to_string());
     if result
         .as_deref()
         .is_some_and(|err| err.contains("Operation not permitted"))
@@ -437,7 +677,8 @@ fn validate_runtime_reload_compatibility_rejects_listener_removal() {
     let current_bundle = runtime_bundle_from_config("current.yaml", &current);
     let next_bundle = runtime_bundle_from_config("next.yaml", &next);
 
-    let err = QUICListener::validate_runtime_reload_compatibility(&current_bundle, &next_bundle);
+    let err = QUICListener::validate_runtime_reload_compatibility(&current_bundle, &next_bundle)
+        .map(|rejection| rejection.to_string());
     assert!(
         err.as_deref()
             .is_some_and(|e| e.contains("restart required")),
@@ -458,7 +699,8 @@ fn validate_runtime_reload_compatibility_rejects_listener_bind_change() {
     let current_bundle = runtime_bundle_from_config("current.yaml", &current);
     let next_bundle = runtime_bundle_from_config("next.yaml", &next);
 
-    let err = QUICListener::validate_runtime_reload_compatibility(&current_bundle, &next_bundle);
+    let err = QUICListener::validate_runtime_reload_compatibility(&current_bundle, &next_bundle)
+        .map(|rejection| rejection.to_string());
     assert!(
         err.as_deref()
             .is_some_and(|e| e.contains("restart required")),
@@ -478,8 +720,7 @@ fn validate_startup_owned_reload_compatibility_rejects_control_plane_thread_chan
 
     let current_bundle = runtime_bundle_from_config("current.yaml", &current);
     let next_bundle = runtime_bundle_from_config("next.yaml", &next);
-    let issues =
-        QUICListener::validate_startup_owned_reload_compatibility(&current_bundle, &next_bundle);
+    let issues = startup_owned_issue_strings(&current_bundle, &next_bundle);
 
     assert!(
         issues
@@ -520,10 +761,7 @@ async fn runtime_bundle_cert_reload_ignores_unrelated_config_drift_and_bundle_sw
         live.performance.control_plane_threads.saturating_add(1);
     let drifted_bundle = runtime_bundle_from_config("drifted.yaml", &drifted);
     let current_runtime = runtime_handle.current_view();
-    let full_reload_issues = QUICListener::validate_startup_owned_reload_compatibility(
-        current_runtime.bundle(),
-        &drifted_bundle,
-    );
+    let full_reload_issues = startup_owned_issue_strings(current_runtime.bundle(), &drifted_bundle);
     assert!(
         full_reload_issues
             .iter()

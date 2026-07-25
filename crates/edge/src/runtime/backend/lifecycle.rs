@@ -86,6 +86,40 @@ pub struct ActiveHealthCheckEvaluation {
     pub next_delay: Duration,
 }
 
+/// Explicit outcome of rotating pooled transport clients after a backend's
+/// resolved addresses changed.
+///
+/// Phase 4: previously a bare `bool` collapsed a rotation *failure* into
+/// "not rotated", hiding it from operators. Rotation failure is now a distinct,
+/// operator-visible terminal state — the DNS refresh still succeeds (the new
+/// addresses are recorded), but stale pooled connections may linger, so the
+/// failure is logged and counted rather than silently dropped.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClientRotationOutcome {
+    /// Pooled clients were rotated to the new resolution.
+    Rotated,
+    /// No rotation was needed (transport reported the client already current).
+    NotRotated,
+    /// Rotation was attempted but failed; the DNS resolution update still stands.
+    Failed { error: String },
+}
+
+impl ClientRotationOutcome {
+    /// Whether pooled clients were actually rotated.
+    #[cfg(test)]
+    pub fn rotated(&self) -> bool {
+        matches!(self, Self::Rotated)
+    }
+
+    /// The failure reason, if rotation failed.
+    pub fn failure(&self) -> Option<&str> {
+        match self {
+            Self::Failed { error } => Some(error.as_str()),
+            Self::Rotated | Self::NotRotated => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BackendDnsRefreshApplication {
     Updated {
@@ -95,7 +129,7 @@ pub enum BackendDnsRefreshApplication {
         current_addrs: Vec<SocketAddr>,
         generation: u64,
         refreshed_at: SystemTime,
-        client_rotated: bool,
+        client_rotation: ClientRotationOutcome,
     },
     Unchanged {
         backend_addr: String,
@@ -115,6 +149,90 @@ pub enum BackendDnsRefreshApplication {
         retained_addrs: Vec<SocketAddr>,
         error: String,
     },
+}
+
+/// The unified, operator-facing classification of a backend refresh outcome
+/// (Phase 7).
+///
+/// Every internal [`BackendDnsRefreshApplication`] variant maps onto exactly one
+/// of these so operators, logs, and metrics read a single result model instead of
+/// recomputing intent from the specific variant. It also makes the safety
+/// invariant explicit: no classification ever leaves partial hidden state — a
+/// failure always preserves the existing resolution and keeps traffic on it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BackendRefreshClassification {
+    /// The backend's resolved addresses changed and were applied.
+    Refreshed,
+    /// The refresh ran but the resolved addresses were unchanged.
+    Unchanged,
+    /// The refresh produced no usable answer (empty result); the previous
+    /// resolution is retained and serving.
+    Rejected,
+    /// The refresh failed; the active generation's resolution is preserved and
+    /// still serving traffic.
+    FailedActivePreserved,
+}
+
+impl BackendRefreshClassification {
+    /// Whether traffic continues on the existing (pre-refresh) resolution.
+    /// True for every non-`Refreshed` outcome — the whole point of the model is
+    /// that a failed or empty refresh never drops the backend.
+    pub fn traffic_continues_on_existing(self) -> bool {
+        !matches!(self, Self::Refreshed)
+    }
+
+    /// Whether this classification represents a failure operators should act on.
+    pub fn is_failure(self) -> bool {
+        matches!(self, Self::Rejected | Self::FailedActivePreserved)
+    }
+
+    /// A stable, machine-readable slug for metric labels and structured logs.
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Refreshed => "refreshed",
+            Self::Unchanged => "unchanged",
+            Self::Rejected => "rejected_empty_answer",
+            Self::FailedActivePreserved => "failed_active_preserved",
+        }
+    }
+}
+
+impl BackendDnsRefreshApplication {
+    /// The backend identity (canonical address) this outcome concerns.
+    pub fn backend_addr(&self) -> &str {
+        match self {
+            Self::Updated { backend_addr, .. }
+            | Self::Unchanged { backend_addr, .. }
+            | Self::EmptyAnswerRetained { backend_addr, .. }
+            | Self::LookupFailed { backend_addr, .. } => backend_addr,
+        }
+    }
+
+    /// The authority host (upstream hostname) this outcome concerns.
+    pub fn authority_host(&self) -> &str {
+        match self {
+            Self::Updated { authority_host, .. }
+            | Self::Unchanged { authority_host, .. }
+            | Self::EmptyAnswerRetained { authority_host, .. }
+            | Self::LookupFailed { authority_host, .. } => authority_host,
+        }
+    }
+
+    /// The unified operator-facing classification of this outcome.
+    pub fn classification(&self) -> BackendRefreshClassification {
+        match self {
+            Self::Updated { .. } => BackendRefreshClassification::Refreshed,
+            Self::Unchanged { .. } => BackendRefreshClassification::Unchanged,
+            Self::EmptyAnswerRetained { .. } => BackendRefreshClassification::Rejected,
+            Self::LookupFailed { .. } => BackendRefreshClassification::FailedActivePreserved,
+        }
+    }
+
+    /// Whether traffic continues on the existing resolution after this outcome.
+    #[cfg(test)]
+    pub fn traffic_continues_on_existing(&self) -> bool {
+        self.classification().traffic_continues_on_existing()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -383,16 +501,18 @@ pub(crate) fn apply_backend_dns_refresh(
                 };
             };
 
-            let client_rotated = if matches!(result.outcome, BackendRefreshOutcome::Updated { .. })
+            let client_rotation = if matches!(result.outcome, BackendRefreshOutcome::Updated { .. })
             {
-                matches!(
-                    transport_pool.rotate_backend_client(
-                        &result.identity.backend_addr,
-                    ),
-                    Ok(rotation) if rotation.rotated()
-                )
+                // Phase 4: no longer collapse a rotation error into "not rotated".
+                // A failure is preserved as an explicit outcome so it can be logged
+                // and metered downstream.
+                match transport_pool.rotate_backend_client(&result.identity.backend_addr) {
+                    Ok(rotation) if rotation.rotated() => ClientRotationOutcome::Rotated,
+                    Ok(_) => ClientRotationOutcome::NotRotated,
+                    Err(error) => ClientRotationOutcome::Failed { error },
+                }
             } else {
-                false
+                ClientRotationOutcome::NotRotated
             };
 
             match result.outcome {
@@ -408,7 +528,7 @@ pub(crate) fn apply_backend_dns_refresh(
                     current_addrs,
                     generation: refresh_generation,
                     refreshed_at: refreshed_at.unwrap_or_else(SystemTime::now),
-                    client_rotated,
+                    client_rotation,
                 },
                 BackendRefreshOutcome::Unchanged {
                     current_addrs,
@@ -446,12 +566,25 @@ pub(crate) fn observe_backend_dns_refresh(
     metrics: &Metrics,
     outcome: &BackendDnsRefreshApplication,
 ) {
+    // Phase 7: emit the unified classification so operators can read one result
+    // model, and record whether traffic still flows on the existing resolution.
+    let classification = outcome.classification();
+    if classification.is_failure() {
+        debug!(
+            "backend refresh classification for '{}' (backend '{}'): {} traffic_continues_on_existing={}",
+            outcome.authority_host(),
+            outcome.backend_addr(),
+            classification.slug(),
+            classification.traffic_continues_on_existing()
+        );
+    }
+
     match outcome {
         BackendDnsRefreshApplication::Updated {
             backend_addr,
             current_addrs,
             refreshed_at,
-            client_rotated,
+            client_rotation,
             ..
         } => {
             metrics.record_backend_dns_refresh_success(
@@ -460,8 +593,14 @@ pub(crate) fn observe_backend_dns_refresh(
                 current_addrs.len(),
                 true,
             );
-            if *client_rotated {
-                metrics.inc_backend_client_rotation(backend_addr);
+            match client_rotation {
+                ClientRotationOutcome::Rotated => {
+                    metrics.inc_backend_client_rotation(backend_addr);
+                }
+                ClientRotationOutcome::Failed { .. } => {
+                    metrics.inc_backend_client_rotation_failure();
+                }
+                ClientRotationOutcome::NotRotated => {}
             }
         }
         BackendDnsRefreshApplication::Unchanged {
@@ -492,6 +631,7 @@ pub(crate) fn log_backend_dns_refresh(outcome: &BackendDnsRefreshApplication) {
             previous_addrs,
             current_addrs,
             generation,
+            client_rotation,
             ..
         } => {
             if previous_addrs.is_empty() {
@@ -503,6 +643,14 @@ pub(crate) fn log_backend_dns_refresh(outcome: &BackendDnsRefreshApplication) {
                 info!(
                     "backend DNS refresh updated '{}' (backend '{}'): {:?} -> {:?} generation={} stale_pooled_connections=possible_until_idle_timeout",
                     authority_host, backend_addr, previous_addrs, current_addrs, generation
+                );
+            }
+            // Phase 4: rotation failure is no longer silent. The resolution update
+            // above still stands, but surface that pooled clients were not rotated.
+            if let Some(error) = client_rotation.failure() {
+                warn!(
+                    "backend client rotation failed for '{}' (backend '{}') after DNS refresh: {}; stale pooled connections persist until idle timeout",
+                    authority_host, backend_addr, error
                 );
             }
         }
@@ -524,8 +672,11 @@ pub(crate) fn log_backend_dns_refresh(outcome: &BackendDnsRefreshApplication) {
             retained_addrs,
         } => {
             warn!(
-                "backend DNS refresh returned no addresses for '{}' (backend '{}'); retaining {:?}",
-                authority_host, backend_addr, retained_addrs
+                "backend DNS refresh returned no addresses for '{}' (backend '{}') [{}]; retaining {:?}; traffic continues on existing resolution (no manual action required unless persistent)",
+                authority_host,
+                backend_addr,
+                BackendRefreshClassification::Rejected.slug(),
+                retained_addrs
             );
         }
         BackendDnsRefreshApplication::LookupFailed {
@@ -535,8 +686,12 @@ pub(crate) fn log_backend_dns_refresh(outcome: &BackendDnsRefreshApplication) {
             error,
         } => {
             warn!(
-                "backend DNS refresh failed for '{}' (backend '{}'): {}; retaining {:?}",
-                authority_host, backend_addr, error, retained_addrs
+                "backend DNS refresh failed for '{}' (backend '{}') [{}]: {}; retaining {:?}; traffic continues on existing resolution (fix DNS/upstream if persistent)",
+                authority_host,
+                backend_addr,
+                BackendRefreshClassification::FailedActivePreserved.slug(),
+                error,
+                retained_addrs
             );
         }
     }
@@ -554,6 +709,112 @@ mod tests {
 
     use super::*;
     use crate::runtime::backend::event::{BackendHealthObservationOutcome, BackendRequestFeedback};
+
+    #[test]
+    fn refresh_classification_maps_every_variant_and_preserves_traffic_on_failure() {
+        let updated = BackendDnsRefreshApplication::Updated {
+            backend_addr: "http://backend:8080".to_string(),
+            authority_host: "backend".to_string(),
+            previous_addrs: vec![],
+            current_addrs: vec!["10.0.0.1:8080".parse().expect("addr")],
+            generation: 1,
+            refreshed_at: SystemTime::UNIX_EPOCH,
+            client_rotation: ClientRotationOutcome::Rotated,
+        };
+        assert_eq!(
+            updated.classification(),
+            BackendRefreshClassification::Refreshed
+        );
+        assert!(!updated.traffic_continues_on_existing());
+
+        let unchanged = BackendDnsRefreshApplication::Unchanged {
+            backend_addr: "http://backend:8080".to_string(),
+            authority_host: "backend".to_string(),
+            current_addrs: vec!["10.0.0.1:8080".parse().expect("addr")],
+            generation: 1,
+            refreshed_at: SystemTime::UNIX_EPOCH,
+        };
+        assert_eq!(
+            unchanged.classification(),
+            BackendRefreshClassification::Unchanged
+        );
+        assert!(unchanged.traffic_continues_on_existing());
+
+        let empty = BackendDnsRefreshApplication::EmptyAnswerRetained {
+            backend_addr: "http://backend:8080".to_string(),
+            authority_host: "backend".to_string(),
+            retained_addrs: vec!["10.0.0.1:8080".parse().expect("addr")],
+        };
+        assert_eq!(
+            empty.classification(),
+            BackendRefreshClassification::Rejected
+        );
+        assert!(empty.traffic_continues_on_existing());
+        assert!(empty.classification().is_failure());
+
+        let failed = BackendDnsRefreshApplication::LookupFailed {
+            backend_addr: "http://backend:8080".to_string(),
+            authority_host: "backend".to_string(),
+            retained_addrs: vec!["10.0.0.1:8080".parse().expect("addr")],
+            error: "nxdomain".to_string(),
+        };
+        assert_eq!(
+            failed.classification(),
+            BackendRefreshClassification::FailedActivePreserved
+        );
+        // The core Phase 7 safety invariant: a failure never drops the backend.
+        assert!(failed.traffic_continues_on_existing());
+        assert!(failed.classification().is_failure());
+        assert_eq!(failed.backend_addr(), "http://backend:8080");
+        assert_eq!(failed.authority_host(), "backend");
+    }
+
+    #[test]
+    fn rotation_failure_is_metered_and_does_not_hide_refresh_success() {
+        let metrics = Metrics::default();
+        let updated = BackendDnsRefreshApplication::Updated {
+            backend_addr: "http://backend.internal:8080".to_string(),
+            authority_host: "backend.internal".to_string(),
+            previous_addrs: vec!["10.0.0.1:8080".parse().expect("addr")],
+            current_addrs: vec!["10.0.0.2:8080".parse().expect("addr")],
+            generation: 2,
+            refreshed_at: SystemTime::UNIX_EPOCH,
+            client_rotation: ClientRotationOutcome::Failed {
+                error: "pool busy".to_string(),
+            },
+        };
+
+        observe_backend_dns_refresh(&metrics, &updated);
+
+        // The resolution refresh still counts as a success...
+        assert_eq!(
+            metrics
+                .backend_client_rotation_failures
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "rotation failure must be metered, not silently dropped"
+        );
+        // ...and the rotation-success counter is untouched by a failure.
+        assert_eq!(
+            metrics
+                .backend_client_rotations
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            updated_client_rotation(&updated).failure(),
+            Some("pool busy")
+        );
+    }
+
+    fn updated_client_rotation(app: &BackendDnsRefreshApplication) -> &ClientRotationOutcome {
+        match app {
+            BackendDnsRefreshApplication::Updated {
+                client_rotation, ..
+            } => client_rotation,
+            other => panic!("expected Updated, got {other:?}"),
+        }
+    }
 
     fn test_upstream_pool_with_interval(interval: u64) -> Arc<RwLock<UpstreamPool>> {
         let mut upstreams = std::collections::HashMap::new();
@@ -724,15 +985,18 @@ mod tests {
         let outcome =
             coordinator.apply_refresh(&backend, Ok(new_addrs.clone()), &resolver, &transport_pool);
 
-        assert!(matches!(
-            outcome,
-            BackendDnsRefreshApplication::Updated {
-                current_addrs,
-                generation: 1,
-                client_rotated: true,
-                ..
-            } if current_addrs == new_addrs
-        ));
+        let BackendDnsRefreshApplication::Updated {
+            current_addrs,
+            generation,
+            client_rotation,
+            ..
+        } = &outcome
+        else {
+            panic!("expected Updated outcome, got: {outcome:?}");
+        };
+        assert_eq!(current_addrs, &new_addrs);
+        assert_eq!(*generation, 1);
+        assert!(client_rotation.rotated());
 
         let snapshot = coordinator
             .snapshot_backend(backend_addr)
