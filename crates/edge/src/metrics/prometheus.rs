@@ -193,9 +193,9 @@ impl Metrics {
                 OverloadShedReason::RequestBufferCap => {
                     self.overload_shed_request_buffer.load(Ordering::Relaxed)
                 }
-                OverloadShedReason::ResponsePrebufferCap => {
-                    self.overload_shed_response_prebuffer.load(Ordering::Relaxed)
-                }
+                OverloadShedReason::ResponsePrebufferCap => self
+                    .overload_shed_response_prebuffer
+                    .load(Ordering::Relaxed),
                 OverloadShedReason::ConnectionCap => {
                     self.overload_shed_connection_cap.load(Ordering::Relaxed)
                 }

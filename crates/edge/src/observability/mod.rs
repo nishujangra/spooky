@@ -351,9 +351,7 @@ impl RetryDecisionReason {
     pub fn is_retry(self) -> bool {
         matches!(
             self,
-            Self::UpstreamTimeout
-                | Self::UpstreamTransportFailure
-                | Self::UpstreamProtocolFailure
+            Self::UpstreamTimeout | Self::UpstreamTransportFailure | Self::UpstreamProtocolFailure
         )
     }
 }
@@ -721,12 +719,18 @@ mod tests {
         // whose slug is the emitted label.
         use crate::metrics::OverloadShedReason;
         let cases = [
-            (OverloadShedReason::Brownout, AdmissionOverloadCause::Brownout),
+            (
+                OverloadShedReason::Brownout,
+                AdmissionOverloadCause::Brownout,
+            ),
             (
                 OverloadShedReason::AdaptiveAdmission,
                 AdmissionOverloadCause::AdaptiveAdmission,
             ),
-            (OverloadShedReason::RouteCap, AdmissionOverloadCause::RouteCap),
+            (
+                OverloadShedReason::RouteCap,
+                AdmissionOverloadCause::RouteCap,
+            ),
             (
                 OverloadShedReason::RouteGlobalCap,
                 AdmissionOverloadCause::RouteGlobalCap,
@@ -770,7 +774,10 @@ mod tests {
     fn overload_cause_slugs_match_legacy_metric_labels() {
         // These must stay byte-identical to `OverloadShedReason` labels so a later
         // migration of the overload emitter does not change the `reason=` series.
-        assert_eq!(AdmissionOverloadCause::GlobalInflight.slug(), "global_inflight");
+        assert_eq!(
+            AdmissionOverloadCause::GlobalInflight.slug(),
+            "global_inflight"
+        );
         assert_eq!(
             AdmissionOverloadCause::ResponsePrebufferCap.slug(),
             "response_prebuffer_cap"
@@ -779,8 +786,14 @@ mod tests {
 
     #[test]
     fn request_outcome_coarse_label_matches_legacy_buckets() {
-        assert_eq!(RequestOutcomeReason::Completed.coarse_outcome_label(), "success");
-        assert_eq!(RequestOutcomeReason::TimedOut.coarse_outcome_label(), "timeout");
+        assert_eq!(
+            RequestOutcomeReason::Completed.coarse_outcome_label(),
+            "success"
+        );
+        assert_eq!(
+            RequestOutcomeReason::TimedOut.coarse_outcome_label(),
+            "timeout"
+        );
         assert_eq!(
             RequestOutcomeReason::Overloaded.coarse_outcome_label(),
             "overload_shed"
@@ -931,14 +944,19 @@ mod tests {
         // admission logs are the canonical AdmissionDecisionReason slugs. This
         // guards those hand-written literals against enum drift.
         assert_eq!(AdmissionDecisionReason::AuthDenied.slug(), "auth_denied");
-        assert_eq!(AdmissionDecisionReason::AuthUnavailable.slug(), "auth_unavailable");
+        assert_eq!(
+            AdmissionDecisionReason::AuthUnavailable.slug(),
+            "auth_unavailable"
+        );
         assert_eq!(AdmissionDecisionReason::RateLimited.slug(), "rate_limited");
         assert_eq!(AdmissionDecisionReason::Overloaded.slug(), "overloaded");
     }
 
     #[test]
     fn retry_and_hedge_denials_map_to_canonical_reasons() {
-        use spooky_errors::{HedgePolicyDenialReason, RetryPolicyDenialReason, UpstreamRetryReason};
+        use spooky_errors::{
+            HedgePolicyDenialReason, RetryPolicyDenialReason, UpstreamRetryReason,
+        };
         assert_eq!(
             RetryDecisionReason::from(UpstreamRetryReason::Timeout),
             RetryDecisionReason::UpstreamTimeout

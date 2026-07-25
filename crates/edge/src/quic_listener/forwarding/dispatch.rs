@@ -348,7 +348,9 @@ impl QUICListener {
             alternate_backend,
         );
         let (retry_reason, canonical_retry_reason) = match retry_decision {
-            RetryPolicyDecision::Retry { reason } => (reason.into(), RetryDecisionReason::from(reason)),
+            RetryPolicyDecision::Retry { reason } => {
+                (reason.into(), RetryDecisionReason::from(reason))
+            }
             RetryPolicyDecision::DoNotRetry { denial } => {
                 policy_telemetry.retry.record_denial(denial);
                 // Phase 6: canonical operational reason (upstream=, decision=retry)

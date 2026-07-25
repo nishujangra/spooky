@@ -739,7 +739,9 @@ mod tests {
         assert_eq!(
             BootstrapTerminalOutcome::Rejected(BootstrapRejectionReason::ValidationFailed)
                 .canonical_reason(),
-            Some(RequestOutcomeReason::from(RejectionReason::ValidationFailed))
+            Some(RequestOutcomeReason::from(
+                RejectionReason::ValidationFailed
+            ))
         );
         // Backend dispatch failure ↔ QUIC transport failure.
         assert_eq!(

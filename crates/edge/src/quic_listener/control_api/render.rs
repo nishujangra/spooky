@@ -321,9 +321,9 @@ impl ControlApiBackendInventoryPayload {
                         BackendHealthState::Unhealthy { .. } => "unhealthy",
                     },
                     health_reason: match backend.health {
-                        BackendHealthState::Unhealthy { reason: Some(reason) } => {
-                            Some(health_failure_reason_label(reason))
-                        }
+                        BackendHealthState::Unhealthy {
+                            reason: Some(reason),
+                        } => Some(health_failure_reason_label(reason)),
                         _ => None,
                     },
                     membership: match backend.membership {
