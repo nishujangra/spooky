@@ -1,0 +1,496 @@
+//! Canonical observability vocabulary (obs plan, Phase 1).
+//!
+//! This module is the **single, handler-free schema** for the operational reason
+//! vocabularies frozen in Phase 0 (`obs-phase0.md`). Phase 0 found the same
+//! concept named differently across metrics, logs, and control-plane JSON — and
+//! two parallel terminal vocabularies (the QUIC data path vs. bootstrap) with no
+//! shared slug. This module defines the canonical enums *once*, along with a
+//! single mapping layer that produces the stable string each surface should use.
+//!
+//! # Phase 1 scope
+//!
+//! This layer introduces **no behavioral change**. Existing emitters keep their
+//! current strings; new code is expected to route through these types, and later
+//! phases migrate the old emitters onto them. The mapping methods here are the
+//! intended canonical strings — where they intentionally differ from a legacy
+//! string, that is called out in a doc comment so the migration is explicit.
+//!
+//! A reader should be able to understand the intended reason vocabularies and
+//! field names from this one module without reading any emitter.
+
+use std::fmt;
+
+/// Why a request reached its terminal state — the one canonical request-outcome
+/// vocabulary. Unifies the QUIC data-path terminal enums
+/// (`RejectionReason`/`BackendFailureReason`/`TimeoutReason`) and the bootstrap
+/// `Bootstrap*` slugs, which Phase 0 found were two disjoint vocabularies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RequestOutcomeReason {
+    /// Response completed successfully (status-derived success).
+    Completed,
+    /// Client cancelled (reset / connection closed / operator abort).
+    Cancelled,
+    /// A deadline expired before completion.
+    TimedOut,
+    /// Rejected by authentication/authorization.
+    AuthDenied,
+    /// Rejected by rate limiting.
+    RateLimited,
+    /// Shed due to overload / admission control.
+    Overloaded,
+    /// Rejected by request validation or policy.
+    ValidationRejected,
+    /// Backend transport-level failure (connect/send/reset).
+    BackendTransportFailed,
+    /// Backend protocol-level failure (malformed/illegal upstream response).
+    BackendProtocolFailed,
+    /// Backend TLS failure.
+    BackendTlsFailed,
+    /// Backend bridge/translation failure.
+    BackendBridgeFailed,
+}
+
+/// Why a backend's health/observation reached its state — the one canonical
+/// backend-health vocabulary. Unifies `HealthFailureReason`,
+/// `BackendHealthObservationOutcome`, and the DNS-refresh classifications, which
+/// Phase 0 found were reported at three different granularities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BackendHealthReason {
+    /// An active probe succeeded.
+    ActiveProbeSuccess,
+    /// An active probe failed.
+    ActiveProbeFailure,
+    /// Passive (live-traffic) observation succeeded.
+    PassiveSuccess,
+    /// Passive observation failed.
+    PassiveFailure,
+    /// A DNS refresh failed; the prior resolution is retained.
+    DnsRefreshFailed,
+    /// A DNS refresh returned no addresses; the prior resolution is retained.
+    EmptyResolutionRetained,
+    /// A backend pool lock was poisoned (observed as a health-affecting event).
+    PoolPoisoned,
+}
+
+/// Why a retry was attempted or denied — the one canonical retry vocabulary.
+/// Reconciles `RetryAttemptTelemetryReason` and `RetryPolicyDenialReason`, which
+/// Phase 0 found emitted lossy/merged metric labels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RetryDecisionReason {
+    /// Retriable: the prior attempt timed out.
+    UpstreamTimeout,
+    /// Retriable: the prior attempt hit a transport failure.
+    UpstreamTransportFailure,
+    /// Retriable: the prior attempt hit a protocol failure.
+    UpstreamProtocolFailure,
+    /// Denied: the retry budget is exhausted.
+    RetryBudgetDenied,
+    /// Denied: retries are disabled by policy.
+    RetryPolicyDisabled,
+    /// Denied: the request is not idempotent / body not replayable.
+    IdempotencyDenied,
+}
+
+/// Why a hedge was triggered or denied — the one canonical hedge vocabulary.
+/// Phase 0 found `HedgePolicyDenialReason` (7 variants) entirely unobserved; this
+/// gives every hedge decision a canonical name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HedgeDecisionReason {
+    /// A hedge fired because the primary passed the hedge delay.
+    DelayElapsed,
+    /// Denied: hedging is disabled by policy.
+    HedgingDisabled,
+    /// Denied: the primary request already completed.
+    PrimaryCompleted,
+    /// Denied: the request body is not replayable.
+    RequestBodyNotReplayable,
+    /// Denied: the request is a tunnel (CONNECT/websocket).
+    TunnelRequest,
+    /// Denied: the method is not allowed to hedge.
+    MethodNotAllowed,
+    /// Denied: no alternate backend is available.
+    AlternateBackendUnavailable,
+    /// Denied: the hedge budget is exhausted.
+    HedgeBudgetDenied,
+}
+
+/// Why admission/auth rejected a request — the one canonical admission vocabulary.
+/// Reconciles `AdmissionOutcomeClass`, `OverloadDecisionReason`, and the external
+/// auth outcomes. Phase 0 found overload was split across two enums
+/// (`OverloadDecisionReason` 6-variant vs `OverloadShedReason` 11-variant); the
+/// fine-grained overload cause is carried separately by
+/// [`AdmissionOverloadCause`] so this stays low-cardinality.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AdmissionDecisionReason {
+    /// Authentication/authorization denied the request.
+    AuthDenied,
+    /// The auth service was unavailable (fail-closed).
+    AuthUnavailable,
+    /// Rate limiting rejected the request.
+    RateLimited,
+    /// Overload/admission control shed the request.
+    Overloaded,
+    /// Request validation rejected the request.
+    ValidationRejected,
+    /// A non-auth policy rejected the request.
+    PolicyRejected,
+}
+
+/// The fine-grained cause of an [`AdmissionDecisionReason::Overloaded`] decision,
+/// carried alongside it. This is the union of the two legacy overload enums so
+/// the shed cause is not lost when the coarse decision is recorded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AdmissionOverloadCause {
+    Brownout,
+    AdaptiveAdmission,
+    RouteCap,
+    RouteGlobalCap,
+    GlobalInflight,
+    UpstreamInflight,
+    BackendInflight,
+    CircuitOpen,
+    RequestBufferCap,
+    ResponsePrebufferCap,
+    ConnectionCap,
+}
+
+// ---------------------------------------------------------------------------
+// Stable string mapping layer (enum -> metric label / log value / control API)
+// ---------------------------------------------------------------------------
+//
+// Each canonical enum exposes exactly one `slug()`. The design decision for
+// Phase 1 is that a single stable slug serves all three surfaces — this is what
+// closes the Phase 0 gap where one concept had three names. Where a surface
+// historically used a different string, the migration comment records it.
+
+impl RequestOutcomeReason {
+    /// The canonical stable slug for metrics labels, log values, and control-API
+    /// strings.
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Cancelled => "cancelled",
+            Self::TimedOut => "timed_out",
+            Self::AuthDenied => "auth_denied",
+            Self::RateLimited => "rate_limited",
+            Self::Overloaded => "overloaded",
+            Self::ValidationRejected => "validation_rejected",
+            Self::BackendTransportFailed => "backend_transport_failed",
+            Self::BackendProtocolFailed => "backend_protocol_failed",
+            Self::BackendTlsFailed => "backend_tls_failed",
+            Self::BackendBridgeFailed => "backend_bridge_failed",
+        }
+    }
+
+    /// Whether this outcome is a success terminal.
+    pub fn is_success(self) -> bool {
+        matches!(self, Self::Completed)
+    }
+
+    /// The coarse `outcome` metric-label bucket, matching the existing
+    /// `route_outcome_label` values so migrating an emitter does not change the
+    /// low-cardinality `outcome` series. Note the *canonical* per-reason detail
+    /// lives in [`Self::slug`]; this is the legacy coarse bucket.
+    pub fn coarse_outcome_label(self) -> &'static str {
+        match self {
+            Self::Completed => "success",
+            Self::TimedOut => "timeout",
+            Self::Overloaded => "overload_shed",
+            Self::RateLimited => "rate_limited",
+            // Phase 0 finding #2: auth-denied and validation currently collapse to
+            // `failure`; the canonical `slug()` distinguishes them, a later phase
+            // decides whether to widen the coarse label.
+            Self::AuthDenied
+            | Self::ValidationRejected
+            | Self::Cancelled
+            | Self::BackendTransportFailed
+            | Self::BackendProtocolFailed
+            | Self::BackendTlsFailed
+            | Self::BackendBridgeFailed => "failure",
+        }
+    }
+}
+
+impl BackendHealthReason {
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::ActiveProbeSuccess => "active_probe_success",
+            Self::ActiveProbeFailure => "active_probe_failure",
+            Self::PassiveSuccess => "passive_success",
+            Self::PassiveFailure => "passive_failure",
+            Self::DnsRefreshFailed => "dns_refresh_failed",
+            Self::EmptyResolutionRetained => "empty_resolution_retained",
+            Self::PoolPoisoned => "pool_poisoned",
+        }
+    }
+
+    /// Whether this reason represents a health-affecting failure.
+    pub fn is_failure(self) -> bool {
+        matches!(
+            self,
+            Self::ActiveProbeFailure
+                | Self::PassiveFailure
+                | Self::DnsRefreshFailed
+                | Self::PoolPoisoned
+        )
+    }
+}
+
+impl RetryDecisionReason {
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::UpstreamTimeout => "upstream_timeout",
+            Self::UpstreamTransportFailure => "upstream_transport_failure",
+            Self::UpstreamProtocolFailure => "upstream_protocol_failure",
+            Self::RetryBudgetDenied => "retry_budget_denied",
+            Self::RetryPolicyDisabled => "retry_policy_disabled",
+            Self::IdempotencyDenied => "idempotency_denied",
+        }
+    }
+
+    /// Whether this reason authorized a retry (vs. denied one).
+    pub fn is_retry(self) -> bool {
+        matches!(
+            self,
+            Self::UpstreamTimeout
+                | Self::UpstreamTransportFailure
+                | Self::UpstreamProtocolFailure
+        )
+    }
+}
+
+impl HedgeDecisionReason {
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::DelayElapsed => "delay_elapsed",
+            Self::HedgingDisabled => "hedging_disabled",
+            Self::PrimaryCompleted => "primary_completed",
+            Self::RequestBodyNotReplayable => "request_body_not_replayable",
+            Self::TunnelRequest => "tunnel_request",
+            Self::MethodNotAllowed => "method_not_allowed",
+            Self::AlternateBackendUnavailable => "alternate_backend_unavailable",
+            Self::HedgeBudgetDenied => "hedge_budget_denied",
+        }
+    }
+
+    /// Whether this reason triggered a hedge (vs. denied one).
+    pub fn is_triggered(self) -> bool {
+        matches!(self, Self::DelayElapsed)
+    }
+}
+
+impl AdmissionDecisionReason {
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::AuthDenied => "auth_denied",
+            Self::AuthUnavailable => "auth_unavailable",
+            Self::RateLimited => "rate_limited",
+            Self::Overloaded => "overloaded",
+            Self::ValidationRejected => "validation_rejected",
+            Self::PolicyRejected => "policy_rejected",
+        }
+    }
+}
+
+impl AdmissionOverloadCause {
+    /// The canonical slug, matching the existing `OverloadShedReason` metric-label
+    /// values (Phase 0 §1.6) so migrating the overload emitter is a no-op on the
+    /// `reason=` label.
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Brownout => "brownout",
+            Self::AdaptiveAdmission => "adaptive_admission",
+            Self::RouteCap => "route_cap",
+            Self::RouteGlobalCap => "route_global_cap",
+            Self::GlobalInflight => "global_inflight",
+            Self::UpstreamInflight => "upstream_inflight",
+            Self::BackendInflight => "backend_inflight",
+            Self::CircuitOpen => "circuit_open",
+            Self::RequestBufferCap => "request_buffer_cap",
+            Self::ResponsePrebufferCap => "response_prebuffer_cap",
+            Self::ConnectionCap => "connection_cap",
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared event-context carrier + metric label model
+// ---------------------------------------------------------------------------
+
+/// The one canonical set of dimensions for an operational event, used to give
+/// structured logs of the same event class the same fields (Phase 0 findings
+/// #9/#10: `route`/`upstream`/`route_upstream` and `request_id=unassigned` were
+/// inconsistent across the forwarding and bootstrap planes).
+///
+/// The canonical field name for the upstream-name concept is **`upstream`**.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OperationalEventContext<'a> {
+    pub request_id: Option<u64>,
+    pub route: Option<&'a str>,
+    pub upstream: Option<&'a str>,
+    pub backend: Option<&'a str>,
+    pub decision_reason: Option<&'a str>,
+    pub failure_class: Option<&'a str>,
+}
+
+impl<'a> OperationalEventContext<'a> {
+    /// Start an empty context; fill fields with the builder methods.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_request_id(mut self, request_id: u64) -> Self {
+        self.request_id = Some(request_id);
+        self
+    }
+
+    pub fn with_upstream(mut self, upstream: &'a str) -> Self {
+        self.upstream = Some(upstream);
+        self
+    }
+
+    pub fn with_backend(mut self, backend: &'a str) -> Self {
+        self.backend = Some(backend);
+        self
+    }
+
+    pub fn with_reason(mut self, reason: &'a str) -> Self {
+        self.decision_reason = Some(reason);
+        self
+    }
+}
+
+impl fmt::Display for OperationalEventContext<'_> {
+    /// Render the canonical `key=value` field set, in a stable order, skipping
+    /// unset fields. This is the single log-field format for an operational event.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut first = true;
+        let mut field = |f: &mut fmt::Formatter<'_>, key: &str, value: &str| -> fmt::Result {
+            if !first {
+                f.write_str(" ")?;
+            }
+            first = false;
+            write!(f, "{key}={value}")
+        };
+        if let Some(request_id) = self.request_id {
+            field(f, "request_id", &request_id.to_string())?;
+        }
+        if let Some(route) = self.route {
+            field(f, "route", route)?;
+        }
+        if let Some(upstream) = self.upstream {
+            field(f, "upstream", upstream)?;
+        }
+        if let Some(backend) = self.backend {
+            field(f, "backend", backend)?;
+        }
+        if let Some(reason) = self.decision_reason {
+            field(f, "reason", reason)?;
+        }
+        if let Some(failure_class) = self.failure_class {
+            field(f, "failure_class", failure_class)?;
+        }
+        Ok(())
+    }
+}
+
+/// The one canonical metric reason-label model. Emitters that record a reasoned
+/// outcome populate this rather than assembling ad hoc label sets, so the label
+/// keys (`outcome`, `reason`, `failure_class`) are the same everywhere.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MetricReasonLabels<'a> {
+    pub outcome: Option<&'a str>,
+    pub reason: Option<&'a str>,
+    pub failure_class: Option<&'a str>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_slug_is_unique_within_each_family() {
+        fn assert_unique(slugs: &[&str], family: &str) {
+            let mut v = slugs.to_vec();
+            let before = v.len();
+            v.sort_unstable();
+            v.dedup();
+            assert_eq!(before, v.len(), "duplicate slug in {family}");
+        }
+        assert_unique(
+            &[
+                RequestOutcomeReason::Completed.slug(),
+                RequestOutcomeReason::Cancelled.slug(),
+                RequestOutcomeReason::TimedOut.slug(),
+                RequestOutcomeReason::AuthDenied.slug(),
+                RequestOutcomeReason::RateLimited.slug(),
+                RequestOutcomeReason::Overloaded.slug(),
+                RequestOutcomeReason::ValidationRejected.slug(),
+                RequestOutcomeReason::BackendTransportFailed.slug(),
+                RequestOutcomeReason::BackendProtocolFailed.slug(),
+                RequestOutcomeReason::BackendTlsFailed.slug(),
+                RequestOutcomeReason::BackendBridgeFailed.slug(),
+            ],
+            "RequestOutcomeReason",
+        );
+        assert_unique(
+            &[
+                AdmissionOverloadCause::Brownout.slug(),
+                AdmissionOverloadCause::AdaptiveAdmission.slug(),
+                AdmissionOverloadCause::RouteCap.slug(),
+                AdmissionOverloadCause::RouteGlobalCap.slug(),
+                AdmissionOverloadCause::GlobalInflight.slug(),
+                AdmissionOverloadCause::UpstreamInflight.slug(),
+                AdmissionOverloadCause::BackendInflight.slug(),
+                AdmissionOverloadCause::CircuitOpen.slug(),
+                AdmissionOverloadCause::RequestBufferCap.slug(),
+                AdmissionOverloadCause::ResponsePrebufferCap.slug(),
+                AdmissionOverloadCause::ConnectionCap.slug(),
+            ],
+            "AdmissionOverloadCause",
+        );
+    }
+
+    #[test]
+    fn overload_cause_slugs_match_legacy_metric_labels() {
+        // These must stay byte-identical to `OverloadShedReason` labels so a later
+        // migration of the overload emitter does not change the `reason=` series.
+        assert_eq!(AdmissionOverloadCause::GlobalInflight.slug(), "global_inflight");
+        assert_eq!(
+            AdmissionOverloadCause::ResponsePrebufferCap.slug(),
+            "response_prebuffer_cap"
+        );
+    }
+
+    #[test]
+    fn request_outcome_coarse_label_matches_legacy_buckets() {
+        assert_eq!(RequestOutcomeReason::Completed.coarse_outcome_label(), "success");
+        assert_eq!(RequestOutcomeReason::TimedOut.coarse_outcome_label(), "timeout");
+        assert_eq!(
+            RequestOutcomeReason::Overloaded.coarse_outcome_label(),
+            "overload_shed"
+        );
+        assert_eq!(
+            RequestOutcomeReason::AuthDenied.coarse_outcome_label(),
+            "failure"
+        );
+    }
+
+    #[test]
+    fn event_context_renders_canonical_fields_in_order() {
+        let ctx = OperationalEventContext::new()
+            .with_request_id(42)
+            .with_upstream("api")
+            .with_backend("10.0.0.1:8080")
+            .with_reason("timed_out");
+        assert_eq!(
+            ctx.to_string(),
+            "request_id=42 upstream=api backend=10.0.0.1:8080 reason=timed_out"
+        );
+    }
+
+    #[test]
+    fn empty_event_context_renders_nothing() {
+        assert_eq!(OperationalEventContext::new().to_string(), "");
+    }
+}
