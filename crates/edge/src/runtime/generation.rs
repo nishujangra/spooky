@@ -52,12 +52,15 @@ impl OwnedRuntimeState for StartupOwnedRuntimeState {
 /// Ownership class: [`OperationalOwnership::ProcessShared`]. These are the
 /// long-lived services the data plane reaches through the active generation.
 ///
-/// NOTE (Phase 3 finding, no behavior change): in the current implementation
-/// `build_shared_state` reconstructs a fresh `RuntimeSharedServices` on every
-/// reload rather than carrying one instance across generations. The ownership
-/// class documents the *intended* contract (one shared instance per process);
-/// reconciling the implementation with it is deferred to a later phase. Until
-/// then, treat these as rebuilt-per-generation in practice.
+/// Not every field is equally "shared": the config-derived services
+/// (`listener_tls_store`, `transport_pool`, `metrics`, `backend_lifecycle`,
+/// `backend_resolution_store`) legitimately track the active config and are
+/// rebuilt per generation on reload. The genuinely process-scoped services —
+/// [`Self::watchdog`] and [`Self::backend_dns_resolver`] — carry state that must
+/// survive a reload (an in-flight watchdog restart/drain; the DNS cache) and are
+/// therefore carried forward across generations by [`CarriedProcessSharedServices`]
+/// rather than reconstructed. See `build_shared_state` for how the reload path
+/// threads them through.
 #[derive(Clone)]
 pub struct RuntimeSharedServices {
     /// Listener TLS material store (swaps atomically under its own lock).
@@ -68,12 +71,38 @@ pub struct RuntimeSharedServices {
     pub backend_lifecycle: Arc<BackendLifecycleCoordinator>,
     /// Backend DNS resolution store.
     pub backend_resolution_store: Arc<RuntimeBackendResolutionStore>,
-    /// Shared DNS resolver handle.
+    /// Shared DNS resolver handle. Process-scoped: carried across reloads so the
+    /// DNS cache is not dropped on every generation swap.
     pub backend_dns_resolver: SharedDnsResolver,
     /// Metrics registry.
     pub metrics: Arc<Metrics>,
-    /// Watchdog coordinator (heartbeat/restart signaling).
+    /// Watchdog coordinator (heartbeat/restart signaling). Process-scoped: carried
+    /// across reloads so an in-flight restart/drain is not silently reset.
     pub watchdog: Arc<WatchdogCoordinator>,
+}
+
+/// The genuinely process-scoped services carried forward from the active
+/// generation into a reloaded one, so their runtime state survives the swap.
+///
+/// Constructed from the current generation's [`RuntimeSharedServices`] and passed
+/// to `build_shared_state` on reload. On startup there is nothing to carry, so the
+/// builder creates fresh instances.
+#[derive(Clone)]
+pub struct CarriedProcessSharedServices {
+    /// The live watchdog coordinator, preserving any in-flight restart/drain state.
+    pub watchdog: Arc<WatchdogCoordinator>,
+    /// The live DNS resolver, preserving its cache across the reload.
+    pub backend_dns_resolver: SharedDnsResolver,
+}
+
+impl CarriedProcessSharedServices {
+    /// Capture the process-scoped services from the currently active shared state.
+    pub fn from_active(shared: &RuntimeSharedServices) -> Self {
+        Self {
+            watchdog: Arc::clone(&shared.watchdog),
+            backend_dns_resolver: shared.backend_dns_resolver.clone(),
+        }
+    }
 }
 
 impl OwnedRuntimeState for RuntimeSharedServices {

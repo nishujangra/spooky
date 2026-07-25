@@ -10,9 +10,7 @@ use socket2::{Domain, Protocol, Socket, Type};
 use spooky_config::runtime::{ListenerRuntimeConfig, RuntimeBackendAddressKind, RuntimeConfig};
 use spooky_errors::ProxyError;
 use spooky_lb::upstream_pool::UpstreamPool;
-use spooky_transport::{
-    ConnectObservation, ConnectObserver, SharedDnsResolver, UpstreamTransportPool,
-};
+use spooky_transport::{ConnectObservation, ConnectObserver, UpstreamTransportPool};
 use tokio::sync::Semaphore;
 
 use crate::{
@@ -109,6 +107,20 @@ impl QUICListener {
     }
 
     pub fn build_shared_state(config: &RuntimeConfig) -> Result<SharedRuntimeState, ProxyError> {
+        Self::build_shared_state_with_carried(config, None)
+    }
+
+    /// Build the shared runtime state for a generation.
+    ///
+    /// On startup, `carried` is `None` and every service is constructed fresh. On
+    /// reload, `carried` supplies the process-scoped services (watchdog, DNS
+    /// resolver) from the active generation so their runtime state — an in-flight
+    /// watchdog restart/drain, the DNS cache — survives the generation swap rather
+    /// than being silently reset. All other, config-derived services are rebuilt.
+    pub fn build_shared_state_with_carried(
+        config: &RuntimeConfig,
+        carried: Option<crate::runtime::generation::CarriedProcessSharedServices>,
+    ) -> Result<SharedRuntimeState, ProxyError> {
         let transport_policy = &config.policies.transport;
         let timeout_policy = &config.policies.timeouts;
         let worker_threads = transport_policy.worker_threads.max(1);
@@ -245,7 +257,12 @@ impl QUICListener {
         route_labels.push("unrouted".to_string());
         let routing_index = Arc::new(RouteIndex::from_runtime_upstreams(&config.upstreams));
         let metrics = Arc::new(crate::Metrics::new(worker_slots, route_labels));
-        let backend_dns_resolver = SharedDnsResolver::new();
+        // Process-scoped: reuse the active generation's DNS resolver on reload so
+        // its cache is preserved; only startup creates a fresh one.
+        let backend_dns_resolver = carried
+            .as_ref()
+            .map(|carried| carried.backend_dns_resolver.clone())
+            .unwrap_or_default();
         let backend_resolution_store =
             Arc::new(RuntimeBackendResolutionStore::new(backend_resolutions));
         let backend_lifecycle = Arc::new(BackendLifecycleCoordinator::new(Arc::clone(
@@ -322,9 +339,14 @@ impl QUICListener {
             &effective_admission,
             &config.policies.rate_limits,
         ));
-        let watchdog = Arc::new(WatchdogCoordinator::from_runtime_config(
-            &WatchdogRuntimeConfig::from(&config.policies.admission.watchdog),
-        ));
+        // Process-scoped: reuse the active generation's watchdog on reload so an
+        // in-flight restart/drain is not silently reset; only startup creates one.
+        let watchdog = match &carried {
+            Some(carried) => Arc::clone(&carried.watchdog),
+            None => Arc::new(WatchdogCoordinator::from_runtime_config(
+                &WatchdogRuntimeConfig::from(&config.policies.admission.watchdog),
+            )),
+        };
         for (listener_label, inventory) in listener_tls_store.snapshot() {
             Self::update_listener_tls_expiry_metrics(&metrics, &listener_label, &inventory);
         }

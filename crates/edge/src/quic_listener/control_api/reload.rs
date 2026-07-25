@@ -216,9 +216,16 @@ impl QUICListener {
             .map_err(|err| format!("Configuration validation failed: {err}"))?;
         let runtime_config = RuntimeConfig::from_config(&config)
             .map_err(|err| format!("Runtime configuration normalization failed: {err}"))?;
-        let next_shared_state = QUICListener::build_shared_state(&runtime_config)
-            .map(Arc::new)
-            .map_err(|err| err.to_string())?;
+        // Carry the process-scoped services (watchdog, DNS resolver) forward from
+        // the active generation so their runtime state survives the swap; all other
+        // config-derived services are rebuilt from the new config.
+        let carried = crate::runtime::generation::CarriedProcessSharedServices::from_active(
+            current.shared_services(),
+        );
+        let next_shared_state =
+            QUICListener::build_shared_state_with_carried(&runtime_config, Some(carried))
+                .map(Arc::new)
+                .map_err(|err| err.to_string())?;
         let current_log_level = current.startup().log_config.level.clone();
         let next_log_level = config.log.level.clone();
 

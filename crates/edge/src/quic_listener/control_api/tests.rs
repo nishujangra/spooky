@@ -293,6 +293,64 @@ fn control_api_state_sees_the_active_runtime_generation_after_bundle_replace() {
 }
 
 #[test]
+fn reload_preserves_process_scoped_watchdog_and_dns_resolver() {
+    // Regression: process-shared services must be carried across a reload, not
+    // rebuilt. Rebuilding the watchdog silently discards an in-flight
+    // restart/drain; rebuilding the DNS resolver drops its cache.
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let mut config = test_config(cert, key);
+    // Enable the watchdog so request_restart takes effect.
+    config.resilience.watchdog.enabled = true;
+    let runtime_config = RuntimeConfig::from_config(&config).expect("runtime config");
+
+    let current = QUICListener::build_shared_state(&runtime_config).expect("current shared state");
+
+    // Simulate an in-flight watchdog restart on the active generation.
+    assert!(
+        current.shared_services().watchdog.request_restart("test"),
+        "watchdog restart should be accepted when enabled"
+    );
+    assert!(current.shared_services().watchdog.restart_requested());
+
+    // Reload: carry the process-scoped services forward.
+    let carried = crate::runtime::generation::CarriedProcessSharedServices::from_active(
+        current.shared_services(),
+    );
+    let next = QUICListener::build_shared_state_with_carried(&runtime_config, Some(carried))
+        .expect("reloaded shared state");
+
+    // Same watchdog instance, and its in-flight restart survived the swap.
+    assert!(
+        Arc::ptr_eq(
+            &current.shared_services().watchdog,
+            &next.shared_services().watchdog
+        ),
+        "watchdog must be the same instance across a reload"
+    );
+    assert!(
+        next.shared_services().watchdog.restart_requested(),
+        "in-flight watchdog restart must survive a reload"
+    );
+
+    // The carried services expose the same DNS resolver handle, so its cache is
+    // preserved rather than rebuilt cold on every reload.
+    let carried_again = crate::runtime::generation::CarriedProcessSharedServices::from_active(
+        current.shared_services(),
+    );
+    let seeded = carried_again
+        .backend_dns_resolver
+        .cached_addrs("never-resolved.example");
+    assert_eq!(
+        seeded,
+        next.shared_services()
+            .backend_dns_resolver
+            .cached_addrs("never-resolved.example"),
+        "carried DNS resolver must be the same cache view as the reloaded generation"
+    );
+}
+
+#[test]
 fn live_reloadable_upstream_change_is_accepted() {
     // Phase 9 (#1): a generation-owned change (upstream/route table) must pass
     // reload compatibility — it is live-reloadable, not restart-required.
