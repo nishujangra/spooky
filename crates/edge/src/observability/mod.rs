@@ -490,6 +490,22 @@ impl From<RetryPolicyDenialReason> for RetryDecisionReason {
     }
 }
 
+/// Admission outcome class → canonical admission decision reason (obs Phase 7).
+/// The single vocabulary both forwarding and bootstrap resolve admission denials
+/// through. `Failed { timed_out }` is a richer subtype: a timeout maps to the
+/// generic policy rejection here (the timeout axis is carried elsewhere).
+impl From<crate::runtime::connection::outcome::AdmissionOutcomeClass> for AdmissionDecisionReason {
+    fn from(outcome: crate::runtime::connection::outcome::AdmissionOutcomeClass) -> Self {
+        use crate::runtime::connection::outcome::AdmissionOutcomeClass as A;
+        match outcome {
+            A::AuthDenied => Self::AuthDenied,
+            A::RateLimited => Self::RateLimited,
+            A::OverloadShed { .. } => Self::Overloaded,
+            A::Failed { .. } => Self::PolicyRejected,
+        }
+    }
+}
+
 /// Hedge denial → canonical hedge decision reason. Alias / richer subtype.
 impl From<HedgePolicyDenialReason> for HedgeDecisionReason {
     fn from(reason: HedgePolicyDenialReason) -> Self {
@@ -693,6 +709,41 @@ mod tests {
             RequestOutcomeReason::from(BackendFailureReason::DispatchSpawnFailed),
             RequestOutcomeReason::BackendTransportFailed
         );
+    }
+
+    #[test]
+    fn admission_outcome_maps_to_canonical_decision_reason() {
+        use crate::metrics::OverloadShedReason;
+        use crate::runtime::connection::outcome::AdmissionOutcomeClass;
+        assert_eq!(
+            AdmissionDecisionReason::from(AdmissionOutcomeClass::AuthDenied),
+            AdmissionDecisionReason::AuthDenied
+        );
+        assert_eq!(
+            AdmissionDecisionReason::from(AdmissionOutcomeClass::RateLimited),
+            AdmissionDecisionReason::RateLimited
+        );
+        assert_eq!(
+            AdmissionDecisionReason::from(AdmissionOutcomeClass::OverloadShed {
+                reason: Some(OverloadShedReason::GlobalInflight)
+            }),
+            AdmissionDecisionReason::Overloaded
+        );
+        assert_eq!(
+            AdmissionDecisionReason::from(AdmissionOutcomeClass::Failed { timed_out: true }),
+            AdmissionDecisionReason::PolicyRejected
+        );
+    }
+
+    #[test]
+    fn admission_log_reason_literals_match_canonical_slugs() {
+        // obs Phase 7: the `reason=` values emitted by the forwarding/bootstrap
+        // admission logs are the canonical AdmissionDecisionReason slugs. This
+        // guards those hand-written literals against enum drift.
+        assert_eq!(AdmissionDecisionReason::AuthDenied.slug(), "auth_denied");
+        assert_eq!(AdmissionDecisionReason::AuthUnavailable.slug(), "auth_unavailable");
+        assert_eq!(AdmissionDecisionReason::RateLimited.slug(), "rate_limited");
+        assert_eq!(AdmissionDecisionReason::Overloaded.slug(), "overloaded");
     }
 
     #[test]
