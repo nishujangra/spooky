@@ -17,6 +17,110 @@
 //!
 //! A reader should be able to understand the intended reason vocabularies and
 //! field names from this one module without reading any emitter.
+//!
+//! # Operational observability schema reference (obs plan, Phase 9)
+//!
+//! This is the stable source of truth for dashboard/alert consumers. For each
+//! canonical reason family: the enum value, its `slug()` (which is the metric
+//! label value, the structured-log `reason=` value, and the control-API string —
+//! one string per concept across all three surfaces).
+//!
+//! ## Request outcome — [`RequestOutcomeReason`]
+//!
+//! | enum value | slug (metric / log / control-API) | coarse `outcome` label |
+//! |---|---|---|
+//! | `Completed` | `completed` | `success` |
+//! | `Cancelled` | `cancelled` | `failure` |
+//! | `TimedOut` | `timed_out` | `timeout` |
+//! | `AuthDenied` | `auth_denied` | `failure` |
+//! | `RateLimited` | `rate_limited` | `rate_limited` |
+//! | `Overloaded` | `overloaded` | `overload_shed` |
+//! | `ValidationRejected` | `validation_rejected` | `failure` |
+//! | `BackendTransportFailed` | `backend_transport_failed` | `failure` |
+//! | `BackendProtocolFailed` | `backend_protocol_failed` | `failure` |
+//! | `BackendTlsFailed` | `backend_tls_failed` | `failure` |
+//! | `BackendBridgeFailed` | `backend_bridge_failed` | `failure` |
+//!
+//! ## Backend health — [`BackendHealthReason`]
+//!
+//! | enum value | slug | failure? |
+//! |---|---|---|
+//! | `ActiveProbeSuccess` | `active_probe_success` | no |
+//! | `ActiveProbeFailure` | `active_probe_failure` | yes |
+//! | `PassiveSuccess` | `passive_success` | no |
+//! | `PassiveFailure` | `passive_failure` | yes |
+//! | `DnsRefreshFailed` | `dns_refresh_failed` | yes |
+//! | `EmptyResolutionRetained` | `empty_resolution_retained` | no |
+//! | `PoolPoisoned` | `pool_poisoned` | yes |
+//!
+//! Health-failure *class* (distinct axis, control-API `health_reason` +
+//! `spooky_health_failures_total{reason}`): `5xx`, `timeout`, `transport`,
+//! `tls`, `circuit_open`. Refresh *classification* (distinct axis): `refreshed`,
+//! `unchanged`, `rejected_empty_answer`, `failed_active_preserved`.
+//!
+//! ## Retry — [`RetryDecisionReason`]
+//!
+//! | enum value | slug | retry? |
+//! |---|---|---|
+//! | `UpstreamTimeout` | `upstream_timeout` | yes |
+//! | `UpstreamTransportFailure` | `upstream_transport_failure` | yes |
+//! | `UpstreamProtocolFailure` | `upstream_protocol_failure` | yes |
+//! | `RetryBudgetDenied` | `retry_budget_denied` | no |
+//! | `RetryPolicyDisabled` | `retry_policy_disabled` | no |
+//! | `IdempotencyDenied` | `idempotency_denied` | no |
+//!
+//! ## Hedge — [`HedgeDecisionReason`]
+//!
+//! | enum value | slug | triggered? |
+//! |---|---|---|
+//! | `DelayElapsed` | `delay_elapsed` | yes |
+//! | `HedgingDisabled` | `hedging_disabled` | no |
+//! | `PrimaryCompleted` | `primary_completed` | no |
+//! | `RequestBodyNotReplayable` | `request_body_not_replayable` | no |
+//! | `TunnelRequest` | `tunnel_request` | no |
+//! | `MethodNotAllowed` | `method_not_allowed` | no |
+//! | `AlternateBackendUnavailable` | `alternate_backend_unavailable` | no |
+//! | `HedgeBudgetDenied` | `hedge_budget_denied` | no |
+//!
+//! ## Admission / auth — [`AdmissionDecisionReason`]
+//!
+//! | enum value | slug |
+//! |---|---|
+//! | `AuthDenied` | `auth_denied` |
+//! | `AuthUnavailable` | `auth_unavailable` |
+//! | `RateLimited` | `rate_limited` |
+//! | `Overloaded` | `overloaded` (cause axis: [`AdmissionOverloadCause`]) |
+//! | `ValidationRejected` | `validation_rejected` |
+//! | `PolicyRejected` | `policy_rejected` |
+//!
+//! Overload cause ([`AdmissionOverloadCause`], the `spooky_overload_shed_by_reason_total{reason}`
+//! label): `brownout`, `adaptive_admission`, `route_cap`, `route_global_cap`,
+//! `global_inflight`, `upstream_inflight`, `backend_inflight`, `circuit_open`,
+//! `request_buffer_cap`, `response_prebuffer_cap`, `connection_cap`.
+//!
+//! ## Required dimensions per event class
+//!
+//! Emitted via [`OperationalEventContext`] (canonical field names). `request_id`
+//! is omitted (not `unassigned`) when no id exists yet.
+//!
+//! - **request / forwarding**: `request_id`, `upstream`, `backend`, `reason`,
+//!   `failure_class`, status
+//! - **backend lifecycle**: `backend`, `health_reason` (or refresh classification)
+//! - **retry / hedge**: `request_id`, `upstream`, `backend`, `decision`, `reason`
+//! - **admission / auth**: `request_id` (when known), `upstream`, `reason`
+//!
+//! ## Deprecated names / migration notes
+//!
+//! Superseded by the canonical field names above; dashboards keying on the old
+//! strings must migrate:
+//! - log field `route=` and `route_upstream=` → **`upstream=`**.
+//! - literal `request_id=unassigned` → field **omitted** when no id exists.
+//! - `Bootstrap request route=…` / `Bootstrap upstream error …` prose → the
+//!   canonical `admission denied: …` / `upstream failure: …` schemas.
+//! - `Backend <addr> became healthy/unhealthy` → `backend health transition:
+//!   backend=<addr> health_reason=…`.
+//! - Metric series names (`spooky_*`) are unchanged; only label *values* are now
+//!   canonical enum slugs.
 
 use std::fmt;
 
