@@ -490,6 +490,51 @@ impl From<RetryPolicyDenialReason> for RetryDecisionReason {
     }
 }
 
+/// Backend health observation (source + outcome) → canonical backend health
+/// reason (obs Phase 8). This is the health axis: active vs passive probe,
+/// success vs failure. `Neutral` observations are not a health *reason* (they
+/// neither confirm nor fault the backend), so they return `None`.
+pub fn backend_health_reason(
+    source: crate::runtime::backend::event::BackendHealthObservationSource,
+    outcome: crate::runtime::backend::event::BackendHealthObservationOutcome,
+) -> Option<BackendHealthReason> {
+    use crate::runtime::backend::event::{
+        BackendHealthObservationOutcome as O, BackendHealthObservationSource as S,
+    };
+    match (source, outcome) {
+        (S::ActiveCheck, O::Success) => Some(BackendHealthReason::ActiveProbeSuccess),
+        (S::ActiveCheck, O::Failure) => Some(BackendHealthReason::ActiveProbeFailure),
+        (S::PassiveRequest | S::RequestCompletion, O::Success) => {
+            Some(BackendHealthReason::PassiveSuccess)
+        }
+        (S::PassiveRequest | S::RequestCompletion, O::Failure) => {
+            Some(BackendHealthReason::PassiveFailure)
+        }
+        // Control-plane driven observations are administrative, not probe health;
+        // and any Neutral outcome carries no health reason.
+        (S::ControlPlane, _) | (_, O::Neutral) => None,
+    }
+}
+
+/// Backend DNS-refresh classification → canonical backend health reason
+/// (obs Phase 8). This is the *resolution/refresh* axis, kept distinct from the
+/// probe-health axis above (Phase 8 step 4). Only the failure classifications
+/// carry a health reason; a successful/unchanged refresh does not.
+impl From<crate::runtime::backend::lifecycle::BackendRefreshClassification>
+    for Option<BackendHealthReason>
+{
+    fn from(
+        classification: crate::runtime::backend::lifecycle::BackendRefreshClassification,
+    ) -> Self {
+        use crate::runtime::backend::lifecycle::BackendRefreshClassification as C;
+        match classification {
+            C::Rejected => Some(BackendHealthReason::EmptyResolutionRetained),
+            C::FailedActivePreserved => Some(BackendHealthReason::DnsRefreshFailed),
+            C::Refreshed | C::Unchanged => None,
+        }
+    }
+}
+
 /// Admission outcome class → canonical admission decision reason (obs Phase 7).
 /// The single vocabulary both forwarding and bootstrap resolve admission denials
 /// through. `Failed { timed_out }` is a richer subtype: a timeout maps to the
@@ -709,6 +754,52 @@ mod tests {
             RequestOutcomeReason::from(BackendFailureReason::DispatchSpawnFailed),
             RequestOutcomeReason::BackendTransportFailed
         );
+    }
+
+    #[test]
+    fn backend_health_observation_maps_to_canonical_health_reason() {
+        use crate::runtime::backend::event::{
+            BackendHealthObservationOutcome as O, BackendHealthObservationSource as S,
+        };
+        assert_eq!(
+            backend_health_reason(S::ActiveCheck, O::Success),
+            Some(BackendHealthReason::ActiveProbeSuccess)
+        );
+        assert_eq!(
+            backend_health_reason(S::ActiveCheck, O::Failure),
+            Some(BackendHealthReason::ActiveProbeFailure)
+        );
+        assert_eq!(
+            backend_health_reason(S::PassiveRequest, O::Failure),
+            Some(BackendHealthReason::PassiveFailure)
+        );
+        assert_eq!(
+            backend_health_reason(S::RequestCompletion, O::Success),
+            Some(BackendHealthReason::PassiveSuccess)
+        );
+        // Neutral and control-plane observations carry no health reason.
+        assert_eq!(backend_health_reason(S::ActiveCheck, O::Neutral), None);
+        assert_eq!(backend_health_reason(S::ControlPlane, O::Success), None);
+    }
+
+    #[test]
+    fn refresh_classification_maps_only_failures_to_health_reason() {
+        use crate::runtime::backend::lifecycle::BackendRefreshClassification as C;
+        // Refresh axis is distinct from probe-health axis: only failures map.
+        assert_eq!(
+            Option::<BackendHealthReason>::from(C::FailedActivePreserved),
+            Some(BackendHealthReason::DnsRefreshFailed)
+        );
+        assert_eq!(
+            Option::<BackendHealthReason>::from(C::Rejected),
+            Some(BackendHealthReason::EmptyResolutionRetained)
+        );
+        assert_eq!(Option::<BackendHealthReason>::from(C::Refreshed), None);
+        assert_eq!(Option::<BackendHealthReason>::from(C::Unchanged), None);
+        // The failure health-reasons are themselves classified as failures.
+        assert!(BackendHealthReason::DnsRefreshFailed.is_failure());
+        assert!(BackendHealthReason::PassiveFailure.is_failure());
+        assert!(!BackendHealthReason::ActiveProbeSuccess.is_failure());
     }
 
     #[test]
