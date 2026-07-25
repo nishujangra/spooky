@@ -131,7 +131,7 @@ pub(in crate::quic_listener) fn observe_bootstrap_dispatch_failure(
         );
     } else {
         log::warn!(
-            "Bootstrap upstream error route={} backend={}: {}",
+            "upstream failure: upstream={} backend={} failure_class=unclassified detail={}",
             prepared_route.upstream_name,
             prepared_route.backend_addr,
             proxy_err

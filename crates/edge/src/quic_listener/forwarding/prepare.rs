@@ -471,12 +471,12 @@ impl QUICListener {
                             AdmissionOutcomeClass::AuthDenied,
                         );
                         warn!(
-                            "request_id=unassigned route={} denied by local auth policy",
+                            "admission denied: upstream={} reason=auth_denied",
                             upstream_name
                         );
                         let Some(response) = rejection_response.as_ref() else {
                             warn!(
-                                "request_id=unassigned route={} missing admission rejection response for unauthorized decision",
+                                "admission rejection response missing: upstream={} reason=auth_denied",
                                 upstream_name
                             );
                             Self::send_simple_response(
@@ -511,12 +511,12 @@ impl QUICListener {
                             AdmissionOutcomeClass::RateLimited,
                         );
                         warn!(
-                            "request_id=unassigned route={} scoped rate limit exceeded by rule={}",
+                            "admission denied: upstream={} reason=rate_limited rule={}",
                             decision.route, decision.rule_name
                         );
                         let Some(response) = rejection_response.as_ref() else {
                             warn!(
-                                "request_id=unassigned route={} missing admission rejection response for rate-limited decision",
+                                "admission rejection response missing: upstream={} reason=rate_limited",
                                 upstream_name
                             );
                             Self::send_simple_response(
@@ -553,7 +553,7 @@ impl QUICListener {
                         );
                         let Some(response) = rejection_response.as_ref() else {
                             warn!(
-                                "request_id=unassigned route={} missing admission rejection response for overload decision",
+                                "admission rejection response missing: upstream={} reason=overloaded",
                                 upstream_name
                             );
                             Self::send_simple_response(
@@ -708,13 +708,13 @@ impl QUICListener {
                                 metrics.inc_external_auth_error();
                                 if timed_out {
                                     warn!(
-                                        "request_id={} route={} external auth startup failed open: timeout",
+                                        "external auth failed open: request_id={} upstream={} reason=auth_timeout",
                                         request.request.request_id(),
                                         request.request.upstream_name()
                                     );
                                 } else if let Some(error) = error {
                                     warn!(
-                                        "request_id={} route={} external auth startup failed open: {:?}",
+                                        "external auth failed open: request_id={} upstream={} reason=auth_unavailable detail={:?}",
                                         request.request.request_id(),
                                         request.request.upstream_name(),
                                         error
@@ -745,14 +745,14 @@ impl QUICListener {
                                 );
                                 if let Some(error) = error {
                                     error!(
-                                        "request_id={} route={} external auth startup failed: {:?}",
+                                        "admission denied: request_id={} upstream={} reason=auth_unavailable detail={:?}",
                                         request.request.request_id(),
                                         request.request.upstream_name(),
                                         error
                                     );
                                 } else {
                                     error!(
-                                        "request_id={} route={} external auth startup failed",
+                                        "admission denied: request_id={} upstream={} reason=auth_unavailable",
                                         request.request.request_id(),
                                         request.request.upstream_name()
                                     );

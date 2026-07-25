@@ -796,12 +796,14 @@ pub(crate) fn log_backend_health_transition_result(
 }
 
 pub(crate) fn log_backend_health_transition(addr: &str, transition: &HealthTransition) {
+    // Phase 3: canonical `backend=` field + `health_reason=` slug so backend
+    // health transitions carry the same dimension names as other backend events.
     match transition {
         HealthTransition::BecameHealthy => {
-            info!("Backend {} became healthy", addr);
+            info!("backend health transition: backend={addr} health_reason=became_healthy");
         }
         HealthTransition::BecameUnhealthy => {
-            error!("Backend {} became unhealthy", addr);
+            error!("backend health transition: backend={addr} health_reason=became_unhealthy");
         }
     }
 }

@@ -386,12 +386,12 @@ pub(in crate::quic_listener) fn evaluate_bootstrap_request_policy(
                 AdmissionOutcomeClass::AuthDenied,
             );
             warn!(
-                "Bootstrap request route={} denied by auth policy",
+                "admission denied: upstream={} reason=auth_denied",
                 resolved.upstream_name
             );
             let Some(response) = rejection_response.as_ref() else {
                 warn!(
-                    "Bootstrap request route={} missing admission rejection response for unauthorized decision",
+                    "admission rejection response missing: upstream={} reason=auth_denied",
                     resolved.upstream_name
                 );
                 return Err(BootstrapTerminalResponse::new(
@@ -402,7 +402,7 @@ pub(in crate::quic_listener) fn evaluate_bootstrap_request_policy(
             };
             let Some(challenge) = response.www_authenticate else {
                 warn!(
-                    "Bootstrap request route={} missing auth challenge in admission rejection response",
+                    "admission rejection response missing: upstream={} reason=auth_denied detail=missing_auth_challenge",
                     resolved.upstream_name
                 );
                 return Err(BootstrapTerminalResponse::new(
@@ -434,12 +434,12 @@ pub(in crate::quic_listener) fn evaluate_bootstrap_request_policy(
                 AdmissionOutcomeClass::RateLimited,
             );
             warn!(
-                "Bootstrap request route={} scoped rate limit exceeded by rule={}",
+                "admission denied: upstream={} reason=rate_limited rule={}",
                 decision.route, decision.rule_name
             );
             let Some(response) = rejection_response.as_ref() else {
                 warn!(
-                    "Bootstrap request route={} missing admission rejection response for rate-limited decision",
+                    "admission rejection response missing: upstream={} reason=rate_limited",
                     resolved.upstream_name
                 );
                 return Err(BootstrapTerminalResponse::new(
@@ -450,7 +450,7 @@ pub(in crate::quic_listener) fn evaluate_bootstrap_request_policy(
             };
             let Some(retry_after_seconds) = response.retry_after_seconds else {
                 warn!(
-                    "Bootstrap request route={} missing retry-after in rate-limited admission rejection response",
+                    "admission rejection response missing: upstream={} reason=rate_limited detail=missing_retry_after",
                     resolved.upstream_name
                 );
                 return Err(BootstrapTerminalResponse::new(
@@ -490,7 +490,7 @@ pub(in crate::quic_listener) fn evaluate_bootstrap_request_policy(
                 .observe(input.request_ctx.request_start.elapsed(), true);
             let Some(response) = rejection_response.as_ref() else {
                 warn!(
-                    "Bootstrap request route={} missing admission rejection response for overload decision",
+                    "admission rejection response missing: upstream={} reason=overloaded",
                     resolved.upstream_name
                 );
                 return Err(BootstrapTerminalResponse::new(
@@ -501,7 +501,7 @@ pub(in crate::quic_listener) fn evaluate_bootstrap_request_policy(
             };
             let Some(retry_after_seconds) = response.retry_after_seconds else {
                 warn!(
-                    "Bootstrap request route={} missing retry-after in overload admission rejection response",
+                    "admission rejection response missing: upstream={} reason=overloaded detail=missing_retry_after",
                     resolved.upstream_name
                 );
                 return Err(BootstrapTerminalResponse::new(
