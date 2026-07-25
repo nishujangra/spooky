@@ -9,6 +9,22 @@ use crate::runtime::backend::state::{
     BackendHealthState, BackendLifecycleInventorySnapshot, BackendMembershipState,
     BackendPoolPlacementSnapshot,
 };
+use spooky_lb::health::HealthFailureReason;
+
+/// Map a backend health-failure reason to the canonical control-plane token.
+///
+/// These are the same tokens as the `spooky_health_failures_total{reason=…}`
+/// metric label (obs Phase 4), so control-plane JSON and metrics name the failure
+/// the same way.
+fn health_failure_reason_label(reason: HealthFailureReason) -> &'static str {
+    match reason {
+        HealthFailureReason::HttpStatus5xx => "5xx",
+        HealthFailureReason::Timeout => "timeout",
+        HealthFailureReason::Transport => "transport",
+        HealthFailureReason::Tls => "tls",
+        HealthFailureReason::CircuitOpen => "circuit_open",
+    }
+}
 
 #[derive(Serialize)]
 struct ControlApiHealthPayload {
@@ -78,6 +94,12 @@ struct ControlApiBackendInventoryPayload {
 struct ControlApiBackendLifecyclePayload {
     backend: String,
     health: &'static str,
+    /// Canonical health-failure reason when the backend is unhealthy and a
+    /// reason is known. Uses the same tokens as `spooky_health_failures_total`'s
+    /// `reason=` label (obs Phase 4), so operators do not translate between the
+    /// control-plane JSON and the metric. Omitted when healthy / reason unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    health_reason: Option<&'static str>,
     membership: &'static str,
     authority_host: String,
     authority_port: u16,
@@ -298,6 +320,12 @@ impl ControlApiBackendInventoryPayload {
                         BackendHealthState::Healthy => "healthy",
                         BackendHealthState::Unhealthy { .. } => "unhealthy",
                     },
+                    health_reason: match backend.health {
+                        BackendHealthState::Unhealthy { reason: Some(reason) } => {
+                            Some(health_failure_reason_label(reason))
+                        }
+                        _ => None,
+                    },
                     membership: match backend.membership {
                         BackendMembershipState::Active => "active",
                         BackendMembershipState::Suppressed => "suppressed",
@@ -340,5 +368,61 @@ impl ControlApiBackendPlacementPayload {
             ewma_latency_ms: snapshot.ewma_latency_ms,
             membership_epoch: snapshot.membership_epoch,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn health_reason_labels_match_metric_reason_tokens() {
+        // obs Phase 4: control-plane `health_reason` must use the same tokens as
+        // the `spooky_health_failures_total{reason=…}` metric label so operators
+        // don't translate between surfaces.
+        assert_eq!(
+            health_failure_reason_label(HealthFailureReason::HttpStatus5xx),
+            "5xx"
+        );
+        assert_eq!(
+            health_failure_reason_label(HealthFailureReason::Timeout),
+            "timeout"
+        );
+        assert_eq!(
+            health_failure_reason_label(HealthFailureReason::Transport),
+            "transport"
+        );
+        assert_eq!(health_failure_reason_label(HealthFailureReason::Tls), "tls");
+        assert_eq!(
+            health_failure_reason_label(HealthFailureReason::CircuitOpen),
+            "circuit_open"
+        );
+    }
+
+    #[test]
+    fn backend_payload_serializes_health_reason_when_present() {
+        // The field appears only when unhealthy with a known reason, and is
+        // omitted otherwise (skip_serializing_if).
+        let with_reason = ControlApiBackendLifecyclePayload {
+            backend: "b".to_string(),
+            health: "unhealthy",
+            health_reason: Some("timeout"),
+            membership: "active",
+            authority_host: "h".to_string(),
+            authority_port: 443,
+            resolved_addrs: vec![],
+            resolution_generation: 0,
+            last_refresh_success_at_unix_seconds: None,
+            placements: vec![],
+        };
+        let json = serde_json::to_string(&with_reason).expect("serialize");
+        assert!(json.contains("\"health_reason\":\"timeout\""));
+
+        let without = ControlApiBackendLifecyclePayload {
+            health_reason: None,
+            ..with_reason
+        };
+        let json = serde_json::to_string(&without).expect("serialize");
+        assert!(!json.contains("health_reason"));
     }
 }
