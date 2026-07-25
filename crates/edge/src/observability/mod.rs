@@ -1,22 +1,18 @@
-//! Canonical observability vocabulary (obs plan, Phase 1).
+//! Canonical observability vocabulary.
 //!
 //! This module is the **single, handler-free schema** for the operational reason
-//! vocabularies frozen in Phase 0 (`obs-phase0.md`). Phase 0 found the same
-//! concept named differently across metrics, logs, and control-plane JSON — and
-//! two parallel terminal vocabularies (the QUIC data path vs. bootstrap) with no
-//! shared slug. This module defines the canonical enums *once*, along with a
-//! single mapping layer that produces the stable string each surface should use.
+//! vocabularies. It defines each canonical enum *once*, with one `slug()` per
+//! concept that is the stable string used across all three observability
+//! surfaces — metric label value, structured-log `reason=` value, and
+//! control-API serialized value. The `From` mappings below tie every local
+//! reason enum (QUIC data path, bootstrap, retry/hedge, admission, backend
+//! health) to this canonical vocabulary, so one operational concept is described
+//! one way everywhere.
 //!
-//! # Phase 1 scope
-//!
-//! This layer introduces **no behavioral change**. Existing emitters keep their
-//! current strings; new code is expected to route through these types, and later
-//! phases migrate the old emitters onto them. The mapping methods here are the
-//! intended canonical strings — where they intentionally differ from a legacy
-//! string, that is called out in a doc comment so the migration is explicit.
-//!
-//! A reader should be able to understand the intended reason vocabularies and
-//! field names from this one module without reading any emitter.
+//! This is the source of truth for dashboard and alert consumers: a reader can
+//! understand the reason vocabularies and canonical field names from this one
+//! module without reading any emitter, and the mapping tests guarantee emitters
+//! cannot drift from it.
 //!
 //! # Operational observability schema reference (obs plan, Phase 9)
 //!
@@ -262,10 +258,9 @@ pub enum AdmissionOverloadCause {
 // Stable string mapping layer (enum -> metric label / log value / control API)
 // ---------------------------------------------------------------------------
 //
-// Each canonical enum exposes exactly one `slug()`. The design decision for
-// Phase 1 is that a single stable slug serves all three surfaces — this is what
-// closes the Phase 0 gap where one concept had three names. Where a surface
-// historically used a different string, the migration comment records it.
+// Each canonical enum exposes exactly one `slug()`: a single stable string that
+// serves all three surfaces (metric label, log value, control-API string), so
+// one concept has exactly one name.
 
 impl RequestOutcomeReason {
     /// The canonical stable slug for metrics labels, log values, and control-API
