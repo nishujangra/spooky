@@ -129,6 +129,36 @@ impl BootstrapTerminalOutcome {
         )
     }
 
+    /// The canonical request-outcome reason for this bootstrap terminal (obs
+    /// Phase 10). Ties the bootstrap terminal vocabulary to the *same* canonical
+    /// enum the QUIC data path resolves through, so equivalent outcomes on both
+    /// planes report one reason. `None` for accepted outcomes (which are not a
+    /// failure reason). Test-only for now — it enforces the cross-plane contract
+    /// until an emitter consumes it.
+    #[cfg(test)]
+    pub(in crate::quic_listener) fn canonical_reason(
+        self,
+    ) -> Option<crate::observability::RequestOutcomeReason> {
+        use crate::observability::RequestOutcomeReason as R;
+        Some(match self {
+            Self::AcceptedStandardResponse | Self::AcceptedWebsocketUpgrade => return None,
+            Self::Rejected(reason) => match reason {
+                BootstrapRejectionReason::AuthDenied => R::AuthDenied,
+                BootstrapRejectionReason::RateLimited => R::RateLimited,
+                BootstrapRejectionReason::Overloaded => R::Overloaded,
+                BootstrapRejectionReason::ValidationFailed
+                | BootstrapRejectionReason::RequestBodyTooLarge => R::ValidationRejected,
+            },
+            Self::BackendFailed(reason) => match reason {
+                BootstrapBackendFailureReason::RouteResolutionFailed
+                | BootstrapBackendFailureReason::MissingEndpoint
+                | BootstrapBackendFailureReason::RequestBuildFailed
+                | BootstrapBackendFailureReason::DispatchFailed => R::BackendTransportFailed,
+            },
+            Self::TimedOut(_) => R::TimedOut,
+        })
+    }
+
     /// A stable slug naming the terminal classification, aligned with the
     /// terminal-state names used in the QUIC data path.
     pub(in crate::quic_listener) fn slug(self) -> &'static str {
@@ -677,5 +707,59 @@ mod tests {
     fn websocket_upgrade_is_a_request_mode_state() {
         assert!(BootstrapRequestMode::WebsocketUpgrade.is_websocket_upgrade());
         assert!(!BootstrapRequestMode::Standard.is_websocket_upgrade());
+    }
+
+    #[test]
+    fn bootstrap_and_quic_terminals_resolve_to_same_canonical_reason() {
+        // obs Phase 10 (step 1): equivalent outcomes on the bootstrap and QUIC
+        // data planes must report the SAME canonical reason — closing Phase 0
+        // finding #1 (two parallel terminal vocabularies).
+        use crate::observability::RequestOutcomeReason;
+        use crate::runtime::connection::stream::{BackendFailureReason, RejectionReason};
+
+        // Auth denied.
+        assert_eq!(
+            BootstrapTerminalOutcome::Rejected(BootstrapRejectionReason::AuthDenied)
+                .canonical_reason(),
+            Some(RequestOutcomeReason::from(RejectionReason::AuthDenied))
+        );
+        // Rate limited.
+        assert_eq!(
+            BootstrapTerminalOutcome::Rejected(BootstrapRejectionReason::RateLimited)
+                .canonical_reason(),
+            Some(RequestOutcomeReason::from(RejectionReason::RateLimited))
+        );
+        // Overloaded.
+        assert_eq!(
+            BootstrapTerminalOutcome::Rejected(BootstrapRejectionReason::Overloaded)
+                .canonical_reason(),
+            Some(RequestOutcomeReason::from(RejectionReason::Overloaded))
+        );
+        // Validation.
+        assert_eq!(
+            BootstrapTerminalOutcome::Rejected(BootstrapRejectionReason::ValidationFailed)
+                .canonical_reason(),
+            Some(RequestOutcomeReason::from(RejectionReason::ValidationFailed))
+        );
+        // Backend dispatch failure ↔ QUIC transport failure.
+        assert_eq!(
+            BootstrapTerminalOutcome::BackendFailed(BootstrapBackendFailureReason::DispatchFailed)
+                .canonical_reason(),
+            Some(RequestOutcomeReason::from(
+                BackendFailureReason::UpstreamTransport
+            ))
+        );
+        // Upstream timeout.
+        assert_eq!(
+            BootstrapTerminalOutcome::TimedOut(BootstrapTimeoutReason::Upstream).canonical_reason(),
+            Some(RequestOutcomeReason::from(
+                BackendFailureReason::UpstreamTimeout
+            ))
+        );
+        // Accepted outcomes carry no failure reason on either plane.
+        assert_eq!(
+            BootstrapTerminalOutcome::AcceptedStandardResponse.canonical_reason(),
+            None
+        );
     }
 }
