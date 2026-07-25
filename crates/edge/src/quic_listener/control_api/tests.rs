@@ -437,6 +437,53 @@ fn accepted_reload_advances_the_active_generation() {
 }
 
 #[test]
+fn handle_drives_full_lifecycle_transition_table() {
+    use crate::runtime::policy::{LifecycleTransitionResult, RuntimeLifecyclePhase};
+
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config = test_config(cert, key);
+    let bundle = runtime_bundle_from_config("current.yaml", &config);
+    let handle = RuntimeBundleHandle::new(bundle);
+
+    // The handle publishes into `Running`.
+    assert_eq!(handle.lifecycle().phase(), RuntimeLifecyclePhase::Running);
+
+    // Running -> Draining (as the supervisor does on a watchdog restart request).
+    assert!(matches!(
+        handle.lifecycle().begin_drain(),
+        LifecycleTransitionResult::Applied {
+            to: RuntimeLifecyclePhase::Draining,
+            ..
+        }
+    ));
+
+    // Draining -> ShuttingDown (as the shutdown-signal handler does).
+    assert!(matches!(
+        handle.lifecycle().begin_shutdown(),
+        LifecycleTransitionResult::Applied {
+            to: RuntimeLifecyclePhase::ShuttingDown,
+            ..
+        }
+    ));
+    // Idempotent second call (the app calls begin_shutdown again before draining).
+    assert!(matches!(
+        handle.lifecycle().begin_shutdown(),
+        LifecycleTransitionResult::NoOp { .. }
+    ));
+
+    // ShuttingDown -> Terminated (after workers are drained and joined).
+    assert!(matches!(
+        handle.lifecycle().finish_shutdown(),
+        LifecycleTransitionResult::Applied {
+            to: RuntimeLifecyclePhase::Terminated,
+            ..
+        }
+    ));
+    assert!(handle.lifecycle().phase().is_terminal());
+}
+
+#[test]
 fn reload_commit_is_rejected_after_shutdown_begins() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");

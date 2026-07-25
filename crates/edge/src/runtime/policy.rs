@@ -510,16 +510,25 @@ impl RuntimeLifecycleState {
             Ordering::AcqRel,
             Ordering::Acquire,
         ) {
-            Ok(_) => LifecycleTransitionResult::Applied {
-                from: expected,
-                to: target,
-            },
+            Ok(_) => {
+                Self::log_transition(expected, target);
+                LifecycleTransitionResult::Applied {
+                    from: expected,
+                    to: target,
+                }
+            }
             // Lost a race; re-evaluate against the phase that won.
             Err(actual) if Self::decode(actual) == target => {
                 LifecycleTransitionResult::NoOp { phase: target }
             }
             Err(_) => self.reject(attempted),
         }
+    }
+
+    /// Emit an explicit transition-boundary log so reload/drain/shutdown behavior
+    /// is observable as the transition table it now is (Phase 6).
+    fn log_transition(from: RuntimeLifecyclePhase, to: RuntimeLifecyclePhase) {
+        log::info!("runtime lifecycle transition {from:?} -> {to:?}");
     }
 
     /// Mark the first generation active: `Starting` -> `Running`.
@@ -569,10 +578,13 @@ impl RuntimeLifecycleState {
                     Ordering::AcqRel,
                     Ordering::Acquire,
                 ) {
-                    Ok(_) => LifecycleTransitionResult::Applied {
-                        from: current,
-                        to: RuntimeLifecyclePhase::ShuttingDown,
-                    },
+                    Ok(_) => {
+                        Self::log_transition(current, RuntimeLifecyclePhase::ShuttingDown);
+                        LifecycleTransitionResult::Applied {
+                            from: current,
+                            to: RuntimeLifecyclePhase::ShuttingDown,
+                        }
+                    }
                     // Another thread advanced us; shutdown is monotonic so treat
                     // any resulting shutting-down/terminated phase as a no-op.
                     Err(_) => LifecycleTransitionResult::NoOp {

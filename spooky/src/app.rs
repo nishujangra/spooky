@@ -174,8 +174,12 @@ async fn run(
 
     let shutdown = Arc::new(AtomicBool::new(false));
     let shutdown_flag = shutdown.clone();
+    let shutdown_lifecycle = Arc::clone(&runtime_bundle);
     tokio::spawn(async move {
         wait_for_shutdown_signal().await;
+        // Drive the runtime lifecycle state machine: Running/Draining ->
+        // ShuttingDown. This also gates any concurrent reload commit (Phase 6).
+        shutdown_lifecycle.lifecycle().begin_shutdown();
         shutdown_flag.store(true, Ordering::Relaxed);
     });
 
@@ -207,6 +211,20 @@ async fn run(
         collect_finished_listener_groups(&mut listener_groups, &mut worker_failed);
         reconcile_listener_groups(&runtime_bundle, &mut listener_groups);
 
+        // Reflect a watchdog-requested drain in the runtime lifecycle: once the
+        // watchdog asks for a restart, workers begin draining, so move the process
+        // Running -> Draining (idempotent while already draining). This keeps the
+        // lifecycle state machine an accurate transition table for drain, not just
+        // reload/shutdown (Phase 6).
+        if runtime_bundle
+            .current_view()
+            .shared_services()
+            .watchdog
+            .restart_requested()
+        {
+            runtime_bundle.lifecycle().begin_drain();
+        }
+
         if worker_failed {
             break;
         }
@@ -214,7 +232,12 @@ async fn run(
         tokio::time::sleep(Duration::from_millis(100)).await;
     }
 
+    // Whether we exited via signal or a worker failure, the process is now
+    // shutting down; ensure the lifecycle reflects it before draining workers.
+    runtime_bundle.lifecycle().begin_shutdown();
     shutdown_listener_groups(&mut listener_groups, &mut worker_failed).await;
+    // Workers are drained and joined: the shutdown transition is complete.
+    runtime_bundle.lifecycle().finish_shutdown();
 
     let panic_count = runtime_guard::panic_count();
     if panic_count > 0 {
