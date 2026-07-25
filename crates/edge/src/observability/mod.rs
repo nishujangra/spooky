@@ -404,6 +404,109 @@ pub struct MetricReasonLabels<'a> {
     pub failure_class: Option<&'a str>,
 }
 
+// ---------------------------------------------------------------------------
+// Canonical mappings from local reason vocabularies (obs Phase 5)
+// ---------------------------------------------------------------------------
+//
+// Phase 5 classifies every local reason enum against the canonical vocabulary so
+// one operational concept is described one way. Each local enum is either:
+//   - an ALIAS of a canonical concept → `From<Local> for Canonical`, or
+//   - a RICHER SUBTYPE → mapped to the coarse canonical reason (the extra detail
+//     stays available as the local enum for debug/telemetry).
+// The QUIC-datapath terminal enums (edge-local) and the retry/hedge enums
+// (spooky_errors) are mapped here; `OverloadShedReason::canonical()` lives with
+// that enum. These impls are the single source that keeps the surfaces aligned.
+
+use crate::runtime::connection::stream::{BackendFailureReason, RejectionReason, TimeoutReason};
+use spooky_errors::{HedgePolicyDenialReason, RetryPolicyDenialReason, UpstreamRetryReason};
+
+/// Request rejection → canonical request outcome. Alias mapping.
+impl From<RejectionReason> for RequestOutcomeReason {
+    fn from(reason: RejectionReason) -> Self {
+        match reason {
+            RejectionReason::AuthDenied => Self::AuthDenied,
+            // AuthUnavailable is a richer subtype of "auth-related rejection";
+            // it maps to the canonical AuthDenied outcome (the request was not
+            // admitted), with the finer cause preserved by the local enum.
+            RejectionReason::AuthUnavailable => Self::AuthDenied,
+            RejectionReason::ValidationFailed
+            | RejectionReason::RequestBodyNotAllowed
+            | RejectionReason::RequestBodyTooLarge => Self::ValidationRejected,
+            RejectionReason::RateLimited => Self::RateLimited,
+            RejectionReason::Overloaded | RejectionReason::ResponsePrebufferCap => Self::Overloaded,
+        }
+    }
+}
+
+/// Backend failure → canonical request outcome. Richer subtype: the transport
+/// class is mapped to the matching canonical backend-failure outcome.
+impl From<BackendFailureReason> for RequestOutcomeReason {
+    fn from(reason: BackendFailureReason) -> Self {
+        match reason {
+            BackendFailureReason::UpstreamTimeout => Self::TimedOut,
+            BackendFailureReason::UpstreamTls => Self::BackendTlsFailed,
+            BackendFailureReason::UpstreamProtocol => Self::BackendProtocolFailed,
+            BackendFailureReason::UpstreamBridge => Self::BackendBridgeFailed,
+            BackendFailureReason::UpstreamTransport
+            | BackendFailureReason::DispatchSpawnFailed
+            | BackendFailureReason::UpstreamResultChannelDropped
+            | BackendFailureReason::ResponseWriteFailed
+            | BackendFailureReason::ResponseStreamAborted => Self::BackendTransportFailed,
+        }
+    }
+}
+
+/// Timeout phase → canonical request outcome. All phases are the one canonical
+/// `TimedOut` outcome; the phase remains the richer local detail.
+impl From<TimeoutReason> for RequestOutcomeReason {
+    fn from(_reason: TimeoutReason) -> Self {
+        Self::TimedOut
+    }
+}
+
+/// Retry attempt cause → canonical retry decision reason. Alias mapping.
+impl From<UpstreamRetryReason> for RetryDecisionReason {
+    fn from(reason: UpstreamRetryReason) -> Self {
+        match reason {
+            UpstreamRetryReason::Timeout => Self::UpstreamTimeout,
+            UpstreamRetryReason::Transport => Self::UpstreamTransportFailure,
+            UpstreamRetryReason::Pool => Self::UpstreamTransportFailure,
+        }
+    }
+}
+
+/// Retry denial → canonical retry decision reason. Richer subtype: the several
+/// idempotency/terminal causes collapse to the coarse canonical denials.
+impl From<RetryPolicyDenialReason> for RetryDecisionReason {
+    fn from(reason: RetryPolicyDenialReason) -> Self {
+        match reason {
+            RetryPolicyDenialReason::BudgetDenied => Self::RetryBudgetDenied,
+            RetryPolicyDenialReason::MethodNotIdempotent
+            | RetryPolicyDenialReason::RequestBodyNotReplayable => Self::IdempotencyDenied,
+            RetryPolicyDenialReason::TerminalError(_)
+            | RetryPolicyDenialReason::AttemptLimitReached
+            | RetryPolicyDenialReason::AlternateBackendUnavailable(_) => Self::RetryPolicyDisabled,
+        }
+    }
+}
+
+/// Hedge denial → canonical hedge decision reason. Alias / richer subtype.
+impl From<HedgePolicyDenialReason> for HedgeDecisionReason {
+    fn from(reason: HedgePolicyDenialReason) -> Self {
+        match reason {
+            HedgePolicyDenialReason::HedgingDisabled => Self::HedgingDisabled,
+            HedgePolicyDenialReason::PrimaryRequestCompleted => Self::PrimaryCompleted,
+            HedgePolicyDenialReason::RequestBodyNotReplayable => Self::RequestBodyNotReplayable,
+            HedgePolicyDenialReason::TunnelRequest => Self::TunnelRequest,
+            HedgePolicyDenialReason::MethodNotAllowed => Self::MethodNotAllowed,
+            HedgePolicyDenialReason::AlternateBackendUnavailable(_) => {
+                Self::AlternateBackendUnavailable
+            }
+            HedgePolicyDenialReason::BudgetDenied => Self::HedgeBudgetDenied,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -544,5 +647,76 @@ mod tests {
     #[test]
     fn empty_event_context_renders_nothing() {
         assert_eq!(OperationalEventContext::new().to_string(), "");
+    }
+
+    #[test]
+    fn local_rejection_maps_to_canonical_request_outcome() {
+        use crate::runtime::connection::stream::RejectionReason;
+        assert_eq!(
+            RequestOutcomeReason::from(RejectionReason::AuthDenied),
+            RequestOutcomeReason::AuthDenied
+        );
+        assert_eq!(
+            RequestOutcomeReason::from(RejectionReason::AuthUnavailable),
+            RequestOutcomeReason::AuthDenied
+        );
+        assert_eq!(
+            RequestOutcomeReason::from(RejectionReason::RequestBodyTooLarge),
+            RequestOutcomeReason::ValidationRejected
+        );
+        assert_eq!(
+            RequestOutcomeReason::from(RejectionReason::ResponsePrebufferCap),
+            RequestOutcomeReason::Overloaded
+        );
+    }
+
+    #[test]
+    fn local_backend_failure_maps_to_canonical_transport_class() {
+        use crate::runtime::connection::stream::BackendFailureReason;
+        assert_eq!(
+            RequestOutcomeReason::from(BackendFailureReason::UpstreamTimeout),
+            RequestOutcomeReason::TimedOut
+        );
+        assert_eq!(
+            RequestOutcomeReason::from(BackendFailureReason::UpstreamTls),
+            RequestOutcomeReason::BackendTlsFailed
+        );
+        assert_eq!(
+            RequestOutcomeReason::from(BackendFailureReason::UpstreamProtocol),
+            RequestOutcomeReason::BackendProtocolFailed
+        );
+        assert_eq!(
+            RequestOutcomeReason::from(BackendFailureReason::UpstreamBridge),
+            RequestOutcomeReason::BackendBridgeFailed
+        );
+        assert_eq!(
+            RequestOutcomeReason::from(BackendFailureReason::DispatchSpawnFailed),
+            RequestOutcomeReason::BackendTransportFailed
+        );
+    }
+
+    #[test]
+    fn retry_and_hedge_denials_map_to_canonical_reasons() {
+        use spooky_errors::{HedgePolicyDenialReason, RetryPolicyDenialReason, UpstreamRetryReason};
+        assert_eq!(
+            RetryDecisionReason::from(UpstreamRetryReason::Timeout),
+            RetryDecisionReason::UpstreamTimeout
+        );
+        assert_eq!(
+            RetryDecisionReason::from(RetryPolicyDenialReason::BudgetDenied),
+            RetryDecisionReason::RetryBudgetDenied
+        );
+        assert_eq!(
+            RetryDecisionReason::from(RetryPolicyDenialReason::MethodNotIdempotent),
+            RetryDecisionReason::IdempotencyDenied
+        );
+        assert_eq!(
+            HedgeDecisionReason::from(HedgePolicyDenialReason::TunnelRequest),
+            HedgeDecisionReason::TunnelRequest
+        );
+        assert_eq!(
+            HedgeDecisionReason::from(HedgePolicyDenialReason::BudgetDenied),
+            HedgeDecisionReason::HedgeBudgetDenied
+        );
     }
 }
