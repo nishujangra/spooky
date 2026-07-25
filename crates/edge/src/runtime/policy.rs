@@ -480,8 +480,7 @@ impl RuntimeLifecycleState {
             field_path: None,
             current_mode: Some(format!("{phase:?}")),
             requested_mode: Some(format!("{attempted:?}")),
-            operator_action:
-                "wait for the current lifecycle phase to complete; the requested transition is not legal now",
+            operator_action: "wait for the current lifecycle phase to complete; the requested transition is not legal now",
             active_runtime_changed: false,
             verbatim: None,
         })
@@ -824,8 +823,12 @@ impl ReloadCompatibilityAuthority {
     /// The `field_path` should exist in [`RESOURCE_DOMAINS`] with
     /// [`ReloadCapability::RestartRequired`]; in debug builds this is asserted so
     /// the table and the call sites cannot silently drift apart.
-    pub fn note_restart_required_change<T>(&mut self, field_path: &'static str, current: &T, next: &T)
-    where
+    pub fn note_restart_required_change<T>(
+        &mut self,
+        field_path: &'static str,
+        current: &T,
+        next: &T,
+    ) where
         T: PartialEq + fmt::Debug,
     {
         debug_assert!(
@@ -833,8 +836,9 @@ impl ReloadCompatibilityAuthority {
             "field_path {field_path:?} is recorded as live-reloadable but used as restart-required"
         );
         if current != next {
-            self.rejections
-                .push(TransitionRejection::restart_required(field_path, current, next));
+            self.rejections.push(TransitionRejection::restart_required(
+                field_path, current, next,
+            ));
         }
     }
 
@@ -979,7 +983,10 @@ mod tests {
             "0.0.0.0:9443",
             "address already in use",
         );
-        assert_eq!(rejection.kind, TransitionRejectionKind::ResourcePreparationFailed);
+        assert_eq!(
+            rejection.kind,
+            TransitionRejectionKind::ResourcePreparationFailed
+        );
         assert!(!rejection.requires_restart());
         assert!(!rejection.active_runtime_changed);
         // Phase 8: consistent structure — attempted action, the specific resource,
@@ -994,8 +1001,9 @@ mod tests {
 
     #[test]
     fn raw_resource_message_is_emitted_verbatim() {
-        let rejection =
-            TransitionRejection::raw_resource_message("failed to bind metrics endpoint 0.0.0.0:9100: in use");
+        let rejection = TransitionRejection::raw_resource_message(
+            "failed to bind metrics endpoint 0.0.0.0:9100: in use",
+        );
         assert_eq!(
             rejection.to_string(),
             "failed to bind metrics endpoint 0.0.0.0:9100: in use"
@@ -1146,6 +1154,10 @@ mod tests {
         paths.sort_unstable();
         let before = paths.len();
         paths.dedup();
-        assert_eq!(before, paths.len(), "duplicate field_path in RESOURCE_DOMAINS");
+        assert_eq!(
+            before,
+            paths.len(),
+            "duplicate field_path in RESOURCE_DOMAINS"
+        );
     }
 }

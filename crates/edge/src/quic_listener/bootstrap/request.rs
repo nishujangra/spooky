@@ -147,9 +147,7 @@ impl BootstrapTerminalOutcome {
                     "backend_failed_route_resolution"
                 }
                 BootstrapBackendFailureReason::MissingEndpoint => "backend_failed_missing_endpoint",
-                BootstrapBackendFailureReason::RequestBuildFailed => {
-                    "backend_failed_request_build"
-                }
+                BootstrapBackendFailureReason::RequestBuildFailed => "backend_failed_request_build",
                 BootstrapBackendFailureReason::DispatchFailed => "backend_failed_dispatch",
             },
             Self::TimedOut(reason) => match reason {
@@ -630,12 +628,16 @@ mod tests {
     fn terminal_outcome_accepted_classification() {
         assert!(BootstrapTerminalOutcome::AcceptedStandardResponse.is_accepted());
         assert!(BootstrapTerminalOutcome::AcceptedWebsocketUpgrade.is_accepted());
-        assert!(!BootstrapTerminalOutcome::Rejected(BootstrapRejectionReason::AuthDenied).is_accepted());
+        assert!(
+            !BootstrapTerminalOutcome::Rejected(BootstrapRejectionReason::AuthDenied).is_accepted()
+        );
         assert!(
             !BootstrapTerminalOutcome::BackendFailed(BootstrapBackendFailureReason::DispatchFailed)
                 .is_accepted()
         );
-        assert!(!BootstrapTerminalOutcome::TimedOut(BootstrapTimeoutReason::Upstream).is_accepted());
+        assert!(
+            !BootstrapTerminalOutcome::TimedOut(BootstrapTimeoutReason::Upstream).is_accepted()
+        );
     }
 
     #[test]
@@ -652,7 +654,9 @@ mod tests {
                 BootstrapBackendFailureReason::RouteResolutionFailed,
             ),
             BootstrapTerminalOutcome::BackendFailed(BootstrapBackendFailureReason::MissingEndpoint),
-            BootstrapTerminalOutcome::BackendFailed(BootstrapBackendFailureReason::RequestBuildFailed),
+            BootstrapTerminalOutcome::BackendFailed(
+                BootstrapBackendFailureReason::RequestBuildFailed,
+            ),
             BootstrapTerminalOutcome::BackendFailed(BootstrapBackendFailureReason::DispatchFailed),
             BootstrapTerminalOutcome::TimedOut(BootstrapTimeoutReason::Upstream),
             BootstrapTerminalOutcome::TimedOut(BootstrapTimeoutReason::ResponseBody),

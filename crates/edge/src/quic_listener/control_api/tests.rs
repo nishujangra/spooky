@@ -15,10 +15,7 @@ use super::{state::ControlApiState, *};
 
 /// Render the typed startup-owned compatibility result into the flat list of
 /// operator strings the assertions below were written against.
-fn startup_owned_issue_strings(
-    current: &RuntimeBundle,
-    next: &RuntimeBundle,
-) -> Vec<String> {
+fn startup_owned_issue_strings(current: &RuntimeBundle, next: &RuntimeBundle) -> Vec<String> {
     match QUICListener::validate_startup_owned_reload_compatibility(current, next) {
         Ok(()) => Vec::new(),
         Err(rejections) => rejections.iter().map(|r| r.to_string()).collect(),
@@ -374,8 +371,7 @@ fn live_reloadable_upstream_change_is_accepted() {
     let next_bundle = runtime_bundle_from_config("next.yaml", &next);
     let current_active = RuntimeBundleHandle::new(current_bundle).current_view();
 
-    let result =
-        QUICListener::evaluate_runtime_reload_compatibility(&current_active, &next_bundle);
+    let result = QUICListener::evaluate_runtime_reload_compatibility(&current_active, &next_bundle);
     assert!(
         result.is_ok(),
         "generation-owned upstream change must be live-reloadable, got: {result:?}"
@@ -405,10 +401,9 @@ fn restart_required_change_rejects_before_touching_active_generation() {
     let result = QUICListener::evaluate_runtime_reload_compatibility(&active, &next_bundle);
     let rejections = result.expect_err("restart-required change must be rejected");
     assert!(
-        rejections
-            .iter()
-            .any(|r| r.to_string().contains("performance.control_plane_threads")
-                && r.requires_restart()),
+        rejections.iter().any(
+            |r| r.to_string().contains("performance.control_plane_threads") && r.requires_restart()
+        ),
         "expected a restart-required rejection, got: {rejections:?}"
     );
     // The active generation is untouched by the rejected evaluation.
@@ -539,8 +534,9 @@ fn validate_control_api_reload_compatibility_allows_bind_change_when_socket_is_f
 
     let current_bundle = runtime_bundle_from_config("current.yaml", &current);
     let next_bundle = runtime_bundle_from_config("next.yaml", &next);
-    let result = QUICListener::validate_control_api_reload_compatibility(&current_bundle, &next_bundle)
-        .map(|rejection| rejection.to_string());
+    let result =
+        QUICListener::validate_control_api_reload_compatibility(&current_bundle, &next_bundle)
+            .map(|rejection| rejection.to_string());
     if result
         .as_deref()
         .is_some_and(|err| err.contains("Operation not permitted"))
@@ -765,8 +761,7 @@ async fn runtime_bundle_cert_reload_ignores_unrelated_config_drift_and_bundle_sw
         live.performance.control_plane_threads.saturating_add(1);
     let drifted_bundle = runtime_bundle_from_config("drifted.yaml", &drifted);
     let current_runtime = runtime_handle.current_view();
-    let full_reload_issues =
-        startup_owned_issue_strings(current_runtime.bundle(), &drifted_bundle);
+    let full_reload_issues = startup_owned_issue_strings(current_runtime.bundle(), &drifted_bundle);
     assert!(
         full_reload_issues
             .iter()

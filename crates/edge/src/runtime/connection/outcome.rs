@@ -962,12 +962,30 @@ mod tests {
         use crate::runtime::connection::stream::{BackendFailedState, TerminalState};
 
         let cases = [
-            (BackendFailureReason::UpstreamTimeout, CanonicalBackendFailureKind::Timeout),
-            (BackendFailureReason::UpstreamTls, CanonicalBackendFailureKind::Tls),
-            (BackendFailureReason::UpstreamBridge, CanonicalBackendFailureKind::Bridge),
-            (BackendFailureReason::UpstreamProtocol, CanonicalBackendFailureKind::Protocol),
-            (BackendFailureReason::UpstreamTransport, CanonicalBackendFailureKind::Transport),
-            (BackendFailureReason::DispatchSpawnFailed, CanonicalBackendFailureKind::Transport),
+            (
+                BackendFailureReason::UpstreamTimeout,
+                CanonicalBackendFailureKind::Timeout,
+            ),
+            (
+                BackendFailureReason::UpstreamTls,
+                CanonicalBackendFailureKind::Tls,
+            ),
+            (
+                BackendFailureReason::UpstreamBridge,
+                CanonicalBackendFailureKind::Bridge,
+            ),
+            (
+                BackendFailureReason::UpstreamProtocol,
+                CanonicalBackendFailureKind::Protocol,
+            ),
+            (
+                BackendFailureReason::UpstreamTransport,
+                CanonicalBackendFailureKind::Transport,
+            ),
+            (
+                BackendFailureReason::DispatchSpawnFailed,
+                CanonicalBackendFailureKind::Transport,
+            ),
         ];
         for (reason, expected_kind) in cases {
             let state = TerminalState::BackendFailed(BackendFailedState {
@@ -985,7 +1003,10 @@ mod tests {
             if matches!(reason, BackendFailureReason::UpstreamTimeout) {
                 assert_eq!(decision.route_outcome, CanonicalRouteOutcome::Timeout);
             } else {
-                assert_eq!(decision.route_outcome, CanonicalRouteOutcome::UpstreamFailure);
+                assert_eq!(
+                    decision.route_outcome,
+                    CanonicalRouteOutcome::UpstreamFailure
+                );
             }
         }
     }
@@ -1007,7 +1028,10 @@ mod tests {
             reason: RejectionReason::AuthDenied,
             snapshot: terminal_snapshot_for_test(),
         }));
-        assert_eq!(auth.rejection_kind, Some(CanonicalRejectionKind::AuthDenied));
+        assert_eq!(
+            auth.rejection_kind,
+            Some(CanonicalRejectionKind::AuthDenied)
+        );
 
         let overload = classify_terminal_outcome(&TerminalState::Rejected(RejectedState {
             reason: RejectionReason::Overloaded,

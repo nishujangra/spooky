@@ -656,7 +656,8 @@ impl Metrics {
         out.push_str("# TYPE spooky_backend_client_rotation_failures_total counter\n");
         out.push_str(&format!(
             "spooky_backend_client_rotation_failures_total {}\n",
-            self.backend_client_rotation_failures.load(Ordering::Relaxed)
+            self.backend_client_rotation_failures
+                .load(Ordering::Relaxed)
         ));
         out.push_str(
             "# HELP spooky_backend_dns_last_refresh_success_seconds Unix timestamp of the last successful backend DNS refresh.\n",

@@ -801,7 +801,10 @@ mod tests {
                 .load(std::sync::atomic::Ordering::Relaxed),
             0
         );
-        assert_eq!(updated_client_rotation(&updated).failure(), Some("pool busy"));
+        assert_eq!(
+            updated_client_rotation(&updated).failure(),
+            Some("pool busy")
+        );
     }
 
     fn updated_client_rotation(app: &BackendDnsRefreshApplication) -> &ClientRotationOutcome {

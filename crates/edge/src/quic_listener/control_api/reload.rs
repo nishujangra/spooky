@@ -255,8 +255,7 @@ impl QUICListener {
         current: &ActiveRuntimeGeneration,
         next: &RuntimeBundle,
     ) -> Result<(), Vec<TransitionRejection>> {
-        if let Some(rejection) =
-            Self::validate_runtime_reload_compatibility(current.bundle(), next)
+        if let Some(rejection) = Self::validate_runtime_reload_compatibility(current.bundle(), next)
         {
             return Err(vec![rejection]);
         }
