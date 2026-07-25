@@ -452,6 +452,58 @@ mod tests {
     }
 
     #[test]
+    fn metrics_overload_reason_routes_through_canonical_vocabulary() {
+        // obs Phase 2 (step 5): the metrics `reason=` label must come from the
+        // canonical vocabulary. Every OverloadShedReason maps to a canonical cause
+        // whose slug is the emitted label.
+        use crate::metrics::OverloadShedReason;
+        let cases = [
+            (OverloadShedReason::Brownout, AdmissionOverloadCause::Brownout),
+            (
+                OverloadShedReason::AdaptiveAdmission,
+                AdmissionOverloadCause::AdaptiveAdmission,
+            ),
+            (OverloadShedReason::RouteCap, AdmissionOverloadCause::RouteCap),
+            (
+                OverloadShedReason::RouteGlobalCap,
+                AdmissionOverloadCause::RouteGlobalCap,
+            ),
+            (
+                OverloadShedReason::GlobalInflight,
+                AdmissionOverloadCause::GlobalInflight,
+            ),
+            (
+                OverloadShedReason::UpstreamInflight,
+                AdmissionOverloadCause::UpstreamInflight,
+            ),
+            (
+                OverloadShedReason::BackendInflight,
+                AdmissionOverloadCause::BackendInflight,
+            ),
+            (
+                OverloadShedReason::CircuitOpen,
+                AdmissionOverloadCause::CircuitOpen,
+            ),
+            (
+                OverloadShedReason::RequestBufferCap,
+                AdmissionOverloadCause::RequestBufferCap,
+            ),
+            (
+                OverloadShedReason::ResponsePrebufferCap,
+                AdmissionOverloadCause::ResponsePrebufferCap,
+            ),
+            (
+                OverloadShedReason::ConnectionCap,
+                AdmissionOverloadCause::ConnectionCap,
+            ),
+        ];
+        for (reason, cause) in cases {
+            assert_eq!(reason.canonical(), cause);
+            assert_eq!(reason.reason_label(), cause.slug());
+        }
+    }
+
+    #[test]
     fn overload_cause_slugs_match_legacy_metric_labels() {
         // These must stay byte-identical to `OverloadShedReason` labels so a later
         // migration of the overload emitter does not change the `reason=` series.

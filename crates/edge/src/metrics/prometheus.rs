@@ -151,51 +151,61 @@ impl Metrics {
             "# HELP spooky_overload_shed_by_reason_total Total overload shed decisions grouped by reason.\n",
         );
         out.push_str("# TYPE spooky_overload_shed_by_reason_total counter\n");
-        out.push_str(&format!(
-            "spooky_overload_shed_by_reason_total{{reason=\"brownout\"}} {}\n",
-            self.overload_shed_brownout.load(Ordering::Relaxed)
-        ));
-        out.push_str(&format!(
-            "spooky_overload_shed_by_reason_total{{reason=\"adaptive_admission\"}} {}\n",
-            self.overload_shed_adaptive.load(Ordering::Relaxed)
-        ));
-        out.push_str(&format!(
-            "spooky_overload_shed_by_reason_total{{reason=\"route_cap\"}} {}\n",
-            self.overload_shed_route_cap.load(Ordering::Relaxed)
-        ));
-        out.push_str(&format!(
-            "spooky_overload_shed_by_reason_total{{reason=\"route_global_cap\"}} {}\n",
-            self.overload_shed_route_global_cap.load(Ordering::Relaxed)
-        ));
-        out.push_str(&format!(
-            "spooky_overload_shed_by_reason_total{{reason=\"global_inflight\"}} {}\n",
-            self.overload_shed_global_inflight.load(Ordering::Relaxed)
-        ));
-        out.push_str(&format!(
-            "spooky_overload_shed_by_reason_total{{reason=\"upstream_inflight\"}} {}\n",
-            self.overload_shed_upstream_inflight.load(Ordering::Relaxed)
-        ));
-        out.push_str(&format!(
-            "spooky_overload_shed_by_reason_total{{reason=\"backend_inflight\"}} {}\n",
-            self.overload_shed_backend_inflight.load(Ordering::Relaxed)
-        ));
-        out.push_str(&format!(
-            "spooky_overload_shed_by_reason_total{{reason=\"circuit_open\"}} {}\n",
-            self.overload_shed_circuit_open.load(Ordering::Relaxed)
-        ));
-        out.push_str(&format!(
-            "spooky_overload_shed_by_reason_total{{reason=\"request_buffer_cap\"}} {}\n",
-            self.overload_shed_request_buffer.load(Ordering::Relaxed)
-        ));
-        out.push_str(&format!(
-            "spooky_overload_shed_by_reason_total{{reason=\"response_prebuffer_cap\"}} {}\n",
-            self.overload_shed_response_prebuffer
-                .load(Ordering::Relaxed)
-        ));
-        out.push_str(&format!(
-            "spooky_overload_shed_by_reason_total{{reason=\"connection_cap\"}} {}\n",
-            self.overload_shed_connection_cap.load(Ordering::Relaxed)
-        ));
+        // Phase 2 (step 5): the `reason=` label vocabulary comes from the canonical
+        // `OverloadShedReason::reason_label()` (→ AdmissionOverloadCause slug), not
+        // ad hoc string literals, so metric and canonical enum cannot drift.
+        for reason in [
+            OverloadShedReason::Brownout,
+            OverloadShedReason::AdaptiveAdmission,
+            OverloadShedReason::RouteCap,
+            OverloadShedReason::RouteGlobalCap,
+            OverloadShedReason::GlobalInflight,
+            OverloadShedReason::UpstreamInflight,
+            OverloadShedReason::BackendInflight,
+            OverloadShedReason::CircuitOpen,
+            OverloadShedReason::RequestBufferCap,
+            OverloadShedReason::ResponsePrebufferCap,
+            OverloadShedReason::ConnectionCap,
+        ] {
+            let count = match reason {
+                OverloadShedReason::Brownout => self.overload_shed_brownout.load(Ordering::Relaxed),
+                OverloadShedReason::AdaptiveAdmission => {
+                    self.overload_shed_adaptive.load(Ordering::Relaxed)
+                }
+                OverloadShedReason::RouteCap => {
+                    self.overload_shed_route_cap.load(Ordering::Relaxed)
+                }
+                OverloadShedReason::RouteGlobalCap => {
+                    self.overload_shed_route_global_cap.load(Ordering::Relaxed)
+                }
+                OverloadShedReason::GlobalInflight => {
+                    self.overload_shed_global_inflight.load(Ordering::Relaxed)
+                }
+                OverloadShedReason::UpstreamInflight => {
+                    self.overload_shed_upstream_inflight.load(Ordering::Relaxed)
+                }
+                OverloadShedReason::BackendInflight => {
+                    self.overload_shed_backend_inflight.load(Ordering::Relaxed)
+                }
+                OverloadShedReason::CircuitOpen => {
+                    self.overload_shed_circuit_open.load(Ordering::Relaxed)
+                }
+                OverloadShedReason::RequestBufferCap => {
+                    self.overload_shed_request_buffer.load(Ordering::Relaxed)
+                }
+                OverloadShedReason::ResponsePrebufferCap => {
+                    self.overload_shed_response_prebuffer.load(Ordering::Relaxed)
+                }
+                OverloadShedReason::ConnectionCap => {
+                    self.overload_shed_connection_cap.load(Ordering::Relaxed)
+                }
+            };
+            out.push_str(&format!(
+                "spooky_overload_shed_by_reason_total{{reason=\"{}\"}} {}\n",
+                reason.reason_label(),
+                count
+            ));
+        }
 
         out.push_str(
             "# HELP spooky_inflight_wait_admit_total Successful inflight admissions after micro-wait.\n",

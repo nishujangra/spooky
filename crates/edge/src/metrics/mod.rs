@@ -133,6 +133,17 @@ pub(crate) struct BackendConnectAttemptKey {
     pub(crate) resolved_addr: String,
 }
 
+/// Upper bound on the number of distinct `spooky_backend_connect_attempt_total`
+/// series (obs Phase 2, step 7). `resolved_addr`/`hostname` are otherwise
+/// unbounded across DNS rotation and multi-A records; once this many distinct
+/// keys exist, further keys collapse into a single stable overflow series so
+/// label cardinality does not grow with DNS churn.
+pub(crate) const BACKEND_CONNECT_ATTEMPT_LABEL_CAP: usize = 512;
+
+/// Stable sentinel used for the `hostname`/`resolved_addr` labels once the
+/// cardinality cap is reached.
+pub(crate) const METRIC_LABEL_OVER_CAP: &str = "__over_cap__";
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct UpstreamRequestCountKey {
     pub(crate) upstream: String,
@@ -351,6 +362,35 @@ pub enum OverloadShedReason {
     RequestBufferCap,
     ResponsePrebufferCap,
     ConnectionCap,
+}
+
+impl OverloadShedReason {
+    /// Bridge to the canonical overload cause (obs Phase 2, step 5). The
+    /// `reason=` label emitted for `spooky_overload_shed_by_reason_total` is the
+    /// canonical [`crate::observability::AdmissionOverloadCause::slug`]; this makes
+    /// the label vocabulary come from the canonical enum rather than the ad hoc
+    /// string literals in `prometheus.rs`.
+    pub fn canonical(self) -> crate::observability::AdmissionOverloadCause {
+        use crate::observability::AdmissionOverloadCause as C;
+        match self {
+            Self::Brownout => C::Brownout,
+            Self::AdaptiveAdmission => C::AdaptiveAdmission,
+            Self::RouteCap => C::RouteCap,
+            Self::RouteGlobalCap => C::RouteGlobalCap,
+            Self::GlobalInflight => C::GlobalInflight,
+            Self::UpstreamInflight => C::UpstreamInflight,
+            Self::BackendInflight => C::BackendInflight,
+            Self::CircuitOpen => C::CircuitOpen,
+            Self::RequestBufferCap => C::RequestBufferCap,
+            Self::ResponsePrebufferCap => C::ResponsePrebufferCap,
+            Self::ConnectionCap => C::ConnectionCap,
+        }
+    }
+
+    /// The canonical, stable `reason=` label value for this shed reason.
+    pub fn reason_label(self) -> &'static str {
+        self.canonical().slug()
+    }
 }
 
 impl Default for Metrics {
@@ -783,13 +823,26 @@ impl Metrics {
         resolved_addr: std::net::SocketAddr,
     ) {
         if let Ok(mut guard) = self.backend_connect_attempts.write() {
-            *guard
-                .entry(BackendConnectAttemptKey {
-                    backend: backend.to_string(),
-                    hostname: hostname.to_string(),
-                    resolved_addr: resolved_addr.to_string(),
-                })
-                .or_default() += 1;
+            let key = BackendConnectAttemptKey {
+                backend: backend.to_string(),
+                hostname: hostname.to_string(),
+                resolved_addr: resolved_addr.to_string(),
+            };
+            // Phase 2 (step 7): bound label cardinality. Existing series always
+            // update; a new series is only created while under the cap, otherwise
+            // it folds into a stable overflow key keyed only by backend identity
+            // (which is bounded by the configured backend set).
+            if guard.contains_key(&key) || guard.len() < BACKEND_CONNECT_ATTEMPT_LABEL_CAP {
+                *guard.entry(key).or_default() += 1;
+            } else {
+                *guard
+                    .entry(BackendConnectAttemptKey {
+                        backend: backend.to_string(),
+                        hostname: METRIC_LABEL_OVER_CAP.to_string(),
+                        resolved_addr: METRIC_LABEL_OVER_CAP.to_string(),
+                    })
+                    .or_default() += 1;
+            }
         }
     }
 
