@@ -317,4 +317,40 @@ mod tests {
         assert!(round_robin.alternate_backend_policy().readonly_lb_pick);
         assert!(round_robin.alternate_backend_policy().healthy_fallback);
     }
+
+    #[test]
+    fn membership_summary_and_runtime_state_stay_coherent_after_health_updates() {
+        let runtime_upstream = runtime_upstream("round-robin", None);
+        let mut pool = UpstreamPool::from_runtime_upstream(&runtime_upstream).expect("pool");
+
+        let before = pool.membership_summary();
+        assert_eq!(before.total_backends, 2);
+        assert_eq!(before.healthy_backends, 2);
+
+        let picked = pool.pick("client-a").expect("pick");
+        let runtime = pool.backend_runtime_state(picked).expect("runtime state");
+        assert_eq!(runtime.active_requests, 1);
+        assert!(runtime.healthy);
+
+        let unhealthy = pool
+            .mark_backend_failure_from_active_check(picked)
+            .expect("health transition");
+        assert!(matches!(
+            unhealthy,
+            crate::backend::HealthTransition::BecameUnhealthy
+        ));
+        let after_failure = pool.membership_summary();
+        assert_eq!(after_failure.total_backends, 2);
+        assert_eq!(after_failure.healthy_backends, 1);
+
+        pool.finish_request(picked, std::time::Duration::from_millis(25), Some(503));
+        let runtime = pool.backend_runtime_state(picked).expect("runtime state");
+        assert_eq!(runtime.active_requests, 0);
+        assert!(!runtime.healthy);
+
+        assert!(pool.mark_backend_healthy(picked).is_none());
+        let after_early_success = pool.membership_summary();
+        assert_eq!(after_early_success.total_backends, 2);
+        assert_eq!(after_early_success.healthy_backends, 1);
+    }
 }
