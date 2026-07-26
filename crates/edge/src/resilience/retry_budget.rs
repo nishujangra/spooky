@@ -77,3 +77,93 @@ impl RetryBudget {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use super::RetryBudget;
+    use spooky_errors::RetryPolicyDenialReason;
+
+    #[test]
+    fn allow_retry_denial_does_not_consume_retry_budget_counters() {
+        let budget = RetryBudget::new(true, 100, HashMap::new());
+
+        assert_eq!(budget.allow_retry("api"), Ok(()));
+        assert_eq!(
+            budget.allow_retry("api"),
+            Err(RetryPolicyDenialReason::BudgetDenied)
+        );
+        assert_eq!(
+            budget
+                .global_primary
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            budget
+                .global_retries
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            budget.route_stats.lock().expect("route stats").get("api"),
+            Some(&(0, 1))
+        );
+
+        budget.mark_primary("api");
+        assert_eq!(budget.allow_retry("api"), Ok(()));
+        assert_eq!(
+            budget.allow_retry("api"),
+            Err(RetryPolicyDenialReason::BudgetDenied)
+        );
+        assert_eq!(
+            budget
+                .global_primary
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            budget
+                .global_retries
+                .load(std::sync::atomic::Ordering::Relaxed),
+            2
+        );
+        assert_eq!(
+            budget.route_stats.lock().expect("route stats").get("api"),
+            Some(&(1, 2))
+        );
+    }
+
+    #[test]
+    fn route_specific_budget_denial_leaves_other_routes_retryable() {
+        let budget = RetryBudget::new(
+            true,
+            100,
+            HashMap::from([(String::from("api"), 0), (String::from("other"), 100)]),
+        );
+        budget.mark_primary("api");
+        budget.mark_primary("other");
+
+        assert_eq!(budget.allow_retry("api"), Ok(()));
+        assert_eq!(
+            budget.allow_retry("api"),
+            Err(RetryPolicyDenialReason::BudgetDenied)
+        );
+        assert_eq!(budget.allow_retry("other"), Ok(()));
+        assert_eq!(
+            budget
+                .global_retries
+                .load(std::sync::atomic::Ordering::Relaxed),
+            2
+        );
+        assert_eq!(
+            budget.route_stats.lock().expect("route stats").get("api"),
+            Some(&(1, 1))
+        );
+        assert_eq!(
+            budget.route_stats.lock().expect("route stats").get("other"),
+            Some(&(1, 1))
+        );
+    }
+}

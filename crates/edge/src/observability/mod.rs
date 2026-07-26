@@ -970,13 +970,58 @@ mod tests {
             RetryDecisionReason::IdempotencyDenied
         );
         assert_eq!(
+            RetryDecisionReason::from(RetryPolicyDenialReason::RequestBodyNotReplayable),
+            RetryDecisionReason::IdempotencyDenied
+        );
+        assert_eq!(
+            RetryDecisionReason::from(RetryPolicyDenialReason::AttemptLimitReached),
+            RetryDecisionReason::RetryPolicyDisabled
+        );
+        assert_eq!(
+            RetryDecisionReason::from(RetryPolicyDenialReason::AlternateBackendUnavailable(
+                spooky_lb::alternate_backend::AlternateBackendFailureReason::NoHealthyBackends
+            )),
+            RetryDecisionReason::RetryPolicyDisabled
+        );
+        assert_eq!(
             HedgeDecisionReason::from(HedgePolicyDenialReason::TunnelRequest),
             HedgeDecisionReason::TunnelRequest
+        );
+        assert_eq!(
+            HedgeDecisionReason::from(HedgePolicyDenialReason::PrimaryRequestCompleted),
+            HedgeDecisionReason::PrimaryCompleted
+        );
+        assert_eq!(
+            HedgeDecisionReason::from(HedgePolicyDenialReason::AlternateBackendUnavailable(
+                spooky_lb::alternate_backend::AlternateBackendFailureReason::NoHealthyBackends
+            )),
+            HedgeDecisionReason::AlternateBackendUnavailable
         );
         assert_eq!(
             HedgeDecisionReason::from(HedgePolicyDenialReason::BudgetDenied),
             HedgeDecisionReason::HedgeBudgetDenied
         );
+    }
+
+    #[test]
+    fn retry_and_hedge_reason_slugs_preserve_trigger_vs_denial_contract() {
+        assert_eq!(
+            RetryDecisionReason::UpstreamTimeout.slug(),
+            "upstream_timeout"
+        );
+        assert!(RetryDecisionReason::UpstreamTimeout.is_retry());
+        assert_eq!(
+            RetryDecisionReason::RetryBudgetDenied.slug(),
+            "retry_budget_denied"
+        );
+        assert!(!RetryDecisionReason::RetryBudgetDenied.is_retry());
+        assert_eq!(HedgeDecisionReason::DelayElapsed.slug(), "delay_elapsed");
+        assert!(HedgeDecisionReason::DelayElapsed.is_triggered());
+        assert_eq!(
+            HedgeDecisionReason::HedgeBudgetDenied.slug(),
+            "hedge_budget_denied"
+        );
+        assert!(!HedgeDecisionReason::HedgeBudgetDenied.is_triggered());
     }
 
     #[test]
