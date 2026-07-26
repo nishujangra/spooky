@@ -34,10 +34,10 @@ This document classifies current visibility. It does not by itself change policy
 | `benchmark` | `pub mod` | canonical public API | Explicit support surface at crate root. |
 | `body` | `pub mod` | canonical public API | Owning module for `ChannelBody`. |
 | `cid_radix` | `pub mod` | canonical public API | Still treated as a direct crate surface on this branch. |
-| `constants` | `pub mod` | stale leftover | Broad constant export is not described as a deliberate consumer façade elsewhere. |
-| `hash` | `pub mod` | stale leftover | Mixed public helpers plus crate-internal counter exposure suggests historical convenience surface. |
+| `constants` | private `mod` | n/a | Edge defaults now escape only through deliberate root re-exports. |
+| `hash` | private `mod` | n/a | Hash helpers now escape only through deliberate root re-exports. |
 | `metrics` | `pub mod` | canonical public API | Owns exported metrics-facing runtime types. |
-| `observability` | `pub mod` | stale leftover | Public at root but absent from prior intentional-surface docs. |
+| `observability` | private `mod` | n/a | Canonical vocabularies now escape only through deliberate root re-exports. |
 | `quic_listener` | private `mod` | n/a | Correctly private listener subsystem façade. |
 | `resilience` | `pub mod` | canonical public API | Deliberate subsystem surface. |
 | `routing` | `pub mod` | canonical public API | Deliberate subsystem surface. |
@@ -57,7 +57,8 @@ This document classifies current visibility. It does not by itself change policy
 | `release_shard_queue_bytes` | `pub use` | canonical public API | Narrow external worker/runtime entrypoint. |
 | `shard_index_for_peer` | `pub use` | canonical public API | Narrow external worker/runtime entrypoint. |
 | `try_reserve_shard_queue_bytes` | `pub use` | canonical public API | Narrow external worker/runtime entrypoint. |
-| `HealthFailureReason` | `pub use` | temporary compatibility surface | Useful shared type, but re-exported from another crate rather than owned here. |
+| edge constant defaults and helpers | `pub use` | canonical public API | Root owns the deliberate constant façade instead of exposing `constants` as a module tree. |
+| edge observability vocabularies and helpers | `pub use` | canonical public API | Root owns the deliberate observability façade instead of exposing `observability` as a module tree. |
 
 ### Public subsystem seams under `runtime`
 
@@ -88,8 +89,8 @@ This document classifies current visibility. It does not by itself change policy
 
 - `quic_listener` staying private is correct and should remain the baseline.
 - `runtime::{connection,generation,tasks,tls}` and `watchdog::{config,service,state,time}` are legitimate crate-local collaboration seams.
-- `constants`, `hash`, and `observability` are the main root-level exposures that still look under-justified.
-- `HealthFailureReason` is intentionally useful but is still a compatibility-style re-export rather than an owned edge API.
+- `constants`, `hash`, and `observability` are no longer public module trees.
+- edge root exports now provide the only deliberate import path for hash helpers, runtime defaults, and observability vocabulary.
 
 ## `spooky-config`
 
@@ -155,12 +156,11 @@ This document classifies current visibility. It does not by itself change policy
 | `request` | `pub mod` | canonical public API | Canonical request construction and header policy surface. |
 | `response` | `pub mod` | canonical public API | Canonical response normalization surface. |
 | `websocket` | `pub mod` | canonical public API | Canonical websocket and upgrade helper surface. |
-| `BridgeError` | `pub use` | temporary compatibility surface | Publicly useful shared error, but owned by `spooky-errors`. |
 
 ### Phase 1 baseline calls
 
 - the bridge crate façade is already narrow and aligned with intended ownership.
-- `BridgeError` is the only compatibility-style re-export in the root surface.
+- `BridgeError` no longer escapes through the bridge root; callers use the owning `spooky-errors` path.
 - no stale leftover module exposure remains at the crate root.
 
 ## `spooky-lb`
@@ -240,15 +240,11 @@ This document classifies current visibility. It does not by itself change policy
 
 ### Temporary compatibility surfaces
 
-- `edge`: `HealthFailureReason` root re-export from `spooky-lb`
-- `bridge`: `BridgeError` root re-export from `spooky-errors`
 - `lb`: `#[doc(hidden)]` modules `algorithms`, `backend`, `backend_pool`
 
 ### Stale leftovers requiring Phase 2 review
 
-- `edge::constants`
-- `edge::hash`
-- `edge::observability`
+- none at the crate-root façade level in the scoped crates after the Phase 2 lockdown pass
 
 ## Phase 1 Exit Check
 
