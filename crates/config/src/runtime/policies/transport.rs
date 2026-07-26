@@ -260,3 +260,80 @@ impl RuntimeTransportPolicy {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Performance;
+
+    #[test]
+    fn normalize_rejects_unknown_length_prebuffer_above_response_cap() {
+        let mut performance = Performance::default();
+        performance.max_response_body_bytes = 1024;
+        performance.unknown_length_response_prebuffer_bytes = 1025;
+
+        let err =
+            RuntimeTransportPolicy::normalize(&performance).expect_err("normalization must fail");
+
+        assert!(
+            err.to_string().contains(
+                "performance.unknown_length_response_prebuffer_bytes (1025) must be <= max_response_body_bytes (1024)"
+            )
+        );
+    }
+
+    #[test]
+    fn normalize_rejects_request_body_cap_above_stream_flow_control() {
+        let mut performance = Performance::default();
+        performance.quic_initial_max_stream_data = 4096;
+        performance.max_request_body_bytes = 4097;
+        performance.request_buffer_global_cap_bytes = 4097;
+
+        let err =
+            RuntimeTransportPolicy::normalize(&performance).expect_err("normalization must fail");
+
+        assert!(
+            err.to_string().contains(
+                "performance.max_request_body_bytes (4097) must be <= quic_initial_max_stream_data (4096)"
+            )
+        );
+    }
+
+    #[test]
+    fn normalize_rejects_request_buffer_cap_below_request_body_cap() {
+        let mut performance = Performance::default();
+        performance.max_request_body_bytes = 8192;
+        performance.request_buffer_global_cap_bytes = 8191;
+        performance.quic_initial_max_stream_data = 8192;
+
+        let err =
+            RuntimeTransportPolicy::normalize(&performance).expect_err("normalization must fail");
+
+        assert!(
+            err.to_string().contains(
+                "performance.request_buffer_global_cap_bytes (8191) must be >= max_request_body_bytes (8192)"
+            )
+        );
+    }
+
+    #[test]
+    fn normalize_preserves_guardrail_values_when_limits_are_consistent() {
+        let mut performance = Performance::default();
+        performance.worker_threads = 1;
+        performance.reuseport = false;
+        performance.quic_initial_max_data = 65_536;
+        performance.quic_initial_max_stream_data = 16_384;
+        performance.max_request_body_bytes = 16_384;
+        performance.request_buffer_global_cap_bytes = 20_000;
+        performance.max_response_body_bytes = 32_768;
+        performance.unknown_length_response_prebuffer_bytes = 8_192;
+
+        let policy =
+            RuntimeTransportPolicy::normalize(&performance).expect("normalization must succeed");
+
+        assert_eq!(policy.max_request_body_bytes, 16_384);
+        assert_eq!(policy.request_buffer_global_cap_bytes, 20_000);
+        assert_eq!(policy.max_response_body_bytes, 32_768);
+        assert_eq!(policy.unknown_length_response_prebuffer_bytes, 8_192);
+    }
+}
