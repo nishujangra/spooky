@@ -569,8 +569,6 @@ impl QUICListener {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use spooky_config::runtime::{
         RuntimeApiKeyAuth, RuntimeAuthPolicy, RuntimeExternalAuthFailureMode,
         RuntimeForwardedHeaderPolicy, RuntimeHostPolicy, RuntimeProtocolPolicy,

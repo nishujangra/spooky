@@ -1425,8 +1425,7 @@ impl QUICListener {
 #[cfg(test)]
 mod tests {
     use crate::runtime::connection::auth::{
-        ExternalAuthChallengeResponse, ExternalAuthDecision, ExternalAuthDenyResponse,
-        ExternalAuthRedirectResponse,
+        ExternalAuthChallengeResponse, ExternalAuthDenyResponse, ExternalAuthRedirectResponse,
     };
     use quiche::h3::NameValue;
 
