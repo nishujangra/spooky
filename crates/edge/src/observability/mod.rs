@@ -978,4 +978,43 @@ mod tests {
             HedgeDecisionReason::HedgeBudgetDenied
         );
     }
+
+    #[test]
+    fn retry_and_outcome_mappings_stay_aligned_but_distinct_by_failure_class() {
+        use crate::runtime::connection::stream::BackendFailureReason;
+        use spooky_errors::{
+            RetryPolicyDenialReason, UpstreamRetryReason, UpstreamTerminalErrorKind,
+        };
+
+        assert_eq!(
+            RetryDecisionReason::from(UpstreamRetryReason::Transport),
+            RetryDecisionReason::UpstreamTransportFailure
+        );
+        assert_eq!(
+            RequestOutcomeReason::from(BackendFailureReason::UpstreamTransport),
+            RequestOutcomeReason::BackendTransportFailed
+        );
+
+        assert_eq!(
+            RetryDecisionReason::from(RetryPolicyDenialReason::TerminalError(
+                UpstreamTerminalErrorKind::Protocol
+            )),
+            RetryDecisionReason::RetryPolicyDisabled
+        );
+        assert_eq!(
+            RequestOutcomeReason::from(BackendFailureReason::UpstreamProtocol),
+            RequestOutcomeReason::BackendProtocolFailed
+        );
+
+        assert_eq!(
+            RetryDecisionReason::from(RetryPolicyDenialReason::TerminalError(
+                UpstreamTerminalErrorKind::Bridge
+            )),
+            RetryDecisionReason::RetryPolicyDisabled
+        );
+        assert_eq!(
+            RequestOutcomeReason::from(BackendFailureReason::UpstreamBridge),
+            RequestOutcomeReason::BackendBridgeFailed
+        );
+    }
 }

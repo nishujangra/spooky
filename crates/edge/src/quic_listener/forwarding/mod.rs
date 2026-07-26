@@ -1310,6 +1310,34 @@ mod tests {
     }
 
     #[test]
+    fn backend_failure_reason_for_proxy_error_preserves_transport_protocol_and_bridge_buckets() {
+        assert_eq!(
+            backend_failure_reason_for_proxy_error(&ProxyError::Transport(
+                "connection reset".to_string()
+            )),
+            BackendFailureReason::UpstreamTransport
+        );
+        assert_eq!(
+            backend_failure_reason_for_proxy_error(&ProxyError::Pool(PoolError::UnknownBackend(
+                "missing".to_string()
+            ))),
+            BackendFailureReason::UpstreamTransport
+        );
+        assert_eq!(
+            backend_failure_reason_for_proxy_error(&ProxyError::Protocol(
+                "bad response frame".to_string()
+            )),
+            BackendFailureReason::UpstreamProtocol
+        );
+        assert_eq!(
+            backend_failure_reason_for_proxy_error(&ProxyError::Bridge(
+                spooky_errors::BridgeError::InvalidHeader
+            )),
+            BackendFailureReason::UpstreamBridge
+        );
+    }
+
+    #[test]
     fn api_key_authorization_requires_exact_configured_match() {
         let policy = RuntimeUpstreamPolicy {
             upstream_auth: RuntimeAuthPolicy {
