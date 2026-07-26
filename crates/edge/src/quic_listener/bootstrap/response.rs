@@ -222,6 +222,27 @@ pub(in crate::quic_listener) fn boxed_full(body: Bytes) -> BoxBody<Bytes, Infall
     Full::new(body).map_err(|never| match never {}).boxed()
 }
 
+fn bootstrap_response_constraints(
+    response_mode: BootstrapResponseMode,
+) -> ResponseProtocolConstraints {
+    ResponseProtocolConstraints {
+        protocol: ResponseNormalizationProtocol::Http1,
+        strip_connection_headers: true,
+        allow_trailers: false,
+        preserve_upgrade: matches!(response_mode, BootstrapResponseMode::WebsocketUpgrade),
+    }
+}
+
+fn bootstrap_response_body_too_large_response(
+    alt_svc: &str,
+) -> Response<BoxBody<Bytes, Infallible>> {
+    Response::builder()
+        .status(StatusCode::SERVICE_UNAVAILABLE)
+        .header("alt-svc", alt_svc)
+        .body(boxed_full(Bytes::from_static(RESPONSE_BODY_TOO_LARGE_BODY)))
+        .unwrap_or_else(|_| Response::new(boxed_full(Bytes::from_static(b"error\n"))))
+}
+
 pub(in crate::quic_listener) struct BootstrapWritebackInput<'a> {
     pub(in crate::quic_listener) upstream_resp: Response<Incoming>,
     pub(in crate::quic_listener) prepared_route: &'a BootstrapPreparedRoute,
@@ -247,12 +268,7 @@ pub(in crate::quic_listener) fn write_bootstrap_response(
         } else {
             ResponseBodyMode::Normal
         },
-        constraints: ResponseProtocolConstraints {
-            protocol: ResponseNormalizationProtocol::Http1,
-            strip_connection_headers: true,
-            allow_trailers: false,
-            preserve_upgrade: matches!(response_mode, BootstrapResponseMode::WebsocketUpgrade),
-        },
+        constraints: bootstrap_response_constraints(response_mode),
     });
     let upstream_content_length = input
         .upstream_resp
@@ -310,11 +326,9 @@ pub(in crate::quic_listener) fn write_bootstrap_response(
         );
         return Ok(BootstrapWritebackOutcome {
             terminal: BootstrapTerminalOutcome::Rejected(BootstrapRejectionReason::Overloaded),
-            response: Response::builder()
-                .status(StatusCode::SERVICE_UNAVAILABLE)
-                .header("alt-svc", &input.dispatch_ctx.request.runtime.alt_svc)
-                .body(boxed_full(Bytes::from_static(RESPONSE_BODY_TOO_LARGE_BODY)))
-                .unwrap_or_else(|_| Response::new(boxed_full(Bytes::from_static(b"error\n")))),
+            response: bootstrap_response_body_too_large_response(
+                &input.dispatch_ctx.request.runtime.alt_svc,
+            ),
         });
     }
     observe_bootstrap_response_status(

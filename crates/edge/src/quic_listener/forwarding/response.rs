@@ -61,6 +61,86 @@ fn response_body_wait_timeout_reason(
     }
 }
 
+fn simple_response_headers(status: http::StatusCode, body: &[u8]) -> Vec<quiche::h3::Header> {
+    vec![
+        quiche::h3::Header::new(b":status", status.as_str().as_bytes()),
+        quiche::h3::Header::new(b"content-type", b"text/plain"),
+        quiche::h3::Header::new(b"content-length", body.len().to_string().as_bytes()),
+    ]
+}
+
+fn overload_response_headers(body: &[u8], retry_after_seconds: u32) -> Vec<quiche::h3::Header> {
+    let retry_after = retry_after_seconds.max(1).to_string();
+    vec![
+        quiche::h3::Header::new(
+            b":status",
+            http::StatusCode::SERVICE_UNAVAILABLE.as_str().as_bytes(),
+        ),
+        quiche::h3::Header::new(b"content-type", b"text/plain"),
+        quiche::h3::Header::new(b"retry-after", retry_after.as_bytes()),
+        quiche::h3::Header::new(b"content-length", body.len().to_string().as_bytes()),
+    ]
+}
+
+fn admission_rejection_headers(
+    response: &crate::quic_listener::admission::AdmissionRejectionResponse,
+) -> Vec<quiche::h3::Header> {
+    let mut headers = vec![
+        quiche::h3::Header::new(b":status", response.status.as_str().as_bytes()),
+        quiche::h3::Header::new(b"content-type", b"text/plain"),
+    ];
+    if let Some(challenge) = response.www_authenticate {
+        headers.push(quiche::h3::Header::new(
+            b"www-authenticate",
+            challenge.as_bytes(),
+        ));
+    }
+    if let Some(retry_after_seconds) = response.retry_after_seconds {
+        let retry_after = retry_after_seconds.max(1).to_string();
+        headers.push(quiche::h3::Header::new(
+            b"retry-after",
+            retry_after.as_bytes(),
+        ));
+    }
+    headers.push(quiche::h3::Header::new(
+        b"content-length",
+        response.body.len().to_string().as_bytes(),
+    ));
+    headers
+}
+
+fn response_headers_with_defaults(
+    status: http::StatusCode,
+    body: &[u8],
+    headers: &[(String, String)],
+) -> Vec<quiche::h3::Header> {
+    let mut resp_headers = vec![quiche::h3::Header::new(
+        b":status",
+        status.as_str().as_bytes(),
+    )];
+    let mut has_content_type = false;
+    let mut has_content_length = false;
+    for (name, value) in headers {
+        if name.eq_ignore_ascii_case(http::header::CONTENT_TYPE.as_str()) {
+            has_content_type = true;
+        }
+        if name.eq_ignore_ascii_case(http::header::CONTENT_LENGTH.as_str()) {
+            has_content_length = true;
+        }
+        resp_headers.push(quiche::h3::Header::new(name.as_bytes(), value.as_bytes()));
+    }
+    if !has_content_type {
+        resp_headers.push(quiche::h3::Header::new(b"content-type", b"text/plain"));
+    }
+    if !has_content_length {
+        resp_headers.push(quiche::h3::Header::new(
+            b"content-length",
+            body.len().to_string().as_bytes(),
+        ));
+    }
+    resp_headers
+}
+
 impl QUICListener {
     pub(super) fn prepare_response_start_decision(
         req: &RequestEnvelope,
@@ -527,11 +607,7 @@ impl QUICListener {
         status: http::StatusCode,
         body: &[u8],
     ) -> Result<(), quiche::h3::Error> {
-        let resp_headers = vec![
-            quiche::h3::Header::new(b":status", status.as_str().as_bytes()),
-            quiche::h3::Header::new(b"content-type", b"text/plain"),
-            quiche::h3::Header::new(b"content-length", body.len().to_string().as_bytes()),
-        ];
+        let resp_headers = simple_response_headers(status, body);
 
         h3.send_response(quic, stream_id, &resp_headers, false)?;
         h3.send_body(quic, stream_id, body, true)?;
@@ -545,16 +621,7 @@ impl QUICListener {
         body: &[u8],
         retry_after_seconds: u32,
     ) -> Result<(), quiche::h3::Error> {
-        let retry_after = retry_after_seconds.max(1).to_string();
-        let resp_headers = vec![
-            quiche::h3::Header::new(
-                b":status",
-                http::StatusCode::SERVICE_UNAVAILABLE.as_str().as_bytes(),
-            ),
-            quiche::h3::Header::new(b"content-type", b"text/plain"),
-            quiche::h3::Header::new(b"retry-after", retry_after.as_bytes()),
-            quiche::h3::Header::new(b"content-length", body.len().to_string().as_bytes()),
-        ];
+        let resp_headers = overload_response_headers(body, retry_after_seconds);
 
         h3.send_response(quic, stream_id, &resp_headers, false)?;
         h3.send_body(quic, stream_id, body, true)?;
@@ -567,27 +634,7 @@ impl QUICListener {
         stream_id: u64,
         response: &crate::quic_listener::admission::AdmissionRejectionResponse,
     ) -> Result<(), quiche::h3::Error> {
-        let mut headers = vec![
-            quiche::h3::Header::new(b":status", response.status.as_str().as_bytes()),
-            quiche::h3::Header::new(b"content-type", b"text/plain"),
-        ];
-        if let Some(challenge) = response.www_authenticate {
-            headers.push(quiche::h3::Header::new(
-                b"www-authenticate",
-                challenge.as_bytes(),
-            ));
-        }
-        if let Some(retry_after_seconds) = response.retry_after_seconds {
-            let retry_after = retry_after_seconds.max(1).to_string();
-            headers.push(quiche::h3::Header::new(
-                b"retry-after",
-                retry_after.as_bytes(),
-            ));
-        }
-        headers.push(quiche::h3::Header::new(
-            b"content-length",
-            response.body.len().to_string().as_bytes(),
-        ));
+        let headers = admission_rejection_headers(response);
 
         h3.send_response(quic, stream_id, &headers, false)?;
         h3.send_body(quic, stream_id, response.body, true)?;
@@ -602,30 +649,7 @@ impl QUICListener {
         body: &[u8],
         headers: &[(String, String)],
     ) -> Result<(), quiche::h3::Error> {
-        let mut resp_headers = vec![quiche::h3::Header::new(
-            b":status",
-            status.as_str().as_bytes(),
-        )];
-        let mut has_content_type = false;
-        let mut has_content_length = false;
-        for (name, value) in headers {
-            if name.eq_ignore_ascii_case(http::header::CONTENT_TYPE.as_str()) {
-                has_content_type = true;
-            }
-            if name.eq_ignore_ascii_case(http::header::CONTENT_LENGTH.as_str()) {
-                has_content_length = true;
-            }
-            resp_headers.push(quiche::h3::Header::new(name.as_bytes(), value.as_bytes()));
-        }
-        if !has_content_type {
-            resp_headers.push(quiche::h3::Header::new(b"content-type", b"text/plain"));
-        }
-        if !has_content_length {
-            resp_headers.push(quiche::h3::Header::new(
-                b"content-length",
-                body.len().to_string().as_bytes(),
-            ));
-        }
+        let resp_headers = response_headers_with_defaults(status, body, headers);
         h3.send_response(quic, stream_id, &resp_headers, false)?;
         h3.send_body(quic, stream_id, body, true)?;
         Ok(())
