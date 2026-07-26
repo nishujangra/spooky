@@ -113,3 +113,44 @@ impl Drop for AdaptivePermit {
         self.admission.inflight.fetch_sub(1, Ordering::Relaxed);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{sync::Arc, time::Duration};
+
+    use super::AdaptiveAdmission;
+
+    #[test]
+    fn try_acquire_rejects_when_inflight_reaches_current_limit() {
+        let admission = Arc::new(AdaptiveAdmission::new(true, 1, 2, 1, 1, 10));
+
+        let first = admission.try_acquire().expect("first permit");
+        let second = admission.try_acquire().expect("second permit");
+
+        assert!(admission.try_acquire().is_none());
+        assert_eq!(admission.inflight(), 2);
+
+        drop(first);
+        assert_eq!(admission.inflight(), 1);
+
+        drop(second);
+        assert_eq!(admission.inflight(), 0);
+    }
+
+    #[test]
+    fn observe_overload_and_recovery_respect_min_and_max_limits() {
+        let admission = AdaptiveAdmission::new(true, 2, 5, 2, 3, 50);
+
+        admission.observe(Duration::from_millis(60), false);
+        assert_eq!(admission.current_limit(), 2);
+
+        admission.observe(Duration::from_millis(10), false);
+        assert_eq!(admission.current_limit(), 4);
+
+        admission.observe(Duration::from_millis(10), false);
+        assert_eq!(admission.current_limit(), 5);
+
+        admission.observe(Duration::from_millis(10), true);
+        assert_eq!(admission.current_limit(), 2);
+    }
+}
