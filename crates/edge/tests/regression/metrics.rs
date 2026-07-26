@@ -161,6 +161,82 @@ fn resilience_metrics_increment_correctly() {
 }
 
 #[test]
+fn retry_and_hedge_counters_increment_only_on_executed_branches() {
+    let metrics = Metrics::default();
+    metrics.inc_retry_attempt(RetryAttemptTelemetryReason::Transport);
+    metrics.inc_retry_denied(RetryPolicyDenialReason::MethodNotIdempotent);
+    metrics.inc_retry_denied(RetryPolicyDenialReason::RequestBodyNotReplayable);
+    metrics.inc_retry_denied(RetryPolicyDenialReason::AlternateBackendUnavailable(
+        spooky_lb::alternate_backend::AlternateBackendFailureReason::NoHealthyBackends,
+    ));
+    metrics.inc_retry_denied(RetryPolicyDenialReason::AttemptLimitReached);
+    metrics.inc_retry_denied(RetryPolicyDenialReason::TerminalError(
+        spooky_errors::UpstreamTerminalErrorKind::Protocol,
+    ));
+    metrics.inc_hedge_trigger(HedgeTriggerTelemetryReason::DelayElapsed);
+    metrics.inc_hedge_outcome(HedgeOutcomeTelemetryReason::PrimaryWonAfterTrigger);
+
+    let output = metrics.render_prometheus();
+    assert!(output.contains("spooky_retries_total 1\n"));
+    assert!(output.contains("spooky_retry_attempts_total{reason=\"transport\"} 1\n"));
+    assert!(output.contains("spooky_retry_attempts_total{reason=\"timeout\"} 0\n"));
+    assert!(output.contains("spooky_retry_denied_total{reason=\"budget\"} 0\n"));
+    assert!(output.contains("spooky_retry_denied_total{reason=\"no_bodyless\"} 2\n"));
+    assert!(output.contains("spooky_retry_denied_total{reason=\"no_alternate\"} 1\n"));
+    assert!(output.contains("spooky_hedge_triggered_total 1\n"));
+    assert!(output.contains("spooky_hedge_won_total 0\n"));
+    assert!(output.contains("spooky_hedge_wasted_total 1\n"));
+    assert!(output.contains("spooky_hedge_primary_won_after_trigger_total 1\n"));
+}
+
+#[test]
+fn metrics_render_keeps_retry_and_outcome_label_vocabularies_stable() {
+    let metrics = Metrics::default();
+    metrics.inc_retry_attempt(RetryAttemptTelemetryReason::Timeout);
+    metrics.inc_retry_attempt(RetryAttemptTelemetryReason::Transport);
+    metrics.inc_retry_attempt(RetryAttemptTelemetryReason::Pool);
+    metrics.inc_retry_denied(RetryPolicyDenialReason::BudgetDenied);
+    metrics.inc_retry_denied(RetryPolicyDenialReason::MethodNotIdempotent);
+    metrics.inc_retry_denied(RetryPolicyDenialReason::AlternateBackendUnavailable(
+        spooky_lb::alternate_backend::AlternateBackendFailureReason::NoHealthyBackends,
+    ));
+    metrics.inc_overload_shed_reason(OverloadShedReason::Brownout);
+    metrics.inc_overload_shed_reason(OverloadShedReason::AdaptiveAdmission);
+    metrics.inc_overload_shed_reason(OverloadShedReason::RouteCap);
+    metrics.inc_overload_shed_reason(OverloadShedReason::RouteGlobalCap);
+    metrics.inc_overload_shed_reason(OverloadShedReason::GlobalInflight);
+    metrics.inc_overload_shed_reason(OverloadShedReason::UpstreamInflight);
+    metrics.inc_overload_shed_reason(OverloadShedReason::BackendInflight);
+    metrics.inc_overload_shed_reason(OverloadShedReason::CircuitOpen);
+    metrics.inc_overload_shed_reason(OverloadShedReason::RequestBufferCap);
+    metrics.inc_overload_shed_reason(OverloadShedReason::ResponsePrebufferCap);
+    metrics.inc_overload_shed_reason(OverloadShedReason::ConnectionCap);
+
+    let output = metrics.render_prometheus();
+    for expected in [
+        "spooky_retry_attempts_total{reason=\"timeout\"} 1",
+        "spooky_retry_attempts_total{reason=\"transport\"} 1",
+        "spooky_retry_attempts_total{reason=\"pool\"} 1",
+        "spooky_retry_denied_total{reason=\"budget\"} 1",
+        "spooky_retry_denied_total{reason=\"no_bodyless\"} 1",
+        "spooky_retry_denied_total{reason=\"no_alternate\"} 1",
+        "spooky_overload_shed_by_reason_total{reason=\"brownout\"} 1",
+        "spooky_overload_shed_by_reason_total{reason=\"adaptive_admission\"} 1",
+        "spooky_overload_shed_by_reason_total{reason=\"route_cap\"} 1",
+        "spooky_overload_shed_by_reason_total{reason=\"route_global_cap\"} 1",
+        "spooky_overload_shed_by_reason_total{reason=\"global_inflight\"} 1",
+        "spooky_overload_shed_by_reason_total{reason=\"upstream_inflight\"} 1",
+        "spooky_overload_shed_by_reason_total{reason=\"backend_inflight\"} 1",
+        "spooky_overload_shed_by_reason_total{reason=\"circuit_open\"} 1",
+        "spooky_overload_shed_by_reason_total{reason=\"request_buffer_cap\"} 1",
+        "spooky_overload_shed_by_reason_total{reason=\"response_prebuffer_cap\"} 1",
+        "spooky_overload_shed_by_reason_total{reason=\"connection_cap\"} 1",
+    ] {
+        assert!(output.contains(expected), "missing metric line: {expected}");
+    }
+}
+
+#[test]
 fn metrics_render_includes_external_auth_counters() {
     let metrics = Metrics::default();
     metrics.inc_external_auth_allowed();
