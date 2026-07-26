@@ -651,8 +651,9 @@ mod tests {
 
     use crate::{
         config::{
-            Backend, Config, ForwardedHeaderPolicy, Listen, LoadBalancing, Resilience, RouteAuth,
-            RouteMatch, Tls, Upstream, UpstreamHostPolicy,
+            ApiKeyAuth, Backend, Config, ExternalAuth, ExternalAuthFailureMode,
+            ExternalAuthRequestHeader, ForwardedHeaderPolicy, Listen, LoadBalancing, Resilience,
+            RouteAuth, RouteMatch, Tls, Upstream, UpstreamHostPolicy,
         },
         runtime::{RuntimeConfigError, RuntimePolicySet},
     };
@@ -787,6 +788,108 @@ mod tests {
                 .method
                 .as_deref(),
             Some("CONNECT")
+        );
+    }
+
+    #[test]
+    fn external_auth_misconfiguration_is_rejected_during_normalization() {
+        let mut invalid_header = upstream(None, "/", None);
+        invalid_header.auth.external_auth = Some(ExternalAuth::Http {
+            endpoint: "https://auth.example.com/check".to_string(),
+            request_headers: vec![ExternalAuthRequestHeader {
+                name: "bad header".to_string(),
+                value: "value".to_string(),
+            }],
+            response_header_allowlist: vec!["x-auth-user".to_string()],
+            timeout_ms: 1000,
+            failure_mode: ExternalAuthFailureMode::FailClosed,
+        });
+        let config = config_with_upstreams(HashMap::from([("api".to_string(), invalid_header)]));
+        let policies = RuntimePolicySet::from_config(&config).expect("policies");
+
+        let err = normalize_upstreams(&config, &policies).expect_err("invalid external auth");
+        assert_eq!(
+            err,
+            RuntimeConfigError::ConfigInvalid(
+                "upstream 'api' auth.external_auth.http.request_headers[].name must be a valid HTTP header name"
+                    .to_string()
+            )
+        );
+
+        let mut duplicate_allowlist = upstream(None, "/", None);
+        duplicate_allowlist.auth.external_auth = Some(ExternalAuth::Http {
+            endpoint: "https://auth.example.com/check".to_string(),
+            request_headers: Vec::new(),
+            response_header_allowlist: vec!["x-auth-user".to_string(), "X-Auth-User".to_string()],
+            timeout_ms: 1000,
+            failure_mode: ExternalAuthFailureMode::FailClosed,
+        });
+        let config =
+            config_with_upstreams(HashMap::from([("api".to_string(), duplicate_allowlist)]));
+        let policies = RuntimePolicySet::from_config(&config).expect("policies");
+
+        let err = normalize_upstreams(&config, &policies).expect_err("duplicate allowlist");
+        assert_eq!(
+            err,
+            RuntimeConfigError::ConfigInvalid(
+                "upstream 'api' auth.external_auth.http.response_header_allowlist contains duplicate header names"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn external_auth_precedence_is_explicit_at_normalization_time() {
+        let mut external_plus_api_key = upstream(None, "/", None);
+        external_plus_api_key.auth = RouteAuth {
+            api_key: Some(ApiKeyAuth {
+                header_name: "x-api-key".to_string(),
+                keys: vec!["secret".to_string()],
+            }),
+            jwt: None,
+            external_auth: Some(ExternalAuth::Http {
+                endpoint: "https://auth.example.com/check".to_string(),
+                request_headers: Vec::new(),
+                response_header_allowlist: Vec::new(),
+                timeout_ms: 1000,
+                failure_mode: ExternalAuthFailureMode::FailClosed,
+            }),
+            required_scopes: Vec::new(),
+            required_roles: Vec::new(),
+        };
+        let config =
+            config_with_upstreams(HashMap::from([("api".to_string(), external_plus_api_key)]));
+        let policies = RuntimePolicySet::from_config(&config).expect("policies");
+
+        let err = normalize_upstreams(&config, &policies).expect_err("external auth precedence");
+        assert_eq!(
+            err,
+            RuntimeConfigError::UnsupportedPolicyCombination(
+                "upstream 'api' auth.external_auth cannot be combined with auth.api_key or auth.jwt in v1"
+                    .to_string()
+            )
+        );
+
+        let mut external_plus_scopes = upstream(None, "/", None);
+        external_plus_scopes.auth.external_auth = Some(ExternalAuth::Http {
+            endpoint: "https://auth.example.com/check".to_string(),
+            request_headers: Vec::new(),
+            response_header_allowlist: Vec::new(),
+            timeout_ms: 1000,
+            failure_mode: ExternalAuthFailureMode::FailClosed,
+        });
+        external_plus_scopes.auth.required_scopes = vec!["read".to_string()];
+        let config =
+            config_with_upstreams(HashMap::from([("api".to_string(), external_plus_scopes)]));
+        let policies = RuntimePolicySet::from_config(&config).expect("policies");
+
+        let err = normalize_upstreams(&config, &policies).expect_err("external auth scope mix");
+        assert_eq!(
+            err,
+            RuntimeConfigError::UnsupportedPolicyCombination(
+                "upstream 'api' auth.external_auth cannot be combined with auth.required_scopes or auth.required_roles in v1"
+                    .to_string()
+            )
         );
     }
 }
