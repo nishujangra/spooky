@@ -79,7 +79,10 @@ pub(super) fn normalize_upstreams(
     let mut seen_backend_origins: HashMap<String, (String, String)> = HashMap::new();
     let mut normalized = HashMap::new();
 
-    for (upstream_name, upstream) in &config.upstream {
+    let mut ordered_upstreams: Vec<(&String, &Upstream)> = config.upstream.iter().collect();
+    ordered_upstreams.sort_by_key(|(upstream_name, _)| *upstream_name);
+
+    for (upstream_name, upstream) in ordered_upstreams {
         validate_upstream_policy(config, upstream_name, upstream)?;
 
         let route_key = RuntimeRouteMatchPolicy::normalize(upstream_name, &upstream.route)?;
