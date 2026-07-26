@@ -1421,3 +1421,182 @@ impl QUICListener {
         terminal
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::runtime::connection::auth::{
+        ExternalAuthChallengeResponse, ExternalAuthDecision, ExternalAuthDenyResponse,
+        ExternalAuthRedirectResponse,
+    };
+    use quiche::h3::NameValue;
+
+    use super::*;
+    use crate::quic_listener::admission::AdmissionRejectionResponse;
+
+    fn header_value<'a>(headers: &'a [quiche::h3::Header], name: &[u8]) -> Option<&'a [u8]> {
+        headers
+            .iter()
+            .find(|header| header.name().eq_ignore_ascii_case(name))
+            .map(|header| header.value())
+    }
+
+    #[test]
+    fn simple_and_overload_local_responses_have_stable_wire_shape() {
+        let simple = simple_response_headers(http::StatusCode::BAD_GATEWAY, b"upstream error\n");
+        assert_eq!(header_value(&simple, b":status"), Some(&b"502"[..]));
+        assert_eq!(
+            header_value(&simple, b"content-type"),
+            Some(&b"text/plain"[..])
+        );
+        assert_eq!(header_value(&simple, b"content-length"), Some(&b"15"[..]));
+
+        let overload = overload_response_headers(b"busy\n", 0);
+        assert_eq!(header_value(&overload, b":status"), Some(&b"503"[..]));
+        assert_eq!(header_value(&overload, b"retry-after"), Some(&b"1"[..]));
+        assert_eq!(header_value(&overload, b"content-length"), Some(&b"5"[..]));
+    }
+
+    #[test]
+    fn admission_rejection_headers_preserve_only_supported_challenge_and_retry_metadata() {
+        let auth = AdmissionRejectionResponse {
+            status: http::StatusCode::UNAUTHORIZED,
+            body: b"auth denied\n",
+            www_authenticate: Some("Bearer realm=\"spooky\""),
+            retry_after_seconds: None,
+        };
+        let auth_headers = admission_rejection_headers(&auth);
+        assert_eq!(header_value(&auth_headers, b":status"), Some(&b"401"[..]));
+        assert_eq!(
+            header_value(&auth_headers, b"www-authenticate"),
+            Some(&b"Bearer realm=\"spooky\""[..])
+        );
+        assert_eq!(header_value(&auth_headers, b"retry-after"), None);
+
+        let overload = AdmissionRejectionResponse {
+            status: http::StatusCode::SERVICE_UNAVAILABLE,
+            body: b"overloaded\n",
+            www_authenticate: None,
+            retry_after_seconds: Some(0),
+        };
+        let overload_headers = admission_rejection_headers(&overload);
+        assert_eq!(
+            header_value(&overload_headers, b":status"),
+            Some(&b"503"[..])
+        );
+        assert_eq!(header_value(&overload_headers, b"www-authenticate"), None);
+        assert_eq!(
+            header_value(&overload_headers, b"retry-after"),
+            Some(&b"1"[..])
+        );
+    }
+
+    #[test]
+    fn response_headers_with_defaults_adds_only_missing_framing_headers() {
+        let headers = response_headers_with_defaults(
+            http::StatusCode::FORBIDDEN,
+            b"denied\n",
+            &[
+                ("x-auth-reason".to_string(), "policy".to_string()),
+                ("content-type".to_string(), "application/json".to_string()),
+            ],
+        );
+
+        assert_eq!(header_value(&headers, b":status"), Some(&b"403"[..]));
+        assert_eq!(
+            header_value(&headers, b"content-type"),
+            Some(&b"application/json"[..])
+        );
+        assert_eq!(header_value(&headers, b"content-length"), Some(&b"7"[..]));
+        assert_eq!(
+            header_value(&headers, b"x-auth-reason"),
+            Some(&b"policy"[..])
+        );
+    }
+
+    #[test]
+    fn external_auth_decision_wire_shape_preserves_allowed_headers_and_local_defaults() {
+        let deny = ExternalAuthDecision::Deny(ExternalAuthDenyResponse {
+            status: http::StatusCode::FORBIDDEN,
+            headers: vec![("x-auth-reason".to_string(), "policy".to_string())],
+            body: b"denied\n".to_vec(),
+        });
+        let redirect = ExternalAuthDecision::Redirect(ExternalAuthRedirectResponse {
+            status: http::StatusCode::TEMPORARY_REDIRECT,
+            headers: vec![("x-auth-reason".to_string(), "login".to_string())],
+            location: "https://login.example.com".to_string(),
+        });
+        let challenge = ExternalAuthDecision::Challenge(ExternalAuthChallengeResponse {
+            status: http::StatusCode::UNAUTHORIZED,
+            headers: vec![("x-auth-reason".to_string(), "expired".to_string())],
+            www_authenticate: "Bearer".to_string(),
+            body: b"challenge\n".to_vec(),
+        });
+
+        let deny_headers = match &deny {
+            ExternalAuthDecision::Deny(response) => {
+                response_headers_with_defaults(response.status, &response.body, &response.headers)
+            }
+            _ => unreachable!(),
+        };
+        assert_eq!(header_value(&deny_headers, b":status"), Some(&b"403"[..]));
+        assert_eq!(
+            header_value(&deny_headers, b"x-auth-reason"),
+            Some(&b"policy"[..])
+        );
+        assert_eq!(header_value(&deny_headers, b"location"), None);
+        assert_eq!(header_value(&deny_headers, b"www-authenticate"), None);
+
+        let redirect_headers = match &redirect {
+            ExternalAuthDecision::Redirect(response) => {
+                let mut headers = response.headers.clone();
+                headers.push((
+                    http::header::LOCATION.as_str().to_string(),
+                    response.location.clone(),
+                ));
+                response_headers_with_defaults(response.status, &[], &headers)
+            }
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            header_value(&redirect_headers, b":status"),
+            Some(&b"307"[..])
+        );
+        assert_eq!(
+            header_value(&redirect_headers, b"location"),
+            Some(&b"https://login.example.com"[..])
+        );
+        assert_eq!(
+            header_value(&redirect_headers, b"content-length"),
+            Some(&b"0"[..])
+        );
+        assert_eq!(header_value(&redirect_headers, b"www-authenticate"), None);
+
+        let challenge_headers = match &challenge {
+            ExternalAuthDecision::Challenge(response) => {
+                let mut headers = response.headers.clone();
+                headers.push((
+                    http::header::WWW_AUTHENTICATE.as_str().to_string(),
+                    response.www_authenticate.clone(),
+                ));
+                response_headers_with_defaults(response.status, &response.body, &headers)
+            }
+            _ => unreachable!(),
+        };
+        assert_eq!(
+            header_value(&challenge_headers, b":status"),
+            Some(&b"401"[..])
+        );
+        assert_eq!(
+            header_value(&challenge_headers, b"x-auth-reason"),
+            Some(&b"expired"[..])
+        );
+        assert_eq!(
+            header_value(&challenge_headers, b"www-authenticate"),
+            Some(&b"Bearer"[..])
+        );
+        assert_eq!(
+            header_value(&challenge_headers, b"content-length"),
+            Some(&b"10"[..])
+        );
+    }
+}
