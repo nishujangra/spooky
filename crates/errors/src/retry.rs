@@ -244,6 +244,7 @@ pub fn is_retryable(err: &ProxyError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{BridgeError, PoolError, ProxyError};
 
     fn retry_facts() -> RetryPolicyFacts {
         RetryPolicyFacts {
@@ -414,6 +415,36 @@ mod tests {
             RetryPolicyDecision::Retry {
                 reason: UpstreamRetryReason::Timeout,
             }
+        );
+    }
+
+    #[test]
+    fn classify_retryability_keeps_retryable_and_terminal_classes_explicit() {
+        assert_eq!(
+            classify_retryability(&ProxyError::Transport("connection reset".to_string())),
+            UpstreamRetryability::Retryable(UpstreamRetryReason::Transport)
+        );
+        assert_eq!(
+            classify_retryability(&ProxyError::Timeout),
+            UpstreamRetryability::Retryable(UpstreamRetryReason::Timeout)
+        );
+        assert_eq!(
+            classify_retryability(&ProxyError::Pool(PoolError::UnknownBackend(
+                "missing".to_string()
+            ))),
+            UpstreamRetryability::Retryable(UpstreamRetryReason::Pool)
+        );
+        assert_eq!(
+            classify_retryability(&ProxyError::Protocol("bad response frame".to_string())),
+            UpstreamRetryability::Terminal(UpstreamTerminalErrorKind::Protocol)
+        );
+        assert_eq!(
+            classify_retryability(&ProxyError::Bridge(BridgeError::InvalidHeader)),
+            UpstreamRetryability::Terminal(UpstreamTerminalErrorKind::Bridge)
+        );
+        assert_eq!(
+            classify_retryability(&ProxyError::Tls("unknown issuer".to_string())),
+            UpstreamRetryability::Terminal(UpstreamTerminalErrorKind::Tls)
         );
     }
 

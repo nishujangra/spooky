@@ -277,6 +277,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn bridge_and_protocol_boundaries_remain_explicit_for_proxy_classification() {
+        assert_eq!(
+            classify_upstream_proxy_error(&ProxyError::Bridge(BridgeError::InvalidHeader)),
+            None
+        );
+
+        let protocol =
+            classify_upstream_proxy_error(&ProxyError::Protocol("malformed headers".to_string()))
+                .expect("protocol should classify");
+        assert_eq!(protocol.kind, UpstreamProxyErrorKind::Protocol);
+        assert_eq!(
+            protocol.classification,
+            UpstreamErrorClassification::protocol()
+        );
+        assert_eq!(protocol.health_failure, None);
+        assert_eq!(
+            protocol.retryability,
+            UpstreamRetryability::Terminal(UpstreamTerminalErrorKind::Protocol)
+        );
+    }
+
     #[tokio::test]
     async fn pool_send_classifies_as_terminal_send_error() {
         let err = ProxyError::Pool(PoolError::Send(connect_send_error().await));
