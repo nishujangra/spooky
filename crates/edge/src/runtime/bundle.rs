@@ -243,3 +243,158 @@ impl RuntimeBundleHandle {
         Ok(generation)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, path::Path};
+
+    use rcgen::{Certificate, CertificateParams, SanType};
+    use tempfile::tempdir;
+
+    use super::*;
+    use crate::runtime::listener::QUICListener;
+    use spooky_config::config::{
+        Backend, ClientAuth, Config as SpookyConfigConfig, Listen, LoadBalancing, Log, LogFile,
+        LogFormat, Observability, Performance, Resilience, RouteMatch, Security, Tls, Upstream,
+        UpstreamTls,
+    };
+    use spooky_config::runtime::RuntimeConfig;
+
+    fn write_test_cert_for_name(dir: &Path, cert_name: &str, dns_name: &str) -> (String, String) {
+        let mut params = CertificateParams::new(vec![dns_name.to_string()]);
+        params
+            .subject_alt_names
+            .push(SanType::DnsName(dns_name.to_string()));
+        let cert = Certificate::from_params(params).expect("failed to build cert");
+
+        let cert_path = dir.join(format!("{cert_name}.pem"));
+        let key_path = dir.join(format!("{cert_name}.key.pem"));
+        std::fs::write(&cert_path, cert.serialize_pem().expect("serialize cert"))
+            .expect("write cert");
+        std::fs::write(&key_path, cert.serialize_private_key_pem()).expect("write key");
+        (
+            cert_path.to_string_lossy().to_string(),
+            key_path.to_string_lossy().to_string(),
+        )
+    }
+
+    fn test_config(cert: String, key: String, backend_addr: &str) -> SpookyConfigConfig {
+        let mut upstreams = HashMap::new();
+        upstreams.insert(
+            "api".to_string(),
+            Upstream {
+                load_balancing: LoadBalancing {
+                    lb_type: "round-robin".to_string(),
+                    key: None,
+                },
+                auth: Default::default(),
+                host_policy: Default::default(),
+                forwarded_headers: Default::default(),
+                tls: None,
+                route: RouteMatch {
+                    path_prefix: Some("/".to_string()),
+                    ..Default::default()
+                },
+                backends: vec![Backend {
+                    id: "b1".to_string(),
+                    address: backend_addr.to_string(),
+                    weight: 1,
+                    health_check: None,
+                }],
+            },
+        );
+
+        SpookyConfigConfig {
+            version: 1,
+            listen: Listen {
+                protocol: "http3".to_string(),
+                port: 9889,
+                address: "127.0.0.1".to_string(),
+                tls: Tls {
+                    cert,
+                    key,
+                    certificates: vec![],
+                    client_auth: ClientAuth::default(),
+                },
+            },
+            listeners: vec![],
+            upstream: upstreams,
+            load_balancing: Some(LoadBalancing {
+                lb_type: "round-robin".to_string(),
+                key: None,
+            }),
+            upstream_tls: UpstreamTls::default(),
+            log: Log {
+                level: "info".to_string(),
+                file: LogFile {
+                    enabled: false,
+                    path: String::new(),
+                },
+                format: LogFormat::Plain,
+            },
+            performance: Performance::default(),
+            observability: Observability::default(),
+            resilience: Resilience::default(),
+            security: Security::default(),
+        }
+    }
+
+    fn runtime_bundle_from_config(
+        generation: u64,
+        config_path: &str,
+        config: &SpookyConfigConfig,
+    ) -> RuntimeBundle {
+        let runtime_config = RuntimeConfig::from_config(config).expect("runtime config");
+        let mut bundle = QUICListener::build_runtime_bundle(
+            config_path.to_string(),
+            config.log.clone(),
+            &runtime_config,
+        )
+        .expect("runtime bundle");
+        bundle.generation = generation;
+        bundle
+    }
+
+    #[test]
+    fn stale_generation_views_do_not_change_after_runtime_bundle_replacement() {
+        let dir = tempdir().expect("tempdir");
+        let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+        let startup = test_config(cert.clone(), key.clone(), "http://127.0.0.1:7001");
+        let reloaded = test_config(cert, key, "http://127.0.0.1:7002");
+
+        let current_bundle = runtime_bundle_from_config(1, "startup.yaml", &startup);
+        let next_bundle = runtime_bundle_from_config(2, "reloaded.yaml", &reloaded);
+        let handle = RuntimeBundleHandle::new(current_bundle.clone());
+
+        let stale = handle.current_view();
+        let installed = handle.replace(next_bundle).expect("replace");
+
+        assert_eq!(installed, 2);
+        assert_eq!(handle.current_generation(), 2);
+        assert_eq!(stale.generation(), 1);
+        assert_eq!(stale.startup().config_path, "startup.yaml");
+        assert_eq!(
+            stale
+                .runtime_config()
+                .upstreams
+                .get("api")
+                .expect("stale upstream")
+                .backends[0]
+                .backend
+                .address,
+            "http://127.0.0.1:7001"
+        );
+        assert_eq!(
+            handle
+                .current()
+                .runtime_config
+                .upstreams
+                .get("api")
+                .expect("current upstream")
+                .backends[0]
+                .backend
+                .address,
+            "http://127.0.0.1:7002"
+        );
+    }
+}

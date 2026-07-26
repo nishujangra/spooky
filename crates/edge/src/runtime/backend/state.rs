@@ -167,4 +167,73 @@ mod tests {
         assert_eq!(state.resolved_addrs, addrs);
         assert!(!state.is_hostname());
     }
+
+    #[test]
+    fn inventory_summary_counts_only_placed_and_healthy_backends() {
+        let snapshot = BackendLifecycleInventorySnapshot {
+            backends: vec![
+                CanonicalBackendLifecycleSnapshot {
+                    identity: BackendIdentity::new("backend-a"),
+                    resolution: BackendResolutionState {
+                        authority_host: "backend-a".into(),
+                        authority_port: 443,
+                        address_kind: RuntimeBackendAddressKind::IpLiteral,
+                        resolved_addrs: vec![],
+                        last_refresh_success_at: None,
+                        refresh_generation: 0,
+                    },
+                    health: BackendHealthState::Healthy,
+                    membership: BackendMembershipState::Active,
+                    placements: vec![BackendPoolPlacementSnapshot {
+                        upstream_name: "api".into(),
+                        backend_index: 0,
+                        healthy: true,
+                        active_requests: 0,
+                        ewma_latency_ms: None,
+                        membership_epoch: 1,
+                    }],
+                },
+                CanonicalBackendLifecycleSnapshot {
+                    identity: BackendIdentity::new("backend-b"),
+                    resolution: BackendResolutionState {
+                        authority_host: "backend-b".into(),
+                        authority_port: 443,
+                        address_kind: RuntimeBackendAddressKind::IpLiteral,
+                        resolved_addrs: vec![],
+                        last_refresh_success_at: None,
+                        refresh_generation: 0,
+                    },
+                    health: BackendHealthState::Unhealthy { reason: None },
+                    membership: BackendMembershipState::Suppressed,
+                    placements: vec![BackendPoolPlacementSnapshot {
+                        upstream_name: "api".into(),
+                        backend_index: 1,
+                        healthy: false,
+                        active_requests: 2,
+                        ewma_latency_ms: Some(25.0),
+                        membership_epoch: 1,
+                    }],
+                },
+                CanonicalBackendLifecycleSnapshot {
+                    identity: BackendIdentity::new("backend-c"),
+                    resolution: BackendResolutionState {
+                        authority_host: "backend-c".into(),
+                        authority_port: 443,
+                        address_kind: RuntimeBackendAddressKind::IpLiteral,
+                        resolved_addrs: vec![],
+                        last_refresh_success_at: None,
+                        refresh_generation: 0,
+                    },
+                    health: BackendHealthState::Healthy,
+                    membership: BackendMembershipState::Removed,
+                    placements: Vec::new(),
+                },
+            ],
+        };
+
+        let summary = snapshot.summary();
+
+        assert_eq!(summary.total_backends, 2);
+        assert_eq!(summary.healthy_backends, 1);
+    }
 }
