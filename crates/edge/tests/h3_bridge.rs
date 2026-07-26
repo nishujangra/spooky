@@ -45,8 +45,8 @@ mod support;
 
 use spooky_config::{
     config::{
-        Backend, ClientAuth, Config, HealthCheck, Listen, LoadBalancing, Log, LogFormat, Security,
-        Tls, TlsCertificate, UpstreamTls,
+        Backend, ClientAuth, Config, HealthCheck, Listen, LoadBalancing, Log, LogFormat,
+        RouteMatch, Security, Tls, TlsCertificate, Upstream, UpstreamTls,
     },
     runtime::RuntimeConfig,
 };
@@ -64,6 +64,14 @@ use support::net::local_listener_bind_available;
 type TrailerPairs = Vec<(String, String)>;
 type H3TrailerResponse = (String, Vec<u8>, TrailerPairs);
 type BootstrapResponse = (StatusCode, Vec<u8>, TrailerPairs);
+
+#[derive(Debug, Default)]
+struct BootstrapCollectedResponse {
+    status: StatusCode,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+    trailers: Vec<(String, String)>,
+}
 
 fn write_test_certs(dir: &TempDir) -> (String, String) {
     write_named_test_cert(dir, "cert", &["localhost"], &[IpAddr::from([127, 0, 0, 1])])
@@ -155,10 +163,6 @@ fn write_test_ca_and_client_cert(
 }
 
 fn make_config(port: u32, backend_addr: String, cert: String, key: String) -> Config {
-    use std::collections::HashMap;
-
-    use spooky_config::config::{RouteMatch, Upstream};
-
     let mut upstream = HashMap::new();
     upstream.insert(
         "test_pool".to_string(),
@@ -191,6 +195,15 @@ fn make_config(port: u32, backend_addr: String, cert: String, key: String) -> Co
         },
     );
 
+    make_config_with_upstreams(port, upstream, cert, key)
+}
+
+fn make_config_with_upstreams(
+    port: u32,
+    upstream: HashMap<String, Upstream>,
+    cert: String,
+    key: String,
+) -> Config {
     Config {
         version: 1,
         listen: Listen {
@@ -311,6 +324,34 @@ async fn start_h2_backend() -> SocketAddr {
                 let io = TokioIo::new(stream);
                 let service = service_fn(|_req: Request<Incoming>| async move {
                     Ok::<_, hyper::Error>(Response::new(Full::new(Bytes::from("backend ok\n"))))
+                });
+
+                let _ = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(io, service)
+                    .await;
+            });
+        }
+    });
+
+    addr
+}
+
+async fn start_h2_backend_with_static_body(body: &'static [u8]) -> SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+
+    tokio::spawn(async move {
+        loop {
+            let (stream, _) = match listener.accept().await {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+            tokio::spawn(async move {
+                let io = TokioIo::new(stream);
+                let service = service_fn(move |_req: Request<Incoming>| async move {
+                    Ok::<_, hyper::Error>(Response::new(
+                        Full::new(Bytes::from_static(body)).boxed(),
+                    ))
                 });
 
                 let _ = hyper::server::conn::http1::Builder::new()
@@ -1937,6 +1978,80 @@ async fn run_bootstrap_h2_client_request(
     Ok((status, body, trailers))
 }
 
+async fn run_bootstrap_h2_client_collect_response(
+    addr: SocketAddr,
+    cert_path: &str,
+    method: &str,
+    path: &str,
+    extra_headers: &[(&str, &str)],
+) -> Result<BootstrapCollectedResponse, String> {
+    let (mut sender, _conn_task) = connect_bootstrap_h2(addr, cert_path).await?;
+    sender
+        .ready()
+        .await
+        .map_err(|err| format!("sender ready: {err}"))?;
+
+    let mut builder = Request::builder()
+        .method(method)
+        .uri(
+            Uri::builder()
+                .path_and_query(path)
+                .build()
+                .map_err(|err| format!("uri build: {err}"))?,
+        )
+        .header("host", "localhost");
+    for (name, value) in extra_headers {
+        builder = builder.header(*name, *value);
+    }
+
+    let req = builder
+        .body(Empty::<Bytes>::new())
+        .map_err(|err| format!("request build: {err}"))?;
+    let mut response = sender
+        .send_request(req)
+        .await
+        .map_err(|err| format!("send request: {err}"))?;
+    let mut collected = BootstrapCollectedResponse {
+        status: response.status(),
+        headers: response
+            .headers()
+            .iter()
+            .map(|(name, value)| {
+                Ok::<_, String>((
+                    name.as_str().to_string(),
+                    value
+                        .to_str()
+                        .map_err(|err| format!("header utf8: {err}"))?
+                        .to_string(),
+                ))
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        ..BootstrapCollectedResponse::default()
+    };
+
+    while let Some(frame) = response.body_mut().frame().await {
+        let frame = frame.map_err(|err| format!("read frame: {err}"))?;
+        match frame.into_data() {
+            Ok(data) => collected.body.extend_from_slice(&data),
+            Err(frame) => {
+                if let Ok(trailer_map) = frame.into_trailers() {
+                    for (name, value) in &trailer_map {
+                        collected.trailers.push((
+                            name.as_str().to_string(),
+                            value
+                                .to_str()
+                                .map_err(|err| format!("trailer utf8: {err}"))?
+                                .to_string(),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(collected)
+}
+
 async fn run_bootstrap_h2_client_request_with_client_auth(
     addr: SocketAddr,
     cert_path: &str,
@@ -3289,6 +3404,241 @@ fn error_status_mapping_parity_is_preserved() {
         String::from_utf8_lossy(&transport_obs.body).contains("upstream error"),
         "transport error body should indicate upstream error"
     );
+}
+
+#[test]
+fn quic_and_bootstrap_route_overlaps_resolve_to_same_upstream() {
+    if !local_listener_bind_available() {
+        return;
+    }
+    let dir = tempdir().expect("failed to create temp dir");
+    let (cert, key) = write_test_certs(&dir);
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+
+    let api_backend = rt.block_on(start_h2_backend_with_static_body(b"api-route\n"));
+    let default_backend = rt.block_on(start_h2_backend_with_static_body(b"default-route\n"));
+    let mut upstreams = HashMap::new();
+    upstreams.insert(
+        "default_pool".to_string(),
+        Upstream {
+            load_balancing: LoadBalancing {
+                lb_type: "random".to_string(),
+                key: None,
+            },
+            auth: Default::default(),
+            host_policy: Default::default(),
+            forwarded_headers: Default::default(),
+            tls: None,
+            route: RouteMatch {
+                path_prefix: Some("/".to_string()),
+                ..Default::default()
+            },
+            backends: vec![Backend {
+                id: "default-backend".to_string(),
+                address: normalize_backend_address(default_backend.to_string()),
+                weight: 1,
+                health_check: None,
+            }],
+        },
+    );
+    upstreams.insert(
+        "api_pool".to_string(),
+        Upstream {
+            load_balancing: LoadBalancing {
+                lb_type: "random".to_string(),
+                key: None,
+            },
+            auth: Default::default(),
+            host_policy: Default::default(),
+            forwarded_headers: Default::default(),
+            tls: None,
+            route: RouteMatch {
+                host: Some("localhost".to_string()),
+                path_prefix: Some("/api".to_string()),
+                ..Default::default()
+            },
+            backends: vec![Backend {
+                id: "api-backend".to_string(),
+                address: normalize_backend_address(api_backend.to_string()),
+                weight: 1,
+                health_check: None,
+            }],
+        },
+    );
+
+    let config =
+        make_config_with_upstreams(find_free_tcp_port() as u32, upstreams, cert.clone(), key);
+    let _enter = rt.enter();
+    let listener = make_listener_with_bootstrap(config);
+    drop(_enter);
+    let listen_addr = listener.socket.local_addr().unwrap();
+    let _listener_task = ListenerTaskGuard::spawn(&rt, listener);
+
+    let quic = run_h3_client_collect_response(
+        listen_addr,
+        vec![
+            quiche::h3::Header::new(b":method", b"GET"),
+            quiche::h3::Header::new(b":scheme", b"https"),
+            quiche::h3::Header::new(b":authority", b"localhost"),
+            quiche::h3::Header::new(b":path", b"/api/items"),
+            quiche::h3::Header::new(b"user-agent", b"spooky-parity-test"),
+        ],
+        true,
+        Duration::from_secs(REQUEST_TIMEOUT_SECS + 4),
+    )
+    .expect("quic route request should complete");
+    let bootstrap = rt
+        .block_on(run_bootstrap_h2_client_collect_response(
+            listen_addr,
+            &cert,
+            "GET",
+            "/api/items",
+            &[],
+        ))
+        .expect("bootstrap route request should complete");
+
+    assert_eq!(quic.status, "200");
+    assert_eq!(bootstrap.status, StatusCode::OK);
+    assert_eq!(quic.body, b"api-route\n");
+    assert_eq!(bootstrap.body, b"api-route\n");
+}
+
+#[test]
+fn quic_and_bootstrap_api_key_denials_share_same_downstream_contract() {
+    if !local_listener_bind_available() {
+        return;
+    }
+    let dir = tempdir().expect("failed to create temp dir");
+    let (cert, key) = write_test_certs(&dir);
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+
+    let backend_addr = rt.block_on(start_h2_backend_with_regression_routes());
+    let mut config = make_config(
+        find_free_tcp_port() as u32,
+        backend_addr.to_string(),
+        cert.clone(),
+        key,
+    );
+    config.upstream.get_mut("test_pool").expect("upstream").auth =
+        spooky_config::config::RouteAuth {
+            api_key: Some(spooky_config::config::ApiKeyAuth {
+                header_name: "x-api-key".to_string(),
+                keys: vec!["edge-key".to_string()],
+            }),
+            jwt: None,
+            external_auth: None,
+            required_scopes: Vec::new(),
+            required_roles: Vec::new(),
+        };
+
+    let _enter = rt.enter();
+    let listener = make_listener_with_bootstrap(config);
+    drop(_enter);
+    let listen_addr = listener.socket.local_addr().unwrap();
+    let _listener_task = ListenerTaskGuard::spawn(&rt, listener);
+
+    let quic = run_h3_client_collect_response(
+        listen_addr,
+        vec![
+            quiche::h3::Header::new(b":method", b"GET"),
+            quiche::h3::Header::new(b":scheme", b"https"),
+            quiche::h3::Header::new(b":authority", b"localhost"),
+            quiche::h3::Header::new(b":path", b"/fast"),
+            quiche::h3::Header::new(b"user-agent", b"spooky-parity-test"),
+        ],
+        true,
+        Duration::from_secs(REQUEST_TIMEOUT_SECS + 4),
+    )
+    .expect("quic unauthorized request should complete");
+    let bootstrap = rt
+        .block_on(run_bootstrap_h2_client_collect_response(
+            listen_addr,
+            &cert,
+            "GET",
+            "/fast",
+            &[],
+        ))
+        .expect("bootstrap unauthorized request should complete");
+
+    let quic_www_authenticate = quic
+        .headers
+        .iter()
+        .find(|(name, _)| name == "www-authenticate")
+        .map(|(_, value)| value.as_str());
+    let bootstrap_www_authenticate = bootstrap
+        .headers
+        .iter()
+        .find(|(name, _)| name == "www-authenticate")
+        .map(|(_, value)| value.as_str());
+
+    assert_eq!(quic.status, "401");
+    assert_eq!(bootstrap.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(quic.body, bootstrap.body);
+    assert_eq!(quic_www_authenticate, Some("ApiKey"));
+    assert_eq!(bootstrap_www_authenticate, Some("ApiKey"));
+}
+
+#[test]
+fn quic_and_bootstrap_grpc_normalization_keep_same_wire_visible_contract() {
+    if !local_listener_bind_available() {
+        return;
+    }
+    let dir = tempdir().expect("failed to create temp dir");
+    let (cert, key) = write_test_certs(&dir);
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+
+    let backend_addr = rt.block_on(start_h2_backend_with_grpc_routes());
+    let _enter = rt.enter();
+    let listener = make_listener_with_bootstrap(make_config(
+        find_free_tcp_port() as u32,
+        backend_addr.to_string(),
+        cert.clone(),
+        key,
+    ));
+    drop(_enter);
+    let listen_addr = listener.socket.local_addr().unwrap();
+    let _listener_task = ListenerTaskGuard::spawn(&rt, listener);
+
+    let quic = run_h3_client_collect_response(
+        listen_addr,
+        vec![
+            quiche::h3::Header::new(b":method", b"GET"),
+            quiche::h3::Header::new(b":scheme", b"https"),
+            quiche::h3::Header::new(b":authority", b"localhost"),
+            quiche::h3::Header::new(b":path", b"/grpc-ok"),
+            quiche::h3::Header::new(b"user-agent", b"spooky-parity-test"),
+        ],
+        true,
+        Duration::from_secs(REQUEST_TIMEOUT_SECS + 4),
+    )
+    .expect("quic grpc request should complete");
+    let bootstrap = rt
+        .block_on(run_bootstrap_h2_client_collect_response(
+            listen_addr,
+            &cert,
+            "GET",
+            "/grpc-ok",
+            &[],
+        ))
+        .expect("bootstrap grpc request should complete");
+
+    let quic_content_type = quic
+        .headers
+        .iter()
+        .find(|(name, _)| name == "content-type")
+        .map(|(_, value)| value.as_str());
+    let bootstrap_content_type = bootstrap
+        .headers
+        .iter()
+        .find(|(name, _)| name == "content-type")
+        .map(|(_, value)| value.as_str());
+
+    assert_eq!(quic.status, "200");
+    assert_eq!(bootstrap.status, StatusCode::OK);
+    assert_eq!(quic.body, bootstrap.body);
+    assert_eq!(quic.trailers, bootstrap.trailers);
+    assert_eq!(quic_content_type, Some("application/grpc"));
+    assert_eq!(bootstrap_content_type, Some("application/grpc"));
 }
 
 #[test]
