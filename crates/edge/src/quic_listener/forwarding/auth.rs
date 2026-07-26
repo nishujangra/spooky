@@ -566,3 +566,222 @@ impl QUICListener {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use spooky_config::runtime::{
+        RuntimeApiKeyAuth, RuntimeAuthPolicy, RuntimeExternalAuthFailureMode,
+        RuntimeForwardedHeaderPolicy, RuntimeHostPolicy, RuntimeProtocolPolicy,
+        RuntimeUpstreamPolicy,
+    };
+
+    use super::*;
+    use crate::{
+        quic_listener::admission::{
+            AdmissionPolicyDecision, UnauthorizedDecision, admission_rejection_response,
+            evaluate_forwarding_pre_admission_policy,
+        },
+        resilience::{brownout::BrownoutController, scoped_rate_limit::ScopedRateLimiters},
+    };
+
+    fn sample_pending_forward(headers: Vec<quiche::h3::Header>) -> PendingForward {
+        PendingForward {
+            method: Arc::<str>::from("GET"),
+            path: Arc::<str>::from("/v1/chat"),
+            authority: Some(Arc::<str>::from("api.example.com")),
+            headers: Arc::new(headers),
+            upstream_name: Arc::<str>::from("api"),
+            route_reason: Arc::<str>::from("path_prefix"),
+            route_path_len: 8,
+            route_host_specific: true,
+            backend_addr: Arc::<str>::from("backend.internal:443"),
+            backend_index: 0,
+            backend_lb: None,
+            client_addr: "203.0.113.55:43210".parse().expect("client addr"),
+            request_id: 17,
+            trace_id: None,
+            span_id: None,
+            traceparent: None,
+            host_policy: Default::default(),
+            forwarded_header_policy: Default::default(),
+            auth_header_mutations: Vec::new(),
+        }
+    }
+
+    fn decision_contract(
+        decision: &crate::runtime::connection::auth::ExternalAuthDecision,
+    ) -> (http::StatusCode, Vec<(String, String)>, Vec<u8>) {
+        match decision {
+            crate::runtime::connection::auth::ExternalAuthDecision::Allow {
+                request_header_mutations: _,
+            } => (http::StatusCode::OK, Vec::new(), Vec::new()),
+            crate::runtime::connection::auth::ExternalAuthDecision::Deny(response) => (
+                response.status,
+                response.headers.clone(),
+                response.body.clone(),
+            ),
+            crate::runtime::connection::auth::ExternalAuthDecision::Redirect(response) => {
+                let mut headers = response.headers.clone();
+                headers.push((
+                    http::header::LOCATION.as_str().to_string(),
+                    response.location.clone(),
+                ));
+                (response.status, headers, Vec::new())
+            }
+            crate::runtime::connection::auth::ExternalAuthDecision::Challenge(response) => {
+                let mut headers = response.headers.clone();
+                headers.push((
+                    http::header::WWW_AUTHENTICATE.as_str().to_string(),
+                    response.www_authenticate.clone(),
+                ));
+                (response.status, headers, response.body.clone())
+            }
+        }
+    }
+
+    #[test]
+    fn append_auth_request_headers_strips_unsafe_headers_and_overrides_with_configured_values() {
+        let pending_forward = sample_pending_forward(vec![
+            quiche::h3::Header::new(b":method", b"GET"),
+            quiche::h3::Header::new(b"host", b"client.example.com"),
+            quiche::h3::Header::new(b"connection", b"keep-alive"),
+            quiche::h3::Header::new(b"content-length", b"42"),
+            quiche::h3::Header::new(b"x-forwarded-for", b"1.2.3.4"),
+            quiche::h3::Header::new(b"x-auth-user", b"alice"),
+            quiche::h3::Header::new(b"x-role", b"stale"),
+        ]);
+        let mut builder = http::Request::builder()
+            .method(http::Method::GET)
+            .uri("https://auth.internal/check");
+
+        append_auth_request_headers(
+            &mut builder,
+            &pending_forward,
+            &[spooky_config::runtime::RuntimeExternalAuthRequestHeader {
+                name: "x-role".to_string(),
+                value: "admin".to_string(),
+            }],
+        );
+
+        let headers = builder.headers_ref().expect("headers");
+        assert!(!headers.contains_key(http::header::HOST));
+        assert!(!headers.contains_key(http::header::CONNECTION));
+        assert!(!headers.contains_key(http::header::CONTENT_LENGTH));
+        assert_eq!(
+            headers
+                .get("x-forwarded-for")
+                .and_then(|value| value.to_str().ok()),
+            Some("1.2.3.4")
+        );
+        assert_eq!(
+            headers
+                .get("x-auth-user")
+                .and_then(|value| value.to_str().ok()),
+            Some("alice")
+        );
+        assert_eq!(
+            headers.get("x-role").and_then(|value| value.to_str().ok()),
+            Some("admin")
+        );
+        assert_eq!(
+            headers
+                .get("x-spooky-original-method")
+                .and_then(|value| value.to_str().ok()),
+            Some("GET")
+        );
+        assert_eq!(
+            headers
+                .get("x-spooky-original-path")
+                .and_then(|value| value.to_str().ok()),
+            Some("/v1/chat")
+        );
+        assert_eq!(
+            headers
+                .get("x-spooky-original-authority")
+                .and_then(|value| value.to_str().ok()),
+            Some("api.example.com")
+        );
+    }
+
+    #[test]
+    fn local_auth_precedence_is_explicit_before_external_auth_candidates_are_relevant() {
+        let policy = RuntimeUpstreamPolicy {
+            upstream_auth: RuntimeAuthPolicy {
+                api_key: Some(RuntimeApiKeyAuth {
+                    header_name: "x-api-key".to_string(),
+                    keys: vec!["secret".to_string()],
+                }),
+                jwt: None,
+                external_auth: Some(RuntimeExternalAuth::Http {
+                    endpoint: "http://127.0.0.1:9000/auth".to_string(),
+                    request_headers: Vec::new(),
+                    response_header_allowlist: Vec::new(),
+                    timeout: Duration::from_millis(250),
+                    failure_mode: RuntimeExternalAuthFailureMode::FailClosed,
+                }),
+                required_scopes: Vec::new(),
+                required_roles: Vec::new(),
+            },
+            host: RuntimeHostPolicy::default(),
+            forwarded_headers: RuntimeForwardedHeaderPolicy::default(),
+            protocol: RuntimeProtocolPolicy::default(),
+        };
+        let brownout = BrownoutController::new(false, 100, 90, Vec::new());
+        let scoped_rate_limits = ScopedRateLimiters::new(&[]);
+
+        let decision = evaluate_forwarding_pre_admission_policy(
+            &policy,
+            None,
+            &brownout,
+            0,
+            "api",
+            1,
+            &scoped_rate_limits,
+            |_| None,
+        );
+
+        assert!(matches!(
+            decision,
+            AdmissionPolicyDecision::Unauthorized(UnauthorizedDecision {
+                status: http::StatusCode::UNAUTHORIZED,
+                body: b"unauthorized\n",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn equivalent_quic_external_auth_challenge_and_bootstrap_auth_denial_share_contract() {
+        let quic = crate::runtime::connection::auth::ExternalAuthDecision::Challenge(
+            crate::runtime::connection::auth::ExternalAuthChallengeResponse {
+                status: http::StatusCode::UNAUTHORIZED,
+                headers: Vec::new(),
+                www_authenticate: "Bearer".to_string(),
+                body: b"unauthorized\n".to_vec(),
+            },
+        );
+        let bootstrap = admission_rejection_response(&AdmissionPolicyDecision::Unauthorized(
+            UnauthorizedDecision {
+                challenge: crate::quic_listener::admission::AuthChallengeKind::Bearer,
+                status: http::StatusCode::UNAUTHORIZED,
+                body: b"unauthorized\n",
+            },
+        ))
+        .expect("bootstrap auth rejection");
+
+        let (quic_status, quic_headers, quic_body) = decision_contract(&quic);
+        let bootstrap_headers = vec![(
+            http::header::WWW_AUTHENTICATE.as_str().to_string(),
+            bootstrap
+                .www_authenticate
+                .expect("bootstrap challenge")
+                .to_string(),
+        )];
+
+        assert_eq!(quic_status, bootstrap.status);
+        assert_eq!(quic_body, bootstrap.body.to_vec());
+        assert_eq!(quic_headers, bootstrap_headers);
+    }
+}
