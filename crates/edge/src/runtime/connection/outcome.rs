@@ -1132,7 +1132,7 @@ mod tests {
     }
 
     #[test]
-    fn outcome_recording_keeps_status_class_backend_labels_and_latency_buckets_aligned() {
+    fn timeout_outcome_records_5xx_labels_and_matching_latency_bucket() {
         let metrics = test_metrics();
 
         let timeout = observe_proxy_error_outcome(
@@ -1148,6 +1148,24 @@ mod tests {
             &ProxyError::Timeout,
             None,
         );
+
+        assert_eq!(timeout.route_outcome, CanonicalRouteOutcome::Timeout);
+        assert_eq!(upstream_request_count(&metrics, "api", "5xx", "timeout"), 1);
+        assert_eq!(
+            backend_request_count(&metrics, "api", "backend-a", "5xx", "timeout"),
+            1
+        );
+
+        let latency = upstream_latency_stats(&metrics, "api", "timeout");
+        assert_eq!(latency.count, 1);
+        assert_eq!(latency.latency_ms_sum, 320);
+        assert_eq!(latency.latency_buckets[7], 1);
+    }
+
+    #[test]
+    fn success_outcome_records_2xx_labels_and_matching_latency_bucket() {
+        let metrics = test_metrics();
+
         let success = observe_status_outcome(
             &metrics,
             OutcomeRouteTarget { route: "api" },
@@ -1160,28 +1178,17 @@ mod tests {
             StatusCode::OK,
         );
 
-        assert_eq!(timeout.route_outcome, CanonicalRouteOutcome::Timeout);
         assert_eq!(success.route_outcome, CanonicalRouteOutcome::Success);
-        assert_eq!(upstream_request_count(&metrics, "api", "5xx", "timeout"), 1);
         assert_eq!(upstream_request_count(&metrics, "api", "2xx", "success"), 1);
-        assert_eq!(
-            backend_request_count(&metrics, "api", "backend-a", "5xx", "timeout"),
-            1
-        );
         assert_eq!(
             backend_request_count(&metrics, "api", "backend-a", "2xx", "success"),
             1
         );
 
-        let timeout_latency = upstream_latency_stats(&metrics, "api", "timeout");
-        assert_eq!(timeout_latency.count, 1);
-        assert_eq!(timeout_latency.latency_ms_sum, 320);
-        assert_eq!(timeout_latency.latency_buckets[7], 1);
-
-        let success_latency = upstream_latency_stats(&metrics, "api", "success");
-        assert_eq!(success_latency.count, 1);
-        assert_eq!(success_latency.latency_ms_sum, 12);
-        assert_eq!(success_latency.latency_buckets[3], 1);
+        let latency = upstream_latency_stats(&metrics, "api", "success");
+        assert_eq!(latency.count, 1);
+        assert_eq!(latency.latency_ms_sum, 12);
+        assert_eq!(latency.latency_buckets[3], 1);
     }
 
     #[test]

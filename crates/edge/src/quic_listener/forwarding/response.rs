@@ -1514,89 +1514,74 @@ mod tests {
     }
 
     #[test]
-    fn external_auth_decision_wire_shape_preserves_allowed_headers_and_local_defaults() {
-        let deny = ExternalAuthDecision::Deny(ExternalAuthDenyResponse {
+    fn external_auth_deny_wire_shape_carries_allowed_headers_without_challenge_metadata() {
+        let response = ExternalAuthDenyResponse {
             status: http::StatusCode::FORBIDDEN,
             headers: vec![("x-auth-reason".to_string(), "policy".to_string())],
             body: b"denied\n".to_vec(),
-        });
-        let redirect = ExternalAuthDecision::Redirect(ExternalAuthRedirectResponse {
+        };
+
+        let headers =
+            response_headers_with_defaults(response.status, &response.body, &response.headers);
+
+        assert_eq!(header_value(&headers, b":status"), Some(&b"403"[..]));
+        assert_eq!(
+            header_value(&headers, b"x-auth-reason"),
+            Some(&b"policy"[..])
+        );
+        assert_eq!(header_value(&headers, b"location"), None);
+        assert_eq!(header_value(&headers, b"www-authenticate"), None);
+    }
+
+    #[test]
+    fn external_auth_redirect_wire_shape_emits_location_and_zero_length_body() {
+        let response = ExternalAuthRedirectResponse {
             status: http::StatusCode::TEMPORARY_REDIRECT,
             headers: vec![("x-auth-reason".to_string(), "login".to_string())],
             location: "https://login.example.com".to_string(),
-        });
-        let challenge = ExternalAuthDecision::Challenge(ExternalAuthChallengeResponse {
+        };
+
+        let mut headers = response.headers.clone();
+        headers.push((
+            http::header::LOCATION.as_str().to_string(),
+            response.location.clone(),
+        ));
+        let headers = response_headers_with_defaults(response.status, &[], &headers);
+
+        assert_eq!(header_value(&headers, b":status"), Some(&b"307"[..]));
+        assert_eq!(
+            header_value(&headers, b"location"),
+            Some(&b"https://login.example.com"[..])
+        );
+        assert_eq!(header_value(&headers, b"content-length"), Some(&b"0"[..]));
+        assert_eq!(header_value(&headers, b"www-authenticate"), None);
+    }
+
+    #[test]
+    fn external_auth_challenge_wire_shape_emits_www_authenticate_with_body_length() {
+        let response = ExternalAuthChallengeResponse {
             status: http::StatusCode::UNAUTHORIZED,
             headers: vec![("x-auth-reason".to_string(), "expired".to_string())],
             www_authenticate: "Bearer".to_string(),
             body: b"challenge\n".to_vec(),
-        });
-
-        let deny_headers = match &deny {
-            ExternalAuthDecision::Deny(response) => {
-                response_headers_with_defaults(response.status, &response.body, &response.headers)
-            }
-            _ => unreachable!(),
         };
-        assert_eq!(header_value(&deny_headers, b":status"), Some(&b"403"[..]));
-        assert_eq!(
-            header_value(&deny_headers, b"x-auth-reason"),
-            Some(&b"policy"[..])
-        );
-        assert_eq!(header_value(&deny_headers, b"location"), None);
-        assert_eq!(header_value(&deny_headers, b"www-authenticate"), None);
 
-        let redirect_headers = match &redirect {
-            ExternalAuthDecision::Redirect(response) => {
-                let mut headers = response.headers.clone();
-                headers.push((
-                    http::header::LOCATION.as_str().to_string(),
-                    response.location.clone(),
-                ));
-                response_headers_with_defaults(response.status, &[], &headers)
-            }
-            _ => unreachable!(),
-        };
-        assert_eq!(
-            header_value(&redirect_headers, b":status"),
-            Some(&b"307"[..])
-        );
-        assert_eq!(
-            header_value(&redirect_headers, b"location"),
-            Some(&b"https://login.example.com"[..])
-        );
-        assert_eq!(
-            header_value(&redirect_headers, b"content-length"),
-            Some(&b"0"[..])
-        );
-        assert_eq!(header_value(&redirect_headers, b"www-authenticate"), None);
+        let mut headers = response.headers.clone();
+        headers.push((
+            http::header::WWW_AUTHENTICATE.as_str().to_string(),
+            response.www_authenticate.clone(),
+        ));
+        let headers = response_headers_with_defaults(response.status, &response.body, &headers);
 
-        let challenge_headers = match &challenge {
-            ExternalAuthDecision::Challenge(response) => {
-                let mut headers = response.headers.clone();
-                headers.push((
-                    http::header::WWW_AUTHENTICATE.as_str().to_string(),
-                    response.www_authenticate.clone(),
-                ));
-                response_headers_with_defaults(response.status, &response.body, &headers)
-            }
-            _ => unreachable!(),
-        };
+        assert_eq!(header_value(&headers, b":status"), Some(&b"401"[..]));
         assert_eq!(
-            header_value(&challenge_headers, b":status"),
-            Some(&b"401"[..])
-        );
-        assert_eq!(
-            header_value(&challenge_headers, b"x-auth-reason"),
+            header_value(&headers, b"x-auth-reason"),
             Some(&b"expired"[..])
         );
         assert_eq!(
-            header_value(&challenge_headers, b"www-authenticate"),
+            header_value(&headers, b"www-authenticate"),
             Some(&b"Bearer"[..])
         );
-        assert_eq!(
-            header_value(&challenge_headers, b"content-length"),
-            Some(&b"10"[..])
-        );
+        assert_eq!(header_value(&headers, b"content-length"), Some(&b"10"[..]));
     }
 }
