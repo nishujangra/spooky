@@ -644,3 +644,149 @@ fn is_valid_connect_authority(value: &str) -> bool {
     }
     port.parse::<u16>().ok().is_some_and(|value| value > 0)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use crate::{
+        config::{
+            Backend, Config, ForwardedHeaderPolicy, Listen, LoadBalancing, Resilience, RouteAuth,
+            RouteMatch, Tls, Upstream, UpstreamHostPolicy,
+        },
+        runtime::{RuntimeConfigError, RuntimePolicySet},
+    };
+
+    use super::normalize_upstreams;
+
+    fn upstream(host: Option<&str>, path_prefix: &str, method: Option<&str>) -> Upstream {
+        Upstream {
+            load_balancing: LoadBalancing {
+                lb_type: "round-robin".to_string(),
+                key: None,
+            },
+            auth: RouteAuth::default(),
+            host_policy: UpstreamHostPolicy::default(),
+            forwarded_headers: ForwardedHeaderPolicy::default(),
+            tls: None,
+            route: RouteMatch {
+                host: host.map(str::to_string),
+                path_prefix: Some(path_prefix.to_string()),
+                method: method.map(str::to_string),
+            },
+            backends: vec![Backend {
+                id: "b1".to_string(),
+                address: "http://127.0.0.1:7001".to_string(),
+                weight: 1,
+                health_check: None,
+            }],
+        }
+    }
+
+    fn config_with_upstreams(upstreams: HashMap<String, Upstream>) -> Config {
+        Config {
+            version: 1,
+            listen: Listen {
+                protocol: "http1".to_string(),
+                tls: Tls {
+                    cert: "/tmp/test-cert.pem".to_string(),
+                    key: "/tmp/test-key.pem".to_string(),
+                    ..Tls::default()
+                },
+                ..Listen::default()
+            },
+            listeners: Vec::new(),
+            upstream: upstreams,
+            load_balancing: None,
+            upstream_tls: Default::default(),
+            log: Default::default(),
+            performance: Default::default(),
+            observability: Default::default(),
+            resilience: Resilience::default(),
+            security: Default::default(),
+        }
+    }
+
+    #[test]
+    fn duplicate_route_ambiguity_is_reported_deterministically() {
+        let mut first_order = HashMap::new();
+        first_order.insert(
+            "zeta".to_string(),
+            upstream(Some("api.example.com"), "/v1", None),
+        );
+        first_order.insert(
+            "alpha".to_string(),
+            upstream(Some("api.example.com"), "/v1", None),
+        );
+
+        let mut second_order = HashMap::new();
+        second_order.insert(
+            "alpha".to_string(),
+            upstream(Some("api.example.com"), "/v1", None),
+        );
+        second_order.insert(
+            "zeta".to_string(),
+            upstream(Some("api.example.com"), "/v1", None),
+        );
+
+        let first_config = config_with_upstreams(first_order);
+        let second_config = config_with_upstreams(second_order);
+        let first_policies = RuntimePolicySet::from_config(&first_config).expect("policies");
+        let second_policies = RuntimePolicySet::from_config(&second_config).expect("policies");
+
+        let first_err = normalize_upstreams(&first_config, &first_policies).expect_err("duplicate");
+        let second_err =
+            normalize_upstreams(&second_config, &second_policies).expect_err("duplicate");
+
+        assert_eq!(first_err, second_err);
+        assert_eq!(
+            first_err,
+            RuntimeConfigError::DuplicateRouteAmbiguity {
+                upstream: "zeta".to_string(),
+                existing_upstream: "alpha".to_string(),
+                host: Some("api.example.com".to_string()),
+                path_prefix: Some("/v1".to_string()),
+                method: None,
+            }
+        );
+    }
+
+    #[test]
+    fn connect_route_requires_allow_connect_during_normalization() {
+        let config = config_with_upstreams(HashMap::from([(
+            "tunnel".to_string(),
+            upstream(None, "/", Some("CONNECT")),
+        )]));
+        let policies = RuntimePolicySet::from_config(&config).expect("policies");
+
+        let err = normalize_upstreams(&config, &policies).expect_err("connect must be rejected");
+        assert_eq!(
+            err,
+            RuntimeConfigError::UnsupportedPolicyCombination(
+                "upstream 'tunnel' routes CONNECT but resilience.protocol.allow_connect=false"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn connect_route_normalizes_when_protocol_policy_allows_it() {
+        let mut config = config_with_upstreams(HashMap::from([(
+            "tunnel".to_string(),
+            upstream(None, "/", Some("connect")),
+        )]));
+        config.resilience.protocol.allow_connect = true;
+        let policies = RuntimePolicySet::from_config(&config).expect("policies");
+
+        let normalized = normalize_upstreams(&config, &policies).expect("normalized upstreams");
+        assert_eq!(
+            normalized
+                .get("tunnel")
+                .expect("tunnel upstream")
+                .route
+                .method
+                .as_deref(),
+            Some("CONNECT")
+        );
+    }
+}
