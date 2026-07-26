@@ -363,7 +363,7 @@ pub(in crate::quic_listener) fn spawn_bootstrap_tls_listener(
                                     warn!("Bootstrap request build failed: {}", err);
                                     let (status, body) = if request_mode
                                         == BootstrapRequestMode::WebsocketUpgrade
-                                        && matches!(err, spooky_bridge::BridgeError::Build(_))
+                                        && matches!(err, spooky_errors::BridgeError::Build(_))
                                     {
                                         (
                                             StatusCode::BAD_GATEWAY,

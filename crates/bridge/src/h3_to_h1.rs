@@ -3,9 +3,9 @@ use std::convert::Infallible;
 use bytes::Bytes;
 use http::{Method, Request, Uri};
 use http_body_util::combinators::BoxBody;
+use spooky_errors::BridgeError;
 
 use crate::{
-    BridgeError,
     request::{
         RequestBuildInput, RequestBuildTarget, RequestHeaderAssembly, RequestHeaderPolicyInput,
         apply_request_header_assembly, apply_request_header_policies,

@@ -10,18 +10,15 @@ use http::{HeaderMap, Request, Response, StatusCode};
 use http_body_util::{BodyExt, combinators::BoxBody};
 use hyper::body::Incoming;
 use log::warn;
-use spooky_bridge::{
-    BridgeError,
-    request::{
-        RequestBuildInput, RequestBuildPolicies, RequestBuildTarget, RequestForwardedContext,
-        RequestTraceContext, build_h1_request, build_h2_request_for_target,
-    },
+use spooky_bridge::request::{
+    RequestBuildInput, RequestBuildPolicies, RequestBuildTarget, RequestForwardedContext,
+    RequestTraceContext, build_h1_request, build_h2_request_for_target,
 };
 use spooky_config::{
     backend_endpoint::{BackendEndpoint, BackendScheme},
     runtime::RuntimeUpstreamPolicy,
 };
-use spooky_errors::ProxyError;
+use spooky_errors::{BridgeError, ProxyError};
 use spooky_lb::upstream_pool::UpstreamPool;
 
 use super::{

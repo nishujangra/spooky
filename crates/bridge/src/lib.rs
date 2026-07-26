@@ -16,5 +16,3 @@ mod host;
 pub mod request;
 pub mod response;
 pub mod websocket;
-
-pub use spooky_errors::BridgeError;
