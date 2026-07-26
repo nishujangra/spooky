@@ -653,6 +653,15 @@ pub(in crate::quic_listener) fn build_bootstrap_upstream_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{collections::BTreeMap, sync::Arc};
+
+    use quiche::h3::NameValue;
+    use spooky_config::{
+        config::{ForwardedHeaderPolicy, ForwardedHeaderPolicyMode},
+        runtime::{RuntimeAuthPolicy, RuntimeForwardedHeaderPolicy, RuntimeHostPolicy},
+    };
+
+    use crate::runtime::connection::request::PendingForward;
 
     #[test]
     fn terminal_outcome_accepted_classification() {
@@ -762,6 +771,213 @@ mod tests {
         assert_eq!(
             BootstrapTerminalOutcome::AcceptedStandardResponse.canonical_reason(),
             None
+        );
+    }
+
+    fn sample_pending_forward(headers: Vec<quiche::h3::Header>) -> PendingForward {
+        PendingForward {
+            method: Arc::<str>::from("GET"),
+            path: Arc::<str>::from("/v1/chat"),
+            authority: Some(Arc::<str>::from("api.example.com")),
+            headers: Arc::new(headers),
+            upstream_name: Arc::<str>::from("api"),
+            route_reason: Arc::<str>::from("path_prefix"),
+            route_path_len: 8,
+            route_host_specific: true,
+            backend_addr: Arc::<str>::from("backend.internal:443"),
+            backend_index: 0,
+            backend_lb: None,
+            client_addr: "203.0.113.55:43210".parse().expect("client addr"),
+            request_id: 41,
+            trace_id: None,
+            span_id: None,
+            traceparent: Some(Arc::<str>::from(
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00",
+            )),
+            host_policy: Default::default(),
+            forwarded_header_policy: ForwardedHeaderPolicy {
+                mode: ForwardedHeaderPolicyMode::Append,
+            },
+            auth_header_mutations: Vec::new(),
+        }
+    }
+
+    fn sample_bootstrap_policy() -> RuntimeUpstreamPolicy {
+        RuntimeUpstreamPolicy {
+            upstream_auth: RuntimeAuthPolicy::default(),
+            host: RuntimeHostPolicy::default(),
+            forwarded_headers: RuntimeForwardedHeaderPolicy(ForwardedHeaderPolicy {
+                mode: ForwardedHeaderPolicyMode::Append,
+            }),
+            protocol: Default::default(),
+        }
+    }
+
+    fn canonical_headers(
+        request: &Request<BoxBody<Bytes, Infallible>>,
+    ) -> BTreeMap<String, Vec<String>> {
+        let mut map = BTreeMap::<String, Vec<String>>::new();
+        for (name, value) in request.headers() {
+            map.entry(name.as_str().to_string())
+                .or_default()
+                .push(value.to_str().expect("header value").to_string());
+        }
+        map
+    }
+
+    #[test]
+    fn bootstrap_and_quic_request_builders_emit_same_standard_request_shape() {
+        let endpoint = BackendEndpoint::parse("backend.internal:443").expect("endpoint");
+        let policy = sample_bootstrap_policy();
+        let logical_headers = vec![
+            quiche::h3::Header::new(b"forwarded", b"for=1.2.3.4;proto=http;host=\"old.example\""),
+            quiche::h3::Header::new(b"x-forwarded-for", b"1.2.3.4"),
+            quiche::h3::Header::new(b"x-forwarded-proto", b"http"),
+            quiche::h3::Header::new(b"x-forwarded-host", b"old.example"),
+            quiche::h3::Header::new(b"authorization", b"Bearer upstream-token"),
+            quiche::h3::Header::new(b"x-api-key", b"route-secret"),
+        ];
+
+        let pending_forward = sample_pending_forward(logical_headers.clone());
+        let quic_headers = pending_forward.headers.as_ref().clone();
+        let quic_request = build_h2_request_for_target(
+            RequestBuildTarget {
+                endpoint: &endpoint,
+                policies: RequestBuildPolicies {
+                    host_policy: &pending_forward.host_policy,
+                    forwarded_header_policy: &pending_forward.forwarded_header_policy,
+                },
+            },
+            RequestBuildInput {
+                method: &pending_forward.method,
+                path: &pending_forward.path,
+                authority: pending_forward.authority.as_deref(),
+                headers: &quic_headers,
+                body: boxed_full(Bytes::new()),
+                content_length: Some(0),
+                body_mode: RequestBuildInput::<BoxBody<Bytes, Infallible>>::body_mode_for_length(
+                    Some(0),
+                ),
+                trace: RequestTraceContext {
+                    request_id: pending_forward.request_id,
+                    traceparent: pending_forward.traceparent.as_deref(),
+                },
+                forwarded: RequestForwardedContext {
+                    client_addr: pending_forward.client_addr,
+                },
+            },
+        )
+        .expect("quic request");
+
+        let mut bootstrap_headers = HeaderMap::new();
+        for header in &logical_headers {
+            let name = http::header::HeaderName::from_bytes(header.name()).expect("header name");
+            let value =
+                http::header::HeaderValue::from_bytes(header.value()).expect("header value");
+            bootstrap_headers.append(name, value);
+        }
+        let bridge_headers = bootstrap_bridge_headers(&bootstrap_headers);
+        let intake = crate::quic_listener::bootstrap::intake::BootstrapRequestIntake {
+            method: "GET".to_string(),
+            path: "/v1/chat".to_string(),
+            authority: Some("api.example.com".to_string()),
+            content_length: Some(0),
+            suppress_downstream_body: false,
+            request_mode: BootstrapRequestMode::Standard,
+            client_upgrade: None,
+        };
+        let bootstrap_request = build_h2_request_for_target(
+            bootstrap_request_build_target(&endpoint, &policy),
+            RequestBuildInput {
+                method: &intake.method,
+                path: &intake.path,
+                authority: intake.authority.as_deref(),
+                headers: &bridge_headers,
+                body: boxed_full(Bytes::new()),
+                content_length: intake.content_length,
+                body_mode: RequestBuildInput::<BoxBody<Bytes, Infallible>>::body_mode_for_length(
+                    intake.content_length,
+                ),
+                trace: RequestTraceContext {
+                    request_id: 41,
+                    traceparent: Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00"),
+                },
+                forwarded: RequestForwardedContext {
+                    client_addr: "203.0.113.55:43210".parse().expect("client addr"),
+                },
+            },
+        )
+        .expect("bootstrap request");
+
+        assert_eq!(quic_request.method(), bootstrap_request.method());
+        assert_eq!(quic_request.uri(), bootstrap_request.uri());
+        assert_eq!(
+            canonical_headers(&quic_request),
+            canonical_headers(&bootstrap_request)
+        );
+    }
+
+    #[test]
+    fn bootstrap_target_uses_same_forwarded_and_auth_header_contract_as_quic() {
+        let endpoint = BackendEndpoint::parse("backend.internal:443").expect("endpoint");
+        let policy = sample_bootstrap_policy();
+        let mut bootstrap_headers = HeaderMap::new();
+        bootstrap_headers.insert(
+            http::header::AUTHORIZATION,
+            http::HeaderValue::from_static("Bearer upstream-token"),
+        );
+        bootstrap_headers.insert("x-api-key", http::HeaderValue::from_static("route-secret"));
+        bootstrap_headers.insert(
+            "forwarded",
+            http::HeaderValue::from_static("for=1.2.3.4;proto=http;host=\"old.example\""),
+        );
+
+        let bridge_headers = bootstrap_bridge_headers(&bootstrap_headers);
+        let request = build_h2_request_for_target(
+            bootstrap_request_build_target(&endpoint, &policy),
+            RequestBuildInput {
+                method: "GET",
+                path: "/v1/chat",
+                authority: Some("api.example.com"),
+                headers: &bridge_headers,
+                body: boxed_full(Bytes::new()),
+                content_length: Some(0),
+                body_mode: RequestBuildInput::<BoxBody<Bytes, Infallible>>::body_mode_for_length(
+                    Some(0),
+                ),
+                trace: RequestTraceContext {
+                    request_id: 99,
+                    traceparent: None,
+                },
+                forwarded: RequestForwardedContext {
+                    client_addr: "203.0.113.55:43210".parse().expect("client addr"),
+                },
+            },
+        )
+        .expect("bootstrap request");
+
+        assert_eq!(
+            request
+                .headers()
+                .get(http::header::AUTHORIZATION)
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer upstream-token")
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get("x-api-key")
+                .and_then(|value| value.to_str().ok()),
+            Some("route-secret")
+        );
+        assert_eq!(
+            request
+                .headers()
+                .get("forwarded")
+                .and_then(|value| value.to_str().ok()),
+            Some(
+                "for=1.2.3.4;proto=http;host=\"old.example\", for=203.0.113.55;proto=https;host=\"api.example.com\""
+            )
         );
     }
 }
