@@ -774,34 +774,6 @@ mod tests {
         );
     }
 
-    fn sample_pending_forward(headers: Vec<quiche::h3::Header>) -> PendingForward {
-        PendingForward {
-            method: Arc::<str>::from("GET"),
-            path: Arc::<str>::from("/v1/chat"),
-            authority: Some(Arc::<str>::from("api.example.com")),
-            headers: Arc::new(headers),
-            upstream_name: Arc::<str>::from("api"),
-            route_reason: Arc::<str>::from("path_prefix"),
-            route_path_len: 8,
-            route_host_specific: true,
-            backend_addr: Arc::<str>::from("backend.internal:443"),
-            backend_index: 0,
-            backend_lb: None,
-            client_addr: "203.0.113.55:43210".parse().expect("client addr"),
-            request_id: 41,
-            trace_id: None,
-            span_id: None,
-            traceparent: Some(Arc::<str>::from(
-                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00",
-            )),
-            host_policy: Default::default(),
-            forwarded_header_policy: ForwardedHeaderPolicy {
-                mode: ForwardedHeaderPolicyMode::Append,
-            },
-            auth_header_mutations: Vec::new(),
-        }
-    }
-
     fn sample_bootstrap_policy() -> RuntimeUpstreamPolicy {
         RuntimeUpstreamPolicy {
             upstream_auth: RuntimeAuthPolicy::default(),
@@ -838,7 +810,16 @@ mod tests {
             quiche::h3::Header::new(b"x-api-key", b"route-secret"),
         ];
 
-        let pending_forward = sample_pending_forward(logical_headers.clone());
+        let pending_forward = PendingForward {
+            request_id: 41,
+            traceparent: Some(Arc::<str>::from(
+                "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-00",
+            )),
+            forwarded_header_policy: ForwardedHeaderPolicy {
+                mode: ForwardedHeaderPolicyMode::Append,
+            },
+            ..PendingForward::sample_for_test(logical_headers.clone())
+        };
         let quic_headers = pending_forward.headers.as_ref().clone();
         let quic_request = build_h2_request_for_target(
             RequestBuildTarget {

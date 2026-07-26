@@ -586,30 +586,6 @@ mod tests {
         resilience::{brownout::BrownoutController, scoped_rate_limit::ScopedRateLimiters},
     };
 
-    fn sample_pending_forward(headers: Vec<quiche::h3::Header>) -> PendingForward {
-        PendingForward {
-            method: Arc::<str>::from("GET"),
-            path: Arc::<str>::from("/v1/chat"),
-            authority: Some(Arc::<str>::from("api.example.com")),
-            headers: Arc::new(headers),
-            upstream_name: Arc::<str>::from("api"),
-            route_reason: Arc::<str>::from("path_prefix"),
-            route_path_len: 8,
-            route_host_specific: true,
-            backend_addr: Arc::<str>::from("backend.internal:443"),
-            backend_index: 0,
-            backend_lb: None,
-            client_addr: "203.0.113.55:43210".parse().expect("client addr"),
-            request_id: 17,
-            trace_id: None,
-            span_id: None,
-            traceparent: None,
-            host_policy: Default::default(),
-            forwarded_header_policy: Default::default(),
-            auth_header_mutations: Vec::new(),
-        }
-    }
-
     fn decision_contract(
         decision: &crate::runtime::connection::auth::ExternalAuthDecision,
     ) -> (http::StatusCode, Vec<(String, String)>, Vec<u8>) {
@@ -643,7 +619,7 @@ mod tests {
 
     #[test]
     fn append_auth_request_headers_strips_unsafe_headers_and_overrides_with_configured_values() {
-        let pending_forward = sample_pending_forward(vec![
+        let pending_forward = PendingForward::sample_for_test(vec![
             quiche::h3::Header::new(b":method", b"GET"),
             quiche::h3::Header::new(b"host", b"client.example.com"),
             quiche::h3::Header::new(b"connection", b"keep-alive"),

@@ -1217,25 +1217,14 @@ mod tests {
 
     fn sample_pending_forward(headers: Vec<quiche::h3::Header>) -> PendingForward {
         PendingForward {
-            method: Arc::<str>::from("GET"),
             path: Arc::<str>::from("/"),
             authority: Some(Arc::<str>::from("example.com")),
-            headers: Arc::new(headers),
-            upstream_name: Arc::<str>::from("api"),
-            route_reason: Arc::<str>::from("path_prefix"),
             route_path_len: 1,
             route_host_specific: false,
             backend_addr: Arc::<str>::from("http://127.0.0.1:8080"),
-            backend_index: 0,
-            backend_lb: None,
             client_addr: "127.0.0.1:443".parse().expect("client addr"),
             request_id: 7,
-            trace_id: None,
-            span_id: None,
-            traceparent: None,
-            host_policy: Default::default(),
-            forwarded_header_policy: Default::default(),
-            auth_header_mutations: Vec::new(),
+            ..PendingForward::sample_for_test(headers)
         }
     }
 

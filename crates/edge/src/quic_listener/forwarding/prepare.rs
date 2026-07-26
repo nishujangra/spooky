@@ -808,30 +808,6 @@ mod tests {
 
     use crate::runtime::connection::auth::PendingHeaderMutation;
 
-    fn sample_pending_forward(headers: Vec<quiche::h3::Header>) -> PendingForward {
-        PendingForward {
-            method: Arc::<str>::from("GET"),
-            path: Arc::<str>::from("/v1/chat"),
-            authority: Some(Arc::<str>::from("api.example.com")),
-            headers: Arc::new(headers),
-            upstream_name: Arc::<str>::from("api"),
-            route_reason: Arc::<str>::from("path_prefix"),
-            route_path_len: 8,
-            route_host_specific: true,
-            backend_addr: Arc::<str>::from("backend.internal:443"),
-            backend_index: 0,
-            backend_lb: None,
-            client_addr: "203.0.113.55:43210".parse().expect("client addr"),
-            request_id: 17,
-            trace_id: None,
-            span_id: None,
-            traceparent: None,
-            host_policy: UpstreamHostPolicy::default(),
-            forwarded_header_policy: ForwardedHeaderPolicy::default(),
-            auth_header_mutations: Vec::new(),
-        }
-    }
-
     fn empty_body() -> BoxBody<Bytes, Infallible> {
         BoxBody::new(Full::new(Bytes::new()))
     }
@@ -844,7 +820,7 @@ mod tests {
     fn build_request_resolves_pass_through_rewrite_and_upstream_host_policies() {
         let endpoint = h2_endpoint();
 
-        let pass_through = sample_pending_forward(vec![]);
+        let pass_through = PendingForward::sample_for_test(vec![]);
         let pass_through_req = pass_through
             .build_request(&endpoint, empty_body(), Some(0))
             .expect("pass-through request");
@@ -861,7 +837,7 @@ mod tests {
                 mode: UpstreamHostPolicyMode::Rewrite,
                 host: Some("origin.example.com".to_string()),
             },
-            ..sample_pending_forward(vec![])
+            ..PendingForward::sample_for_test(vec![])
         };
         let rewrite_req = rewrite
             .build_request(&endpoint, empty_body(), Some(0))
@@ -886,7 +862,7 @@ mod tests {
                 mode: UpstreamHostPolicyMode::Upstream,
                 host: None,
             },
-            ..sample_pending_forward(vec![])
+            ..PendingForward::sample_for_test(vec![])
         };
         let upstream_req = upstream
             .build_request(&endpoint, empty_body(), Some(0))
@@ -906,7 +882,7 @@ mod tests {
             forwarded_header_policy: ForwardedHeaderPolicy {
                 mode: ForwardedHeaderPolicyMode::Append,
             },
-            ..sample_pending_forward(vec![
+            ..PendingForward::sample_for_test(vec![
                 quiche::h3::Header::new(
                     b"forwarded",
                     b"for=1.2.3.4;proto=http;host=\"old.example\"",
@@ -974,7 +950,7 @@ mod tests {
                     name: b"x-remove-me".to_vec(),
                 },
             ],
-            ..sample_pending_forward(vec![
+            ..PendingForward::sample_for_test(vec![
                 quiche::h3::Header::new(b"x-configured-auth", b"route-policy"),
                 quiche::h3::Header::new(b"x-auth-user", b"stale"),
                 quiche::h3::Header::new(b"x-remove-me", b"1"),
@@ -1004,7 +980,7 @@ mod tests {
     #[test]
     fn build_request_rejects_invalid_headers_before_upstream_dispatch() {
         let pending_forward =
-            sample_pending_forward(vec![quiche::h3::Header::new(b"bad header", b"1")]);
+            PendingForward::sample_for_test(vec![quiche::h3::Header::new(b"bad header", b"1")]);
 
         let err = pending_forward
             .build_request(&h2_endpoint(), empty_body(), Some(0))

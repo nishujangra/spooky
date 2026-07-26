@@ -956,6 +956,36 @@ pub struct PendingForward {
 }
 
 #[cfg(test)]
+impl PendingForward {
+    /// Baseline forward for tests: a plain GET with default host and forwarded
+    /// policies. Override individual fields with struct update syntax so adding a
+    /// field to `PendingForward` only touches this constructor.
+    pub(crate) fn sample_for_test(headers: Vec<quiche::h3::Header>) -> Self {
+        Self {
+            method: Arc::<str>::from("GET"),
+            path: Arc::<str>::from("/v1/chat"),
+            authority: Some(Arc::<str>::from("api.example.com")),
+            headers: Arc::new(headers),
+            upstream_name: Arc::<str>::from("api"),
+            route_reason: Arc::<str>::from("path_prefix"),
+            route_path_len: 8,
+            route_host_specific: true,
+            backend_addr: Arc::<str>::from("backend.internal:443"),
+            backend_index: 0,
+            backend_lb: None,
+            client_addr: "203.0.113.55:43210".parse().expect("client addr"),
+            request_id: 17,
+            trace_id: None,
+            span_id: None,
+            traceparent: None,
+            host_policy: UpstreamHostPolicy::default(),
+            forwarded_header_policy: ForwardedHeaderPolicy::default(),
+            auth_header_mutations: Vec::new(),
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use std::{
         collections::VecDeque,
@@ -1004,22 +1034,13 @@ mod tests {
             method: Arc::<str>::from("POST"),
             path: Arc::<str>::from("/upload"),
             authority: Some(Arc::<str>::from("example.com")),
-            headers: Arc::new(vec![quiche::h3::Header::new(b":method", b"POST")]),
             upstream_name: Arc::<str>::from("api"),
-            route_reason: Arc::<str>::from("path_prefix"),
             route_path_len: 1,
             route_host_specific: false,
             backend_addr: Arc::<str>::from("http://127.0.0.1:8080"),
-            backend_index: 0,
-            backend_lb: None,
             client_addr: "127.0.0.1:443".parse().expect("client addr"),
             request_id: 42,
-            trace_id: None,
-            span_id: None,
-            traceparent: None,
-            host_policy: Default::default(),
-            forwarded_header_policy: Default::default(),
-            auth_header_mutations: Vec::new(),
+            ..PendingForward::sample_for_test(vec![quiche::h3::Header::new(b":method", b"POST")])
         })
     }
 
