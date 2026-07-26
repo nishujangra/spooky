@@ -1,5 +1,3 @@
-use std::time::Duration;
-
 // ─── Memory envelope ──────────────────────────────────────────────────────────
 //
 // Per-stream worst-case memory (defaults; operator can tune via `performance.*`):
@@ -78,14 +76,6 @@ pub const BENCH_CONN_PEER_BASE_PORT: u16 = 20_000;
 pub const BENCH_CONN_PEER_PORT_SPAN: usize = 20_000;
 pub const BENCH_CONN_MISS_PORT: u16 = u16::MAX;
 
-pub fn backend_timeout() -> Duration {
-    Duration::from_secs(BACKEND_TIMEOUT_SECS)
-}
-
-pub fn request_timeout() -> Duration {
-    Duration::from_secs(REQUEST_TIMEOUT_SECS)
-}
-
-pub fn scid_rotation_interval() -> Duration {
-    Duration::from_secs(SCID_ROTATION_INTERVAL_SECS)
+pub fn scid_rotation_interval() -> std::time::Duration {
+    std::time::Duration::from_secs(SCID_ROTATION_INTERVAL_SECS)
 }

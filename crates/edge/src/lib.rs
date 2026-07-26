@@ -24,7 +24,6 @@ pub use constants::{
     MAX_UDP_PAYLOAD_BYTES, QUIC_IDLE_TIMEOUT_MS, QUIC_INITIAL_MAX_DATA,
     QUIC_INITIAL_MAX_STREAMS_BIDI, QUIC_INITIAL_MAX_STREAMS_UNI, QUIC_INITIAL_STREAM_DATA,
     REQUEST_BUFFERED_CHUNK_BYTES_LIMIT, REQUEST_TIMEOUT_SECS, UDP_READ_TIMEOUT_MS,
-    backend_timeout, request_timeout,
 };
 pub(crate) use hash::REQUEST_ID_COUNTER;
 pub use hash::{stable_hash_socket_addr, stable_hash64};
