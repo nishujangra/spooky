@@ -172,19 +172,21 @@ This document classifies current visibility. It does not by itself change policy
 
 | Item | Visibility | Classification | Notes |
 | --- | --- | --- | --- |
-| `algorithms` | `#[doc(hidden)] pub mod` | temporary compatibility surface | Hidden but still public substrate. |
+| `algorithms` | private `mod` | n/a | Strategy implementations are internal substrate behind `load_balancing`. |
 | `alternate_backend` | `pub mod` | canonical public API | Deliberate public subsystem. |
-| `backend` | `#[doc(hidden)] pub mod` | temporary compatibility surface | Hidden but still public substrate. |
-| `backend_pool` | `#[doc(hidden)] pub mod` | temporary compatibility surface | Hidden but still public substrate. |
+| `backend` | private `mod` | n/a | Backend state internals are private substrate behind `upstream_pool`. |
+| `backend_pool` | private `mod` | n/a | Pool membership/cache internals are private substrate behind `upstream_pool`. |
 | `hash` | `pub(crate) mod` | internal-to-crate collaboration surface | Correctly crate-private helper module. |
 | `health` | `pub mod` | canonical public API | Deliberate public subsystem. |
 | `load_balancing` | `pub mod` | canonical public API | Deliberate public subsystem. |
 | `upstream_pool` | `pub mod` | canonical public API | Deliberate public subsystem. |
+| `HealthTransition` | `pub use` | canonical public API | Narrow shared lifecycle transition type promoted from private backend internals. |
 
 ### Phase 1 baseline calls
 
-- `algorithms`, `backend`, and `backend_pool` are explicit compatibility/testing surfaces and should be treated as temporary until re-justified.
-- no stale leftover crate-root exposure is hiding behind ordinary `pub` here; the questionable items are already marked hidden.
+- `algorithms`, `backend`, and `backend_pool` are no longer public module trees.
+- `HealthTransition` remains public as the only deliberate cross-crate lifecycle type from the prior backend substrate.
+- implementation-level `lb` tests now live inside the crate instead of forcing public compatibility modules.
 
 ## `spooky-transport`
 
@@ -240,7 +242,7 @@ This document classifies current visibility. It does not by itself change policy
 
 ### Temporary compatibility surfaces
 
-- `lb`: `#[doc(hidden)]` modules `algorithms`, `backend`, `backend_pool`
+- none in the scoped crates after the Phase 3 hidden-surface audit
 
 ### Stale leftovers requiring Phase 2 review
 

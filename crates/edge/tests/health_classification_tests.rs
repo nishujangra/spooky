@@ -1,28 +1,73 @@
 use http::StatusCode;
-use spooky_config::config::{Backend, HealthCheck};
+use spooky_config::{
+    config::{Backend, Config, HealthCheck, Listen, RouteMatch, Tls, Upstream},
+    runtime::RuntimeConfig,
+};
 use spooky_edge::runtime::health::{HealthClassification, outcome_from_status};
-use spooky_lb::{backend::HealthTransition, backend_pool::BackendPool};
+use spooky_lb::{HealthTransition, upstream_pool::UpstreamPool};
 
-/// Mock setup for backend pool testing
-fn create_test_backend_pool() -> BackendPool {
-    let backends = [Backend {
-        id: "bk-1".to_string(),
-        address: "127.0.0.1:8001".to_string(),
-        weight: 1,
-        health_check: Some(HealthCheck {
-            path: "/health".to_string(),
-            interval: 1000,
-            timeout_ms: 5000,
-            failure_threshold: 3,
-            success_threshold: 2,
-            cooldown_ms: 10000,
-        }),
-    }];
-    let backend_states = backends
-        .iter()
-        .map(spooky_lb::backend::BackendState::new)
-        .collect();
-    BackendPool::new_from_states(backend_states)
+fn create_test_upstream_pool() -> UpstreamPool {
+    let mut upstreams = std::collections::HashMap::new();
+    upstreams.insert(
+        "api".to_string(),
+        Upstream {
+            load_balancing: spooky_config::config::LoadBalancing {
+                lb_type: "round-robin".to_string(),
+                key: None,
+            },
+            auth: Default::default(),
+            host_policy: Default::default(),
+            forwarded_headers: Default::default(),
+            tls: None,
+            route: RouteMatch {
+                path_prefix: Some("/".to_string()),
+                ..Default::default()
+            },
+            backends: vec![Backend {
+                id: "bk-1".to_string(),
+                address: "127.0.0.1:8001".to_string(),
+                weight: 1,
+                health_check: Some(HealthCheck {
+                    path: "/health".to_string(),
+                    interval: 1000,
+                    timeout_ms: 5000,
+                    failure_threshold: 3,
+                    success_threshold: 2,
+                    cooldown_ms: 10000,
+                }),
+            }],
+        },
+    );
+
+    let runtime = RuntimeConfig::from_config(&Config {
+        version: 1,
+        listen: Listen {
+            protocol: "http1".to_string(),
+            tls: Tls {
+                cert: "/tmp/test-cert.pem".to_string(),
+                key: "/tmp/test-key.pem".to_string(),
+                ..Tls::default()
+            },
+            ..Listen::default()
+        },
+        listeners: Vec::new(),
+        upstream: upstreams,
+        load_balancing: None,
+        upstream_tls: Default::default(),
+        log: Default::default(),
+        performance: Default::default(),
+        observability: Default::default(),
+        resilience: Default::default(),
+        security: Default::default(),
+    })
+    .expect("runtime config");
+
+    UpstreamPool::from_runtime_upstream(runtime.upstreams.get("api").expect("upstream"))
+        .expect("pool")
+}
+
+fn healthy_backend_indices(pool: &UpstreamPool) -> Vec<usize> {
+    pool.healthy_backend_indices_iter().collect()
 }
 
 // ============================================================================
@@ -45,7 +90,7 @@ fn test_4xx_response_does_not_change_health() {
     ];
 
     for status in test_cases {
-        let mut pool = create_test_backend_pool();
+        let mut pool = create_test_upstream_pool();
 
         // Verify outcome is Neutral
         let outcome = outcome_from_status(status);
@@ -57,7 +102,7 @@ fn test_4xx_response_does_not_change_health() {
         );
 
         // Verify no health state transition
-        let transition = pool.mark_success(backend_index);
+        let transition = pool.mark_backend_healthy(backend_index);
         // This is intentionally NOT called; we verify that 4xx doesn't trigger health change
         // The test verifies outcome classification, not the caller's behavior
         assert!(
@@ -84,7 +129,7 @@ fn test_5xx_response_marks_failure() {
     ];
 
     for status in test_cases {
-        let mut pool = create_test_backend_pool();
+        let mut pool = create_test_upstream_pool();
 
         // Verify outcome is Failure
         let outcome = outcome_from_status(status);
@@ -98,7 +143,7 @@ fn test_5xx_response_marks_failure() {
         // Simulate receiving the 5xx response (failure_threshold = 3)
         // Need 3 failures to mark unhealthy
         for i in 0..3 {
-            let transition = pool.mark_failure(backend_index);
+            let transition = pool.mark_backend_failure_from_active_check(backend_index);
             if i < 2 {
                 // First 2 failures don't cause transition
                 assert!(
@@ -117,7 +162,7 @@ fn test_5xx_response_marks_failure() {
         }
 
         // Verify backend is now unhealthy
-        let healthy_indices = pool.healthy_indices();
+        let healthy_indices = healthy_backend_indices(&pool);
         assert!(
             !healthy_indices.contains(&backend_index),
             "Backend should be unhealthy after 5xx response"
@@ -142,7 +187,7 @@ fn test_2xx_3xx_response_marks_success() {
     ];
 
     for status in test_cases {
-        let mut pool = create_test_backend_pool();
+        let mut pool = create_test_upstream_pool();
         let backend_index = 0;
 
         // Verify outcome is Success
@@ -155,7 +200,7 @@ fn test_2xx_3xx_response_marks_success() {
         );
 
         // Mark the response as success
-        let transition = pool.mark_success(backend_index);
+        let transition = pool.mark_backend_healthy(backend_index);
         // Healthy backend receiving success: no transition
         assert!(
             transition.is_none(),
@@ -163,7 +208,7 @@ fn test_2xx_3xx_response_marks_success() {
         );
 
         // Verify backend stays healthy
-        let healthy_indices = pool.healthy_indices();
+        let healthy_indices = healthy_backend_indices(&pool);
         assert!(
             healthy_indices.contains(&backend_index),
             "Backend should remain healthy after 2xx/3xx response"
@@ -173,16 +218,16 @@ fn test_2xx_3xx_response_marks_success() {
 
 #[test]
 fn test_2xx_response_recovers_failed_backend() {
-    let mut pool = create_test_backend_pool();
+    let mut pool = create_test_upstream_pool();
     let backend_index = 0;
 
     // Mark backend as failed (3 consecutive failures)
     for _ in 0..3 {
-        let _ = pool.mark_failure(backend_index);
+        let _ = pool.mark_backend_failure_from_active_check(backend_index);
     }
 
     // Verify backend is unhealthy
-    let healthy_indices = pool.healthy_indices();
+    let healthy_indices = healthy_backend_indices(&pool);
     assert!(
         !healthy_indices.contains(&backend_index),
         "Backend should be unhealthy after failures"
@@ -190,7 +235,7 @@ fn test_2xx_response_recovers_failed_backend() {
 
     // Now simulate receiving 2xx responses (success_threshold = 2)
     for i in 0..2 {
-        let transition = pool.mark_success(backend_index);
+        let transition = pool.mark_backend_healthy(backend_index);
         if i < 1 {
             // First success doesn't cause transition (within cooldown)
             assert!(
@@ -211,13 +256,13 @@ fn test_2xx_response_recovers_failed_backend() {
 
 #[test]
 fn test_bridge_error_does_not_change_health() {
-    let mut pool = create_test_backend_pool();
+    let mut pool = create_test_upstream_pool();
     let backend_index = 0;
 
     // Bridge errors represent local proxy issues (invalid request, encoding error, etc.)
     // They should NOT affect backend health state
     // Verify initial state is healthy
-    let healthy_indices = pool.healthy_indices();
+    let healthy_indices = healthy_backend_indices(&pool);
     assert!(
         healthy_indices.contains(&backend_index),
         "Backend should start healthy"
@@ -225,14 +270,14 @@ fn test_bridge_error_does_not_change_health() {
 
     // Simulate Bridge error (no health transition should occur)
     // In real code, this is handled by: Err(ProxyError::Bridge(_)) => no mark_success/mark_failure
-    let transition = pool.mark_success(backend_index);
+    let transition = pool.mark_backend_healthy(backend_index);
     assert!(
         transition.is_none(),
         "Bridge error should not cause health transition"
     );
 
     // Verify backend health unchanged
-    let healthy_indices = pool.healthy_indices();
+    let healthy_indices = healthy_backend_indices(&pool);
     assert!(
         healthy_indices.contains(&backend_index),
         "Backend health should be unchanged after Bridge error"
@@ -245,14 +290,14 @@ fn test_bridge_error_does_not_change_health() {
 
 #[test]
 fn test_transport_error_marks_failure() {
-    let mut pool = create_test_backend_pool();
+    let mut pool = create_test_upstream_pool();
     let backend_index = 0;
 
     // Transport errors represent backend connectivity issues (connection refused, host unreachable, etc.)
     // They SHOULD mark backend as failed
     // Simulate 3 transport errors to cross failure threshold
     for i in 0..3 {
-        let transition = pool.mark_failure(backend_index);
+        let transition = pool.mark_backend_failure_from_active_check(backend_index);
         if i < 2 {
             assert!(
                 transition.is_none(),
@@ -268,7 +313,7 @@ fn test_transport_error_marks_failure() {
     }
 
     // Verify backend is unhealthy
-    let healthy_indices = pool.healthy_indices();
+    let healthy_indices = healthy_backend_indices(&pool);
     assert!(
         !healthy_indices.contains(&backend_index),
         "Backend should be unhealthy after transport error"
@@ -281,14 +326,14 @@ fn test_transport_error_marks_failure() {
 
 #[test]
 fn test_timeout_marks_failure() {
-    let mut pool = create_test_backend_pool();
+    let mut pool = create_test_upstream_pool();
     let backend_index = 0;
 
     // Timeouts represent slow/hung backends
     // They SHOULD mark backend as failed
     // Simulate 3 timeouts to cross failure threshold
     for i in 0..3 {
-        let transition = pool.mark_failure(backend_index);
+        let transition = pool.mark_backend_failure_from_active_check(backend_index);
         if i < 2 {
             assert!(
                 transition.is_none(),
@@ -304,7 +349,7 @@ fn test_timeout_marks_failure() {
     }
 
     // Verify backend is unhealthy
-    let healthy_indices = pool.healthy_indices();
+    let healthy_indices = healthy_backend_indices(&pool);
     assert!(
         !healthy_indices.contains(&backend_index),
         "Backend should be unhealthy after timeout"
@@ -317,7 +362,7 @@ fn test_timeout_marks_failure() {
 
 #[test]
 fn test_tls_error_does_not_change_health() {
-    let mut pool = create_test_backend_pool();
+    let mut pool = create_test_upstream_pool();
     let backend_index = 0;
 
     // TLS errors represent server misconfiguration (bad cert, verification failure, etc.)
@@ -325,7 +370,7 @@ fn test_tls_error_does_not_change_health() {
     // This is different from Transport errors which indicate unavailability
 
     // Verify initial state is healthy
-    let healthy_indices = pool.healthy_indices();
+    let healthy_indices = healthy_backend_indices(&pool);
     assert!(
         healthy_indices.contains(&backend_index),
         "Backend should start healthy"
@@ -333,14 +378,14 @@ fn test_tls_error_does_not_change_health() {
 
     // Simulate TLS error (no health transition should occur)
     // In real code, this is handled by: Err(ProxyError::Tls(_)) => no mark_success/mark_failure
-    let transition = pool.mark_success(backend_index);
+    let transition = pool.mark_backend_healthy(backend_index);
     assert!(
         transition.is_none(),
         "TLS error should not cause health transition"
     );
 
     // Verify backend health unchanged
-    let healthy_indices = pool.healthy_indices();
+    let healthy_indices = healthy_backend_indices(&pool);
     assert!(
         healthy_indices.contains(&backend_index),
         "Backend health should be unchanged after TLS error"
@@ -353,21 +398,21 @@ fn test_tls_error_does_not_change_health() {
 
 #[test]
 fn test_mixed_error_and_success_responses() {
-    let mut pool = create_test_backend_pool();
+    let mut pool = create_test_upstream_pool();
     let backend_index = 0;
 
     // Scenario: Backend receives mixed responses
     // 1. 200 OK -> stays healthy
-    let transition = pool.mark_success(backend_index);
+    let transition = pool.mark_backend_healthy(backend_index);
     assert!(
         transition.is_none(),
         "200 OK should not transition healthy backend"
     );
 
     // 2. 5xx -> trigger failure threshold (3 failures needed)
-    let _ = pool.mark_failure(backend_index);
-    let _ = pool.mark_failure(backend_index);
-    let transition = pool.mark_failure(backend_index);
+    let _ = pool.mark_backend_failure_from_active_check(backend_index);
+    let _ = pool.mark_backend_failure_from_active_check(backend_index);
+    let transition = pool.mark_backend_failure_from_active_check(backend_index);
     assert!(
         matches!(transition, Some(HealthTransition::BecameUnhealthy)),
         "Backend should be unhealthy after 3 failures"
@@ -381,7 +426,7 @@ fn test_mixed_error_and_success_responses() {
     );
 
     // Verify backend is still unhealthy
-    let healthy_indices = pool.healthy_indices();
+    let healthy_indices = healthy_backend_indices(&pool);
     assert!(
         !healthy_indices.contains(&backend_index),
         "Backend should still be unhealthy"

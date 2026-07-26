@@ -6,3 +6,9 @@ pub enum HealthFailureReason {
     Tls,
     CircuitOpen,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HealthTransition {
+    BecameHealthy,
+    BecameUnhealthy,
+}

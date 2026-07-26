@@ -6,9 +6,7 @@ use std::{
 use http::StatusCode;
 use log::{error, info};
 use spooky_errors::{ClassifiedUpstreamProxyError, PoolError, ProxyError};
-use spooky_lb::{
-    backend::HealthTransition, health::HealthFailureReason, upstream_pool::UpstreamPool,
-};
+use spooky_lb::{HealthTransition, health::HealthFailureReason, upstream_pool::UpstreamPool};
 
 use crate::{
     Metrics, OverloadShedReason, RouteOutcome,

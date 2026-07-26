@@ -6,7 +6,7 @@ use std::{
 };
 
 use log::{debug, info, warn};
-use spooky_lb::{backend::HealthTransition, upstream_pool::UpstreamPool};
+use spooky_lb::{HealthTransition, upstream_pool::UpstreamPool};
 use spooky_transport::{SharedDnsResolver, UpstreamTransportPool};
 
 use super::{

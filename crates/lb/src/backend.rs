@@ -8,7 +8,7 @@ use std::{
 
 use spooky_config::config::{Backend, HealthCheck};
 
-use crate::health::HealthFailureReason;
+use crate::health::{HealthFailureReason, HealthTransition};
 
 #[derive(Clone)]
 pub struct BackendState {
@@ -150,9 +150,4 @@ enum HealthState {
         successes: u32,
         reason: HealthFailureReason,
     },
-}
-
-pub enum HealthTransition {
-    BecameHealthy,
-    BecameUnhealthy,
 }
