@@ -10,6 +10,7 @@ pub mod cid_radix;
 pub mod constants;
 pub mod hash;
 pub mod metrics;
+pub mod observability;
 mod quic_listener;
 pub mod resilience;
 pub mod routing;

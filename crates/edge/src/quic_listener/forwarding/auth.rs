@@ -488,7 +488,7 @@ impl QUICListener {
                     AdmissionOutcomeClass::AuthDenied,
                 );
                 warn!(
-                    "request_id={} route={} external auth denied with status={}",
+                    "admission denied: request_id={} upstream={} reason=auth_denied status={}",
                     req.request_id,
                     req.upstream_name.as_deref().unwrap_or("unrouted"),
                     req.response_status.unwrap_or(0)
@@ -509,7 +509,7 @@ impl QUICListener {
                 metrics.inc_external_auth_error();
                 if let Some(error) = &error {
                     debug!(
-                        "request_id={} route={} external auth rejected after error: {:?}",
+                        "admission denied: request_id={} upstream={} reason=auth_unavailable detail={:?}",
                         req.request_id,
                         req.upstream_name.as_deref().unwrap_or("unrouted"),
                         error

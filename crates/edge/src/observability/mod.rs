@@ -1,0 +1,981 @@
+//! Canonical observability vocabulary.
+//!
+//! This module is the **single, handler-free schema** for the operational reason
+//! vocabularies. It defines each canonical enum *once*, with one `slug()` per
+//! concept that is the stable string used across all three observability
+//! surfaces — metric label value, structured-log `reason=` value, and
+//! control-API serialized value. The `From` mappings below tie every local
+//! reason enum (QUIC data path, bootstrap, retry/hedge, admission, backend
+//! health) to this canonical vocabulary, so one operational concept is described
+//! one way everywhere.
+//!
+//! This is the source of truth for dashboard and alert consumers: a reader can
+//! understand the reason vocabularies and canonical field names from this one
+//! module without reading any emitter, and the mapping tests guarantee emitters
+//! cannot drift from it.
+//!
+//! # Operational observability schema reference (obs plan, Phase 9)
+//!
+//! This is the stable source of truth for dashboard/alert consumers. For each
+//! canonical reason family: the enum value, its `slug()` (which is the metric
+//! label value, the structured-log `reason=` value, and the control-API string —
+//! one string per concept across all three surfaces).
+//!
+//! ## Request outcome — [`RequestOutcomeReason`]
+//!
+//! | enum value | slug (metric / log / control-API) | coarse `outcome` label |
+//! |---|---|---|
+//! | `Completed` | `completed` | `success` |
+//! | `Cancelled` | `cancelled` | `failure` |
+//! | `TimedOut` | `timed_out` | `timeout` |
+//! | `AuthDenied` | `auth_denied` | `failure` |
+//! | `RateLimited` | `rate_limited` | `rate_limited` |
+//! | `Overloaded` | `overloaded` | `overload_shed` |
+//! | `ValidationRejected` | `validation_rejected` | `failure` |
+//! | `BackendTransportFailed` | `backend_transport_failed` | `failure` |
+//! | `BackendProtocolFailed` | `backend_protocol_failed` | `failure` |
+//! | `BackendTlsFailed` | `backend_tls_failed` | `failure` |
+//! | `BackendBridgeFailed` | `backend_bridge_failed` | `failure` |
+//!
+//! ## Backend health — [`BackendHealthReason`]
+//!
+//! | enum value | slug | failure? |
+//! |---|---|---|
+//! | `ActiveProbeSuccess` | `active_probe_success` | no |
+//! | `ActiveProbeFailure` | `active_probe_failure` | yes |
+//! | `PassiveSuccess` | `passive_success` | no |
+//! | `PassiveFailure` | `passive_failure` | yes |
+//! | `DnsRefreshFailed` | `dns_refresh_failed` | yes |
+//! | `EmptyResolutionRetained` | `empty_resolution_retained` | no |
+//! | `PoolPoisoned` | `pool_poisoned` | yes |
+//!
+//! Health-failure *class* (distinct axis, control-API `health_reason` +
+//! `spooky_health_failures_total{reason}`): `5xx`, `timeout`, `transport`,
+//! `tls`, `circuit_open`. Refresh *classification* (distinct axis): `refreshed`,
+//! `unchanged`, `rejected_empty_answer`, `failed_active_preserved`.
+//!
+//! ## Retry — [`RetryDecisionReason`]
+//!
+//! | enum value | slug | retry? |
+//! |---|---|---|
+//! | `UpstreamTimeout` | `upstream_timeout` | yes |
+//! | `UpstreamTransportFailure` | `upstream_transport_failure` | yes |
+//! | `UpstreamProtocolFailure` | `upstream_protocol_failure` | yes |
+//! | `RetryBudgetDenied` | `retry_budget_denied` | no |
+//! | `RetryPolicyDisabled` | `retry_policy_disabled` | no |
+//! | `IdempotencyDenied` | `idempotency_denied` | no |
+//!
+//! ## Hedge — [`HedgeDecisionReason`]
+//!
+//! | enum value | slug | triggered? |
+//! |---|---|---|
+//! | `DelayElapsed` | `delay_elapsed` | yes |
+//! | `HedgingDisabled` | `hedging_disabled` | no |
+//! | `PrimaryCompleted` | `primary_completed` | no |
+//! | `RequestBodyNotReplayable` | `request_body_not_replayable` | no |
+//! | `TunnelRequest` | `tunnel_request` | no |
+//! | `MethodNotAllowed` | `method_not_allowed` | no |
+//! | `AlternateBackendUnavailable` | `alternate_backend_unavailable` | no |
+//! | `HedgeBudgetDenied` | `hedge_budget_denied` | no |
+//!
+//! ## Admission / auth — [`AdmissionDecisionReason`]
+//!
+//! | enum value | slug |
+//! |---|---|
+//! | `AuthDenied` | `auth_denied` |
+//! | `AuthUnavailable` | `auth_unavailable` |
+//! | `RateLimited` | `rate_limited` |
+//! | `Overloaded` | `overloaded` (cause axis: [`AdmissionOverloadCause`]) |
+//! | `ValidationRejected` | `validation_rejected` |
+//! | `PolicyRejected` | `policy_rejected` |
+//!
+//! Overload cause ([`AdmissionOverloadCause`], the `spooky_overload_shed_by_reason_total{reason}`
+//! label): `brownout`, `adaptive_admission`, `route_cap`, `route_global_cap`,
+//! `global_inflight`, `upstream_inflight`, `backend_inflight`, `circuit_open`,
+//! `request_buffer_cap`, `response_prebuffer_cap`, `connection_cap`.
+//!
+//! ## Required dimensions per event class
+//!
+//! Emitted via [`OperationalEventContext`] (canonical field names). `request_id`
+//! is omitted (not `unassigned`) when no id exists yet.
+//!
+//! - **request / forwarding**: `request_id`, `upstream`, `backend`, `reason`,
+//!   `failure_class`, status
+//! - **backend lifecycle**: `backend`, `health_reason` (or refresh classification)
+//! - **retry / hedge**: `request_id`, `upstream`, `backend`, `decision`, `reason`
+//! - **admission / auth**: `request_id` (when known), `upstream`, `reason`
+//!
+//! ## Deprecated names / migration notes
+//!
+//! Superseded by the canonical field names above; dashboards keying on the old
+//! strings must migrate:
+//! - log field `route=` and `route_upstream=` → **`upstream=`**.
+//! - literal `request_id=unassigned` → field **omitted** when no id exists.
+//! - `Bootstrap request route=…` / `Bootstrap upstream error …` prose → the
+//!   canonical `admission denied: …` / `upstream failure: …` schemas.
+//! - `Backend <addr> became healthy/unhealthy` → `backend health transition:
+//!   backend=<addr> health_reason=…`.
+//! - Metric series names (`spooky_*`) are unchanged; only label *values* are now
+//!   canonical enum slugs.
+
+use std::fmt;
+
+/// Why a request reached its terminal state — the one canonical request-outcome
+/// vocabulary. Unifies the QUIC data-path terminal enums
+/// (`RejectionReason`/`BackendFailureReason`/`TimeoutReason`) and the bootstrap
+/// `Bootstrap*` slugs, which Phase 0 found were two disjoint vocabularies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RequestOutcomeReason {
+    /// Response completed successfully (status-derived success).
+    Completed,
+    /// Client cancelled (reset / connection closed / operator abort).
+    Cancelled,
+    /// A deadline expired before completion.
+    TimedOut,
+    /// Rejected by authentication/authorization.
+    AuthDenied,
+    /// Rejected by rate limiting.
+    RateLimited,
+    /// Shed due to overload / admission control.
+    Overloaded,
+    /// Rejected by request validation or policy.
+    ValidationRejected,
+    /// Backend transport-level failure (connect/send/reset).
+    BackendTransportFailed,
+    /// Backend protocol-level failure (malformed/illegal upstream response).
+    BackendProtocolFailed,
+    /// Backend TLS failure.
+    BackendTlsFailed,
+    /// Backend bridge/translation failure.
+    BackendBridgeFailed,
+}
+
+/// Why a backend's health/observation reached its state — the one canonical
+/// backend-health vocabulary. Unifies `HealthFailureReason`,
+/// `BackendHealthObservationOutcome`, and the DNS-refresh classifications, which
+/// Phase 0 found were reported at three different granularities.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BackendHealthReason {
+    /// An active probe succeeded.
+    ActiveProbeSuccess,
+    /// An active probe failed.
+    ActiveProbeFailure,
+    /// Passive (live-traffic) observation succeeded.
+    PassiveSuccess,
+    /// Passive observation failed.
+    PassiveFailure,
+    /// A DNS refresh failed; the prior resolution is retained.
+    DnsRefreshFailed,
+    /// A DNS refresh returned no addresses; the prior resolution is retained.
+    EmptyResolutionRetained,
+    /// A backend pool lock was poisoned (observed as a health-affecting event).
+    PoolPoisoned,
+}
+
+/// Why a retry was attempted or denied — the one canonical retry vocabulary.
+/// Reconciles `RetryAttemptTelemetryReason` and `RetryPolicyDenialReason`, which
+/// Phase 0 found emitted lossy/merged metric labels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RetryDecisionReason {
+    /// Retriable: the prior attempt timed out.
+    UpstreamTimeout,
+    /// Retriable: the prior attempt hit a transport failure.
+    UpstreamTransportFailure,
+    /// Retriable: the prior attempt hit a protocol failure.
+    UpstreamProtocolFailure,
+    /// Denied: the retry budget is exhausted.
+    RetryBudgetDenied,
+    /// Denied: retries are disabled by policy.
+    RetryPolicyDisabled,
+    /// Denied: the request is not idempotent / body not replayable.
+    IdempotencyDenied,
+}
+
+/// Why a hedge was triggered or denied — the one canonical hedge vocabulary.
+/// Phase 0 found `HedgePolicyDenialReason` (7 variants) entirely unobserved; this
+/// gives every hedge decision a canonical name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HedgeDecisionReason {
+    /// A hedge fired because the primary passed the hedge delay.
+    DelayElapsed,
+    /// Denied: hedging is disabled by policy.
+    HedgingDisabled,
+    /// Denied: the primary request already completed.
+    PrimaryCompleted,
+    /// Denied: the request body is not replayable.
+    RequestBodyNotReplayable,
+    /// Denied: the request is a tunnel (CONNECT/websocket).
+    TunnelRequest,
+    /// Denied: the method is not allowed to hedge.
+    MethodNotAllowed,
+    /// Denied: no alternate backend is available.
+    AlternateBackendUnavailable,
+    /// Denied: the hedge budget is exhausted.
+    HedgeBudgetDenied,
+}
+
+/// Why admission/auth rejected a request — the one canonical admission vocabulary.
+/// Reconciles `AdmissionOutcomeClass`, `OverloadDecisionReason`, and the external
+/// auth outcomes. Phase 0 found overload was split across two enums
+/// (`OverloadDecisionReason` 6-variant vs `OverloadShedReason` 11-variant); the
+/// fine-grained overload cause is carried separately by
+/// [`AdmissionOverloadCause`] so this stays low-cardinality.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AdmissionDecisionReason {
+    /// Authentication/authorization denied the request.
+    AuthDenied,
+    /// The auth service was unavailable (fail-closed).
+    AuthUnavailable,
+    /// Rate limiting rejected the request.
+    RateLimited,
+    /// Overload/admission control shed the request.
+    Overloaded,
+    /// Request validation rejected the request.
+    ValidationRejected,
+    /// A non-auth policy rejected the request.
+    PolicyRejected,
+}
+
+/// The fine-grained cause of an [`AdmissionDecisionReason::Overloaded`] decision,
+/// carried alongside it. This is the union of the two legacy overload enums so
+/// the shed cause is not lost when the coarse decision is recorded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AdmissionOverloadCause {
+    Brownout,
+    AdaptiveAdmission,
+    RouteCap,
+    RouteGlobalCap,
+    GlobalInflight,
+    UpstreamInflight,
+    BackendInflight,
+    CircuitOpen,
+    RequestBufferCap,
+    ResponsePrebufferCap,
+    ConnectionCap,
+}
+
+// ---------------------------------------------------------------------------
+// Stable string mapping layer (enum -> metric label / log value / control API)
+// ---------------------------------------------------------------------------
+//
+// Each canonical enum exposes exactly one `slug()`: a single stable string that
+// serves all three surfaces (metric label, log value, control-API string), so
+// one concept has exactly one name.
+
+impl RequestOutcomeReason {
+    /// The canonical stable slug for metrics labels, log values, and control-API
+    /// strings.
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Completed => "completed",
+            Self::Cancelled => "cancelled",
+            Self::TimedOut => "timed_out",
+            Self::AuthDenied => "auth_denied",
+            Self::RateLimited => "rate_limited",
+            Self::Overloaded => "overloaded",
+            Self::ValidationRejected => "validation_rejected",
+            Self::BackendTransportFailed => "backend_transport_failed",
+            Self::BackendProtocolFailed => "backend_protocol_failed",
+            Self::BackendTlsFailed => "backend_tls_failed",
+            Self::BackendBridgeFailed => "backend_bridge_failed",
+        }
+    }
+
+    /// Whether this outcome is a success terminal.
+    pub fn is_success(self) -> bool {
+        matches!(self, Self::Completed)
+    }
+
+    /// The coarse `outcome` metric-label bucket, matching the existing
+    /// `route_outcome_label` values so migrating an emitter does not change the
+    /// low-cardinality `outcome` series. Note the *canonical* per-reason detail
+    /// lives in [`Self::slug`]; this is the legacy coarse bucket.
+    pub fn coarse_outcome_label(self) -> &'static str {
+        match self {
+            Self::Completed => "success",
+            Self::TimedOut => "timeout",
+            Self::Overloaded => "overload_shed",
+            Self::RateLimited => "rate_limited",
+            // Phase 0 finding #2: auth-denied and validation currently collapse to
+            // `failure`; the canonical `slug()` distinguishes them, a later phase
+            // decides whether to widen the coarse label.
+            Self::AuthDenied
+            | Self::ValidationRejected
+            | Self::Cancelled
+            | Self::BackendTransportFailed
+            | Self::BackendProtocolFailed
+            | Self::BackendTlsFailed
+            | Self::BackendBridgeFailed => "failure",
+        }
+    }
+}
+
+impl BackendHealthReason {
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::ActiveProbeSuccess => "active_probe_success",
+            Self::ActiveProbeFailure => "active_probe_failure",
+            Self::PassiveSuccess => "passive_success",
+            Self::PassiveFailure => "passive_failure",
+            Self::DnsRefreshFailed => "dns_refresh_failed",
+            Self::EmptyResolutionRetained => "empty_resolution_retained",
+            Self::PoolPoisoned => "pool_poisoned",
+        }
+    }
+
+    /// Whether this reason represents a health-affecting failure.
+    pub fn is_failure(self) -> bool {
+        matches!(
+            self,
+            Self::ActiveProbeFailure
+                | Self::PassiveFailure
+                | Self::DnsRefreshFailed
+                | Self::PoolPoisoned
+        )
+    }
+}
+
+impl RetryDecisionReason {
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::UpstreamTimeout => "upstream_timeout",
+            Self::UpstreamTransportFailure => "upstream_transport_failure",
+            Self::UpstreamProtocolFailure => "upstream_protocol_failure",
+            Self::RetryBudgetDenied => "retry_budget_denied",
+            Self::RetryPolicyDisabled => "retry_policy_disabled",
+            Self::IdempotencyDenied => "idempotency_denied",
+        }
+    }
+
+    /// Whether this reason authorized a retry (vs. denied one).
+    pub fn is_retry(self) -> bool {
+        matches!(
+            self,
+            Self::UpstreamTimeout | Self::UpstreamTransportFailure | Self::UpstreamProtocolFailure
+        )
+    }
+}
+
+impl HedgeDecisionReason {
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::DelayElapsed => "delay_elapsed",
+            Self::HedgingDisabled => "hedging_disabled",
+            Self::PrimaryCompleted => "primary_completed",
+            Self::RequestBodyNotReplayable => "request_body_not_replayable",
+            Self::TunnelRequest => "tunnel_request",
+            Self::MethodNotAllowed => "method_not_allowed",
+            Self::AlternateBackendUnavailable => "alternate_backend_unavailable",
+            Self::HedgeBudgetDenied => "hedge_budget_denied",
+        }
+    }
+
+    /// Whether this reason triggered a hedge (vs. denied one).
+    pub fn is_triggered(self) -> bool {
+        matches!(self, Self::DelayElapsed)
+    }
+}
+
+impl AdmissionDecisionReason {
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::AuthDenied => "auth_denied",
+            Self::AuthUnavailable => "auth_unavailable",
+            Self::RateLimited => "rate_limited",
+            Self::Overloaded => "overloaded",
+            Self::ValidationRejected => "validation_rejected",
+            Self::PolicyRejected => "policy_rejected",
+        }
+    }
+}
+
+impl AdmissionOverloadCause {
+    /// The canonical slug, matching the existing `OverloadShedReason` metric-label
+    /// values (Phase 0 §1.6) so migrating the overload emitter is a no-op on the
+    /// `reason=` label.
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Brownout => "brownout",
+            Self::AdaptiveAdmission => "adaptive_admission",
+            Self::RouteCap => "route_cap",
+            Self::RouteGlobalCap => "route_global_cap",
+            Self::GlobalInflight => "global_inflight",
+            Self::UpstreamInflight => "upstream_inflight",
+            Self::BackendInflight => "backend_inflight",
+            Self::CircuitOpen => "circuit_open",
+            Self::RequestBufferCap => "request_buffer_cap",
+            Self::ResponsePrebufferCap => "response_prebuffer_cap",
+            Self::ConnectionCap => "connection_cap",
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shared event-context carrier + metric label model
+// ---------------------------------------------------------------------------
+
+/// The one canonical set of dimensions for an operational event, used to give
+/// structured logs of the same event class the same fields (Phase 0 findings
+/// #9/#10: `route`/`upstream`/`route_upstream` and `request_id=unassigned` were
+/// inconsistent across the forwarding and bootstrap planes).
+///
+/// The canonical field name for the upstream-name concept is **`upstream`**.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OperationalEventContext<'a> {
+    pub request_id: Option<u64>,
+    pub route: Option<&'a str>,
+    pub upstream: Option<&'a str>,
+    pub backend: Option<&'a str>,
+    pub decision_reason: Option<&'a str>,
+    pub failure_class: Option<&'a str>,
+}
+
+impl<'a> OperationalEventContext<'a> {
+    /// Start an empty context; fill fields with the builder methods.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_request_id(mut self, request_id: u64) -> Self {
+        self.request_id = Some(request_id);
+        self
+    }
+
+    pub fn with_upstream(mut self, upstream: &'a str) -> Self {
+        self.upstream = Some(upstream);
+        self
+    }
+
+    pub fn with_backend(mut self, backend: &'a str) -> Self {
+        self.backend = Some(backend);
+        self
+    }
+
+    pub fn with_reason(mut self, reason: &'a str) -> Self {
+        self.decision_reason = Some(reason);
+        self
+    }
+}
+
+impl fmt::Display for OperationalEventContext<'_> {
+    /// Render the canonical `key=value` field set, in a stable order, skipping
+    /// unset fields. This is the single log-field format for an operational event.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut first = true;
+        let mut field = |f: &mut fmt::Formatter<'_>, key: &str, value: &str| -> fmt::Result {
+            if !first {
+                f.write_str(" ")?;
+            }
+            first = false;
+            write!(f, "{key}={value}")
+        };
+        if let Some(request_id) = self.request_id {
+            field(f, "request_id", &request_id.to_string())?;
+        }
+        if let Some(route) = self.route {
+            field(f, "route", route)?;
+        }
+        if let Some(upstream) = self.upstream {
+            field(f, "upstream", upstream)?;
+        }
+        if let Some(backend) = self.backend {
+            field(f, "backend", backend)?;
+        }
+        if let Some(reason) = self.decision_reason {
+            field(f, "reason", reason)?;
+        }
+        if let Some(failure_class) = self.failure_class {
+            field(f, "failure_class", failure_class)?;
+        }
+        Ok(())
+    }
+}
+
+/// The one canonical metric reason-label model. Emitters that record a reasoned
+/// outcome populate this rather than assembling ad hoc label sets, so the label
+/// keys (`outcome`, `reason`, `failure_class`) are the same everywhere.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MetricReasonLabels<'a> {
+    pub outcome: Option<&'a str>,
+    pub reason: Option<&'a str>,
+    pub failure_class: Option<&'a str>,
+}
+
+// ---------------------------------------------------------------------------
+// Canonical mappings from local reason vocabularies (obs Phase 5)
+// ---------------------------------------------------------------------------
+//
+// Phase 5 classifies every local reason enum against the canonical vocabulary so
+// one operational concept is described one way. Each local enum is either:
+//   - an ALIAS of a canonical concept → `From<Local> for Canonical`, or
+//   - a RICHER SUBTYPE → mapped to the coarse canonical reason (the extra detail
+//     stays available as the local enum for debug/telemetry).
+// The QUIC-datapath terminal enums (edge-local) and the retry/hedge enums
+// (spooky_errors) are mapped here; `OverloadShedReason::canonical()` lives with
+// that enum. These impls are the single source that keeps the surfaces aligned.
+
+use crate::runtime::connection::stream::{BackendFailureReason, RejectionReason, TimeoutReason};
+use spooky_errors::{HedgePolicyDenialReason, RetryPolicyDenialReason, UpstreamRetryReason};
+
+/// Request rejection → canonical request outcome. Alias mapping.
+impl From<RejectionReason> for RequestOutcomeReason {
+    fn from(reason: RejectionReason) -> Self {
+        match reason {
+            RejectionReason::AuthDenied => Self::AuthDenied,
+            // AuthUnavailable is a richer subtype of "auth-related rejection";
+            // it maps to the canonical AuthDenied outcome (the request was not
+            // admitted), with the finer cause preserved by the local enum.
+            RejectionReason::AuthUnavailable => Self::AuthDenied,
+            RejectionReason::ValidationFailed
+            | RejectionReason::RequestBodyNotAllowed
+            | RejectionReason::RequestBodyTooLarge => Self::ValidationRejected,
+            RejectionReason::RateLimited => Self::RateLimited,
+            RejectionReason::Overloaded | RejectionReason::ResponsePrebufferCap => Self::Overloaded,
+        }
+    }
+}
+
+/// Backend failure → canonical request outcome. Richer subtype: the transport
+/// class is mapped to the matching canonical backend-failure outcome.
+impl From<BackendFailureReason> for RequestOutcomeReason {
+    fn from(reason: BackendFailureReason) -> Self {
+        match reason {
+            BackendFailureReason::UpstreamTimeout => Self::TimedOut,
+            BackendFailureReason::UpstreamTls => Self::BackendTlsFailed,
+            BackendFailureReason::UpstreamProtocol => Self::BackendProtocolFailed,
+            BackendFailureReason::UpstreamBridge => Self::BackendBridgeFailed,
+            BackendFailureReason::UpstreamTransport
+            | BackendFailureReason::DispatchSpawnFailed
+            | BackendFailureReason::UpstreamResultChannelDropped
+            | BackendFailureReason::ResponseWriteFailed
+            | BackendFailureReason::ResponseStreamAborted => Self::BackendTransportFailed,
+        }
+    }
+}
+
+/// Timeout phase → canonical request outcome. All phases are the one canonical
+/// `TimedOut` outcome; the phase remains the richer local detail.
+impl From<TimeoutReason> for RequestOutcomeReason {
+    fn from(_reason: TimeoutReason) -> Self {
+        Self::TimedOut
+    }
+}
+
+/// Retry attempt cause → canonical retry decision reason. Alias mapping.
+impl From<UpstreamRetryReason> for RetryDecisionReason {
+    fn from(reason: UpstreamRetryReason) -> Self {
+        match reason {
+            UpstreamRetryReason::Timeout => Self::UpstreamTimeout,
+            UpstreamRetryReason::Transport => Self::UpstreamTransportFailure,
+            UpstreamRetryReason::Pool => Self::UpstreamTransportFailure,
+        }
+    }
+}
+
+/// Retry denial → canonical retry decision reason. Richer subtype: the several
+/// idempotency/terminal causes collapse to the coarse canonical denials.
+impl From<RetryPolicyDenialReason> for RetryDecisionReason {
+    fn from(reason: RetryPolicyDenialReason) -> Self {
+        match reason {
+            RetryPolicyDenialReason::BudgetDenied => Self::RetryBudgetDenied,
+            RetryPolicyDenialReason::MethodNotIdempotent
+            | RetryPolicyDenialReason::RequestBodyNotReplayable => Self::IdempotencyDenied,
+            RetryPolicyDenialReason::TerminalError(_)
+            | RetryPolicyDenialReason::AttemptLimitReached
+            | RetryPolicyDenialReason::AlternateBackendUnavailable(_) => Self::RetryPolicyDisabled,
+        }
+    }
+}
+
+/// Backend health observation (source + outcome) → canonical backend health
+/// reason (obs Phase 8). This is the health axis: active vs passive probe,
+/// success vs failure. `Neutral` observations are not a health *reason* (they
+/// neither confirm nor fault the backend), so they return `None`.
+pub fn backend_health_reason(
+    source: crate::runtime::backend::event::BackendHealthObservationSource,
+    outcome: crate::runtime::backend::event::BackendHealthObservationOutcome,
+) -> Option<BackendHealthReason> {
+    use crate::runtime::backend::event::{
+        BackendHealthObservationOutcome as O, BackendHealthObservationSource as S,
+    };
+    match (source, outcome) {
+        (S::ActiveCheck, O::Success) => Some(BackendHealthReason::ActiveProbeSuccess),
+        (S::ActiveCheck, O::Failure) => Some(BackendHealthReason::ActiveProbeFailure),
+        (S::PassiveRequest | S::RequestCompletion, O::Success) => {
+            Some(BackendHealthReason::PassiveSuccess)
+        }
+        (S::PassiveRequest | S::RequestCompletion, O::Failure) => {
+            Some(BackendHealthReason::PassiveFailure)
+        }
+        // Control-plane driven observations are administrative, not probe health;
+        // and any Neutral outcome carries no health reason.
+        (S::ControlPlane, _) | (_, O::Neutral) => None,
+    }
+}
+
+/// Backend DNS-refresh classification → canonical backend health reason
+/// (obs Phase 8). This is the *resolution/refresh* axis, kept distinct from the
+/// probe-health axis above (Phase 8 step 4). Only the failure classifications
+/// carry a health reason; a successful/unchanged refresh does not.
+impl From<crate::runtime::backend::lifecycle::BackendRefreshClassification>
+    for Option<BackendHealthReason>
+{
+    fn from(
+        classification: crate::runtime::backend::lifecycle::BackendRefreshClassification,
+    ) -> Self {
+        use crate::runtime::backend::lifecycle::BackendRefreshClassification as C;
+        match classification {
+            C::Rejected => Some(BackendHealthReason::EmptyResolutionRetained),
+            C::FailedActivePreserved => Some(BackendHealthReason::DnsRefreshFailed),
+            C::Refreshed | C::Unchanged => None,
+        }
+    }
+}
+
+/// Admission outcome class → canonical admission decision reason (obs Phase 7).
+/// The single vocabulary both forwarding and bootstrap resolve admission denials
+/// through. `Failed { timed_out }` is a richer subtype: a timeout maps to the
+/// generic policy rejection here (the timeout axis is carried elsewhere).
+impl From<crate::runtime::connection::outcome::AdmissionOutcomeClass> for AdmissionDecisionReason {
+    fn from(outcome: crate::runtime::connection::outcome::AdmissionOutcomeClass) -> Self {
+        use crate::runtime::connection::outcome::AdmissionOutcomeClass as A;
+        match outcome {
+            A::AuthDenied => Self::AuthDenied,
+            A::RateLimited => Self::RateLimited,
+            A::OverloadShed { .. } => Self::Overloaded,
+            A::Failed { .. } => Self::PolicyRejected,
+        }
+    }
+}
+
+/// Hedge denial → canonical hedge decision reason. Alias / richer subtype.
+impl From<HedgePolicyDenialReason> for HedgeDecisionReason {
+    fn from(reason: HedgePolicyDenialReason) -> Self {
+        match reason {
+            HedgePolicyDenialReason::HedgingDisabled => Self::HedgingDisabled,
+            HedgePolicyDenialReason::PrimaryRequestCompleted => Self::PrimaryCompleted,
+            HedgePolicyDenialReason::RequestBodyNotReplayable => Self::RequestBodyNotReplayable,
+            HedgePolicyDenialReason::TunnelRequest => Self::TunnelRequest,
+            HedgePolicyDenialReason::MethodNotAllowed => Self::MethodNotAllowed,
+            HedgePolicyDenialReason::AlternateBackendUnavailable(_) => {
+                Self::AlternateBackendUnavailable
+            }
+            HedgePolicyDenialReason::BudgetDenied => Self::HedgeBudgetDenied,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_slug_is_unique_within_each_family() {
+        fn assert_unique(slugs: &[&str], family: &str) {
+            let mut v = slugs.to_vec();
+            let before = v.len();
+            v.sort_unstable();
+            v.dedup();
+            assert_eq!(before, v.len(), "duplicate slug in {family}");
+        }
+        assert_unique(
+            &[
+                RequestOutcomeReason::Completed.slug(),
+                RequestOutcomeReason::Cancelled.slug(),
+                RequestOutcomeReason::TimedOut.slug(),
+                RequestOutcomeReason::AuthDenied.slug(),
+                RequestOutcomeReason::RateLimited.slug(),
+                RequestOutcomeReason::Overloaded.slug(),
+                RequestOutcomeReason::ValidationRejected.slug(),
+                RequestOutcomeReason::BackendTransportFailed.slug(),
+                RequestOutcomeReason::BackendProtocolFailed.slug(),
+                RequestOutcomeReason::BackendTlsFailed.slug(),
+                RequestOutcomeReason::BackendBridgeFailed.slug(),
+            ],
+            "RequestOutcomeReason",
+        );
+        assert_unique(
+            &[
+                AdmissionOverloadCause::Brownout.slug(),
+                AdmissionOverloadCause::AdaptiveAdmission.slug(),
+                AdmissionOverloadCause::RouteCap.slug(),
+                AdmissionOverloadCause::RouteGlobalCap.slug(),
+                AdmissionOverloadCause::GlobalInflight.slug(),
+                AdmissionOverloadCause::UpstreamInflight.slug(),
+                AdmissionOverloadCause::BackendInflight.slug(),
+                AdmissionOverloadCause::CircuitOpen.slug(),
+                AdmissionOverloadCause::RequestBufferCap.slug(),
+                AdmissionOverloadCause::ResponsePrebufferCap.slug(),
+                AdmissionOverloadCause::ConnectionCap.slug(),
+            ],
+            "AdmissionOverloadCause",
+        );
+    }
+
+    #[test]
+    fn metrics_overload_reason_routes_through_canonical_vocabulary() {
+        // obs Phase 2 (step 5): the metrics `reason=` label must come from the
+        // canonical vocabulary. Every OverloadShedReason maps to a canonical cause
+        // whose slug is the emitted label.
+        use crate::metrics::OverloadShedReason;
+        let cases = [
+            (
+                OverloadShedReason::Brownout,
+                AdmissionOverloadCause::Brownout,
+            ),
+            (
+                OverloadShedReason::AdaptiveAdmission,
+                AdmissionOverloadCause::AdaptiveAdmission,
+            ),
+            (
+                OverloadShedReason::RouteCap,
+                AdmissionOverloadCause::RouteCap,
+            ),
+            (
+                OverloadShedReason::RouteGlobalCap,
+                AdmissionOverloadCause::RouteGlobalCap,
+            ),
+            (
+                OverloadShedReason::GlobalInflight,
+                AdmissionOverloadCause::GlobalInflight,
+            ),
+            (
+                OverloadShedReason::UpstreamInflight,
+                AdmissionOverloadCause::UpstreamInflight,
+            ),
+            (
+                OverloadShedReason::BackendInflight,
+                AdmissionOverloadCause::BackendInflight,
+            ),
+            (
+                OverloadShedReason::CircuitOpen,
+                AdmissionOverloadCause::CircuitOpen,
+            ),
+            (
+                OverloadShedReason::RequestBufferCap,
+                AdmissionOverloadCause::RequestBufferCap,
+            ),
+            (
+                OverloadShedReason::ResponsePrebufferCap,
+                AdmissionOverloadCause::ResponsePrebufferCap,
+            ),
+            (
+                OverloadShedReason::ConnectionCap,
+                AdmissionOverloadCause::ConnectionCap,
+            ),
+        ];
+        for (reason, cause) in cases {
+            assert_eq!(reason.canonical(), cause);
+            assert_eq!(reason.reason_label(), cause.slug());
+        }
+    }
+
+    #[test]
+    fn overload_cause_slugs_match_legacy_metric_labels() {
+        // These must stay byte-identical to `OverloadShedReason` labels so a later
+        // migration of the overload emitter does not change the `reason=` series.
+        assert_eq!(
+            AdmissionOverloadCause::GlobalInflight.slug(),
+            "global_inflight"
+        );
+        assert_eq!(
+            AdmissionOverloadCause::ResponsePrebufferCap.slug(),
+            "response_prebuffer_cap"
+        );
+    }
+
+    #[test]
+    fn request_outcome_coarse_label_matches_legacy_buckets() {
+        assert_eq!(
+            RequestOutcomeReason::Completed.coarse_outcome_label(),
+            "success"
+        );
+        assert_eq!(
+            RequestOutcomeReason::TimedOut.coarse_outcome_label(),
+            "timeout"
+        );
+        assert_eq!(
+            RequestOutcomeReason::Overloaded.coarse_outcome_label(),
+            "overload_shed"
+        );
+        assert_eq!(
+            RequestOutcomeReason::AuthDenied.coarse_outcome_label(),
+            "failure"
+        );
+    }
+
+    #[test]
+    fn event_context_renders_canonical_fields_in_order() {
+        let ctx = OperationalEventContext::new()
+            .with_request_id(42)
+            .with_upstream("api")
+            .with_backend("10.0.0.1:8080")
+            .with_reason("timed_out");
+        assert_eq!(
+            ctx.to_string(),
+            "request_id=42 upstream=api backend=10.0.0.1:8080 reason=timed_out"
+        );
+    }
+
+    #[test]
+    fn empty_event_context_renders_nothing() {
+        assert_eq!(OperationalEventContext::new().to_string(), "");
+    }
+
+    #[test]
+    fn local_rejection_maps_to_canonical_request_outcome() {
+        use crate::runtime::connection::stream::RejectionReason;
+        assert_eq!(
+            RequestOutcomeReason::from(RejectionReason::AuthDenied),
+            RequestOutcomeReason::AuthDenied
+        );
+        assert_eq!(
+            RequestOutcomeReason::from(RejectionReason::AuthUnavailable),
+            RequestOutcomeReason::AuthDenied
+        );
+        assert_eq!(
+            RequestOutcomeReason::from(RejectionReason::RequestBodyTooLarge),
+            RequestOutcomeReason::ValidationRejected
+        );
+        assert_eq!(
+            RequestOutcomeReason::from(RejectionReason::ResponsePrebufferCap),
+            RequestOutcomeReason::Overloaded
+        );
+    }
+
+    #[test]
+    fn local_backend_failure_maps_to_canonical_transport_class() {
+        use crate::runtime::connection::stream::BackendFailureReason;
+        assert_eq!(
+            RequestOutcomeReason::from(BackendFailureReason::UpstreamTimeout),
+            RequestOutcomeReason::TimedOut
+        );
+        assert_eq!(
+            RequestOutcomeReason::from(BackendFailureReason::UpstreamTls),
+            RequestOutcomeReason::BackendTlsFailed
+        );
+        assert_eq!(
+            RequestOutcomeReason::from(BackendFailureReason::UpstreamProtocol),
+            RequestOutcomeReason::BackendProtocolFailed
+        );
+        assert_eq!(
+            RequestOutcomeReason::from(BackendFailureReason::UpstreamBridge),
+            RequestOutcomeReason::BackendBridgeFailed
+        );
+        assert_eq!(
+            RequestOutcomeReason::from(BackendFailureReason::DispatchSpawnFailed),
+            RequestOutcomeReason::BackendTransportFailed
+        );
+    }
+
+    #[test]
+    fn backend_health_observation_maps_to_canonical_health_reason() {
+        use crate::runtime::backend::event::{
+            BackendHealthObservationOutcome as O, BackendHealthObservationSource as S,
+        };
+        assert_eq!(
+            backend_health_reason(S::ActiveCheck, O::Success),
+            Some(BackendHealthReason::ActiveProbeSuccess)
+        );
+        assert_eq!(
+            backend_health_reason(S::ActiveCheck, O::Failure),
+            Some(BackendHealthReason::ActiveProbeFailure)
+        );
+        assert_eq!(
+            backend_health_reason(S::PassiveRequest, O::Failure),
+            Some(BackendHealthReason::PassiveFailure)
+        );
+        assert_eq!(
+            backend_health_reason(S::RequestCompletion, O::Success),
+            Some(BackendHealthReason::PassiveSuccess)
+        );
+        // Neutral and control-plane observations carry no health reason.
+        assert_eq!(backend_health_reason(S::ActiveCheck, O::Neutral), None);
+        assert_eq!(backend_health_reason(S::ControlPlane, O::Success), None);
+    }
+
+    #[test]
+    fn refresh_classification_maps_only_failures_to_health_reason() {
+        use crate::runtime::backend::lifecycle::BackendRefreshClassification as C;
+        // Refresh axis is distinct from probe-health axis: only failures map.
+        assert_eq!(
+            Option::<BackendHealthReason>::from(C::FailedActivePreserved),
+            Some(BackendHealthReason::DnsRefreshFailed)
+        );
+        assert_eq!(
+            Option::<BackendHealthReason>::from(C::Rejected),
+            Some(BackendHealthReason::EmptyResolutionRetained)
+        );
+        assert_eq!(Option::<BackendHealthReason>::from(C::Refreshed), None);
+        assert_eq!(Option::<BackendHealthReason>::from(C::Unchanged), None);
+        // The failure health-reasons are themselves classified as failures.
+        assert!(BackendHealthReason::DnsRefreshFailed.is_failure());
+        assert!(BackendHealthReason::PassiveFailure.is_failure());
+        assert!(!BackendHealthReason::ActiveProbeSuccess.is_failure());
+    }
+
+    #[test]
+    fn admission_outcome_maps_to_canonical_decision_reason() {
+        use crate::metrics::OverloadShedReason;
+        use crate::runtime::connection::outcome::AdmissionOutcomeClass;
+        assert_eq!(
+            AdmissionDecisionReason::from(AdmissionOutcomeClass::AuthDenied),
+            AdmissionDecisionReason::AuthDenied
+        );
+        assert_eq!(
+            AdmissionDecisionReason::from(AdmissionOutcomeClass::RateLimited),
+            AdmissionDecisionReason::RateLimited
+        );
+        assert_eq!(
+            AdmissionDecisionReason::from(AdmissionOutcomeClass::OverloadShed {
+                reason: Some(OverloadShedReason::GlobalInflight)
+            }),
+            AdmissionDecisionReason::Overloaded
+        );
+        assert_eq!(
+            AdmissionDecisionReason::from(AdmissionOutcomeClass::Failed { timed_out: true }),
+            AdmissionDecisionReason::PolicyRejected
+        );
+    }
+
+    #[test]
+    fn admission_log_reason_literals_match_canonical_slugs() {
+        // obs Phase 7: the `reason=` values emitted by the forwarding/bootstrap
+        // admission logs are the canonical AdmissionDecisionReason slugs. This
+        // guards those hand-written literals against enum drift.
+        assert_eq!(AdmissionDecisionReason::AuthDenied.slug(), "auth_denied");
+        assert_eq!(
+            AdmissionDecisionReason::AuthUnavailable.slug(),
+            "auth_unavailable"
+        );
+        assert_eq!(AdmissionDecisionReason::RateLimited.slug(), "rate_limited");
+        assert_eq!(AdmissionDecisionReason::Overloaded.slug(), "overloaded");
+    }
+
+    #[test]
+    fn retry_and_hedge_denials_map_to_canonical_reasons() {
+        use spooky_errors::{
+            HedgePolicyDenialReason, RetryPolicyDenialReason, UpstreamRetryReason,
+        };
+        assert_eq!(
+            RetryDecisionReason::from(UpstreamRetryReason::Timeout),
+            RetryDecisionReason::UpstreamTimeout
+        );
+        assert_eq!(
+            RetryDecisionReason::from(RetryPolicyDenialReason::BudgetDenied),
+            RetryDecisionReason::RetryBudgetDenied
+        );
+        assert_eq!(
+            RetryDecisionReason::from(RetryPolicyDenialReason::MethodNotIdempotent),
+            RetryDecisionReason::IdempotencyDenied
+        );
+        assert_eq!(
+            HedgeDecisionReason::from(HedgePolicyDenialReason::TunnelRequest),
+            HedgeDecisionReason::TunnelRequest
+        );
+        assert_eq!(
+            HedgeDecisionReason::from(HedgePolicyDenialReason::BudgetDenied),
+            HedgeDecisionReason::HedgeBudgetDenied
+        );
+    }
+}

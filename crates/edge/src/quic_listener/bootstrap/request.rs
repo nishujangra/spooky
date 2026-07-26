@@ -129,6 +129,36 @@ impl BootstrapTerminalOutcome {
         )
     }
 
+    /// The canonical request-outcome reason for this bootstrap terminal (obs
+    /// Phase 10). Ties the bootstrap terminal vocabulary to the *same* canonical
+    /// enum the QUIC data path resolves through, so equivalent outcomes on both
+    /// planes report one reason. `None` for accepted outcomes (which are not a
+    /// failure reason). Test-only for now — it enforces the cross-plane contract
+    /// until an emitter consumes it.
+    #[cfg(test)]
+    pub(in crate::quic_listener) fn canonical_reason(
+        self,
+    ) -> Option<crate::observability::RequestOutcomeReason> {
+        use crate::observability::RequestOutcomeReason as R;
+        Some(match self {
+            Self::AcceptedStandardResponse | Self::AcceptedWebsocketUpgrade => return None,
+            Self::Rejected(reason) => match reason {
+                BootstrapRejectionReason::AuthDenied => R::AuthDenied,
+                BootstrapRejectionReason::RateLimited => R::RateLimited,
+                BootstrapRejectionReason::Overloaded => R::Overloaded,
+                BootstrapRejectionReason::ValidationFailed
+                | BootstrapRejectionReason::RequestBodyTooLarge => R::ValidationRejected,
+            },
+            Self::BackendFailed(reason) => match reason {
+                BootstrapBackendFailureReason::RouteResolutionFailed
+                | BootstrapBackendFailureReason::MissingEndpoint
+                | BootstrapBackendFailureReason::RequestBuildFailed
+                | BootstrapBackendFailureReason::DispatchFailed => R::BackendTransportFailed,
+            },
+            Self::TimedOut(_) => R::TimedOut,
+        })
+    }
+
     /// A stable slug naming the terminal classification, aligned with the
     /// terminal-state names used in the QUIC data path.
     pub(in crate::quic_listener) fn slug(self) -> &'static str {
@@ -386,12 +416,12 @@ pub(in crate::quic_listener) fn evaluate_bootstrap_request_policy(
                 AdmissionOutcomeClass::AuthDenied,
             );
             warn!(
-                "Bootstrap request route={} denied by auth policy",
+                "admission denied: upstream={} reason=auth_denied",
                 resolved.upstream_name
             );
             let Some(response) = rejection_response.as_ref() else {
                 warn!(
-                    "Bootstrap request route={} missing admission rejection response for unauthorized decision",
+                    "admission rejection response missing: upstream={} reason=auth_denied",
                     resolved.upstream_name
                 );
                 return Err(BootstrapTerminalResponse::new(
@@ -402,7 +432,7 @@ pub(in crate::quic_listener) fn evaluate_bootstrap_request_policy(
             };
             let Some(challenge) = response.www_authenticate else {
                 warn!(
-                    "Bootstrap request route={} missing auth challenge in admission rejection response",
+                    "admission rejection response missing: upstream={} reason=auth_denied detail=missing_auth_challenge",
                     resolved.upstream_name
                 );
                 return Err(BootstrapTerminalResponse::new(
@@ -434,12 +464,12 @@ pub(in crate::quic_listener) fn evaluate_bootstrap_request_policy(
                 AdmissionOutcomeClass::RateLimited,
             );
             warn!(
-                "Bootstrap request route={} scoped rate limit exceeded by rule={}",
+                "admission denied: upstream={} reason=rate_limited rule={}",
                 decision.route, decision.rule_name
             );
             let Some(response) = rejection_response.as_ref() else {
                 warn!(
-                    "Bootstrap request route={} missing admission rejection response for rate-limited decision",
+                    "admission rejection response missing: upstream={} reason=rate_limited",
                     resolved.upstream_name
                 );
                 return Err(BootstrapTerminalResponse::new(
@@ -450,7 +480,7 @@ pub(in crate::quic_listener) fn evaluate_bootstrap_request_policy(
             };
             let Some(retry_after_seconds) = response.retry_after_seconds else {
                 warn!(
-                    "Bootstrap request route={} missing retry-after in rate-limited admission rejection response",
+                    "admission rejection response missing: upstream={} reason=rate_limited detail=missing_retry_after",
                     resolved.upstream_name
                 );
                 return Err(BootstrapTerminalResponse::new(
@@ -490,7 +520,7 @@ pub(in crate::quic_listener) fn evaluate_bootstrap_request_policy(
                 .observe(input.request_ctx.request_start.elapsed(), true);
             let Some(response) = rejection_response.as_ref() else {
                 warn!(
-                    "Bootstrap request route={} missing admission rejection response for overload decision",
+                    "admission rejection response missing: upstream={} reason=overloaded",
                     resolved.upstream_name
                 );
                 return Err(BootstrapTerminalResponse::new(
@@ -501,7 +531,7 @@ pub(in crate::quic_listener) fn evaluate_bootstrap_request_policy(
             };
             let Some(retry_after_seconds) = response.retry_after_seconds else {
                 warn!(
-                    "Bootstrap request route={} missing retry-after in overload admission rejection response",
+                    "admission rejection response missing: upstream={} reason=overloaded detail=missing_retry_after",
                     resolved.upstream_name
                 );
                 return Err(BootstrapTerminalResponse::new(
@@ -677,5 +707,61 @@ mod tests {
     fn websocket_upgrade_is_a_request_mode_state() {
         assert!(BootstrapRequestMode::WebsocketUpgrade.is_websocket_upgrade());
         assert!(!BootstrapRequestMode::Standard.is_websocket_upgrade());
+    }
+
+    #[test]
+    fn bootstrap_and_quic_terminals_resolve_to_same_canonical_reason() {
+        // obs Phase 10 (step 1): equivalent outcomes on the bootstrap and QUIC
+        // data planes must report the SAME canonical reason — closing Phase 0
+        // finding #1 (two parallel terminal vocabularies).
+        use crate::observability::RequestOutcomeReason;
+        use crate::runtime::connection::stream::{BackendFailureReason, RejectionReason};
+
+        // Auth denied.
+        assert_eq!(
+            BootstrapTerminalOutcome::Rejected(BootstrapRejectionReason::AuthDenied)
+                .canonical_reason(),
+            Some(RequestOutcomeReason::from(RejectionReason::AuthDenied))
+        );
+        // Rate limited.
+        assert_eq!(
+            BootstrapTerminalOutcome::Rejected(BootstrapRejectionReason::RateLimited)
+                .canonical_reason(),
+            Some(RequestOutcomeReason::from(RejectionReason::RateLimited))
+        );
+        // Overloaded.
+        assert_eq!(
+            BootstrapTerminalOutcome::Rejected(BootstrapRejectionReason::Overloaded)
+                .canonical_reason(),
+            Some(RequestOutcomeReason::from(RejectionReason::Overloaded))
+        );
+        // Validation.
+        assert_eq!(
+            BootstrapTerminalOutcome::Rejected(BootstrapRejectionReason::ValidationFailed)
+                .canonical_reason(),
+            Some(RequestOutcomeReason::from(
+                RejectionReason::ValidationFailed
+            ))
+        );
+        // Backend dispatch failure ↔ QUIC transport failure.
+        assert_eq!(
+            BootstrapTerminalOutcome::BackendFailed(BootstrapBackendFailureReason::DispatchFailed)
+                .canonical_reason(),
+            Some(RequestOutcomeReason::from(
+                BackendFailureReason::UpstreamTransport
+            ))
+        );
+        // Upstream timeout.
+        assert_eq!(
+            BootstrapTerminalOutcome::TimedOut(BootstrapTimeoutReason::Upstream).canonical_reason(),
+            Some(RequestOutcomeReason::from(
+                BackendFailureReason::UpstreamTimeout
+            ))
+        );
+        // Accepted outcomes carry no failure reason on either plane.
+        assert_eq!(
+            BootstrapTerminalOutcome::AcceptedStandardResponse.canonical_reason(),
+            None
+        );
     }
 }

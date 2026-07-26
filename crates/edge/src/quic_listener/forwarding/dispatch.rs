@@ -8,6 +8,7 @@ use spooky_lb::alternate_backend::{
 };
 
 use super::*;
+use crate::observability::{HedgeDecisionReason, RetryDecisionReason};
 use crate::runtime::connection::response::ForwardingPolicyTelemetry;
 
 const MAX_UPSTREAM_RETRY_ATTEMPTS: u8 = 1;
@@ -346,13 +347,23 @@ impl QUICListener {
             retry_budget_available_for_error(&primary_err, route_name, retry_budget),
             alternate_backend,
         );
-        let retry_reason = match retry_decision {
-            RetryPolicyDecision::Retry { reason } => reason.into(),
+        let (retry_reason, canonical_retry_reason) = match retry_decision {
+            RetryPolicyDecision::Retry { reason } => {
+                (reason.into(), RetryDecisionReason::from(reason))
+            }
             RetryPolicyDecision::DoNotRetry { denial } => {
                 policy_telemetry.retry.record_denial(denial);
+                // Phase 6: canonical operational reason (upstream=, decision=retry)
+                // with the raw denial kept as debug-only detail.
+                let reason = denial
+                    .map(RetryDecisionReason::from)
+                    .unwrap_or(RetryDecisionReason::RetryPolicyDisabled);
                 debug!(
-                    "request_id={} retry denied: route={} reason={:?}",
-                    request_id, route_name, denial
+                    "retry decision: request_id={} upstream={} decision=denied reason={} detail={:?}",
+                    request_id,
+                    route_name,
+                    reason.slug(),
+                    denial
                 );
                 return Err(primary_err);
             }
@@ -372,8 +383,11 @@ impl QUICListener {
 
         policy_telemetry.retry.record_attempt(retry_reason);
         info!(
-            "request_id={} retrying request on alternate backend: route={} reason={:?}",
-            request_id, route_name, retry_reason
+            "retry decision: request_id={} upstream={} decision=retry reason={} backend={}",
+            request_id,
+            route_name,
+            canonical_retry_reason.slug(),
+            retry_backend
         );
         Self::send_upstream_request(retry_backend, retry_request, circuit_breakers, transport).await
     }
@@ -541,8 +555,11 @@ impl QUICListener {
                                     HedgePolicyDecision::WaitForPrimary => primary_fut.await?,
                                     HedgePolicyDecision::DoNotHedge { denial } => {
                                         debug!(
-                                            "request_id={} hedge suppressed after delay: route={} reason={:?}",
-                                            request_id, route_name, denial
+                                            "hedge decision: request_id={} upstream={} decision=suppressed reason={} detail={:?}",
+                                            request_id,
+                                            route_name,
+                                            HedgeDecisionReason::from(denial).slug(),
+                                            denial
                                         );
                                         primary_fut.await?
                                     }
@@ -560,8 +577,11 @@ impl QUICListener {
                         }
                         HedgePolicyDecision::DoNotHedge { denial } => {
                             debug!(
-                                "request_id={} hedging disabled for request: route={} reason={:?}",
-                                request_id, route_name, denial
+                                "hedge decision: request_id={} upstream={} decision=denied reason={} detail={:?}",
+                                request_id,
+                                route_name,
+                                HedgeDecisionReason::from(denial).slug(),
+                                denial
                             );
                             match Self::send_upstream_request(
                                 fwd_addr.clone(),
@@ -592,8 +612,11 @@ impl QUICListener {
                         }
                         HedgePolicyDecision::Hedge { reason } => {
                             debug!(
-                                "request_id={} shared hedge policy triggered early: route={} reason={:?}",
-                                request_id, route_name, reason
+                                "hedge decision: request_id={} upstream={} decision=triggered reason={} detail={:?}",
+                                request_id,
+                                route_name,
+                                HedgeDecisionReason::DelayElapsed.slug(),
+                                reason
                             );
                             match Self::send_upstream_request(
                                 fwd_addr.clone(),
