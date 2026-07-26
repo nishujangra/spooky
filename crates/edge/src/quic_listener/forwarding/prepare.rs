@@ -793,3 +793,226 @@ impl QUICListener {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bytes::Bytes;
+    use http::header::HOST;
+    use http_body_util::{Full, combinators::BoxBody};
+    use spooky_config::config::{
+        ForwardedHeaderPolicy, ForwardedHeaderPolicyMode, UpstreamHostPolicy,
+        UpstreamHostPolicyMode,
+    };
+    use spooky_errors::{BridgeError, ProxyError};
+
+    use crate::runtime::connection::auth::PendingHeaderMutation;
+
+    fn sample_pending_forward(headers: Vec<quiche::h3::Header>) -> PendingForward {
+        PendingForward {
+            method: Arc::<str>::from("GET"),
+            path: Arc::<str>::from("/v1/chat"),
+            authority: Some(Arc::<str>::from("api.example.com")),
+            headers: Arc::new(headers),
+            upstream_name: Arc::<str>::from("api"),
+            route_reason: Arc::<str>::from("path_prefix"),
+            route_path_len: 8,
+            route_host_specific: true,
+            backend_addr: Arc::<str>::from("backend.internal:443"),
+            backend_index: 0,
+            backend_lb: None,
+            client_addr: "203.0.113.55:43210".parse().expect("client addr"),
+            request_id: 17,
+            trace_id: None,
+            span_id: None,
+            traceparent: None,
+            host_policy: UpstreamHostPolicy::default(),
+            forwarded_header_policy: ForwardedHeaderPolicy::default(),
+            auth_header_mutations: Vec::new(),
+        }
+    }
+
+    fn empty_body() -> BoxBody<Bytes, Infallible> {
+        BoxBody::new(Full::new(Bytes::new()))
+    }
+
+    fn h2_endpoint() -> BackendEndpoint {
+        BackendEndpoint::parse("backend.internal:443").expect("endpoint")
+    }
+
+    #[test]
+    fn build_request_resolves_pass_through_rewrite_and_upstream_host_policies() {
+        let endpoint = h2_endpoint();
+
+        let pass_through = sample_pending_forward(vec![]);
+        let pass_through_req = pass_through
+            .build_request(&endpoint, empty_body(), Some(0))
+            .expect("pass-through request");
+        assert_eq!(
+            pass_through_req
+                .headers()
+                .get(HOST)
+                .and_then(|value| value.to_str().ok()),
+            Some("api.example.com")
+        );
+
+        let rewrite = PendingForward {
+            host_policy: UpstreamHostPolicy {
+                mode: UpstreamHostPolicyMode::Rewrite,
+                host: Some("origin.example.com".to_string()),
+            },
+            ..sample_pending_forward(vec![])
+        };
+        let rewrite_req = rewrite
+            .build_request(&endpoint, empty_body(), Some(0))
+            .expect("rewrite request");
+        assert_eq!(
+            rewrite_req
+                .headers()
+                .get(HOST)
+                .and_then(|value| value.to_str().ok()),
+            Some("origin.example.com")
+        );
+        assert_eq!(
+            rewrite_req
+                .headers()
+                .get("x-forwarded-host")
+                .and_then(|value| value.to_str().ok()),
+            Some("origin.example.com")
+        );
+
+        let upstream = PendingForward {
+            host_policy: UpstreamHostPolicy {
+                mode: UpstreamHostPolicyMode::Upstream,
+                host: None,
+            },
+            ..sample_pending_forward(vec![])
+        };
+        let upstream_req = upstream
+            .build_request(&endpoint, empty_body(), Some(0))
+            .expect("upstream-host request");
+        assert_eq!(
+            upstream_req
+                .headers()
+                .get(HOST)
+                .and_then(|value| value.to_str().ok()),
+            Some("backend.internal:443")
+        );
+    }
+
+    #[test]
+    fn build_request_applies_forwarded_header_policy_without_duplicate_drift() {
+        let pending_forward = PendingForward {
+            forwarded_header_policy: ForwardedHeaderPolicy {
+                mode: ForwardedHeaderPolicyMode::Append,
+            },
+            ..sample_pending_forward(vec![
+                quiche::h3::Header::new(
+                    b"forwarded",
+                    b"for=1.2.3.4;proto=http;host=\"old.example\"",
+                ),
+                quiche::h3::Header::new(b"x-forwarded-for", b"1.2.3.4"),
+                quiche::h3::Header::new(b"x-forwarded-proto", b"http"),
+                quiche::h3::Header::new(b"x-forwarded-host", b"old.example"),
+                quiche::h3::Header::new(b"authorization", b"Bearer route-token"),
+            ])
+        };
+
+        let request = pending_forward
+            .build_request(&h2_endpoint(), empty_body(), Some(0))
+            .expect("request");
+        let headers = request.headers();
+
+        assert_eq!(
+            headers
+                .get("forwarded")
+                .and_then(|value| value.to_str().ok()),
+            Some(
+                "for=1.2.3.4;proto=http;host=\"old.example\", for=203.0.113.55;proto=https;host=\"api.example.com\""
+            )
+        );
+        assert_eq!(
+            headers
+                .get("x-forwarded-for")
+                .and_then(|value| value.to_str().ok()),
+            Some("1.2.3.4, 203.0.113.55")
+        );
+        assert_eq!(
+            headers
+                .get("x-forwarded-proto")
+                .and_then(|value| value.to_str().ok()),
+            Some("http, https")
+        );
+        assert_eq!(
+            headers
+                .get("x-forwarded-host")
+                .and_then(|value| value.to_str().ok()),
+            Some("old.example, api.example.com")
+        );
+        assert_eq!(
+            headers.keys().filter(|name| *name == "forwarded").count(),
+            1,
+            "forwarded policy should normalize to one forwarded header"
+        );
+        assert_eq!(
+            headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer route-token")
+        );
+    }
+
+    #[test]
+    fn build_request_injects_auth_mutations_after_configured_headers() {
+        let pending_forward = PendingForward {
+            auth_header_mutations: vec![
+                PendingHeaderMutation::Upsert {
+                    name: b"x-auth-user".to_vec(),
+                    value: b"alice".to_vec(),
+                },
+                PendingHeaderMutation::Remove {
+                    name: b"x-remove-me".to_vec(),
+                },
+            ],
+            ..sample_pending_forward(vec![
+                quiche::h3::Header::new(b"x-configured-auth", b"route-policy"),
+                quiche::h3::Header::new(b"x-auth-user", b"stale"),
+                quiche::h3::Header::new(b"x-remove-me", b"1"),
+            ])
+        };
+
+        let request = pending_forward
+            .build_request(&h2_endpoint(), empty_body(), Some(0))
+            .expect("request");
+        let headers = request.headers();
+
+        assert_eq!(
+            headers
+                .get("x-configured-auth")
+                .and_then(|value| value.to_str().ok()),
+            Some("route-policy")
+        );
+        assert_eq!(
+            headers
+                .get("x-auth-user")
+                .and_then(|value| value.to_str().ok()),
+            Some("alice")
+        );
+        assert!(!headers.contains_key("x-remove-me"));
+    }
+
+    #[test]
+    fn build_request_rejects_invalid_headers_before_upstream_dispatch() {
+        let pending_forward =
+            sample_pending_forward(vec![quiche::h3::Header::new(b"bad header", b"1")]);
+
+        let err = pending_forward
+            .build_request(&h2_endpoint(), empty_body(), Some(0))
+            .expect_err("invalid header should fail request build");
+
+        assert!(matches!(
+            err,
+            ProxyError::Bridge(BridgeError::InvalidHeader)
+        ));
+    }
+}
