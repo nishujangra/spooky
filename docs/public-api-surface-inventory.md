@@ -1,20 +1,20 @@
 # Public API Surface Inventory
 
-Phase 1 baseline for `refactor/final-api-lockdown-and-deletion`.
-
 How to use this file:
 
 - use it as the canonical map of intentional crate façades before adding or widening visibility
 - check whether a type or module is meant to be a public entrypoint, a crate-local collaboration seam, or an accidental leak
 - update this file when a refactor deliberately changes a crate boundary, instead of letting visibility drift silently
 - do not use this file as a substitute for module docs; use it to answer "should this be public at all?"
+- prefer adding new logic behind an owning façade or crate-local seam instead of widening visibility for convenience
+- if a type belongs to runtime ownership, transport execution, bridge shaping, or load-balancing substrate, keep it in that owning layer rather than re-exporting it from an unrelated crate root
 
 Purpose:
-- re-state the current crate façades exactly as the branch exposes them
+- re-state the current crate façades exactly as the codebase exposes them
 - classify every non-private boundary item in the primary architecture crates
 - identify which exposed items are canonical API, crate-local collaboration seams, compatibility surfaces, or stale leftovers
 
-Scope for this baseline:
+Scope:
 - `crates/edge`
 - `crates/config`
 - `crates/bridge`
@@ -27,7 +27,7 @@ Classification keys:
 - `temporary compatibility surface`: intentionally exposed, but not the recommended long-term owning surface
 - `stale leftover`: exposed item that no longer has a clear architectural reason to stay visible
 
-This document classifies current visibility. It does not by itself change policy.
+This document classifies current visibility. It is a contributor aid for deciding whether code belongs on a public crate surface, an internal collaboration seam, or nowhere visible at all.
 
 ## `spooky-edge`
 
@@ -40,7 +40,7 @@ This document classifies current visibility. It does not by itself change policy
 | --- | --- | --- | --- |
 | `benchmark` | `pub mod` | canonical public API | Explicit support surface at crate root. |
 | `body` | `pub mod` | canonical public API | Owning module for `ChannelBody`. |
-| `cid_radix` | `pub mod` | canonical public API | Still treated as a direct crate surface on this branch. |
+| `cid_radix` | `pub mod` | canonical public API | Direct crate surface today. |
 | `constants` | private `mod` | n/a | Edge defaults now escape only through deliberate root re-exports. |
 | `hash` | private `mod` | n/a | Hash helpers now escape only through deliberate root re-exports. |
 | `metrics` | `pub mod` | canonical public API | Owns exported metrics-facing runtime types. |
@@ -78,7 +78,7 @@ This document classifies current visibility. It does not by itself change policy
 | `runtime::health` | `pub mod` | canonical public API | Stable health classification/output surface. |
 | `runtime::listener` | `pub mod` | canonical public API | Public listener state type owner. |
 | `runtime::policy` | `pub mod` | canonical public API | Public runtime policy access surface. |
-| `runtime::shared_state` | `pub mod` | canonical public API | Stable shared-state surface on this branch. |
+| `runtime::shared_state` | `pub mod` | canonical public API | Stable shared-state surface. |
 | `runtime::tasks` | `pub(crate) mod` | internal-to-crate collaboration surface | Runtime task lifecycle internals. |
 | `runtime::tls` | `pub(crate) mod` | internal-to-crate collaboration surface | Runtime TLS loading/reload internals. |
 
@@ -92,7 +92,7 @@ This document classifies current visibility. It does not by itself change policy
 | `watchdog::state` | `pub(crate) mod` | internal-to-crate collaboration surface | Internal state carrier. |
 | `watchdog::time` | `pub(crate) mod` | internal-to-crate collaboration surface | Internal timing helpers. |
 
-### Phase 1 baseline calls
+### Edge boundary notes
 
 - `quic_listener` staying private is correct and should remain the baseline.
 - `runtime::{connection,generation,tasks,tls}` and `watchdog::{config,service,state,time}` are legitimate crate-local collaboration seams.
@@ -111,7 +111,7 @@ This document classifies current visibility. It does not by itself change policy
 | --- | --- | --- | --- |
 | `backend_endpoint` | `pub mod` | canonical public API | Shared endpoint parsing/runtime shaping surface. |
 | `config` | `pub mod` | canonical public API | User-facing raw config schema owner. |
-| `default` | `pub mod` | canonical public API | Explicit defaults surface on this branch. |
+| `default` | `pub mod` | canonical public API | Explicit defaults surface. |
 | `loader` | `pub mod` | canonical public API | Canonical config-loading entrypoint. |
 | `runtime` | `pub mod` | canonical public API | Canonical normalized runtime output surface. |
 | `validator` | `pub mod` | canonical public API | Canonical validation surface. |
@@ -140,7 +140,7 @@ This document classifies current visibility. It does not by itself change policy
 | `RuntimeConfig::upstreams_as_config` | `#[cfg(test)] pub(crate) fn` | internal-to-crate collaboration surface | Test-only visibility shim; not public API. |
 | `RuntimeUpstream::backend_tls_policy` field | `pub(crate)` field | internal-to-crate collaboration surface | Internal escape hatch on an otherwise public type. |
 
-### Phase 1 baseline calls
+### Config boundary notes
 
 - `runtime` remains the correct canonical API owner for lowered policy/config state.
 - policy interpreter modules are correctly private already.
@@ -165,7 +165,7 @@ This document classifies current visibility. It does not by itself change policy
 | `response` | `pub mod` | canonical public API | Canonical response normalization surface. |
 | `websocket` | `pub mod` | canonical public API | Canonical websocket and upgrade helper surface. |
 
-### Phase 1 baseline calls
+### Bridge boundary notes
 
 - the bridge crate façade is already narrow and aligned with intended ownership.
 - `BridgeError` no longer escapes through the bridge root; callers use the owning `spooky-errors` path.
@@ -190,7 +190,7 @@ This document classifies current visibility. It does not by itself change policy
 | `upstream_pool` | `pub mod` | canonical public API | Deliberate public subsystem. |
 | `HealthTransition` | `pub use` | canonical public API | Narrow shared lifecycle transition type promoted from private backend internals. |
 
-### Phase 1 baseline calls
+### LB boundary notes
 
 - `algorithms`, `backend`, and `backend_pool` are no longer public module trees.
 - `HealthTransition` remains public as the only deliberate cross-crate lifecycle type from the prior backend substrate.
@@ -226,7 +226,7 @@ This document classifies current visibility. It does not by itself change policy
 | `TransportClientRotation` | `pub struct` | canonical public API | Narrow public wrapper around internal rotation state. |
 | `UpstreamTransportPool` | `pub struct` | canonical public API | Canonical execution façade for downstream callers. |
 
-### Phase 1 baseline calls
+### Transport boundary notes
 
 - the transport crate boundary is already in the intended shape: private protocol modules plus narrow façade re-exports.
 - no hidden compatibility modules remain at the crate root.
@@ -250,23 +250,19 @@ This document classifies current visibility. It does not by itself change policy
 
 ### Temporary compatibility surfaces
 
-- none in the scoped crates after the Phase 3 hidden-surface audit
+- none in the scoped crates
 
-### Stale leftovers requiring Phase 2 review
+### Stale leftovers
 
-- none at the crate-root façade level in the scoped crates after the Phase 2 lockdown pass
+- none at the crate-root façade level in the scoped crates
 
-## Current Exit Check
+## Placement Guidance
 
 - every non-private boundary item in the scoped crates has an explicit classification
-- the current baseline no longer relies on “probably needed” wording
-- the Phase 2 and Phase 3 façade-hardening work is reflected in the classifications above
-
-## Verification Pass
-
-- `cargo fmt --all` applied; the only changes were whitespace reflow caused by earlier renames and field removals
-- `cargo check --workspace --all-targets` is clean, and `spooky-edge` reports no `unreachable_pub` warnings
-- crate-targeted tests pass for `lb`, `bridge`, `transport`, `config`, and `edge`
-- `cargo test --workspace --no-fail-fast` passes: 725 tests, 0 failures, 2 ignored
-- the five scoped crate roots were re-read and match the intended architecture; `runtime` and `watchdog` submodule visibility also matches this document
-- known pre-existing flake: `edge` integration test `concurrent_large_body_pressure_is_bounded` intermittently observes a `502` where it asserts only `200`/`503`. Reproduced on `e089628` (before this branch's cleanup), so it is not a regression from the lockdown work.
+- if a new item does not clearly fit `canonical public API` or `internal-to-crate collaboration surface`, it probably should not be exposed
+- public crate roots should stay narrow and intentional
+- protocol details belong in owning crates such as `bridge` and `transport`, not in unrelated façade exports
+- runtime state and lifecycle ownership belong under `edge::runtime`, not under request-ingress helpers
+- request shaping and response normalization belong under `bridge`
+- balancing substrate belongs under `lb`
+- normalized runtime policy output belongs under `config::runtime`
