@@ -53,29 +53,29 @@ pub const MAX_STREAMS_PER_CONNECTION: usize = QUIC_INITIAL_MAX_STREAMS_BIDI as u
 pub const MAX_RESPONSE_BODY_BYTES: usize = 100 * 1024 * 1024; // 100 MiB
 
 pub const MAX_INFLIGHT_PER_BACKEND: usize = 64;
-pub const DEFAULT_SCID_LEN_BYTES: usize = 16;
-pub const RESET_TOKEN_LEN_BYTES: usize = 16;
-pub const MIN_SCID_LEN_BYTES: usize = 8;
+pub(crate) const DEFAULT_SCID_LEN_BYTES: usize = 16;
+pub(crate) const RESET_TOKEN_LEN_BYTES: usize = 16;
+pub(crate) const MIN_SCID_LEN_BYTES: usize = 8;
 
 // Queue/backpressure controls for streaming request/response bodies.
-pub const REQUEST_CHUNK_CHANNEL_CAPACITY: usize = 64;
-pub const REQUEST_CHUNK_BYTES_LIMIT: usize = 16 * 1024;
+pub(crate) const REQUEST_CHUNK_CHANNEL_CAPACITY: usize = 64;
+pub(crate) const REQUEST_CHUNK_BYTES_LIMIT: usize = 16 * 1024;
 pub const REQUEST_BUFFERED_CHUNK_BYTES_LIMIT: usize = MAX_REQUEST_BODY_BYTES;
-pub const RESPONSE_CHUNK_CHANNEL_CAPACITY: usize = 16;
-pub const RESPONSE_CHUNK_BYTES_LIMIT: usize = 16 * 1024;
+pub(crate) const RESPONSE_CHUNK_CHANNEL_CAPACITY: usize = 16;
+pub(crate) const RESPONSE_CHUNK_BYTES_LIMIT: usize = 16 * 1024;
 
-pub const SCID_ROTATION_INTERVAL_SECS: u64 = 60;
-pub const SCID_ROTATION_PACKET_THRESHOLD: u64 = 8;
+pub(crate) const SCID_ROTATION_INTERVAL_SECS: u64 = 60;
+pub(crate) const SCID_ROTATION_PACKET_THRESHOLD: u64 = 8;
 
-pub const BENCH_CONN_PRIMARY_ID_LEN_BYTES: usize = 16;
-pub const BENCH_CONN_PRIMARY_ID_PREFIX_BYTES: usize = 8;
-pub const BENCH_CONN_ALIAS_SUFFIX: [u8; 4] = [0xaa, 0xbb, 0xcc, 0xdd];
-pub const BENCH_CONN_MISS_ID_LEN_BYTES: usize = 24;
-pub const BENCH_CONN_MISS_ID_FILL: u8 = 0xff;
-pub const BENCH_CONN_PEER_BASE_PORT: u16 = 20_000;
-pub const BENCH_CONN_PEER_PORT_SPAN: usize = 20_000;
-pub const BENCH_CONN_MISS_PORT: u16 = u16::MAX;
+pub(crate) const BENCH_CONN_PRIMARY_ID_LEN_BYTES: usize = 16;
+pub(crate) const BENCH_CONN_PRIMARY_ID_PREFIX_BYTES: usize = 8;
+pub(crate) const BENCH_CONN_ALIAS_SUFFIX: [u8; 4] = [0xaa, 0xbb, 0xcc, 0xdd];
+pub(crate) const BENCH_CONN_MISS_ID_LEN_BYTES: usize = 24;
+pub(crate) const BENCH_CONN_MISS_ID_FILL: u8 = 0xff;
+pub(crate) const BENCH_CONN_PEER_BASE_PORT: u16 = 20_000;
+pub(crate) const BENCH_CONN_PEER_PORT_SPAN: usize = 20_000;
+pub(crate) const BENCH_CONN_MISS_PORT: u16 = u16::MAX;
 
-pub fn scid_rotation_interval() -> std::time::Duration {
+pub(crate) fn scid_rotation_interval() -> std::time::Duration {
     std::time::Duration::from_secs(SCID_ROTATION_INTERVAL_SECS)
 }

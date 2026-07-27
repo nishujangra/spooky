@@ -3,6 +3,7 @@
 //! The crate root exposes the small set of entrypoints that other crates should
 //! depend on directly. Listener orchestration, runtime wiring, and control-plane
 //! mechanics stay behind internal subsystem modules.
+#![warn(unreachable_pub)]
 
 pub mod benchmark;
 pub mod body;

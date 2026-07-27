@@ -6,10 +6,10 @@
 //! callers depend on the stable execution types rather than the enforcement
 //! internals.
 
-pub mod auth;
+pub(crate) mod auth;
 pub(crate) mod guardrails;
-pub mod outcome;
-pub mod quic;
-pub mod request;
-pub mod response;
-pub mod stream;
+pub(crate) mod outcome;
+pub(crate) mod quic;
+pub(crate) mod request;
+pub(crate) mod response;
+pub(crate) mod stream;
