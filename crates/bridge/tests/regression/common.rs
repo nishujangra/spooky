@@ -6,13 +6,14 @@ use bytes::Bytes;
 use http_body_util::{BodyExt, Empty, combinators::BoxBody};
 use quiche::h3::Header;
 use spooky_bridge::request::{
-    RequestBuildInput, RequestBuildPolicies, RequestBuildTarget, RequestForwardedContext,
-    RequestTraceContext,
+    RequestBodyMode, RequestBuildInput, RequestBuildPolicies, RequestBuildTarget,
+    RequestForwardedContext, RequestTraceContext, build_h1_request, build_h2_request_for_target,
 };
 use spooky_config::{
     backend_endpoint::BackendEndpoint,
     config::{ForwardedHeaderPolicy, UpstreamHostPolicy},
 };
+use spooky_errors::BridgeError;
 
 #[derive(Clone, Copy)]
 pub struct RequestInputMeta<'a> {
@@ -61,4 +62,42 @@ pub fn request_input<'a>(
             client_addr: meta.client_addr,
         },
     }
+}
+
+pub fn request_input_with_body_mode<'a>(
+    method: &'a str,
+    path: &'a str,
+    headers: &'a [Header],
+    meta: RequestInputMeta<'a>,
+    body_mode: RequestBodyMode,
+) -> RequestBuildInput<'a, BoxBody<Bytes, Infallible>> {
+    let mut input = request_input(method, path, headers, meta);
+    input.body_mode = body_mode;
+    input
+}
+
+pub fn build_h1_and_h2_requests<'a>(
+    endpoint: &'a BackendEndpoint,
+    host_policy: &'a UpstreamHostPolicy,
+    forwarded_header_policy: &'a ForwardedHeaderPolicy,
+    method: &'a str,
+    path: &'a str,
+    headers: &'a [Header],
+    meta: RequestInputMeta<'a>,
+) -> Result<
+    (
+        http::Request<BoxBody<Bytes, Infallible>>,
+        http::Request<BoxBody<Bytes, Infallible>>,
+    ),
+    BridgeError,
+> {
+    let h1 = build_h1_request(
+        request_target(endpoint, host_policy, forwarded_header_policy),
+        request_input(method, path, headers, meta),
+    )?;
+    let h2 = build_h2_request_for_target(
+        request_target(endpoint, host_policy, forwarded_header_policy),
+        request_input(method, path, headers, meta),
+    )?;
+    Ok((h1, h2))
 }
