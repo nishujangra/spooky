@@ -2,6 +2,12 @@ use std::sync::Arc;
 
 use crate::runtime::generation::{RuntimeGenerationState, RuntimeSharedServices};
 
+/// Shared runtime services plus the currently published generation-owned state.
+///
+/// Callers should treat this as the stable hand-off point between runtime
+/// assembly and worker execution. The split between `shared_services` and
+/// `generation_state` mirrors the runtime ownership model without exposing the
+/// internal reload planner here.
 pub struct SharedRuntimeState {
     pub(crate) shared_services: Arc<RuntimeSharedServices>,
     pub(crate) generation_state: Arc<RuntimeGenerationState>,

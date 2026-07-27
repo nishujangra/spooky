@@ -16,6 +16,11 @@ use crate::runtime::{
     shared_state::SharedRuntimeState,
 };
 
+/// The fully assembled runtime generation published to listener workers.
+///
+/// A bundle is the canonical boundary between configuration/build time and live
+/// worker execution: startup-owned state, generation-owned state, and shared
+/// services are packaged together and swapped as one unit.
 #[derive(Clone)]
 pub struct RuntimeBundle {
     pub generation: u64,
@@ -44,6 +49,10 @@ impl RuntimeBundle {
     }
 }
 
+/// Read-only view of the generation currently installed in the process.
+///
+/// This wrapper gives callers stable access to the active bundle without
+/// exposing the swap mechanism itself.
 #[derive(Clone)]
 pub struct ActiveRuntimeGeneration {
     bundle: Arc<RuntimeBundle>,
@@ -83,6 +92,10 @@ impl ActiveRuntimeGeneration {
     }
 }
 
+/// Atomic handle for publishing and reading the active runtime generation.
+///
+/// Ownership of reload lifecycle transitions stays here. Callers that only need
+/// runtime data should prefer [`Self::current_view`] or [`Self::with_current_view`].
 #[derive(Clone)]
 pub struct RuntimeBundleHandle {
     inner: Arc<RwLock<Arc<RuntimeBundle>>>,
