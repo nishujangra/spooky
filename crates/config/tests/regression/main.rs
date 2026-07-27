@@ -14,5 +14,6 @@ mod common;
 mod auth;
 mod backends;
 mod policy;
+mod reload_boundaries;
 mod timeouts;
 mod tls;
