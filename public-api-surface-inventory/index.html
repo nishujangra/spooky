@@ -1409,217 +1409,831 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Current Phase 2 surface for <code>refactor/public-api-and-visibility-hardening</code>.</p>
-<p>Scope:
-- crate <code>lib.rs</code> façades
-- intentionally public subsystem entrypoints
-- remaining hidden or compatibility-oriented surfaces that are still exposed on purpose</p>
-<p>This document reflects the current branch state after the visibility-hardening work, not the original baseline audit.</p>
+    <p>Phase 1 baseline for <code>refactor/final-api-lockdown-and-deletion</code>.</p>
+<p>Purpose:
+- re-state the current crate façades exactly as the branch exposes them
+- classify every non-private boundary item in the primary architecture crates
+- identify which exposed items are canonical API, crate-local collaboration seams, compatibility surfaces, or stale leftovers</p>
+<p>Scope for this baseline:
+- <code>crates/edge</code>
+- <code>crates/config</code>
+- <code>crates/bridge</code>
+- <code>crates/lb</code>
+- <code>crates/transport</code></p>
+<p>Classification keys:
+- <code>canonical public API</code>: intended external consumer surface
+- <code>internal-to-crate collaboration surface</code>: <code>pub(crate)</code> seam used inside a crate boundary
+- <code>temporary compatibility surface</code>: intentionally exposed, but not the recommended long-term owning surface
+- <code>stale leftover</code>: exposed item that no longer has a clear architectural reason to stay visible</p>
+<p>This document classifies current visibility. It does not by itself change policy.</p>
 <h2 id="spooky-edge"><code>spooky-edge</code></h2>
 <h3 id="crate-facade">Crate façade</h3>
 <ul>
 <li><code>crates/edge/src/lib.rs</code></li>
 </ul>
-<h3 id="public-surface">Public surface</h3>
+<h3 id="current-facade-declarations">Current façade declarations</h3>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Visibility</th>
+<th>Classification</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>benchmark</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Explicit support surface at crate root.</td>
+</tr>
+<tr>
+<td><code>body</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Owning module for <code>ChannelBody</code>.</td>
+</tr>
+<tr>
+<td><code>cid_radix</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Still treated as a direct crate surface on this branch.</td>
+</tr>
+<tr>
+<td><code>constants</code></td>
+<td>private <code>mod</code></td>
+<td>n/a</td>
+<td>Edge defaults now escape only through deliberate root re-exports.</td>
+</tr>
+<tr>
+<td><code>hash</code></td>
+<td>private <code>mod</code></td>
+<td>n/a</td>
+<td>Hash helpers now escape only through deliberate root re-exports.</td>
+</tr>
+<tr>
+<td><code>metrics</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Owns exported metrics-facing runtime types.</td>
+</tr>
+<tr>
+<td><code>observability</code></td>
+<td>private <code>mod</code></td>
+<td>n/a</td>
+<td>Canonical vocabularies now escape only through deliberate root re-exports.</td>
+</tr>
+<tr>
+<td><code>quic_listener</code></td>
+<td>private <code>mod</code></td>
+<td>n/a</td>
+<td>Correctly private listener subsystem façade.</td>
+</tr>
+<tr>
+<td><code>resilience</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Deliberate subsystem surface.</td>
+</tr>
+<tr>
+<td><code>routing</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Deliberate subsystem surface.</td>
+</tr>
+<tr>
+<td><code>runtime</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Deliberate subsystem surface for stable runtime types.</td>
+</tr>
+<tr>
+<td><code>watchdog</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Small public façade with internal helpers behind it.</td>
+</tr>
+<tr>
+<td><code>ChannelBody</code></td>
+<td><code>pub use</code></td>
+<td>canonical public API</td>
+<td>Root-level convenience re-export from owning public module.</td>
+</tr>
+<tr>
+<td><code>REQUEST_ID_COUNTER</code></td>
+<td><code>pub(crate) use</code></td>
+<td>internal-to-crate collaboration surface</td>
+<td>Crate-wide shared counter, not external API.</td>
+</tr>
+<tr>
+<td><code>stable_hash_socket_addr</code></td>
+<td><code>pub use</code></td>
+<td>canonical public API</td>
+<td>Explicit root helper export.</td>
+</tr>
+<tr>
+<td><code>stable_hash64</code></td>
+<td><code>pub use</code></td>
+<td>canonical public API</td>
+<td>Explicit root helper export.</td>
+</tr>
+<tr>
+<td><code>Metrics</code></td>
+<td><code>pub use</code></td>
+<td>canonical public API</td>
+<td>Root convenience export for core metrics type.</td>
+</tr>
+<tr>
+<td><code>OverloadShedReason</code></td>
+<td><code>pub use</code></td>
+<td>canonical public API</td>
+<td>Root export for public overload outcome vocabulary.</td>
+</tr>
+<tr>
+<td><code>RouteOutcome</code></td>
+<td><code>pub use</code></td>
+<td>canonical public API</td>
+<td>Root export for public request outcome vocabulary.</td>
+</tr>
+<tr>
+<td><code>configure_async_runtime</code></td>
+<td><code>pub use</code></td>
+<td>canonical public API</td>
+<td>Narrow external worker/runtime entrypoint.</td>
+</tr>
+<tr>
+<td><code>ListenerWorkerRuntimeState</code></td>
+<td><code>pub use</code></td>
+<td>canonical public API</td>
+<td>Narrow external worker/runtime entrypoint.</td>
+</tr>
+<tr>
+<td><code>ListenerWorkerGroupConfig</code></td>
+<td><code>pub use</code></td>
+<td>canonical public API</td>
+<td>Narrow external worker/runtime entrypoint.</td>
+</tr>
+<tr>
+<td><code>spawn_listener_worker_group</code></td>
+<td><code>pub use</code></td>
+<td>canonical public API</td>
+<td>Narrow external worker/runtime entrypoint.</td>
+</tr>
+<tr>
+<td><code>release_shard_queue_bytes</code></td>
+<td><code>pub use</code></td>
+<td>canonical public API</td>
+<td>Narrow external worker/runtime entrypoint.</td>
+</tr>
+<tr>
+<td><code>shard_index_for_peer</code></td>
+<td><code>pub use</code></td>
+<td>canonical public API</td>
+<td>Narrow external worker/runtime entrypoint.</td>
+</tr>
+<tr>
+<td><code>try_reserve_shard_queue_bytes</code></td>
+<td><code>pub use</code></td>
+<td>canonical public API</td>
+<td>Narrow external worker/runtime entrypoint.</td>
+</tr>
+<tr>
+<td>edge constant defaults and helpers</td>
+<td><code>pub use</code></td>
+<td>canonical public API</td>
+<td>Root owns the deliberate constant façade instead of exposing <code>constants</code> as a module tree.</td>
+</tr>
+<tr>
+<td>edge observability vocabularies and helpers</td>
+<td><code>pub use</code></td>
+<td>canonical public API</td>
+<td>Root owns the deliberate observability façade instead of exposing <code>observability</code> as a module tree.</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="public-subsystem-seams-under-runtime">Public subsystem seams under <code>runtime</code></h3>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Visibility</th>
+<th>Classification</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>runtime::backend</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Declared stable runtime subsystem surface.</td>
+</tr>
+<tr>
+<td><code>runtime::bundle</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Public runtime state grouping surface.</td>
+</tr>
+<tr>
+<td><code>runtime::connection</code></td>
+<td><code>pub(crate) mod</code></td>
+<td>internal-to-crate collaboration surface</td>
+<td>Correctly hidden request/response plumbing.</td>
+</tr>
+<tr>
+<td><code>runtime::generation</code></td>
+<td><code>pub(crate) mod</code></td>
+<td>internal-to-crate collaboration surface</td>
+<td>Generation swap internals.</td>
+</tr>
+<tr>
+<td><code>runtime::health</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Stable health classification/output surface.</td>
+</tr>
+<tr>
+<td><code>runtime::listener</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Public listener state type owner.</td>
+</tr>
+<tr>
+<td><code>runtime::policy</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Public runtime policy access surface.</td>
+</tr>
+<tr>
+<td><code>runtime::shared_state</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Stable shared-state surface on this branch.</td>
+</tr>
+<tr>
+<td><code>runtime::tasks</code></td>
+<td><code>pub(crate) mod</code></td>
+<td>internal-to-crate collaboration surface</td>
+<td>Runtime task lifecycle internals.</td>
+</tr>
+<tr>
+<td><code>runtime::tls</code></td>
+<td><code>pub(crate) mod</code></td>
+<td>internal-to-crate collaboration surface</td>
+<td>Runtime TLS loading/reload internals.</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="public-subsystem-seams-under-watchdog">Public subsystem seams under <code>watchdog</code></h3>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Visibility</th>
+<th>Classification</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>watchdog::config</code></td>
+<td><code>pub(crate) mod</code></td>
+<td>internal-to-crate collaboration surface</td>
+<td>Internal config translation.</td>
+</tr>
+<tr>
+<td><code>watchdog::coordinator</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Intended owning public surface.</td>
+</tr>
+<tr>
+<td><code>watchdog::service</code></td>
+<td><code>pub(crate) mod</code></td>
+<td>internal-to-crate collaboration surface</td>
+<td>Service execution internals.</td>
+</tr>
+<tr>
+<td><code>watchdog::state</code></td>
+<td><code>pub(crate) mod</code></td>
+<td>internal-to-crate collaboration surface</td>
+<td>Internal state carrier.</td>
+</tr>
+<tr>
+<td><code>watchdog::time</code></td>
+<td><code>pub(crate) mod</code></td>
+<td>internal-to-crate collaboration surface</td>
+<td>Internal timing helpers.</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="phase-1-baseline-calls">Phase 1 baseline calls</h3>
 <ul>
-<li>modules:</li>
-<li><code>benchmark</code></li>
-<li><code>body</code></li>
-<li><code>cid_radix</code></li>
-<li><code>constants</code></li>
-<li><code>hash</code></li>
-<li><code>metrics</code></li>
-<li><code>resilience</code></li>
-<li><code>routing</code></li>
-<li><code>runtime</code></li>
-<li><code>watchdog</code></li>
-<li>re-exports:</li>
-<li><code>ChannelBody</code></li>
-<li><code>stable_hash_socket_addr</code></li>
-<li><code>stable_hash64</code></li>
-<li><code>Metrics</code></li>
-<li><code>OverloadShedReason</code></li>
-<li><code>RouteOutcome</code></li>
-<li><code>HealthFailureReason</code></li>
-<li><code>configure_async_runtime</code></li>
-<li><code>ListenerWorkerRuntimeState</code></li>
-<li><code>ListenerWorkerGroupConfig</code></li>
-<li><code>spawn_listener_worker_group</code></li>
-<li><code>release_shard_queue_bytes</code></li>
-<li><code>shard_index_for_peer</code></li>
-<li><code>try_reserve_shard_queue_bytes</code></li>
-</ul>
-<h3 id="internal-facades-intentionally-kept-private">Internal façades intentionally kept private</h3>
-<ul>
-<li><code>quic_listener</code></li>
-<li>runtime connection/task/tls internals</li>
-<li>bootstrap/control-plane/request-path decomposition modules under <code>quic_listener</code></li>
-</ul>
-<h3 id="phase-2-hardening-result">Phase 2 hardening result</h3>
-<ul>
-<li><code>quic_listener</code> is no longer crate-public</li>
-<li><code>quic_listener::workers</code> is no longer a public module</li>
-<li>worker/runtime entrypoints are exposed only through the crate root and listener façade re-exports</li>
-<li><code>HealthFailureReason</code> is re-exported from its owning crate path, not through <code>metrics</code></li>
-</ul>
-<h3 id="remaining-intentional-exposure">Remaining intentional exposure</h3>
-<ul>
-<li><code>runtime</code>, <code>routing</code>, <code>resilience</code>, and <code>watchdog</code> remain public because cross-crate tests and consumers still use stable types from those subsystems</li>
-<li><code>benchmark</code> remains public as an explicitly exposed support surface</li>
+<li><code>quic_listener</code> staying private is correct and should remain the baseline.</li>
+<li><code>runtime::{connection,generation,tasks,tls}</code> and <code>watchdog::{config,service,state,time}</code> are legitimate crate-local collaboration seams.</li>
+<li><code>constants</code>, <code>hash</code>, and <code>observability</code> are no longer public module trees.</li>
+<li>edge root exports now provide the only deliberate import path for hash helpers, runtime defaults, and observability vocabulary.</li>
+<li><code>#![warn(unreachable_pub)]</code> is enabled at the crate root, so items that are <code>pub</code> but unreachable from the façade are reported rather than accumulating silently.</li>
 </ul>
 <h2 id="spooky-config"><code>spooky-config</code></h2>
 <h3 id="crate-facade_1">Crate façade</h3>
 <ul>
 <li><code>crates/config/src/lib.rs</code></li>
 </ul>
-<h3 id="public-surface_1">Public surface</h3>
+<h3 id="current-facade-declarations_1">Current façade declarations</h3>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Visibility</th>
+<th>Classification</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>backend_endpoint</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Shared endpoint parsing/runtime shaping surface.</td>
+</tr>
+<tr>
+<td><code>config</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>User-facing raw config schema owner.</td>
+</tr>
+<tr>
+<td><code>default</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Explicit defaults surface on this branch.</td>
+</tr>
+<tr>
+<td><code>loader</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Canonical config-loading entrypoint.</td>
+</tr>
+<tr>
+<td><code>runtime</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Canonical normalized runtime output surface.</td>
+</tr>
+<tr>
+<td><code>validator</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Canonical validation surface.</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="runtime-lowering-seams">Runtime lowering seams</h3>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Visibility</th>
+<th>Classification</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>runtime::listeners</code></td>
+<td>private <code>mod</code></td>
+<td>n/a</td>
+<td>Correctly internal lowering module.</td>
+</tr>
+<tr>
+<td><code>runtime::policies</code></td>
+<td>private <code>mod</code></td>
+<td>n/a</td>
+<td>Correctly internal lowering owner behind runtime re-exports.</td>
+</tr>
+<tr>
+<td><code>runtime::upstreams</code></td>
+<td>private <code>mod</code></td>
+<td>n/a</td>
+<td>Correctly internal lowering module.</td>
+</tr>
+<tr>
+<td><code>runtime</code> re-exports from <code>policies</code></td>
+<td><code>pub use</code></td>
+<td>canonical public API</td>
+<td>Public runtime policy vocabulary is intentionally flattened here.</td>
+</tr>
+<tr>
+<td><code>RuntimeConfig</code></td>
+<td><code>pub struct</code></td>
+<td>canonical public API</td>
+<td>Primary normalized config output.</td>
+</tr>
+<tr>
+<td><code>RuntimeConfigError</code></td>
+<td><code>pub enum</code></td>
+<td>canonical public API</td>
+<td>Public validation/lowering error contract.</td>
+</tr>
+<tr>
+<td><code>RuntimeListener</code></td>
+<td><code>pub struct</code></td>
+<td>canonical public API</td>
+<td>Public normalized listener shape.</td>
+</tr>
+<tr>
+<td><code>ListenerRuntimeConfig</code></td>
+<td><code>pub struct</code></td>
+<td>canonical public API</td>
+<td>Canonical listener-scoped runtime view.</td>
+</tr>
+<tr>
+<td><code>RuntimeListenerSource</code></td>
+<td><code>pub enum</code></td>
+<td>canonical public API</td>
+<td>Public listener-origin vocabulary.</td>
+</tr>
+<tr>
+<td><code>RuntimeListenerTls</code></td>
+<td><code>pub struct</code></td>
+<td>canonical public API</td>
+<td>Public listener TLS policy output.</td>
+</tr>
+<tr>
+<td><code>RuntimeTlsIdentity</code></td>
+<td><code>pub struct</code></td>
+<td>canonical public API</td>
+<td>Public normalized TLS identity.</td>
+</tr>
+<tr>
+<td><code>RuntimeUpstream</code></td>
+<td><code>pub struct</code></td>
+<td>canonical public API</td>
+<td>Public normalized upstream shape.</td>
+</tr>
+<tr>
+<td><code>RuntimeBackend</code></td>
+<td><code>pub struct</code></td>
+<td>canonical public API</td>
+<td>Public normalized backend shape.</td>
+</tr>
+<tr>
+<td><code>RuntimeHostPolicy</code></td>
+<td><code>pub struct</code></td>
+<td>canonical public API</td>
+<td>Public wrapper type used by downstream crates.</td>
+</tr>
+<tr>
+<td><code>RuntimeForwardedHeaderPolicy</code></td>
+<td><code>pub struct</code></td>
+<td>canonical public API</td>
+<td>Public wrapper type used by downstream crates.</td>
+</tr>
+<tr>
+<td><code>RuntimeProtocolPolicy</code></td>
+<td><code>pub struct</code></td>
+<td>canonical public API</td>
+<td>Public wrapper type used by downstream crates.</td>
+</tr>
+<tr>
+<td><code>RuntimeUpstreamPolicy</code></td>
+<td><code>pub struct</code></td>
+<td>canonical public API</td>
+<td>Canonical runtime policy bundle for one upstream.</td>
+</tr>
+<tr>
+<td><code>RuntimeConfig::upstreams_as_config</code></td>
+<td><code>#[cfg(test)] pub(crate) fn</code></td>
+<td>internal-to-crate collaboration surface</td>
+<td>Test-only visibility shim; not public API.</td>
+</tr>
+<tr>
+<td><code>RuntimeUpstream::backend_tls_policy</code> field</td>
+<td><code>pub(crate)</code> field</td>
+<td>internal-to-crate collaboration surface</td>
+<td>Internal escape hatch on an otherwise public type.</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="phase-1-baseline-calls_1">Phase 1 baseline calls</h3>
 <ul>
-<li>modules:</li>
-<li><code>backend_endpoint</code></li>
-<li><code>config</code></li>
-<li><code>default</code></li>
-<li><code>loader</code></li>
-<li><code>runtime</code></li>
-<li><code>validator</code></li>
-</ul>
-<h3 id="canonical-consumer-paths">Canonical consumer paths</h3>
-<ul>
-<li>raw config shapes from <code>config</code></li>
-<li>runtime-ready policy/config output from <code>runtime</code></li>
-<li>backend endpoint parsing/runtime shaping from <code>backend_endpoint</code></li>
-</ul>
-<h3 id="internal-facades-intentionally-kept-private_1">Internal façades intentionally kept private</h3>
-<ul>
-<li><code>runtime::listeners</code></li>
-<li><code>runtime::policies</code> domain modules</li>
-<li><code>runtime::upstreams</code></li>
-</ul>
-<h3 id="phase-2-hardening-result_1">Phase 2 hardening result</h3>
-<ul>
-<li>runtime policy interpretation is centralized under <code>runtime</code></li>
-<li>domain interpreter modules are no longer exposed as their own public surface</li>
-<li>crate-level ownership docs now direct consumers to <code>runtime</code> rather than policy internals</li>
+<li><code>runtime</code> remains the correct canonical API owner for lowered policy/config state.</li>
+<li>policy interpreter modules are correctly private already.</li>
+<li>the only notable visibility shim in scope is <code>RuntimeConfig::upstreams_as_config</code>.</li>
+<li>no obvious stale public root modules were found in the config crate façade.</li>
 </ul>
 <h2 id="spooky-bridge"><code>spooky-bridge</code></h2>
 <h3 id="crate-facade_2">Crate façade</h3>
 <ul>
 <li><code>crates/bridge/src/lib.rs</code></li>
 </ul>
-<h3 id="public-surface_2">Public surface</h3>
+<h3 id="current-facade-declarations_2">Current façade declarations</h3>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Visibility</th>
+<th>Classification</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>forwarded</code></td>
+<td>private <code>mod</code></td>
+<td>n/a</td>
+<td>Internal helper.</td>
+</tr>
+<tr>
+<td><code>h3_to_h1</code></td>
+<td>private <code>mod</code></td>
+<td>n/a</td>
+<td>Internal protocol-specific builder.</td>
+</tr>
+<tr>
+<td><code>h3_to_h2</code></td>
+<td>private <code>mod</code></td>
+<td>n/a</td>
+<td>Internal protocol-specific builder.</td>
+</tr>
+<tr>
+<td><code>headers</code></td>
+<td>private <code>mod</code></td>
+<td>n/a</td>
+<td>Internal helper.</td>
+</tr>
+<tr>
+<td><code>host</code></td>
+<td>private <code>mod</code></td>
+<td>n/a</td>
+<td>Internal helper.</td>
+</tr>
+<tr>
+<td><code>request</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Canonical request construction and header policy surface.</td>
+</tr>
+<tr>
+<td><code>response</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Canonical response normalization surface.</td>
+</tr>
+<tr>
+<td><code>websocket</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Canonical websocket and upgrade helper surface.</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="phase-1-baseline-calls_2">Phase 1 baseline calls</h3>
 <ul>
-<li>modules:</li>
-<li><code>request</code></li>
-<li><code>response</code></li>
-<li><code>websocket</code></li>
-<li>re-exports:</li>
-<li><code>BridgeError</code></li>
-</ul>
-<h3 id="internal-facades-intentionally-kept-private_2">Internal façades intentionally kept private</h3>
-<ul>
-<li><code>h3_to_h1</code></li>
-<li><code>h3_to_h2</code></li>
-<li>forwarded/header/host helper modules</li>
-</ul>
-<h3 id="phase-2-hardening-result_2">Phase 2 hardening result</h3>
-<ul>
-<li>protocol-specific request builder modules are internal</li>
-<li>public surface is now the canonical request/response/websocket policy layer only</li>
-</ul>
-<h2 id="spooky-errors"><code>spooky-errors</code></h2>
-<h3 id="crate-facade_3">Crate façade</h3>
-<ul>
-<li><code>crates/errors/src/lib.rs</code></li>
-</ul>
-<h3 id="public-surface_3">Public surface</h3>
-<ul>
-<li>re-exported error and policy types from:</li>
-<li><code>bridge</code></li>
-<li><code>pool</code></li>
-<li><code>proxy</code></li>
-<li><code>retry</code></li>
-<li><code>upstream</code></li>
-</ul>
-<h3 id="internal-facades-intentionally-kept-private_3">Internal façades intentionally kept private</h3>
-<ul>
-<li>module files themselves are private; consumers use only crate-root re-exports</li>
-</ul>
-<h3 id="phase-2-hardening-result_3">Phase 2 hardening result</h3>
-<ul>
-<li>stale <code>spooky_lb::alternate_backend::*</code> compatibility re-exports are gone</li>
-<li>formatting and normalization helpers remain internal to the module implementations</li>
-<li>consumers see one shared classifier/error contract from the crate root</li>
+<li>the bridge crate façade is already narrow and aligned with intended ownership.</li>
+<li><code>BridgeError</code> no longer escapes through the bridge root; callers use the owning <code>spooky-errors</code> path.</li>
+<li>no stale leftover module exposure remains at the crate root.</li>
 </ul>
 <h2 id="spooky-lb"><code>spooky-lb</code></h2>
-<h3 id="crate-facade_4">Crate façade</h3>
+<h3 id="crate-facade_3">Crate façade</h3>
 <ul>
 <li><code>crates/lb/src/lib.rs</code></li>
 </ul>
-<h3 id="public-surface_4">Public surface</h3>
+<h3 id="current-facade-declarations_3">Current façade declarations</h3>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Visibility</th>
+<th>Classification</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>algorithms</code></td>
+<td>private <code>mod</code></td>
+<td>n/a</td>
+<td>Strategy implementations are internal substrate behind <code>load_balancing</code>.</td>
+</tr>
+<tr>
+<td><code>alternate_backend</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Deliberate public subsystem.</td>
+</tr>
+<tr>
+<td><code>backend</code></td>
+<td>private <code>mod</code></td>
+<td>n/a</td>
+<td>Backend state internals are private substrate behind <code>upstream_pool</code>.</td>
+</tr>
+<tr>
+<td><code>backend_pool</code></td>
+<td>private <code>mod</code></td>
+<td>n/a</td>
+<td>Pool membership/cache internals are private substrate behind <code>upstream_pool</code>.</td>
+</tr>
+<tr>
+<td><code>hash</code></td>
+<td><code>pub(crate) mod</code></td>
+<td>internal-to-crate collaboration surface</td>
+<td>Correctly crate-private helper module.</td>
+</tr>
+<tr>
+<td><code>health</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Deliberate public subsystem.</td>
+</tr>
+<tr>
+<td><code>load_balancing</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Deliberate public subsystem.</td>
+</tr>
+<tr>
+<td><code>upstream_pool</code></td>
+<td><code>pub mod</code></td>
+<td>canonical public API</td>
+<td>Deliberate public subsystem.</td>
+</tr>
+<tr>
+<td><code>HealthTransition</code></td>
+<td><code>pub use</code></td>
+<td>canonical public API</td>
+<td>Narrow shared lifecycle transition type promoted from private backend internals.</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="phase-1-baseline-calls_3">Phase 1 baseline calls</h3>
 <ul>
-<li>canonical modules:</li>
-<li><code>alternate_backend</code></li>
-<li><code>health</code></li>
-<li><code>load_balancing</code></li>
-<li><code>upstream_pool</code></li>
-<li>hidden compatibility/testing substrate:</li>
-<li><code>algorithms</code></li>
-<li><code>backend</code></li>
-<li><code>backend_pool</code></li>
-<li>crate-private:</li>
-<li><code>hash</code></li>
-</ul>
-<h3 id="phase-2-hardening-result_4">Phase 2 hardening result</h3>
-<ul>
-<li><code>UpstreamPool</code> internals are private</li>
-<li>callers use narrow pool-level methods instead of reaching through internal fields</li>
-<li>implementation algorithms remain exposed only as hidden compatibility/test substrate, not as the recommended crate surface</li>
+<li><code>algorithms</code>, <code>backend</code>, and <code>backend_pool</code> are no longer public module trees.</li>
+<li><code>HealthTransition</code> remains public as the only deliberate cross-crate lifecycle type from the prior backend substrate.</li>
+<li>implementation-level <code>lb</code> tests now live inside the crate instead of forcing public compatibility modules.</li>
 </ul>
 <h2 id="spooky-transport"><code>spooky-transport</code></h2>
-<h3 id="crate-facade_5">Crate façade</h3>
+<h3 id="crate-facade_4">Crate façade</h3>
 <ul>
 <li><code>crates/transport/src/lib.rs</code></li>
 <li><code>crates/transport/src/transport_pool.rs</code></li>
 </ul>
-<h3 id="public-surface_5">Public surface</h3>
+<h3 id="current-facade-declarations_4">Current façade declarations</h3>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Visibility</th>
+<th>Classification</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>client_rotation</code></td>
+<td>private <code>mod</code></td>
+<td>n/a</td>
+<td>Internal rotation-state machinery.</td>
+</tr>
+<tr>
+<td><code>h1_client</code></td>
+<td>private <code>mod</code></td>
+<td>n/a</td>
+<td>Internal protocol implementation.</td>
+</tr>
+<tr>
+<td><code>h1_pool</code></td>
+<td>private <code>mod</code></td>
+<td>n/a</td>
+<td>Internal protocol implementation.</td>
+</tr>
+<tr>
+<td><code>h2_client</code></td>
+<td>private <code>mod</code></td>
+<td>n/a</td>
+<td>Internal protocol implementation.</td>
+</tr>
+<tr>
+<td><code>h2_pool</code></td>
+<td>private <code>mod</code></td>
+<td>n/a</td>
+<td>Internal protocol implementation.</td>
+</tr>
+<tr>
+<td><code>transport_pool</code></td>
+<td>private <code>mod</code></td>
+<td>n/a</td>
+<td>Private owning module behind façade re-exports.</td>
+</tr>
+<tr>
+<td><code>ConnectObservation</code></td>
+<td><code>pub use</code></td>
+<td>canonical public API</td>
+<td>Public transport observability type.</td>
+</tr>
+<tr>
+<td><code>ConnectObserver</code></td>
+<td><code>pub use</code></td>
+<td>canonical public API</td>
+<td>Public transport observability callback type.</td>
+</tr>
+<tr>
+<td><code>SharedDnsResolver</code></td>
+<td><code>pub use</code></td>
+<td>canonical public API</td>
+<td>Public DNS coordination type.</td>
+</tr>
+<tr>
+<td><code>TlsClientConfig</code></td>
+<td><code>pub use</code></td>
+<td>canonical public API</td>
+<td>Public upstream TLS config type.</td>
+</tr>
+<tr>
+<td><code>TransportClientRotation</code></td>
+<td><code>pub use</code></td>
+<td>canonical public API</td>
+<td>Public backend-client rotation result type.</td>
+</tr>
+<tr>
+<td><code>UpstreamTransportPool</code></td>
+<td><code>pub use</code></td>
+<td>canonical public API</td>
+<td>Canonical transport façade.</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="public-facade-types-owned-by-transport_pool">Public façade types owned by <code>transport_pool</code></h3>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Visibility</th>
+<th>Classification</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TransportClientRotation</code></td>
+<td><code>pub struct</code></td>
+<td>canonical public API</td>
+<td>Narrow public wrapper around internal rotation state.</td>
+</tr>
+<tr>
+<td><code>UpstreamTransportPool</code></td>
+<td><code>pub struct</code></td>
+<td>canonical public API</td>
+<td>Canonical execution façade for downstream callers.</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="phase-1-baseline-calls_4">Phase 1 baseline calls</h3>
 <ul>
-<li>re-exports from owning modules:</li>
-<li><code>ConnectObservation</code></li>
-<li><code>ConnectObserver</code></li>
-<li><code>SharedDnsResolver</code></li>
-<li><code>TlsClientConfig</code></li>
-<li><code>TransportClientRotation</code></li>
-<li><code>UpstreamTransportPool</code></li>
+<li>the transport crate boundary is already in the intended shape: private protocol modules plus narrow façade re-exports.</li>
+<li>no hidden compatibility modules remain at the crate root.</li>
+<li>no stale leftover root exposure was found in the transport crate façade.</li>
 </ul>
-<h3 id="internal-facades-intentionally-kept-private_4">Internal façades intentionally kept private</h3>
+<h2 id="baseline-summary">Baseline Summary</h2>
+<h3 id="canonical-public-api-surfaces">Canonical public API surfaces</h3>
 <ul>
-<li><code>client_rotation</code></li>
-<li><code>h1_client</code></li>
-<li><code>h1_pool</code></li>
-<li><code>h2_client</code></li>
-<li><code>h2_pool</code></li>
-<li><code>transport_pool</code> module itself remains internal; only its façade types are re-exported</li>
+<li><code>edge</code>: <code>benchmark</code>, <code>body</code>, <code>cid_radix</code>, <code>metrics</code>, <code>resilience</code>, <code>routing</code>, <code>runtime</code>, <code>watchdog</code>, and the narrow worker/runtime re-exports</li>
+<li><code>config</code>: <code>backend_endpoint</code>, <code>config</code>, <code>default</code>, <code>loader</code>, <code>runtime</code>, <code>validator</code>, plus runtime policy and normalized runtime types</li>
+<li><code>bridge</code>: <code>request</code>, <code>response</code>, <code>websocket</code></li>
+<li><code>lb</code>: <code>alternate_backend</code>, <code>health</code>, <code>load_balancing</code>, <code>upstream_pool</code>, plus the <code>HealthTransition</code> root re-export</li>
+<li><code>transport</code>: <code>ConnectObservation</code>, <code>ConnectObserver</code>, <code>SharedDnsResolver</code>, <code>TlsClientConfig</code>, <code>TransportClientRotation</code>, <code>UpstreamTransportPool</code></li>
 </ul>
-<h3 id="phase-2-hardening-result_5">Phase 2 hardening result</h3>
+<h3 id="internal-to-crate-collaboration-surfaces">Internal-to-crate collaboration surfaces</h3>
 <ul>
-<li>protocol-specific pools/clients remain implementation details</li>
-<li>DNS/connect configuration types are re-exported from their owning module path, not via a secondary <code>transport_pool</code> shim</li>
-<li>internal client rotation state is no longer public</li>
+<li><code>edge</code>: <code>REQUEST_ID_COUNTER</code>, <code>constants</code>, <code>hash</code>, <code>observability</code>, <code>runtime::{connection,generation,tasks,tls}</code>, <code>watchdog::{config,service,state,time}</code></li>
+<li><code>config</code>: <code>RuntimeConfig::upstreams_as_config</code>, <code>RuntimeUpstream::backend_tls_policy</code> field</li>
+<li><code>lb</code>: <code>algorithms</code>, <code>backend</code>, <code>backend_pool</code>, <code>hash</code></li>
 </ul>
-<h2 id="summary-of-resolved-baseline-leaks">Summary of Resolved Baseline Leaks</h2>
-<p>Resolved during this branch:
-- <code>edge::quic_listener</code> is no longer public API
-- <code>edge::quic_listener::workers</code> is no longer a public module
-- <code>bridge::h3_to_h1</code> and <code>bridge::h3_to_h2</code> are no longer public
-- <code>errors</code> no longer re-exports <code>lb</code> alternate-backend types
-- <code>lb::hash</code> is no longer public
-- <code>transport_pool</code> no longer acts as a compatibility re-export hop for DNS/connect config types</p>
-<h2 id="remaining-intentional-public-areas">Remaining Intentional Public Areas</h2>
-<p>These are still public by design or current test/consumer need:
-- <code>edge::runtime</code> subsystem types
-- <code>edge::routing</code> and <code>edge::resilience</code> subsystems
-- <code>config::{default, validator}</code> modules
-- hidden-but-public <code>lb</code> substrate modules used by compatibility/tests</p>
-<p>These should be treated as the current deliberate surface, not accidental leftovers from the Phase 2 refactors.</p>
+<h3 id="temporary-compatibility-surfaces">Temporary compatibility surfaces</h3>
+<ul>
+<li>none in the scoped crates after the Phase 3 hidden-surface audit</li>
+</ul>
+<h3 id="stale-leftovers-requiring-phase-2-review">Stale leftovers requiring Phase 2 review</h3>
+<ul>
+<li>none at the crate-root façade level in the scoped crates after the Phase 2 lockdown pass</li>
+</ul>
+<h2 id="phase-1-exit-check">Phase 1 Exit Check</h2>
+<ul>
+<li>every non-private boundary item in the scoped crates has an explicit classification</li>
+<li>the current baseline no longer relies on “probably needed” wording</li>
+<li>the main unresolved Phase 2 targets are now named rather than implicit</li>
+</ul>
+<h2 id="phase-8-verification-pass">Phase 8 Verification Pass</h2>
+<ul>
+<li><code>cargo fmt --all</code> applied; the only changes were whitespace reflow caused by earlier renames and field removals</li>
+<li><code>cargo check --workspace --all-targets</code> is clean, and <code>spooky-edge</code> reports no <code>unreachable_pub</code> warnings</li>
+<li>crate-targeted tests pass for <code>lb</code>, <code>bridge</code>, <code>transport</code>, <code>config</code>, and <code>edge</code></li>
+<li><code>cargo test --workspace --no-fail-fast</code> passes: 725 tests, 0 failures, 2 ignored</li>
+<li>the five scoped crate roots were re-read and match the intended architecture; <code>runtime</code> and <code>watchdog</code> submodule visibility also matches this document</li>
+<li>known pre-existing flake: <code>edge</code> integration test <code>concurrent_large_body_pressure_is_bounded</code> intermittently observes a <code>502</code> where it asserts only <code>200</code>/<code>503</code>. Reproduced on <code>e089628</code> (before this branch's cleanup), so it is not a regression from the lockdown work.</li>
+</ul>
   </div>
   
   <script>
@@ -2057,28 +2671,28 @@
             Crate façade
         </a>
         
-        <a href="#public-surface"
+        <a href="#current-facade-declarations"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#public-surface');">
-            Public surface
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#current-facade-declarations');">
+            Current façade declarations
         </a>
         
-        <a href="#internal-facades-intentionally-kept-private"
+        <a href="#public-subsystem-seams-under-runtime"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#internal-facades-intentionally-kept-private');">
-            Internal façades intentionally kept private
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#public-subsystem-seams-under-runtime');">
+            Public subsystem seams under runtime
         </a>
         
-        <a href="#phase-2-hardening-result"
+        <a href="#public-subsystem-seams-under-watchdog"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#phase-2-hardening-result');">
-            Phase 2 hardening result
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#public-subsystem-seams-under-watchdog');">
+            Public subsystem seams under watchdog
         </a>
         
-        <a href="#remaining-intentional-exposure"
+        <a href="#phase-1-baseline-calls"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#remaining-intentional-exposure');">
-            Remaining intentional exposure
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#phase-1-baseline-calls');">
+            Phase 1 baseline calls
         </a>
         
         
@@ -2097,28 +2711,22 @@
             Crate façade
         </a>
         
-        <a href="#public-surface_1"
+        <a href="#current-facade-declarations_1"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#public-surface_1');">
-            Public surface
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#current-facade-declarations_1');">
+            Current façade declarations
         </a>
         
-        <a href="#canonical-consumer-paths"
+        <a href="#runtime-lowering-seams"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#canonical-consumer-paths');">
-            Canonical consumer paths
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#runtime-lowering-seams');">
+            Runtime lowering seams
         </a>
         
-        <a href="#internal-facades-intentionally-kept-private_1"
+        <a href="#phase-1-baseline-calls_1"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#internal-facades-intentionally-kept-private_1');">
-            Internal façades intentionally kept private
-        </a>
-        
-        <a href="#phase-2-hardening-result_1"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#phase-2-hardening-result_1');">
-            Phase 2 hardening result
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#phase-1-baseline-calls_1');">
+            Phase 1 baseline calls
         </a>
         
         
@@ -2137,56 +2745,16 @@
             Crate façade
         </a>
         
-        <a href="#public-surface_2"
+        <a href="#current-facade-declarations_2"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#public-surface_2');">
-            Public surface
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#current-facade-declarations_2');">
+            Current façade declarations
         </a>
         
-        <a href="#internal-facades-intentionally-kept-private_2"
+        <a href="#phase-1-baseline-calls_2"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#internal-facades-intentionally-kept-private_2');">
-            Internal façades intentionally kept private
-        </a>
-        
-        <a href="#phase-2-hardening-result_2"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#phase-2-hardening-result_2');">
-            Phase 2 hardening result
-        </a>
-        
-        
-
-        
-        <a href="#spooky-errors"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#spooky-errors');">
-            spooky-errors
-        </a>
-        
-        
-        <a href="#crate-facade_3"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#crate-facade_3');">
-            Crate façade
-        </a>
-        
-        <a href="#public-surface_3"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#public-surface_3');">
-            Public surface
-        </a>
-        
-        <a href="#internal-facades-intentionally-kept-private_3"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#internal-facades-intentionally-kept-private_3');">
-            Internal façades intentionally kept private
-        </a>
-        
-        <a href="#phase-2-hardening-result_3"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#phase-2-hardening-result_3');">
-            Phase 2 hardening result
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#phase-1-baseline-calls_2');">
+            Phase 1 baseline calls
         </a>
         
         
@@ -2199,22 +2767,22 @@
         </a>
         
         
-        <a href="#crate-facade_4"
+        <a href="#crate-facade_3"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#crate-facade_4');">
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#crate-facade_3');">
             Crate façade
         </a>
         
-        <a href="#public-surface_4"
+        <a href="#current-facade-declarations_3"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#public-surface_4');">
-            Public surface
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#current-facade-declarations_3');">
+            Current façade declarations
         </a>
         
-        <a href="#phase-2-hardening-result_4"
+        <a href="#phase-1-baseline-calls_3"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#phase-2-hardening-result_4');">
-            Phase 2 hardening result
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#phase-1-baseline-calls_3');">
+            Phase 1 baseline calls
         </a>
         
         
@@ -2227,45 +2795,79 @@
         </a>
         
         
-        <a href="#crate-facade_5"
+        <a href="#crate-facade_4"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#crate-facade_5');">
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#crate-facade_4');">
             Crate façade
         </a>
         
-        <a href="#public-surface_5"
+        <a href="#current-facade-declarations_4"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#public-surface_5');">
-            Public surface
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#current-facade-declarations_4');">
+            Current façade declarations
         </a>
         
-        <a href="#internal-facades-intentionally-kept-private_4"
+        <a href="#public-facade-types-owned-by-transport_pool"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#internal-facades-intentionally-kept-private_4');">
-            Internal façades intentionally kept private
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#public-facade-types-owned-by-transport_pool');">
+            Public façade types owned by transport_pool
         </a>
         
-        <a href="#phase-2-hardening-result_5"
+        <a href="#phase-1-baseline-calls_4"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#phase-2-hardening-result_5');">
-            Phase 2 hardening result
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#phase-1-baseline-calls_4');">
+            Phase 1 baseline calls
         </a>
         
         
 
         
-        <a href="#summary-of-resolved-baseline-leaks"
+        <a href="#baseline-summary"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#summary-of-resolved-baseline-leaks');">
-            Summary of Resolved Baseline Leaks
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#baseline-summary');">
+            Baseline Summary
+        </a>
+        
+        
+        <a href="#canonical-public-api-surfaces"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#canonical-public-api-surfaces');">
+            Canonical public API surfaces
+        </a>
+        
+        <a href="#internal-to-crate-collaboration-surfaces"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#internal-to-crate-collaboration-surfaces');">
+            Internal-to-crate collaboration surfaces
+        </a>
+        
+        <a href="#temporary-compatibility-surfaces"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#temporary-compatibility-surfaces');">
+            Temporary compatibility surfaces
+        </a>
+        
+        <a href="#stale-leftovers-requiring-phase-2-review"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#stale-leftovers-requiring-phase-2-review');">
+            Stale leftovers requiring Phase 2 review
+        </a>
+        
+        
+
+        
+        <a href="#phase-1-exit-check"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#phase-1-exit-check');">
+            Phase 1 Exit Check
         </a>
         
 
         
-        <a href="#remaining-intentional-public-areas"
+        <a href="#phase-8-verification-pass"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#remaining-intentional-public-areas');">
-            Remaining Intentional Public Areas
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#phase-8-verification-pass');">
+            Phase 8 Verification Pass
         </a>
         
 
