@@ -1,128 +1,39 @@
-use std::{
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::Duration,
-};
+//! HTTP/1-backed transport facade contract tests.
 
-use bytes::Bytes;
-use http_body_util::{BodyExt, Full};
-use hyper::{Request, Response, body::Incoming, service::service_fn};
-use hyper_util::rt::TokioIo;
-use spooky_config::runtime::{RuntimeBackendConnectionPolicy, RuntimeBackendTransportKind};
+mod support;
+
+use std::{sync::Arc, time::Duration};
+
+use spooky_config::runtime::RuntimeBackendTransportKind;
 use spooky_errors::{PoolError, ProxyError};
 use spooky_transport::{SharedDnsResolver, UpstreamTransportPool};
-use tokio::net::TcpListener;
 
-struct ConcurrencyTracker {
-    current: AtomicUsize,
-    max: AtomicUsize,
-}
-
-impl ConcurrencyTracker {
-    fn new() -> Self {
-        Self {
-            current: AtomicUsize::new(0),
-            max: AtomicUsize::new(0),
-        }
-    }
-
-    fn enter(&self) {
-        let now = self.current.fetch_add(1, Ordering::SeqCst) + 1;
-        let mut prev = self.max.load(Ordering::SeqCst);
-        while now > prev {
-            match self
-                .max
-                .compare_exchange(prev, now, Ordering::SeqCst, Ordering::SeqCst)
-            {
-                Ok(_) => break,
-                Err(next) => prev = next,
-            }
-        }
-    }
-
-    fn exit(&self) {
-        self.current.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-
-fn loopback_bind_restricted(err: &std::io::Error) -> bool {
-    err.kind() == std::io::ErrorKind::PermissionDenied
-        || matches!(err.raw_os_error(), Some(1) | Some(13))
-}
-
-fn test_connection_policy() -> RuntimeBackendConnectionPolicy {
-    RuntimeBackendConnectionPolicy {
-        max_inflight: 1,
-        max_idle_per_backend: 64,
-        pool_idle_timeout: Duration::from_secs(30),
-        connect_timeout: Duration::from_secs(2),
-        execution_timeout: Duration::from_secs(5),
-    }
-}
-
-async fn start_h1_server(tracker: Arc<ConcurrencyTracker>) -> std::io::Result<u16> {
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let port = listener.local_addr()?.port();
-
-    tokio::spawn(async move {
-        loop {
-            let (stream, _) = match listener.accept().await {
-                Ok(v) => v,
-                Err(_) => break,
-            };
-            let tracker = tracker.clone();
-            let service = service_fn(move |_req: Request<Incoming>| {
-                let tracker = tracker.clone();
-                async move {
-                    tracker.enter();
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                    tracker.exit();
-                    Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::from("ok"))))
-                }
-            });
-
-            tokio::spawn(async move {
-                let _ = hyper::server::conn::http1::Builder::new()
-                    .serve_connection(TokioIo::new(stream), service)
-                    .await;
-            });
-        }
-    });
-
-    Ok(port)
-}
+use crate::support::{
+    ConcurrencyTracker, connection_policy, loopback_bind_restricted, request, start_h1_server,
+};
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn pool_limits_inflight_per_backend() {
+async fn http1_transport_enforces_per_backend_inflight_contract() {
     let tracker = Arc::new(ConcurrencyTracker::new());
-    let port = match start_h1_server(tracker.clone()).await {
-        Ok(port) => port,
-        Err(err) if loopback_bind_restricted(&err) => return,
-        Err(err) => panic!("failed to start h1 test server: {err}"),
-    };
+    let port =
+        match start_h1_server(b"ok", Duration::from_millis(50), Some(Arc::clone(&tracker))).await {
+            Ok(port) => port,
+            Err(err) if loopback_bind_restricted(&err) => return,
+            Err(err) => panic!("failed to start h1 test server: {err}"),
+        };
     let backend = format!("127.0.0.1:{port}");
 
     let pool = Arc::new(
         UpstreamTransportPool::new_from_runtime_backends(
             [(backend.clone(), RuntimeBackendTransportKind::Http1)],
             std::collections::HashMap::new(),
-            test_connection_policy(),
+            connection_policy(1),
             SharedDnsResolver::new(),
         )
         .expect("pool"),
     );
-    let req1 = Request::builder()
-        .method("GET")
-        .uri(format!("http://{backend}/"))
-        .body(Full::new(Bytes::new()).boxed())
-        .unwrap();
-    let req2 = Request::builder()
-        .method("GET")
-        .uri(format!("http://{backend}/"))
-        .body(Full::new(Bytes::new()).boxed())
-        .unwrap();
+    let req1 = request(&format!("http://{backend}/"));
+    let req2 = request(&format!("http://{backend}/"));
 
     let pool1 = pool.clone();
     let backend1 = backend.clone();
@@ -133,56 +44,54 @@ async fn pool_limits_inflight_per_backend() {
     let r2 = tokio::spawn(async move { pool2.send_backend_request(&backend2, req2).await });
 
     let (r1, r2) = tokio::join!(r1, r2);
-    let r1 = r1.unwrap();
-    let r2 = r2.unwrap();
+    let r1 = r1.expect("first request join");
+    let r2 = r2.expect("second request join");
     assert!(
         r1.is_ok() || r2.is_ok(),
-        "at least one request should be admitted"
+        "at least one HTTP/1 request should be admitted"
     );
     assert!(
         matches!(r1, Err(ProxyError::Pool(PoolError::BackendOverloaded(_))))
             || matches!(r2, Err(ProxyError::Pool(PoolError::BackendOverloaded(_)))),
-        "one request should be rejected by backend inflight admission"
+        "one HTTP/1 request should be rejected by per-backend inflight admission"
     );
-
-    let max = tracker.max.load(Ordering::SeqCst);
-    assert_eq!(max, 1);
+    assert_eq!(
+        tracker.max_observed(),
+        1,
+        "only one HTTP/1 request should reach the backend at a time"
+    );
 }
 
 #[tokio::test]
-async fn pool_rejects_unknown_backend() {
+async fn http1_transport_rejects_unknown_backend_at_facade_boundary() {
     let pool = UpstreamTransportPool::new_from_runtime_backends(
         [(
             "127.0.0.1:12345".to_string(),
             RuntimeBackendTransportKind::Http1,
         )],
         std::collections::HashMap::new(),
-        test_connection_policy(),
+        connection_policy(1),
         SharedDnsResolver::new(),
     )
     .expect("pool");
-    let req = Request::builder()
-        .method("GET")
-        .uri("http://127.0.0.1:12345/")
-        .body(Full::new(Bytes::new()).boxed())
-        .unwrap();
+    let req = request("http://127.0.0.1:12345/");
 
     let err = pool
         .send_backend_request("127.0.0.1:9999", req)
         .await
-        .unwrap_err();
+        .expect_err("unknown backend should fail");
     match err {
         ProxyError::Pool(PoolError::UnknownBackend(name)) => {
             assert_eq!(name, "127.0.0.1:9999")
         }
-        _ => panic!("unexpected error"),
+        _ => panic!("unexpected error contract for missing HTTP/1 backend"),
     }
 }
 
 #[tokio::test]
-async fn pool_reports_overload_when_inflight_is_exhausted() {
+async fn http1_transport_reports_backend_overload_when_inflight_is_exhausted() {
     let tracker = Arc::new(ConcurrencyTracker::new());
-    let port = match start_h1_server(tracker).await {
+    let port = match start_h1_server(b"ok", Duration::from_millis(50), Some(tracker)).await {
         Ok(port) => port,
         Err(err) if loopback_bind_restricted(&err) => return,
         Err(err) => panic!("failed to start h1 test server: {err}"),
@@ -192,22 +101,14 @@ async fn pool_reports_overload_when_inflight_is_exhausted() {
         UpstreamTransportPool::new_from_runtime_backends(
             [(backend.clone(), RuntimeBackendTransportKind::Http1)],
             std::collections::HashMap::new(),
-            test_connection_policy(),
+            connection_policy(1),
             SharedDnsResolver::new(),
         )
         .expect("pool"),
     );
 
-    let req1 = Request::builder()
-        .method("GET")
-        .uri(format!("http://{backend}/"))
-        .body(Full::new(Bytes::new()).boxed())
-        .unwrap();
-    let req2 = Request::builder()
-        .method("GET")
-        .uri(format!("http://{backend}/"))
-        .body(Full::new(Bytes::new()).boxed())
-        .unwrap();
+    let req1 = request(&format!("http://{backend}/"));
+    let req2 = request(&format!("http://{backend}/"));
 
     let pool_task = Arc::clone(&pool);
     let backend_task = backend.clone();
@@ -225,14 +126,14 @@ async fn pool_reports_overload_when_inflight_is_exhausted() {
 }
 
 #[test]
-fn pool_rotates_known_backend_client_and_ignores_unknown_backend() {
+fn http1_transport_rotation_contract_is_effective_for_known_backends_and_noop_for_missing_ones() {
     let pool = UpstreamTransportPool::new_from_runtime_backends(
         [(
             "127.0.0.1:12345".to_string(),
             RuntimeBackendTransportKind::Http1,
         )],
         std::collections::HashMap::new(),
-        test_connection_policy(),
+        connection_policy(1),
         SharedDnsResolver::new(),
     )
     .expect("pool");

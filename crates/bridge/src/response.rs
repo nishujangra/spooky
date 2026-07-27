@@ -419,6 +419,23 @@ mod tests {
     }
 
     #[test]
+    fn trailer_normalization_drops_all_trailers_when_protocol_disallows_them() {
+        let mut trailers = HeaderMap::new();
+        trailers.insert(
+            http::HeaderName::from_static("grpc-status"),
+            HeaderValue::from_static("0"),
+        );
+        trailers.insert(
+            http::HeaderName::from_static("grpc-message"),
+            HeaderValue::from_static("ok"),
+        );
+
+        let normalized = normalize_response_trailers(&trailers, http1_constraints());
+
+        assert!(normalized.is_empty());
+    }
+
+    #[test]
     fn normalizes_http3_head_response_as_bodyless_and_header_terminal() {
         let mut headers = HeaderMap::new();
         headers.insert(http::header::CONTENT_LENGTH, HeaderValue::from_static("12"));
@@ -487,6 +504,32 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_informational_response_as_bodyless_and_terminal() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            http::HeaderName::from_static("retry-after"),
+            HeaderValue::from_static("3"),
+        );
+
+        let normalized = normalize_upstream_response(ResponseNormalizationInput {
+            upstream: UpstreamResponseView {
+                status: StatusCode::CONTINUE,
+                headers: &headers,
+                trailers: None,
+            },
+            body_mode: ResponseBodyMode::Normal,
+            constraints: http1_constraints(),
+        });
+
+        assert_eq!(normalized.emission.body, ResponseBodyPolicy::Suppress);
+        assert!(normalized.emission.emit_end_stream_on_headers);
+        assert_eq!(
+            header_value(&normalized.head.headers, "retry-after"),
+            Some("3")
+        );
+    }
+
+    #[test]
     fn normalizes_http1_no_content_without_suppressing_surviving_metadata() {
         let mut headers = HeaderMap::new();
         headers.insert(http::header::CONTENT_LENGTH, HeaderValue::from_static("0"));
@@ -528,6 +571,38 @@ mod tests {
     }
 
     #[test]
+    fn normalizes_not_modified_response_as_bodyless_while_preserving_end_to_end_metadata() {
+        let mut headers = HeaderMap::new();
+        headers.insert(http::header::CONTENT_LENGTH, HeaderValue::from_static("0"));
+        headers.insert(http::header::ETAG, HeaderValue::from_static("\"etag-304\""));
+        headers.insert(
+            http::header::CACHE_CONTROL,
+            HeaderValue::from_static("max-age=60"),
+        );
+
+        let normalized = normalize_upstream_response(ResponseNormalizationInput {
+            upstream: UpstreamResponseView {
+                status: StatusCode::NOT_MODIFIED,
+                headers: &headers,
+                trailers: None,
+            },
+            body_mode: ResponseBodyMode::Normal,
+            constraints: http1_constraints(),
+        });
+
+        assert_eq!(normalized.emission.body, ResponseBodyPolicy::Suppress);
+        assert!(normalized.emission.emit_end_stream_on_headers);
+        assert_eq!(
+            header_value(&normalized.head.headers, "etag"),
+            Some("\"etag-304\"")
+        );
+        assert_eq!(
+            header_value(&normalized.head.headers, "cache-control"),
+            Some("max-age=60")
+        );
+    }
+
+    #[test]
     fn tunnel_success_does_not_force_body_suppression_or_terminal_headers() {
         let mut headers = HeaderMap::new();
         headers.insert(http::header::CONTENT_LENGTH, HeaderValue::from_static("0"));
@@ -544,6 +619,40 @@ mod tests {
 
         assert_eq!(normalized.emission.body, ResponseBodyPolicy::Forward);
         assert!(!normalized.emission.emit_end_stream_on_headers);
+    }
+
+    #[test]
+    fn switching_protocols_preserves_upgrade_headers_when_requested() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            http::header::CONNECTION,
+            HeaderValue::from_static("upgrade"),
+        );
+        headers.insert(http::header::UPGRADE, HeaderValue::from_static("websocket"));
+
+        let normalized = normalize_upstream_response(ResponseNormalizationInput {
+            upstream: UpstreamResponseView {
+                status: StatusCode::SWITCHING_PROTOCOLS,
+                headers: &headers,
+                trailers: None,
+            },
+            body_mode: ResponseBodyMode::TunnelSuccess,
+            constraints: ResponseProtocolConstraints {
+                preserve_upgrade: true,
+                ..http1_constraints()
+            },
+        });
+
+        assert_eq!(normalized.emission.body, ResponseBodyPolicy::Forward);
+        assert!(!normalized.emission.emit_end_stream_on_headers);
+        assert_eq!(
+            header_value(&normalized.head.headers, "connection"),
+            Some("upgrade")
+        );
+        assert_eq!(
+            header_value(&normalized.head.headers, "upgrade"),
+            Some("websocket")
+        );
     }
 
     #[test]
@@ -576,6 +685,51 @@ mod tests {
                 .any(|header| header.name == http::header::CONTENT_LENGTH
                     && header.value == HeaderValue::from_static("5"))
         );
+    }
+
+    #[test]
+    fn response_defaults_do_not_duplicate_existing_content_type_or_content_length() {
+        let mut headers = vec![
+            NormalizedHeader {
+                name: http::header::CONTENT_TYPE,
+                value: HeaderValue::from_static("application/json"),
+            },
+            NormalizedHeader {
+                name: http::header::CONTENT_LENGTH,
+                value: HeaderValue::from_static("9"),
+            },
+        ];
+
+        apply_response_header_defaults(
+            &mut headers,
+            &ResponseEmissionPolicy {
+                body: ResponseBodyPolicy::Forward,
+                content_length: ContentLengthPolicy::Preserve,
+                content_type: ContentTypePolicy::SynthesizeTextPlain,
+                emit_end_stream_on_headers: false,
+            },
+            9,
+        );
+
+        assert_eq!(
+            headers
+                .iter()
+                .filter(|header| header.name == http::header::CONTENT_TYPE)
+                .count(),
+            1
+        );
+        assert_eq!(
+            headers
+                .iter()
+                .filter(|header| header.name == http::header::CONTENT_LENGTH)
+                .count(),
+            1
+        );
+        assert_eq!(
+            header_value(&headers, "content-type"),
+            Some("application/json")
+        );
+        assert_eq!(header_value(&headers, "content-length"), Some("9"));
     }
 
     #[test]
