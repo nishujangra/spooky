@@ -82,83 +82,23 @@ pub fn choose_alternate_backend(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
-    use spooky_config::{
-        config::{Backend, Config, HealthCheck, Listen, LoadBalancing, RouteMatch, Tls, Upstream},
-        runtime::{RuntimeAlternateBackendPolicy, RuntimeConfig, RuntimeUpstream},
-    };
+    use spooky_config::runtime::RuntimeAlternateBackendPolicy;
 
     use super::*;
-    fn upstream(lb_type: &str, backends: &[&str]) -> Upstream {
-        Upstream {
-            tls: None,
-            load_balancing: LoadBalancing {
-                lb_type: lb_type.to_string(),
-                key: None,
-            },
-            auth: Default::default(),
-            host_policy: Default::default(),
-            forwarded_headers: Default::default(),
-            route: RouteMatch::default(),
-            backends: backends
-                .iter()
-                .enumerate()
-                .map(|(index, address)| Backend {
-                    id: format!("backend-{index}"),
-                    address: (*address).to_string(),
-                    weight: 1,
-                    health_check: Some(HealthCheck {
-                        path: "/health".to_string(),
-                        interval: 1,
-                        timeout_ms: 1000,
-                        failure_threshold: 1,
-                        success_threshold: 1,
-                        cooldown_ms: 1000,
-                    }),
-                })
-                .collect(),
-        }
-    }
+    use crate::test_support::runtime_upstream_from_addresses;
 
-    fn runtime_upstream(upstream: Upstream) -> RuntimeUpstream {
-        let mut upstreams = HashMap::new();
-        upstreams.insert("api".to_string(), upstream);
-
-        RuntimeConfig::from_config(&Config {
-            version: 1,
-            listen: Listen {
-                protocol: "http1".to_string(),
-                tls: Tls {
-                    cert: "/tmp/test-cert.pem".to_string(),
-                    key: "/tmp/test-key.pem".to_string(),
-                    ..Tls::default()
-                },
-                ..Listen::default()
-            },
-            listeners: Vec::new(),
-            upstream: upstreams,
-            load_balancing: None,
-            upstream_tls: Default::default(),
-            log: Default::default(),
-            performance: Default::default(),
-            observability: Default::default(),
-            resilience: Default::default(),
-            security: Default::default(),
-        })
-        .expect("runtime config")
-        .upstreams
-        .remove("api")
-        .expect("runtime upstream")
+    fn pool_for(lb_type: &str, backends: &[&str]) -> UpstreamPool {
+        UpstreamPool::from_runtime_upstream(&runtime_upstream_from_addresses(
+            lb_type,
+            None,
+            backends,
+        ))
+        .expect("alternate-backend fixture pool should build")
     }
 
     #[test]
-    fn chooses_non_excluded_backend_from_readonly_lb_pick() {
-        let pool = UpstreamPool::from_runtime_upstream(&runtime_upstream(upstream(
-            "round-robin",
-            &["http://a", "http://b", "http://c"],
-        )))
-        .expect("pool");
+    fn readonly_lb_pick_wins_when_candidate_is_not_excluded() {
+        let pool = pool_for("round-robin", &["http://a", "http://b", "http://c"]);
 
         let decision = choose_alternate_backend(&pool, &[2], None);
         assert_eq!(
@@ -171,12 +111,8 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_when_readonly_pick_hits_excluded_backend() {
-        let pool = UpstreamPool::from_runtime_upstream(&runtime_upstream(upstream(
-            "round-robin",
-            &["http://a", "http://b", "http://c"],
-        )))
-        .expect("pool");
+    fn healthy_fallback_runs_when_readonly_pick_hits_excluded_backend() {
+        let pool = pool_for("round-robin", &["http://a", "http://b", "http://c"]);
 
         let decision = choose_alternate_backend(&pool, &[0], None);
         assert_eq!(
@@ -189,12 +125,8 @@ mod tests {
     }
 
     #[test]
-    fn excludes_multiple_prior_backends_before_selecting_an_alternate() {
-        let pool = UpstreamPool::from_runtime_upstream(&runtime_upstream(upstream(
-            "round-robin",
-            &["http://a", "http://b", "http://c", "http://d"],
-        )))
-        .expect("pool");
+    fn alternate_selection_respects_multiple_excluded_backends() {
+        let pool = pool_for("round-robin", &["http://a", "http://b", "http://c", "http://d"]);
 
         let decision = choose_alternate_backend(&pool, &[0, 1, 2], None);
         assert_eq!(
@@ -207,12 +139,8 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_to_healthy_scan_when_readonly_strategy_is_unavailable() {
-        let pool = UpstreamPool::from_runtime_upstream(&runtime_upstream(upstream(
-            "consistent-hash",
-            &["http://a", "http://b"],
-        )))
-        .expect("pool");
+    fn healthy_fallback_runs_when_strategy_has_no_readonly_pick() {
+        let pool = pool_for("consistent-hash", &["http://a", "http://b"]);
 
         let decision = choose_alternate_backend(&pool, &[0], None);
         assert_eq!(
@@ -225,12 +153,8 @@ mod tests {
     }
 
     #[test]
-    fn ignores_unhealthy_backends_when_scanning_for_alternates() {
-        let mut pool = UpstreamPool::from_runtime_upstream(&runtime_upstream(upstream(
-            "round-robin",
-            &["http://a", "http://b", "http://c"],
-        )))
-        .expect("pool");
+    fn healthy_fallback_skips_unhealthy_backends() {
+        let mut pool = pool_for("round-robin", &["http://a", "http://b", "http://c"]);
 
         let _ = pool.mark_backend_failure_from_active_check(1);
 
@@ -245,12 +169,8 @@ mod tests {
     }
 
     #[test]
-    fn reports_when_only_excluded_backends_are_healthy() {
-        let pool = UpstreamPool::from_runtime_upstream(&runtime_upstream(upstream(
-            "round-robin",
-            &["http://a"],
-        )))
-        .expect("pool");
+    fn alternate_selection_reports_only_excluded_backends_when_no_candidate_remains() {
+        let pool = pool_for("round-robin", &["http://a"]);
 
         let decision = choose_alternate_backend(&pool, &[0], None);
         assert_eq!(
@@ -263,11 +183,7 @@ mod tests {
 
     #[test]
     fn readonly_strategy_interaction_uses_load_balancer_mode_for_alternates() {
-        let pool = UpstreamPool::from_runtime_upstream(&runtime_upstream(upstream(
-            "round-robin",
-            &["http://a", "http://b", "http://c"],
-        )))
-        .expect("pool");
+        let pool = pool_for("round-robin", &["http://a", "http://b", "http://c"]);
 
         let first = choose_alternate_backend(&pool, &[], Some("tenant-a"));
         let second = choose_alternate_backend(&pool, &[], Some("tenant-b"));
@@ -290,11 +206,7 @@ mod tests {
 
     #[test]
     fn non_readonly_strategies_use_healthy_fallback_for_alternates() {
-        let pool = UpstreamPool::from_runtime_upstream(&runtime_upstream(upstream(
-            "consistent-hash",
-            &["http://a", "http://b", "http://c"],
-        )))
-        .expect("pool");
+        let pool = pool_for("consistent-hash", &["http://a", "http://b", "http://c"]);
 
         let decision = choose_alternate_backend(&pool, &[0, 1], Some("tenant-a"));
         assert_eq!(
@@ -307,12 +219,8 @@ mod tests {
     }
 
     #[test]
-    fn reports_when_no_backends_are_healthy() {
-        let mut pool = UpstreamPool::from_runtime_upstream(&runtime_upstream(upstream(
-            "round-robin",
-            &["http://a", "http://b"],
-        )))
-        .expect("pool");
+    fn alternate_selection_reports_no_healthy_backends_when_pool_is_drained() {
+        let mut pool = pool_for("round-robin", &["http://a", "http://b"]);
 
         let _ = pool.mark_backend_failure_from_active_check(0);
         let _ = pool.mark_backend_failure_from_active_check(1);
@@ -327,12 +235,8 @@ mod tests {
     }
 
     #[test]
-    fn denial_reason_stays_no_healthy_backends_even_when_failover_modes_are_disabled() {
-        let mut pool = UpstreamPool::from_runtime_upstream(&runtime_upstream(upstream(
-            "round-robin",
-            &["http://a", "http://b"],
-        )))
-        .expect("pool");
+    fn no_healthy_backend_denial_survives_policy_disablement() {
+        let mut pool = pool_for("round-robin", &["http://a", "http://b"]);
         pool.set_alternate_backend_policy(RuntimeAlternateBackendPolicy {
             readonly_lb_pick: false,
             healthy_fallback: false,
@@ -350,12 +254,8 @@ mod tests {
     }
 
     #[test]
-    fn suppresses_readonly_pick_when_policy_disables_it() {
-        let mut pool = UpstreamPool::from_runtime_upstream(&runtime_upstream(upstream(
-            "round-robin",
-            &["http://a", "http://b", "http://c"],
-        )))
-        .expect("pool");
+    fn alternate_selection_respects_disabled_readonly_pick_policy() {
+        let mut pool = pool_for("round-robin", &["http://a", "http://b", "http://c"]);
         pool.set_alternate_backend_policy(RuntimeAlternateBackendPolicy {
             readonly_lb_pick: false,
             healthy_fallback: true,
@@ -372,12 +272,8 @@ mod tests {
     }
 
     #[test]
-    fn reports_excluded_backends_when_all_failover_modes_are_disabled() {
-        let mut pool = UpstreamPool::from_runtime_upstream(&runtime_upstream(upstream(
-            "round-robin",
-            &["http://a", "http://b"],
-        )))
-        .expect("pool");
+    fn only_excluded_backend_denial_survives_when_failover_modes_are_disabled() {
+        let mut pool = pool_for("round-robin", &["http://a", "http://b"]);
         pool.set_alternate_backend_policy(RuntimeAlternateBackendPolicy {
             readonly_lb_pick: false,
             healthy_fallback: false,

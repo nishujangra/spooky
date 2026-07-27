@@ -177,94 +177,22 @@ impl UpstreamPool {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
     use spooky_config::{
-        config::{Backend, Config, HealthCheck, Listen, LoadBalancing, RouteMatch, Tls, Upstream},
-        runtime::{RuntimeConfig, RuntimeLoadBalancingStrategy, RuntimeRequestKeySpec},
+        runtime::{RuntimeLoadBalancingStrategy, RuntimeRequestKeySpec},
     };
 
     use super::UpstreamPool;
-
-    fn runtime_upstream(
-        lb_type: &str,
-        key: Option<&str>,
-    ) -> spooky_config::runtime::RuntimeUpstream {
-        let mut upstreams = HashMap::new();
-        upstreams.insert(
-            "api".to_string(),
-            Upstream {
-                tls: None,
-                load_balancing: LoadBalancing {
-                    lb_type: lb_type.to_string(),
-                    key: key.map(str::to_string),
-                },
-                auth: Default::default(),
-                host_policy: Default::default(),
-                forwarded_headers: Default::default(),
-                route: RouteMatch::default(),
-                backends: vec![
-                    Backend {
-                        id: "backend-a".to_string(),
-                        address: "http://127.0.0.1:7001".to_string(),
-                        weight: 1,
-                        health_check: Some(HealthCheck {
-                            path: "/health".to_string(),
-                            interval: 1,
-                            timeout_ms: 1000,
-                            failure_threshold: 1,
-                            success_threshold: 1,
-                            cooldown_ms: 1000,
-                        }),
-                    },
-                    Backend {
-                        id: "backend-b".to_string(),
-                        address: "http://127.0.0.1:7002".to_string(),
-                        weight: 1,
-                        health_check: Some(HealthCheck {
-                            path: "/health".to_string(),
-                            interval: 1,
-                            timeout_ms: 1000,
-                            failure_threshold: 1,
-                            success_threshold: 1,
-                            cooldown_ms: 1000,
-                        }),
-                    },
-                ],
-            },
-        );
-
-        RuntimeConfig::from_config(&Config {
-            version: 1,
-            listen: Listen {
-                protocol: "http1".to_string(),
-                tls: Tls {
-                    cert: "/tmp/test-cert.pem".to_string(),
-                    key: "/tmp/test-key.pem".to_string(),
-                    ..Tls::default()
-                },
-                ..Listen::default()
-            },
-            listeners: Vec::new(),
-            upstream: upstreams,
-            load_balancing: None,
-            upstream_tls: Default::default(),
-            log: Default::default(),
-            performance: Default::default(),
-            observability: Default::default(),
-            resilience: Default::default(),
-            security: Default::default(),
-        })
-        .expect("runtime config")
-        .upstreams
-        .remove("api")
-        .expect("runtime upstream")
-    }
+    use crate::test_support::runtime_upstream_from_addresses;
 
     #[test]
-    fn pick_without_begin_preserves_active_request_count_but_pick_increments_it() {
-        let runtime_upstream = runtime_upstream("round-robin", None);
-        let mut pool = UpstreamPool::from_runtime_upstream(&runtime_upstream).expect("pool");
+    fn readonly_pick_preserves_request_count_until_mutating_pick_runs() {
+        let runtime_upstream = runtime_upstream_from_addresses(
+            "round-robin",
+            None,
+            &["http://127.0.0.1:7001", "http://127.0.0.1:7002"],
+        );
+        let mut pool =
+            UpstreamPool::from_runtime_upstream(&runtime_upstream).expect("runtime pool should build");
 
         let idx = pool.pick_without_begin("key").expect("readonly pick");
         assert_eq!(
@@ -284,12 +212,13 @@ mod tests {
     }
 
     #[test]
-    fn pool_exposes_lb_key_spec_and_alternate_policy_from_runtime() {
-        let consistent = UpstreamPool::from_runtime_upstream(&runtime_upstream(
+    fn runtime_pool_contract_preserves_lb_key_spec_and_alternate_policy() {
+        let consistent = UpstreamPool::from_runtime_upstream(&runtime_upstream_from_addresses(
             "consistent-hash",
             Some("header:x-user-id"),
+            &["http://127.0.0.1:7001", "http://127.0.0.1:7002"],
         ))
-        .expect("consistent pool");
+        .expect("consistent-hash runtime pool should build");
         assert_eq!(
             consistent.lb_strategy(),
             RuntimeLoadBalancingStrategy::ConsistentHash
@@ -301,11 +230,12 @@ mod tests {
         assert!(!consistent.alternate_backend_policy().readonly_lb_pick);
         assert!(consistent.alternate_backend_policy().healthy_fallback);
 
-        let round_robin = UpstreamPool::from_runtime_upstream(&runtime_upstream(
+        let round_robin = UpstreamPool::from_runtime_upstream(&runtime_upstream_from_addresses(
             "round-robin",
             Some("authority"),
+            &["http://127.0.0.1:7001", "http://127.0.0.1:7002"],
         ))
-        .expect("round robin pool");
+        .expect("round-robin runtime pool should build");
         assert_eq!(
             round_robin.lb_strategy(),
             RuntimeLoadBalancingStrategy::RoundRobin
@@ -320,8 +250,13 @@ mod tests {
 
     #[test]
     fn membership_summary_and_runtime_state_stay_coherent_after_health_updates() {
-        let runtime_upstream = runtime_upstream("round-robin", None);
-        let mut pool = UpstreamPool::from_runtime_upstream(&runtime_upstream).expect("pool");
+        let runtime_upstream = runtime_upstream_from_addresses(
+            "round-robin",
+            None,
+            &["http://127.0.0.1:7001", "http://127.0.0.1:7002"],
+        );
+        let mut pool =
+            UpstreamPool::from_runtime_upstream(&runtime_upstream).expect("runtime pool should build");
 
         let before = pool.membership_summary();
         assert_eq!(before.total_backends, 2);
