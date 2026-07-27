@@ -55,3 +55,69 @@ pub fn h3_websocket_request_kind(
 pub fn h3_websocket_tunnel_requested(method: &str, headers: &[quiche::h3::Header]) -> bool {
     h3_websocket_request_kind(method, headers) != H3WebsocketRequestKind::None
 }
+
+#[cfg(test)]
+mod tests {
+    use quiche::h3::Header;
+
+    use super::{H3WebsocketRequestKind, h3_websocket_request_kind, h3_websocket_tunnel_requested};
+
+    #[test]
+    fn detects_legacy_upgrade_only_when_upgrade_and_connection_requirements_are_met() {
+        let headers = vec![
+            Header::new(b"connection", b"keep-alive, upgrade"),
+            Header::new(b"upgrade", b"websocket"),
+            Header::new(b"sec-websocket-key", b"dGhlIHNhbXBsZSBub25jZQ=="),
+        ];
+
+        assert_eq!(
+            h3_websocket_request_kind("GET", &headers),
+            H3WebsocketRequestKind::LegacyUpgrade
+        );
+        assert!(h3_websocket_tunnel_requested("GET", &headers));
+    }
+
+    #[test]
+    fn detects_extended_connect_only_when_connect_uses_websocket_protocol() {
+        let headers = vec![
+            Header::new(b":protocol", b"websocket"),
+            Header::new(b"sec-websocket-key", b"dGhlIHNhbXBsZSBub25jZQ=="),
+        ];
+
+        assert_eq!(
+            h3_websocket_request_kind("CONNECT", &headers),
+            H3WebsocketRequestKind::ExtendedConnect
+        );
+        assert!(h3_websocket_tunnel_requested("CONNECT", &headers));
+    }
+
+    #[test]
+    fn ignores_incomplete_or_invalid_upgrade_candidates() {
+        let missing_connection = vec![Header::new(b"upgrade", b"websocket")];
+        assert_eq!(
+            h3_websocket_request_kind("GET", &missing_connection),
+            H3WebsocketRequestKind::None
+        );
+
+        let wrong_upgrade_token = vec![
+            Header::new(b"connection", b"upgrade"),
+            Header::new(b"upgrade", b"h2c"),
+        ];
+        assert_eq!(
+            h3_websocket_request_kind("GET", &wrong_upgrade_token),
+            H3WebsocketRequestKind::None
+        );
+
+        let connect_without_protocol = vec![Header::new(b"sec-websocket-key", b"abc")];
+        assert_eq!(
+            h3_websocket_request_kind("CONNECT", &connect_without_protocol),
+            H3WebsocketRequestKind::None
+        );
+
+        let get_with_protocol_header = vec![Header::new(b":protocol", b"websocket")];
+        assert_eq!(
+            h3_websocket_request_kind("GET", &get_with_protocol_header),
+            H3WebsocketRequestKind::None
+        );
+    }
+}
