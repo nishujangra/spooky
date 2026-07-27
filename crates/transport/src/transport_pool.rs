@@ -413,6 +413,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn h1_rotation_results_stay_effective_without_generation_movement() {
+        let pool = UpstreamTransportPool::new_from_runtime_backends(
+            [(
+                "http://127.0.0.1:8080".to_string(),
+                RuntimeBackendTransportKind::Http1,
+            )],
+            HashMap::new(),
+            connection_policy(),
+            SharedDnsResolver::new(),
+        )
+        .expect("transport pool");
+
+        let first_rotation = pool
+            .rotate_backend_client("http://127.0.0.1:8080")
+            .expect("first h1 rotation");
+        let second_rotation = pool
+            .rotate_backend_client("http://127.0.0.1:8080")
+            .expect("second h1 rotation");
+
+        assert!(first_rotation.rotated());
+        assert!(second_rotation.rotated());
+        assert_eq!(first_rotation.generations(), None);
+        assert_eq!(second_rotation.generations(), None);
+    }
+
+    #[test]
+    fn h2_rotation_results_report_generation_movement_on_each_rotation() {
+        let pool = UpstreamTransportPool::new_from_runtime_backends(
+            [(
+                "https://api.internal:8443".to_string(),
+                RuntimeBackendTransportKind::H2,
+            )],
+            HashMap::new(),
+            connection_policy(),
+            SharedDnsResolver::new(),
+        )
+        .expect("transport pool");
+
+        let first_rotation = pool
+            .rotate_backend_client("https://api.internal:8443")
+            .expect("first h2 rotation");
+        let second_rotation = pool
+            .rotate_backend_client("https://api.internal:8443")
+            .expect("second h2 rotation");
+
+        assert!(first_rotation.rotated());
+        assert!(second_rotation.rotated());
+        assert_eq!(first_rotation.generations(), Some((0, 1)));
+        assert_eq!(second_rotation.generations(), Some((1, 2)));
+    }
+
+    #[tokio::test]
     async fn unknown_backend_send_fails_at_the_transport_facade_boundary() {
         let pool = UpstreamTransportPool::new_from_runtime_backends(
             [(
@@ -438,7 +490,7 @@ mod tests {
     }
 
     #[test]
-    fn missing_backend_rotation_returns_a_non_rotating_facade_result() {
+    fn backend_not_found_rotation_is_a_no_op_facade_result() {
         let pool = UpstreamTransportPool::new_from_runtime_backends(
             [(
                 "https://api.internal:8443".to_string(),
