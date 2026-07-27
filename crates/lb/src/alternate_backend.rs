@@ -89,9 +89,7 @@ mod tests {
 
     fn pool_for(lb_type: &str, backends: &[&str]) -> UpstreamPool {
         UpstreamPool::from_runtime_upstream(&runtime_upstream_from_addresses(
-            lb_type,
-            None,
-            backends,
+            lb_type, None, backends,
         ))
         .expect("alternate-backend fixture pool should build")
     }
@@ -126,7 +124,10 @@ mod tests {
 
     #[test]
     fn alternate_selection_respects_multiple_excluded_backends() {
-        let pool = pool_for("round-robin", &["http://a", "http://b", "http://c", "http://d"]);
+        let pool = pool_for(
+            "round-robin",
+            &["http://a", "http://b", "http://c", "http://d"],
+        );
 
         let decision = choose_alternate_backend(&pool, &[0, 1, 2], None);
         assert_eq!(

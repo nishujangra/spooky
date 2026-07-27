@@ -177,9 +177,7 @@ impl UpstreamPool {
 
 #[cfg(test)]
 mod tests {
-    use spooky_config::{
-        runtime::{RuntimeLoadBalancingStrategy, RuntimeRequestKeySpec},
-    };
+    use spooky_config::runtime::{RuntimeLoadBalancingStrategy, RuntimeRequestKeySpec};
 
     use super::UpstreamPool;
     use crate::test_support::runtime_upstream_from_addresses;
@@ -191,8 +189,8 @@ mod tests {
             None,
             &["http://127.0.0.1:7001", "http://127.0.0.1:7002"],
         );
-        let mut pool =
-            UpstreamPool::from_runtime_upstream(&runtime_upstream).expect("runtime pool should build");
+        let mut pool = UpstreamPool::from_runtime_upstream(&runtime_upstream)
+            .expect("runtime pool should build");
 
         let idx = pool.pick_without_begin("key").expect("readonly pick");
         assert_eq!(
@@ -255,8 +253,8 @@ mod tests {
             None,
             &["http://127.0.0.1:7001", "http://127.0.0.1:7002"],
         );
-        let mut pool =
-            UpstreamPool::from_runtime_upstream(&runtime_upstream).expect("runtime pool should build");
+        let mut pool = UpstreamPool::from_runtime_upstream(&runtime_upstream)
+            .expect("runtime pool should build");
 
         let before = pool.membership_summary();
         assert_eq!(before.total_backends, 2);

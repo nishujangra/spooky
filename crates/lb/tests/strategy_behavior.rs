@@ -3,7 +3,10 @@
 use std::{collections::HashMap, time::Duration};
 
 use spooky_config::{
-    config::{Backend, Config, HealthCheck, Listen, LoadBalancing as ConfigLoadBalancing, RouteMatch, Tls, Upstream},
+    config::{
+        Backend, Config, HealthCheck, Listen, LoadBalancing as ConfigLoadBalancing, RouteMatch,
+        Tls, Upstream,
+    },
     runtime::RuntimeConfig,
 };
 use spooky_lb::{load_balancing::LoadBalancing, upstream_pool::UpstreamPool};
@@ -19,7 +22,10 @@ fn supported_strategy_names_normalize_through_the_canonical_facade() {
     assert!(LoadBalancing::from_config("unknown").is_err());
 }
 
-fn runtime_upstream(strategy: &str, backend_count: usize) -> spooky_config::runtime::RuntimeUpstream {
+fn runtime_upstream(
+    strategy: &str,
+    backend_count: usize,
+) -> spooky_config::runtime::RuntimeUpstream {
     let mut upstreams = HashMap::new();
     upstreams.insert(
         "api".to_string(),
@@ -87,7 +93,10 @@ fn round_robin_sequences_across_healthy_backends() {
     let mut pool = pool("round-robin", 3);
 
     let picks: Vec<_> = (0..6)
-        .map(|_| pool.pick_without_begin("ignored").expect("round-robin pick"))
+        .map(|_| {
+            pool.pick_without_begin("ignored")
+                .expect("round-robin pick")
+        })
         .collect();
 
     assert_eq!(picks, vec![0, 1, 2, 0, 1, 2]);

@@ -254,9 +254,15 @@ mod tests {
     fn request_feedback_from_status_maps_success_client_error_and_server_error() {
         let identity = BackendIdentity::new("https://backend.internal:8443");
 
-        let success =
-            BackendRequestFeedback::from_status(identity.clone(), Duration::from_millis(5), StatusCode::OK);
-        assert!(matches!(success.outcome, BackendRequestFeedbackOutcome::Success));
+        let success = BackendRequestFeedback::from_status(
+            identity.clone(),
+            Duration::from_millis(5),
+            StatusCode::OK,
+        );
+        assert!(matches!(
+            success.outcome,
+            BackendRequestFeedbackOutcome::Success
+        ));
         assert_eq!(success.status, Some(200));
 
         let client_error = BackendRequestFeedback::from_status(

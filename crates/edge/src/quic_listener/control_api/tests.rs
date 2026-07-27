@@ -309,7 +309,10 @@ fn control_api_backend_inventory_and_summary_share_one_canonical_snapshot_contra
     assert_eq!(backend.resolution.authority_host, "127.0.0.1");
     assert_eq!(backend.resolution.authority_port, 7001);
     assert_eq!(backend.resolution.refresh_generation, 0);
-    assert_eq!(backend.membership, crate::runtime::backend::state::BackendMembershipState::Active);
+    assert_eq!(
+        backend.membership,
+        crate::runtime::backend::state::BackendMembershipState::Active
+    );
     assert!(matches!(
         backend.health,
         crate::runtime::backend::state::BackendHealthState::Healthy

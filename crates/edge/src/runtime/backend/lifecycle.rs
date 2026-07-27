@@ -802,7 +802,6 @@ mod tests {
         .expect("transport pool")
     }
 
-
     mod refresh_application {
         use super::*;
 
@@ -1191,7 +1190,11 @@ mod tests {
                 ),
             ]));
             store
-                .apply_resolution_refresh(backend_addr, resolved_addrs.clone(), SystemTime::UNIX_EPOCH)
+                .apply_resolution_refresh(
+                    backend_addr,
+                    resolved_addrs.clone(),
+                    SystemTime::UNIX_EPOCH,
+                )
                 .expect("seed refresh");
             let coordinator = BackendLifecycleCoordinator::new(store);
 
@@ -1294,7 +1297,11 @@ mod tests {
                 ),
             ]));
             store
-                .apply_resolution_refresh(placed_backend, resolved_addrs.clone(), SystemTime::UNIX_EPOCH)
+                .apply_resolution_refresh(
+                    placed_backend,
+                    resolved_addrs.clone(),
+                    SystemTime::UNIX_EPOCH,
+                )
                 .expect("seed refresh");
             let coordinator = BackendLifecycleCoordinator::new(Arc::clone(&store));
             let pool = test_active_health_upstream_pool();
@@ -1329,7 +1336,10 @@ mod tests {
             ));
             assert_eq!(active.resolution.resolved_addrs, resolved_addrs);
             assert_eq!(active.resolution.refresh_generation, 1);
-            assert_eq!(active.resolution.last_refresh_success_at, Some(SystemTime::UNIX_EPOCH));
+            assert_eq!(
+                active.resolution.last_refresh_success_at,
+                Some(SystemTime::UNIX_EPOCH)
+            );
             assert_eq!(active.placements.len(), 1);
             assert!(!active.placements[0].healthy);
 
@@ -1395,7 +1405,10 @@ mod tests {
             );
 
             let transition = apply_backend_health_observation(Some(&pool), Some(0), &observation);
-            assert!(transition.is_none(), "healthy backend should not re-transition");
+            assert!(
+                transition.is_none(),
+                "healthy backend should not re-transition"
+            );
 
             let guard = pool.read().expect("read");
             let state = guard.backend_runtime_state(0).expect("backend state");
@@ -1469,7 +1482,10 @@ mod tests {
             };
 
             let transition = apply_backend_health_observation(Some(&pool), Some(0), &no_reason);
-            assert!(transition.is_none(), "missing reason must not mutate health");
+            assert!(
+                transition.is_none(),
+                "missing reason must not mutate health"
+            );
             assert!(
                 pool.read().expect("read").is_backend_healthy(0),
                 "pool should remain healthy without a mapped reason"
@@ -1482,12 +1498,8 @@ mod tests {
                 reason: Some(spooky_lb::health::HealthFailureReason::Timeout),
             };
 
-            assert!(
-                apply_backend_health_observation(Some(&pool), Some(0), &failure).is_none()
-            );
-            assert!(
-                apply_backend_health_observation(Some(&pool), Some(0), &failure).is_none()
-            );
+            assert!(apply_backend_health_observation(Some(&pool), Some(0), &failure).is_none());
+            assert!(apply_backend_health_observation(Some(&pool), Some(0), &failure).is_none());
             let transition = apply_backend_health_observation(Some(&pool), Some(0), &failure);
             assert!(matches!(
                 transition,
@@ -1532,8 +1544,7 @@ mod tests {
                     .apply_health_observation(Some(&pool), Some(0), &failure)
                     .is_none()
             );
-            let transition =
-                coordinator.apply_health_observation(Some(&pool), Some(0), &failure);
+            let transition = coordinator.apply_health_observation(Some(&pool), Some(0), &failure);
             assert!(matches!(
                 transition,
                 Some(HealthTransition::BecameUnhealthy)
@@ -1656,8 +1667,14 @@ mod tests {
                 None,
                 Some(spooky_lb::health::HealthFailureReason::Timeout),
             );
-            assert!(apply_backend_request_feedback(Some(&timeout_pool), Some(0), &timeout_feedback).is_none());
-            assert!(apply_backend_request_feedback(Some(&timeout_pool), Some(0), &timeout_feedback).is_none());
+            assert!(
+                apply_backend_request_feedback(Some(&timeout_pool), Some(0), &timeout_feedback)
+                    .is_none()
+            );
+            assert!(
+                apply_backend_request_feedback(Some(&timeout_pool), Some(0), &timeout_feedback)
+                    .is_none()
+            );
             let timeout_transition =
                 apply_backend_request_feedback(Some(&timeout_pool), Some(0), &timeout_feedback);
             assert!(matches!(
@@ -1672,13 +1689,16 @@ mod tests {
                 None,
                 Some(spooky_lb::health::HealthFailureReason::Transport),
             );
-            assert!(apply_backend_request_feedback(Some(&transport_pool), Some(0), &transport_feedback).is_none());
-            assert!(apply_backend_request_feedback(Some(&transport_pool), Some(0), &transport_feedback).is_none());
-            let transport_transition = apply_backend_request_feedback(
-                Some(&transport_pool),
-                Some(0),
-                &transport_feedback,
+            assert!(
+                apply_backend_request_feedback(Some(&transport_pool), Some(0), &transport_feedback)
+                    .is_none()
             );
+            assert!(
+                apply_backend_request_feedback(Some(&transport_pool), Some(0), &transport_feedback)
+                    .is_none()
+            );
+            let transport_transition =
+                apply_backend_request_feedback(Some(&transport_pool), Some(0), &transport_feedback);
             assert!(matches!(
                 transport_transition,
                 Some(HealthTransition::BecameUnhealthy)
