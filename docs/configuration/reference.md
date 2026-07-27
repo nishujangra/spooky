@@ -17,6 +17,7 @@ This page covers:
 - precedence and normalization rules
 - validation behavior
 - runtime meaning of major knobs
+- the boundary between raw YAML input and runtime-normalized policy objects
 
 Default coverage now lives on [Configuration Defaults](defaults.md) so the full inventory can stay centralized and easier to audit against the code.
 
@@ -29,6 +30,49 @@ This page does not change the current product behavior:
   restart.
 - certificate reload (`POST /admin/runtime/reload-certs`) covers new handshakes only
 - backend transport is scheme-driven: `https://` backends use HTTP/2, `http://` backends use HTTP/1.1
+
+## Raw Config vs Runtime Interpretation
+
+Spooky now has a clearer split between:
+
+- raw configuration schema loaded from YAML
+- normalized runtime configuration consumed by the rest of the system
+
+The raw schema is defined by the `config` module and is what this page documents field-by-field.
+
+The runtime model is defined by `crates/config/src/runtime.rs` and the domain interpreters under `crates/config/src/runtime/policies/`. Downstream crates should depend on that runtime model, not on the raw YAML shape.
+
+### Canonical runtime boundary
+
+The important runtime outputs are:
+
+- `RuntimeConfig`
+- `RuntimePolicySet`
+- `RuntimeListenerPolicySet`
+- `RuntimeUpstream`
+- `RuntimeBackendEndpoint`
+- `RuntimeLoadBalancingPolicy`
+- `RuntimeAdmissionPolicy`
+- `RuntimeAuthPolicy`
+- `RuntimeTransportPolicy`
+- `RuntimeTimeoutPolicy`
+
+These types are the validated, normalized forms that `edge`, `transport`, and `lb` actually execute against.
+
+### What normalization means in practice
+
+Normalization is where Spooky resolves and validates things such as:
+
+- listener selection precedence between `listen` and `listeners`
+- per-upstream override precedence over global defaults
+- trimming and rejection of empty strings where fields must be meaningful
+- route host and method canonicalization
+- backend endpoint parsing and transport-kind derivation
+- timeout conversion from raw millisecond fields into runtime `Duration`s
+- cross-field validation for limits, inflight caps, and watchdog/retry policy
+- route, auth, admission, backend, and load-balancing policy shaping
+
+If the raw YAML is accepted, the rest of the system should not need to reinterpret those rules again.
 
 ## Reading This Reference
 
@@ -106,6 +150,155 @@ Precedence and interpretation rules:
 4. Per-upstream load-balancing settings override the top-level `load_balancing` fallback.
 5. Certificate reload updates listener TLS material for future handshakes; it does not rewrite the already-running route or upstream model.
 
+## Runtime Interpretation Domains
+
+The runtime interpreter is now decomposed by policy domain. That split is important because it defines where runtime behavior is shaped and validated.
+
+### Listener and listener-TLS interpretation
+
+The listener interpreter resolves:
+
+- whether `listen` or `listeners[]` is authoritative
+- listener source identity
+- listener bind conflicts
+- default TLS identity and SNI identities
+- listener-scoped TLS reload inventory
+
+This produces runtime listener types such as:
+
+- `RuntimeListener`
+- `RuntimeListenerTls`
+- `ListenerRuntimeConfig`
+
+### Timeout interpretation
+
+Timeout interpretation converts raw timeout fields into the canonical runtime timeout policy:
+
+- backend request timeout
+- backend connect timeout
+- backend body idle and total timeouts
+- shutdown drain timeout
+- client body idle timeout
+- backend DNS refresh interval
+- QUIC idle timeout
+
+Cross-field ordering is validated here rather than by data-plane callers.
+
+### Transport interpretation
+
+Transport interpretation shapes:
+
+- worker and control-plane thread counts
+- shard layout
+- queue capacities
+- UDP buffer sizing
+- inflight limits
+- backend connection reuse policy
+- DNS refresh enablement
+- body-size and prebuffer limits
+
+This produces:
+
+- `RuntimeTransportPolicy`
+- `RuntimeConnectionLimits`
+- `RuntimeBackendConnectionPolicy`
+
+### Auth interpretation
+
+Auth interpretation shapes:
+
+- API key auth policy
+- JWT auth policy
+- external auth policy
+- external auth failure mode
+- external auth request-header shaping
+
+This produces runtime auth types such as:
+
+- `RuntimeAuthPolicy`
+- `RuntimeApiKeyAuth`
+- `RuntimeJwtAuth`
+- `RuntimeExternalAuth`
+
+### Admission and rate-limit interpretation
+
+Admission interpretation shapes:
+
+- brownout policy
+- overload and route queue policy
+- scoped rate-limit rules
+- watchdog-related admission policy
+
+This produces:
+
+- `RuntimeAdmissionPolicy`
+- `RuntimeRateLimitPolicy`
+- `RuntimeScopedRateLimitPolicy`
+- `RuntimeBrownoutPolicy`
+
+### Backend interpretation
+
+Backend interpretation shapes:
+
+- canonical backend endpoint
+- authority host and port
+- hostname vs IP-literal classification
+- runtime backend transport kind
+- backend TLS policy
+- backend DNS policy
+- backend health-check policy
+
+This produces:
+
+- `RuntimeBackendEndpoint`
+- `RuntimeBackendTlsPolicy`
+- `RuntimeBackendDnsPolicy`
+- `RuntimeBackendHealthCheck`
+
+### Load-balancing interpretation
+
+Load-balancing interpretation shapes:
+
+- canonical strategy
+- request-key extraction spec
+- alternate-backend behavior
+
+This produces:
+
+- `RuntimeLoadBalancingPolicy`
+- `RuntimeLoadBalancingStrategy`
+- `RuntimeRequestKeySpec`
+
+### Resilience and watchdog interpretation
+
+Resilience interpretation shapes:
+
+- retry budget policy
+- hedge policy
+- circuit breaker policy
+- watchdog runtime policy
+
+This produces:
+
+- `RuntimeRetryBudgetPolicy`
+- `RuntimeHedgingPolicy`
+- `RuntimeCircuitBreakerPolicy`
+- `RuntimeWatchdogPolicy`
+
+## How To Read Field Semantics
+
+For each setting on this page, keep the following distinction in mind:
+
+- raw schema semantics tell you what can be written in YAML
+- runtime semantics tell you what the interpreter will actually execute after normalization
+
+Examples:
+
+- a backend address string is raw input; `RuntimeBackendEndpoint` is the executed form
+- a timeout field in milliseconds is raw input; `RuntimeTimeoutPolicy` is the executed form
+- a `load_balancing.key` string is raw input; `RuntimeRequestKeySpec` is the executed form
+- auth and admission nested objects are raw input; `RuntimeAuthPolicy` and `RuntimeAdmissionPolicy` are the executed forms
+
 ## Production-Safe Defaults
 
 The configuration model is intentionally safe-by-default in several important areas:
@@ -145,9 +338,21 @@ Configuration schema version.
 
 Server listening configuration. Defines the protocol, address, and port for incoming client connections. Used as the single listener when `listeners` is absent or empty.
 
+Runtime interpretation:
+
+- lowered into `RuntimeListener` plus `RuntimeListenerTls`
+- then wrapped into `ListenerRuntimeConfig` with normalized timeout and transport policy
+- ignored for runtime listener selection when `listeners[]` is non-empty
+
 ### listeners
 
 Optional multi-listener array. When set, overrides the top-level `listen` block. Each entry is an independent listener with its own address, port, and TLS identity. Spooky spawns a separate QUIC worker group and bootstrap TLS listener per entry.
+
+Runtime interpretation:
+
+- becomes the authoritative listener set when non-empty
+- each entry is normalized independently
+- duplicate bind combinations are rejected before startup or reload commit
 
 ### Runtime Normalization And Precedence
 
@@ -172,13 +377,31 @@ Startup rejects ambiguous or contradictory combinations, including duplicate eff
 
 Named upstream pool definitions. Each key represents a unique upstream pool with its own routing rules, load balancing strategy, and backend servers.
 
+Runtime interpretation:
+
+- lowered into `RuntimeUpstream`
+- route matching becomes `RuntimeRouteMatchPolicy`
+- backend entries become `RuntimeBackend` plus `RuntimeBackendEndpoint`
+- effective upstream TLS, auth, admission, and load-balancing policy are resolved here
+
 ### load_balancing
 
 Optional global fallback for upstream load balancing. If an upstream omits `upstream.<name>.load_balancing`, the top-level `load_balancing` value is applied to that upstream during config load.
 
+Runtime interpretation:
+
+- global fallback only
+- each effective upstream receives a canonical `RuntimeLoadBalancingPolicy`
+- request key strings are parsed into `RuntimeRequestKeySpec`
+
 ### log
 
 Logging configuration. Controls log level and output formatting.
+
+Runtime interpretation:
+
+- `log.level` participates in live reload
+- log sink shape such as file output and format is treated as startup-owned and may require restart
 
 ## Default Values
 
@@ -191,6 +414,26 @@ Use that page when you need:
 - the difference between `null`, empty collections, empty strings, and structured section defaults
 
 This reference page keeps the schema and semantics, while [Configuration Defaults](defaults.md) owns the exhaustive default matrix.
+
+## Validation Model
+
+Validation happens during runtime interpretation, not lazily in downstream crates.
+
+Important validation categories include:
+
+- invalid listener bind combinations
+- invalid or contradictory TLS identity configuration
+- duplicate normalized route matchers
+- invalid backend endpoint addresses
+- unsupported load-balancing strategies or key specs
+- zero or out-of-range timeout and limit values
+- illegal cross-field timeout ordering
+- unsupported watchdog or auth policy combinations
+
+The expected downstream contract is:
+
+- if `RuntimeConfig::from_config(...)` succeeds, the runtime receives canonical and validated policy objects
+- data-plane and control-plane crates should consume those objects rather than repeat raw-schema validation
 
 ## Listen Configuration
 
