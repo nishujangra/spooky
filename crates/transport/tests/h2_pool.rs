@@ -15,17 +15,12 @@ use crate::support::{
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn http2_transport_enforces_per_backend_inflight_contract() {
     let tracker = Arc::new(ConcurrencyTracker::new());
-    let port = match start_h2_server(
-        b"ok",
-        Duration::from_millis(50),
-        Some(Arc::clone(&tracker)),
-    )
-    .await
-    {
-        Ok(port) => port,
-        Err(err) if loopback_bind_restricted(&err) => return,
-        Err(err) => panic!("failed to start h2 test server: {err}"),
-    };
+    let port =
+        match start_h2_server(b"ok", Duration::from_millis(50), Some(Arc::clone(&tracker))).await {
+            Ok(port) => port,
+            Err(err) if loopback_bind_restricted(&err) => return,
+            Err(err) => panic!("failed to start h2 test server: {err}"),
+        };
     let backend = format!("127.0.0.1:{port}");
 
     let pool = Arc::new(

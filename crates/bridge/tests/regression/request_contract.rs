@@ -2,7 +2,9 @@
 
 use http::header::{CONTENT_LENGTH, HOST};
 use quiche::h3::Header;
-use spooky_bridge::request::{RequestBodyMode, RequestBuildInput, build_h1_request, build_h2_request_for_target};
+use spooky_bridge::request::{
+    RequestBodyMode, RequestBuildInput, build_h1_request, build_h2_request_for_target,
+};
 use spooky_config::{
     backend_endpoint::BackendEndpoint,
     config::{ForwardedHeaderPolicy, UpstreamHostPolicy},
@@ -39,7 +41,10 @@ fn canonical_known_length_inputs_shape_h1_and_h2_requests_consistently() {
 
     assert_eq!(h1.method(), http::Method::POST);
     assert_eq!(h2.method(), http::Method::POST);
-    assert_eq!(h1.uri().to_string(), "https://payments.internal:443/v1/payments");
+    assert_eq!(
+        h1.uri().to_string(),
+        "https://payments.internal:443/v1/payments"
+    );
     assert_eq!(h1.uri(), h2.uri());
 
     for name in [
@@ -122,11 +127,15 @@ fn canonical_streaming_inputs_preserve_authority_and_forwarded_context_without_c
         Some("203.0.113.9")
     );
     assert_eq!(
-        h1.headers().get("forwarded").and_then(|value| value.to_str().ok()),
+        h1.headers()
+            .get("forwarded")
+            .and_then(|value| value.to_str().ok()),
         Some("for=203.0.113.9;proto=https;host=\"stream.example.com\"")
     );
     assert_eq!(
-        h1.headers().get("x-request-id").and_then(|value| value.to_str().ok()),
+        h1.headers()
+            .get("x-request-id")
+            .and_then(|value| value.to_str().ok()),
         Some("88")
     );
     assert!(h1.headers().get("traceparent").is_none());
@@ -174,24 +183,21 @@ fn canonical_empty_body_inputs_do_not_emit_content_length_for_h1_or_h2() {
 #[test]
 fn request_body_mode_helper_maps_lengths_to_canonical_modes() {
     assert_eq!(
-        RequestBuildInput::<http_body_util::combinators::BoxBody<
-            bytes::Bytes,
-            std::convert::Infallible,
-        >>::body_mode_for_length(Some(0)),
+        RequestBuildInput::<
+            http_body_util::combinators::BoxBody<bytes::Bytes, std::convert::Infallible>,
+        >::body_mode_for_length(Some(0)),
         RequestBodyMode::Empty
     );
     assert_eq!(
-        RequestBuildInput::<http_body_util::combinators::BoxBody<
-            bytes::Bytes,
-            std::convert::Infallible,
-        >>::body_mode_for_length(Some(12)),
+        RequestBuildInput::<
+            http_body_util::combinators::BoxBody<bytes::Bytes, std::convert::Infallible>,
+        >::body_mode_for_length(Some(12)),
         RequestBodyMode::KnownLength
     );
     assert_eq!(
-        RequestBuildInput::<http_body_util::combinators::BoxBody<
-            bytes::Bytes,
-            std::convert::Infallible,
-        >>::body_mode_for_length(None),
+        RequestBuildInput::<
+            http_body_util::combinators::BoxBody<bytes::Bytes, std::convert::Infallible>,
+        >::body_mode_for_length(None),
         RequestBodyMode::Streaming
     );
 }

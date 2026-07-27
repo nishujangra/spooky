@@ -138,7 +138,10 @@ fn incomplete_upgrade_candidates_do_not_trigger_websocket_specific_request_shapi
 #[test]
 fn connect_without_websocket_protocol_stays_on_normal_connect_path() {
     let endpoint = BackendEndpoint::parse("proxy.internal:8443").expect("endpoint");
-    let headers = vec![Header::new(b"sec-websocket-key", b"dGhlIHNhbXBsZSBub25jZQ==")];
+    let headers = vec![Header::new(
+        b"sec-websocket-key",
+        b"dGhlIHNhbXBsZSBub25jZQ==",
+    )];
 
     let request = build_h2_request_for_target(
         request_target(
@@ -165,7 +168,10 @@ fn connect_without_websocket_protocol_stays_on_normal_connect_path() {
     assert_eq!(request.uri().to_string(), "target.example.com:443");
     assert!(request.extensions().get::<hyper::ext::Protocol>().is_none());
     assert_eq!(
-        request.headers().get(HOST).and_then(|value| value.to_str().ok()),
+        request
+            .headers()
+            .get(HOST)
+            .and_then(|value| value.to_str().ok()),
         Some("target.example.com:443")
     );
 }

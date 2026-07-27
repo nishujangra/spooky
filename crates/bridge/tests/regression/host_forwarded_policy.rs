@@ -214,7 +214,9 @@ fn forwarded_header_policy_modes_apply_identically_for_h1_and_h2() {
         assert!(h1.headers().get("x-secret").is_none());
         assert!(h2.headers().get("x-secret").is_none());
         assert_eq!(
-            h1.headers().get("x-keep").and_then(|value| value.to_str().ok()),
+            h1.headers()
+                .get("x-keep")
+                .and_then(|value| value.to_str().ok()),
             Some("ok")
         );
     }

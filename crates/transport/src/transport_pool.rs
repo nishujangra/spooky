@@ -254,23 +254,17 @@ impl UpstreamTransportPool {
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        collections::HashMap,
-        convert::Infallible,
-        time::Duration,
-    };
+    use std::{collections::HashMap, convert::Infallible, time::Duration};
 
     use http_body_util::{BodyExt, Empty, combinators::BoxBody};
     use hyper::{Request, body::Bytes};
     use spooky_config::{
         config::{
             Backend, ClientAuth, Config, ForwardedHeaderPolicy, ForwardedHeaderPolicyMode, Listen,
-            LoadBalancing, Log, Observability, Performance, Resilience, RouteMatch, Security,
-            Tls, Upstream, UpstreamHostPolicy, UpstreamHostPolicyMode, UpstreamTls,
+            LoadBalancing, Log, Observability, Performance, Resilience, RouteMatch, Security, Tls,
+            Upstream, UpstreamHostPolicy, UpstreamHostPolicyMode, UpstreamTls,
         },
-        runtime::{
-            RuntimeBackendConnectionPolicy, RuntimeBackendTransportKind, RuntimeConfig,
-        },
+        runtime::{RuntimeBackendConnectionPolicy, RuntimeBackendTransportKind, RuntimeConfig},
     };
     use spooky_errors::{PoolError, ProxyError};
 

@@ -523,7 +523,10 @@ mod tests {
 
         assert_eq!(normalized.emission.body, ResponseBodyPolicy::Suppress);
         assert!(normalized.emission.emit_end_stream_on_headers);
-        assert_eq!(header_value(&normalized.head.headers, "retry-after"), Some("3"));
+        assert_eq!(
+            header_value(&normalized.head.headers, "retry-after"),
+            Some("3")
+        );
     }
 
     #[test]
@@ -589,7 +592,10 @@ mod tests {
 
         assert_eq!(normalized.emission.body, ResponseBodyPolicy::Suppress);
         assert!(normalized.emission.emit_end_stream_on_headers);
-        assert_eq!(header_value(&normalized.head.headers, "etag"), Some("\"etag-304\""));
+        assert_eq!(
+            header_value(&normalized.head.headers, "etag"),
+            Some("\"etag-304\"")
+        );
         assert_eq!(
             header_value(&normalized.head.headers, "cache-control"),
             Some("max-age=60")
@@ -618,7 +624,10 @@ mod tests {
     #[test]
     fn switching_protocols_preserves_upgrade_headers_when_requested() {
         let mut headers = HeaderMap::new();
-        headers.insert(http::header::CONNECTION, HeaderValue::from_static("upgrade"));
+        headers.insert(
+            http::header::CONNECTION,
+            HeaderValue::from_static("upgrade"),
+        );
         headers.insert(http::header::UPGRADE, HeaderValue::from_static("websocket"));
 
         let normalized = normalize_upstream_response(ResponseNormalizationInput {
@@ -716,7 +725,10 @@ mod tests {
                 .count(),
             1
         );
-        assert_eq!(header_value(&headers, "content-type"), Some("application/json"));
+        assert_eq!(
+            header_value(&headers, "content-type"),
+            Some("application/json")
+        );
         assert_eq!(header_value(&headers, "content-length"), Some("9"));
     }
 

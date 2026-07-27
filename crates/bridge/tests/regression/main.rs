@@ -9,8 +9,8 @@
 mod common;
 
 // Request-shaping contracts.
-mod request_contract;
 mod host_forwarded_policy;
+mod request_contract;
 mod websocket_contract;
 
 // Protocol-specific request behavior and parity.

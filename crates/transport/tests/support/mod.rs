@@ -14,9 +14,7 @@ use bytes::Bytes;
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::{Request, Response, body::Incoming, service::service_fn};
 use hyper_util::rt::{TokioExecutor, TokioIo};
-use spooky_config::runtime::{
-    RuntimeBackendConnectionPolicy, RuntimeBackendTransportKind,
-};
+use spooky_config::runtime::{RuntimeBackendConnectionPolicy, RuntimeBackendTransportKind};
 use spooky_transport::{SharedDnsResolver, UpstreamTransportPool};
 use tokio::net::TcpListener;
 
