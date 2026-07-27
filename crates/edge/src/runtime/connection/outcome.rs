@@ -10,19 +10,19 @@ use spooky_lb::{HealthTransition, health::HealthFailureReason, upstream_pool::Up
 
 use crate::{
     Metrics, OverloadShedReason, RouteOutcome,
-    runtime::backend::{
-        event::{
-            BackendHealthObservation, BackendHealthObservationOutcome,
-            BackendHealthObservationSource, BackendRequestFeedback,
+    runtime::{
+        backend::{
+            event::{
+                BackendHealthObservation, BackendHealthObservationOutcome,
+                BackendHealthObservationSource, BackendRequestFeedback,
+            },
+            lifecycle::{
+                apply_backend_health_observation, apply_backend_request_accounting,
+                apply_backend_request_feedback,
+            },
+            state::BackendIdentity,
         },
-        lifecycle::{
-            apply_backend_health_observation, apply_backend_request_accounting,
-            apply_backend_request_feedback,
-        },
-        state::BackendIdentity,
-    },
-    runtime::connection::stream::{
-        BackendFailureReason, RejectionReason, TerminalState, TimeoutReason,
+        connection::stream::{BackendFailureReason, RejectionReason, TerminalState, TimeoutReason},
     },
 };
 

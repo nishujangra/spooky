@@ -8,6 +8,25 @@ Legend:
 - `Partial`: implemented with important caveats or limited scope
 - `Missing`: not implemented as a first-class feature
 
+## Refactor Foundations
+
+These are architectural foundations rather than user-facing product features, but they now materially define how the codebase behaves and how future work should be added.
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| Request admission and policy evaluation | `Done` | Shared admission flow covers auth checks, scoped rate limits, brownout, overload, and rejection mapping |
+| Route resolution and backend selection pipeline | `Done` | Shared route match, upstream lookup, LB strategy, backend selection, and resolution telemetry flow |
+| Canonical load-balancing key resolution | `Done` | Cookie/query/header/bearer/CID/peer-IP extraction plus shared fallback behavior |
+| Shared upstream error classification | `Done` | Timeout/transport/TLS/protocol normalization with shared health and retry interpretation |
+| Canonical request building | `Done` | Host policy, forwarded-header policy, and shared H1/H2 request construction live behind `bridge` |
+| Canonical response normalization | `Done` | Hop-header stripping, trailer handling, bodyless/no-content shaping, and bootstrap/QUIC parity |
+| External auth decision layer | `Done` | Timeout/failure-mode handling, allowlist filtering, mutation safety, deny/challenge/redirect mapping |
+| Runtime generation model | `Done` | Startup-owned, generation-owned, and shared runtime ownership boundaries are formalized |
+| Unified backend lifecycle model | `Done` | DNS refresh, health observations, request feedback, pool placement, and lifecycle snapshots are coordinated |
+| Canonical transport façade | `Done` | Edge depends on transport execution contract instead of H1/H2 pool details |
+| Listener/runtime façade split | `Done` | `quic_listener` and bootstrap paths are decomposed into orchestration-oriented modules |
+| Public API and visibility hardening | `Done` | Canonical crate façades and reduced accidental exports across edge, config, bridge, lb, transport, and errors |
+
 ## Protocols
 
 | Area | Status | Notes |
@@ -89,7 +108,7 @@ Legend:
 | Runtime status endpoint | `Done` | Implemented |
 | Restart endpoint | `Done` | Implemented |
 | Cert reload endpoint | `Done` | Implemented |
-| Full config hot reload | `Partial` | Startup-owned settings + listner removal, bind still need restart |
+| Full config hot reload | `Partial` | Broad runtime swap exists; startup-owned settings and bind/topology changes still require restart or explicit compatibility handling |
 | Dynamic route updates | `Done via config reload` | routing index rebuilt + swapped |
 | Dynamic upstream membership API | `Missing` | No first-class API |
 | DNS refresh | `Done` | Implemented for hostname-based backends |
@@ -115,6 +134,8 @@ Legend:
 | --- | --- | --- |
 | Prometheus metrics | `Done` | Rich built-in metrics |
 | Structured logging | `Done` | Plain and JSON formats |
+| Canonical observability vocabulary | `Done` | Shared reason slugs align metrics, logs, and control-plane snapshot fields |
+| Control-plane runtime snapshots | `Done` | Backend lifecycle, runtime generation, watchdog, TLS, and coarse metrics summary exposed through shared runtime views |
 | OTLP tracing hooks | `Done` | Optional |
 | Packaging for Docker | `Done` | Present |
 | Packaging for Debian/systemd | `Done` | Present |
@@ -128,6 +149,7 @@ Spooky is strongest today as:
 - an HTTP/3-first edge proxy
 - a deterministic routing and balancing layer with scheme-driven H1/H2 upstream transport
 - a proxy with strong resource-bound and teardown behavior
+- a codebase with shared policy/runtime boundaries in place across request path, runtime ownership, backend lifecycle, transport, and observability
 
 Spooky is not yet strongest as:
 

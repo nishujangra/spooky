@@ -10,10 +10,10 @@ use super::{
     context::BootstrapDispatchCtx,
     intake::bootstrap_error_response,
     outcome::observe_bootstrap_dispatch_failure,
-    request::BootstrapPreparedRoute,
     request::{
-        BootstrapBackendFailureReason, BootstrapLifecycleStage, BootstrapTerminalOutcome,
-        BootstrapTerminalResponse, BootstrapTerminalResult, BootstrapTimeoutReason,
+        BootstrapBackendFailureReason, BootstrapLifecycleStage, BootstrapPreparedRoute,
+        BootstrapTerminalOutcome, BootstrapTerminalResponse, BootstrapTerminalResult,
+        BootstrapTimeoutReason,
     },
     websocket::dispatch_bootstrap_websocket,
 };

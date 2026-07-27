@@ -11,10 +11,10 @@ use crate::{
         evaluate_forwarding_pre_admission_policy,
     },
     runtime::connection::{
-        auth::ExternalAuthResult,
         auth::{
-            ExternalAuthCompletion, ExternalAuthFailureDisposition, ExternalAuthTaskConfig,
-            apply_auth_request_mutations, evaluate_external_auth_completion,
+            ExternalAuthCompletion, ExternalAuthFailureDisposition, ExternalAuthResult,
+            ExternalAuthTaskConfig, apply_auth_request_mutations,
+            evaluate_external_auth_completion,
         },
         outcome::{
             AdmissionOutcomeClass, BackendOutcomeTarget, RouteOutcomeTarget,
@@ -796,7 +796,6 @@ impl QUICListener {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use bytes::Bytes;
     use http::header::HOST;
     use http_body_util::{Full, combinators::BoxBody};
@@ -806,6 +805,7 @@ mod tests {
     };
     use spooky_errors::{BridgeError, ProxyError};
 
+    use super::*;
     use crate::runtime::connection::auth::PendingHeaderMutation;
 
     fn empty_body() -> BoxBody<Bytes, Infallible> {

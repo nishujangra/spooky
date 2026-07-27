@@ -25,6 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Large runtime modules split into focused submodules: `quic_listener/mod.rs` → `bootstrap_tls`, `control_api/`, `forwarding`, `metrics_endpoint`, `tls_runtime`; `spooky/main.rs` → `app`, `listener_group`; `config/validator.rs` → `helpers`; `config/runtime.rs` → `listeners`, `upstreams`.
 - Integration tests extracted into per-subsystem modules (`h3_edge/`, `h3_bridge/protocol`, `lb/tests`, `control_api/tests`).
+- Phase 1 to Phase 3 refactor foundations completed across the main runtime layers: shared admission, route/backend resolution, LB key resolution, upstream error classification, canonical request/response shaping, external auth decision mapping, runtime generation ownership, backend lifecycle coordination, transport façade cleanup, and public API hardening.
+- `spooky-edge`, `spooky-config`, `spooky-bridge`, `spooky-transport`, and `spooky-lb` now expose narrower, more intentional façades; internal orchestration and protocol details were pushed back behind owning modules.
+- Control-plane, observability, backend lifecycle, and runtime reload flows now share canonical runtime views and reason vocabularies instead of relying on listener-local wiring or duplicated interpretation paths.
 
 ## [0.3.0-beta] - 2026-06-20
 

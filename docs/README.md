@@ -16,25 +16,55 @@ Spooky is an open-source HTTP/3 (QUIC) edge reverse proxy written in Rust that t
 | [Production Readiness](operations/production-readiness.md) | Canonical statement of what is production-ready today and what still blocks GA |
 | [Limitations](reference/limitations.md) | The current hard product limits, without marketing language |
 
-### Developer — understand the architecture, contribute
+### Architecture — understand the runtime and subsystem ownership
 
 | Document | What you'll find |
 |---|---|
 | [Architecture Overview](architecture/overview.md) | Design principles, data-plane topology, sharded ingress model |
 | [Component Breakdown](architecture/components.md) | Per-crate responsibilities, inter-crate boundaries, key types |
-| [Load Balancing](user-guide/load-balancing.md) | All six algorithms with characteristics, use-case guidance, and config examples |
-| [Contributing Guide](https://github.com/Supernova-Labs-Org/spooky/blob/master/CONTRIBUTING.md) | Dev setup, build commands, test matrix, PR conventions |
+| [Codebase Map](development/codebase-map.md) | Current crate/module map and where major logic lives |
+| [Development Invariants](development/invariants.md) | Core runtime invariants, ownership assumptions, and rules the code depends on |
+| [Public API Surface Inventory](public-api-surface-inventory.md) | Current canonical public surfaces, hidden internals, and remaining intentional exports |
 
-### Reference — config schema, API, benchmarks, changelog
+### Control Plane and Operations — runtime control, observability, and failure handling
+
+| Document | What you'll find |
+|---|---|
+| [API Overview](api/overview.md) | Metrics endpoint and control-plane HTTP surfaces at a high level |
+| [Control API Reference](reference/control-api-reference.md) | Endpoint-by-endpoint control API contract |
+| [Metrics Reference](reference/metrics-reference.md) | Metric names, labels, and exported runtime signals |
+| [Operations Overview](operations/overview.md) | Operator map for deployment, sizing, tuning, and failure handling |
+| [Runbook](operations/runbook.md) | Day-2 operational procedures and troubleshooting flow |
+| [Failure Modes](operations/failure-modes.md) | Expected degraded behaviors and what they mean operationally |
+| [Sizing and Capacity](operations/sizing-and-capacity.md) | Capacity planning and scaling guidance |
+
+### Protocol, traffic, and policy reference
+
+| Document | What you'll find |
+|---|---|
+| [Load Balancing](user-guide/load-balancing.md) | Current balancing strategies, selection behavior, and config examples |
+| [HTTP/3](protocols/http3.md) | HTTP/3 behavior and protocol-specific operational notes |
+| [QUIC](protocols/quic.md) | QUIC transport behavior, constraints, and terminology |
+| [Security Model](concepts/security-model.md) | Current trust boundaries, admin-plane assumptions, and missing security layers |
+| [Terminology](reference/terminology.md) | Canonical definitions for listener, upstream, backend, route, drain, and related terms |
+
+### Developer — contribute safely against the current architecture
+
+| Document | What you'll find |
+|---|---|
+| [Contributing Guide](https://github.com/Supernova-Labs-Org/spooky/blob/master/CONTRIBUTING.md) | Dev setup, build commands, test matrix, PR conventions |
+| [Development Overview](development/overview.md) | Contributor-oriented guide to working in the repo |
+| [Testing Strategy](development/testing-strategy.md) | Contract, regression, and parity test expectations |
+| [Benchmarking](development/benchmarking.md) | Benchmark crate, micro/macro suites, and regression-gate workflow |
+| [Adding Features](development/adding-features.md) | Expectations for new features against the current architecture |
+
+### Reference — schema, maturity, roadmap, and release state
 
 | Document | What you'll find |
 |---|---|
 | [Configuration Reference](configuration/reference.md) | Authoritative schema reference for every configuration block |
 | [Feature Matrix](reference/feature-matrix.md) | Strict feature-by-feature inventory of what is done, partial, and missing |
-| [Security Model](concepts/security-model.md) | Current trust boundaries, admin-plane assumptions, and missing security layers |
-| [Terminology](reference/terminology.md) | Canonical definitions for listener, upstream, backend, route, drain, and related terms |
-| [API Overview](api/overview.md) | Metrics endpoint, control API (health, ready, runtime), bearer auth |
-| [Benchmarking](development/benchmarking.md) | Benchmark crate, micro/macro suites, and regression-gate workflow |
+| [Reference Overview](reference/overview.md) | Index of the strict reference material and product limits |
 | [Roadmap](roadmap.md) | Planned features, GA exit criteria, known limitations |
 | [Changelog](changelog.md) | Version history with added, fixed, and changed entries |
 

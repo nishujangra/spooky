@@ -82,8 +82,9 @@ impl RetryBudget {
 mod tests {
     use std::collections::HashMap;
 
-    use super::RetryBudget;
     use spooky_errors::RetryPolicyDenialReason;
+
+    use super::RetryBudget;
 
     #[test]
     fn allow_retry_denial_does_not_consume_retry_budget_counters() {

@@ -2,8 +2,10 @@ use bytes::Bytes;
 use http_body_util::Full;
 
 use super::*;
-use crate::runtime::bundle::{ActiveRuntimeGeneration, RuntimeBundleHandle};
-use crate::runtime::policy::{ReloadCompatibilityAuthority, TransitionRejection};
+use crate::runtime::{
+    bundle::{ActiveRuntimeGeneration, RuntimeBundleHandle},
+    policy::{ReloadCompatibilityAuthority, TransitionRejection},
+};
 
 pub(super) struct RuntimeReloadPlan {
     pub(super) next_runtime: RuntimeBundle,

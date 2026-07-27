@@ -262,16 +262,18 @@ mod tests {
     use std::{collections::HashMap, path::Path};
 
     use rcgen::{Certificate, CertificateParams, SanType};
+    use spooky_config::{
+        config::{
+            Backend, ClientAuth, Config as SpookyConfigConfig, Listen, LoadBalancing, Log, LogFile,
+            LogFormat, Observability, Performance, Resilience, RouteMatch, Security, Tls, Upstream,
+            UpstreamTls,
+        },
+        runtime::RuntimeConfig,
+    };
     use tempfile::tempdir;
 
     use super::*;
     use crate::runtime::listener::QUICListener;
-    use spooky_config::config::{
-        Backend, ClientAuth, Config as SpookyConfigConfig, Listen, LoadBalancing, Log, LogFile,
-        LogFormat, Observability, Performance, Resilience, RouteMatch, Security, Tls, Upstream,
-        UpstreamTls,
-    };
-    use spooky_config::runtime::RuntimeConfig;
 
     fn write_test_cert_for_name(dir: &Path, cert_name: &str, dns_name: &str) -> (String, String) {
         let mut params = CertificateParams::new(vec![dns_name.to_string()]);

@@ -1424,13 +1424,15 @@ impl QUICListener {
 
 #[cfg(test)]
 mod tests {
-    use crate::runtime::connection::auth::{
-        ExternalAuthChallengeResponse, ExternalAuthDenyResponse, ExternalAuthRedirectResponse,
-    };
     use quiche::h3::NameValue;
 
     use super::*;
-    use crate::quic_listener::admission::AdmissionRejectionResponse;
+    use crate::{
+        quic_listener::admission::AdmissionRejectionResponse,
+        runtime::connection::auth::{
+            ExternalAuthChallengeResponse, ExternalAuthDenyResponse, ExternalAuthRedirectResponse,
+        },
+    };
 
     fn header_value<'a>(headers: &'a [quiche::h3::Header], name: &[u8]) -> Option<&'a [u8]> {
         headers
