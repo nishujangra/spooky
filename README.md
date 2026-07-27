@@ -1,13 +1,14 @@
 # Spooky
 
-Spooky is an HTTP/3 (QUIC) edge proxy and load balancer for HTTP/2 backends.
+Spooky is an HTTP/3 (QUIC) edge proxy and load balancer with native QUIC ingress, a bootstrap HTTP/1.1 and HTTP/2 compatibility path, and scheme-driven HTTP/1.1 or HTTP/2 upstream execution.
 
 ## Overview
 
-Modern clients increasingly expect HTTP/3 support, but most production backends still use HTTP/2. Spooky bridges this gap by:
+Modern clients increasingly expect HTTP/3 support, while production platforms still need compatibility with mixed client and backend environments. Spooky bridges that gap by:
 
 - Terminating QUIC connections with TLS 1.3
-- Converting HTTP/3 streams to HTTP/2 requests
+- Running HTTP/3 as the primary data-plane ingress with a bootstrap HTTP/1.1 and HTTP/2 ingress path
+- Converting canonical request flow into scheme-driven upstream HTTP/1.1 or HTTP/2 execution
 - Load balancing across backend pools with health checks
 - Supporting path and host-based routing
 - Enforcing bounded request/response memory with deterministic overload failures
@@ -225,10 +226,19 @@ See [release maturity](docs/release-maturity.md) for scope and GA exit criteria,
 
 ## Documentation
 
-- [Architecture Overview](docs/architecture.md)
+Start with the [docs index](docs/README.md).
+
+Recommended entrypoints:
+
+- [Architecture Overview](docs/architecture/overview.md)
+- [Edge Runtime Ownership](docs/architecture/edge-runtime.md)
+- [Request Lifecycle](docs/architecture/request-lifecycle.md)
+- [Transport Boundaries](docs/architecture/transport.md)
+- [Observability Contract](docs/architecture/observability-contract.md)
 - [Configuration Reference](docs/configuration/reference.md)
-- [TLS Setup Guide](docs/configuration/tls.md)
-- [Load Balancing Guide](docs/user-guide/load-balancing.md)
+- [Control Plane](docs/operations/control-plane.md)
+- [Reload and Drain](docs/operations/reload-and-drain.md)
+- [Metrics and Alerts](docs/operations/metrics-and-alerts.md)
 - [Production Deployment](docs/deployment/production.md)
 - [Troubleshooting](docs/troubleshooting/common-issues.md)
 
