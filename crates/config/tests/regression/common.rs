@@ -89,7 +89,7 @@ pub fn runtime_config_err(config: &Config) -> RuntimeConfigError {
         .expect_err("regression case must reject the runtime lowering input")
 }
 
-pub fn api_runtime_upstream<'a>(runtime: &'a RuntimeConfig) -> &'a RuntimeUpstream {
+pub fn api_runtime_upstream(runtime: &RuntimeConfig) -> &RuntimeUpstream {
     runtime
         .upstreams
         .get(API_UPSTREAM)

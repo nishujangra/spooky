@@ -279,9 +279,11 @@ mod tests {
 
     #[test]
     fn runtime_backend_dns_policy_shapes_refresh_settings_from_performance() {
-        let mut performance = Performance::default();
-        performance.backend_dns_refresh_enabled = true;
-        performance.backend_dns_refresh_interval_ms = 45_000;
+        let performance = Performance {
+            backend_dns_refresh_enabled: true,
+            backend_dns_refresh_interval_ms: 45_000,
+            ..Performance::default()
+        };
 
         let policy = RuntimeBackendDnsPolicy::from_performance(&performance);
 
