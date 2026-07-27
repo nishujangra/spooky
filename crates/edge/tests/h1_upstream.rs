@@ -27,8 +27,7 @@ use spooky_config::{
 use spooky_edge::{
     MAX_DATAGRAM_SIZE_BYTES, MAX_UDP_PAYLOAD_BYTES, QUIC_IDLE_TIMEOUT_MS, QUIC_INITIAL_MAX_DATA,
     QUIC_INITIAL_MAX_STREAMS_BIDI, QUIC_INITIAL_MAX_STREAMS_UNI, QUIC_INITIAL_STREAM_DATA,
-    REQUEST_TIMEOUT_SECS, UDP_READ_TIMEOUT_MS,
-    runtime::listener::QUICListener,
+    REQUEST_TIMEOUT_SECS, UDP_READ_TIMEOUT_MS, runtime::listener::QUICListener,
 };
 use tempfile::{TempDir, tempdir};
 use tokio::net::TcpListener;

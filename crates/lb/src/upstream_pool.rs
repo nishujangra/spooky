@@ -335,7 +335,10 @@ mod tests {
         let unhealthy = pool
             .mark_backend_failure_from_active_check(picked)
             .expect("health transition");
-        assert!(matches!(unhealthy, crate::HealthTransition::BecameUnhealthy));
+        assert!(matches!(
+            unhealthy,
+            crate::HealthTransition::BecameUnhealthy
+        ));
         let after_failure = pool.membership_summary();
         assert_eq!(after_failure.total_backends, 2);
         assert_eq!(after_failure.healthy_backends, 1);

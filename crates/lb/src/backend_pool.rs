@@ -384,7 +384,10 @@ mod tests {
 
         pool.mark_request_failure(0, HealthFailureReason::Transport);
         let transition = pool.mark_request_failure(0, HealthFailureReason::Transport);
-        assert!(matches!(transition, Some(HealthTransition::BecameUnhealthy)));
+        assert!(matches!(
+            transition,
+            Some(HealthTransition::BecameUnhealthy)
+        ));
         assert_eq!(pool.healthy_len(), 0);
         assert!(pool.readmit_due());
 

@@ -592,8 +592,13 @@ mod tests {
         ]));
         let routing_index = RouteIndex::from_runtime_upstreams(&runtime.upstreams);
         let pools = upstream_pools(&runtime);
-        let request =
-            TargetResolutionRequest::new("POST", "/api/orders", Some("pay.example.com"), None, None);
+        let request = TargetResolutionRequest::new(
+            "POST",
+            "/api/orders",
+            Some("pay.example.com"),
+            None,
+            None,
+        );
 
         let route = QUICListener::resolve_route_target(
             &request,
@@ -635,8 +640,13 @@ mod tests {
             .map(|(name, upstream)| (name.clone(), upstream.policy.clone()))
             .collect::<HashMap<_, _>>();
 
-        let request =
-            TargetResolutionRequest::new("GET", "/missing", Some("unknown.example.com"), None, None);
+        let request = TargetResolutionRequest::new(
+            "GET",
+            "/missing",
+            Some("unknown.example.com"),
+            None,
+            None,
+        );
         let first =
             match QUICListener::resolve_route_target(&request, &pools, &policies, &routing_index) {
                 Err(err) => err,

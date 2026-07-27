@@ -518,9 +518,7 @@ fn infer_terminal_status(state: &TerminalState) -> Option<StatusCode> {
     }
 }
 
-pub(crate) fn classify_terminal_outcome(
-    state: &TerminalState,
-) -> RequestOutcomeClassification {
+pub(crate) fn classify_terminal_outcome(state: &TerminalState) -> RequestOutcomeClassification {
     match state {
         TerminalState::Completed(state) if state.snapshot.overload_reason.is_some() => {
             classify_admission_outcome(AdmissionOutcomeClass::OverloadShed {
@@ -986,10 +984,7 @@ mod tests {
                 BackendFailureReason::UpstreamTimeout,
                 BackendFailureClass::Timeout,
             ),
-            (
-                BackendFailureReason::UpstreamTls,
-                BackendFailureClass::Tls,
-            ),
+            (BackendFailureReason::UpstreamTls, BackendFailureClass::Tls),
             (
                 BackendFailureReason::UpstreamBridge,
                 BackendFailureClass::Bridge,
@@ -1048,19 +1043,13 @@ mod tests {
             reason: RejectionReason::AuthDenied,
             snapshot: terminal_snapshot_for_test(),
         }));
-        assert_eq!(
-            auth.rejection_kind,
-            Some(RejectionClass::AuthDenied)
-        );
+        assert_eq!(auth.rejection_kind, Some(RejectionClass::AuthDenied));
 
         let overload = classify_terminal_outcome(&TerminalState::Rejected(RejectedState {
             reason: RejectionReason::Overloaded,
             snapshot: terminal_snapshot_for_test(),
         }));
-        assert_eq!(
-            overload.rejection_kind,
-            Some(RejectionClass::OverloadShed)
-        );
+        assert_eq!(overload.rejection_kind, Some(RejectionClass::OverloadShed));
     }
 
     #[test]
@@ -1334,14 +1323,8 @@ mod tests {
             },
         ));
 
-        assert_eq!(
-            auth.rejection_kind,
-            Some(RejectionClass::AuthDenied)
-        );
-        assert_eq!(
-            overload.rejection_kind,
-            Some(RejectionClass::OverloadShed)
-        );
+        assert_eq!(auth.rejection_kind, Some(RejectionClass::AuthDenied));
+        assert_eq!(overload.rejection_kind, Some(RejectionClass::OverloadShed));
         assert_eq!(
             backend.backend_failure_kind,
             Some(BackendFailureClass::Protocol)

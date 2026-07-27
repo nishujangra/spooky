@@ -142,8 +142,5 @@ impl BackendState {
 #[derive(Clone)]
 enum HealthState {
     Healthy,
-    Unhealthy {
-        until: Instant,
-        successes: u32,
-    },
+    Unhealthy { until: Instant, successes: u32 },
 }
