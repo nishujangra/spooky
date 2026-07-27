@@ -2,6 +2,13 @@
 
 Phase 1 baseline for `refactor/final-api-lockdown-and-deletion`.
 
+How to use this file:
+
+- use it as the canonical map of intentional crate façades before adding or widening visibility
+- check whether a type or module is meant to be a public entrypoint, a crate-local collaboration seam, or an accidental leak
+- update this file when a refactor deliberately changes a crate boundary, instead of letting visibility drift silently
+- do not use this file as a substitute for module docs; use it to answer "should this be public at all?"
+
 Purpose:
 - re-state the current crate façades exactly as the branch exposes them
 - classify every non-private boundary item in the primary architecture crates
@@ -249,13 +256,13 @@ This document classifies current visibility. It does not by itself change policy
 
 - none at the crate-root façade level in the scoped crates after the Phase 2 lockdown pass
 
-## Phase 1 Exit Check
+## Current Exit Check
 
 - every non-private boundary item in the scoped crates has an explicit classification
 - the current baseline no longer relies on “probably needed” wording
-- the main unresolved Phase 2 targets are now named rather than implicit
+- the Phase 2 and Phase 3 façade-hardening work is reflected in the classifications above
 
-## Phase 8 Verification Pass
+## Verification Pass
 
 - `cargo fmt --all` applied; the only changes were whitespace reflow caused by earlier renames and field removals
 - `cargo check --workspace --all-targets` is clean, and `spooky-edge` reports no `unreachable_pub` warnings
