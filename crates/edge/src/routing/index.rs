@@ -156,7 +156,7 @@ impl RouteIndex {
         best.map(|candidate| self.upstream_names[candidate.route.upstream_idx].as_str())
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn lookup_with_decision<'a>(
         &'a self,
         path: &str,

@@ -160,7 +160,7 @@ fn lookup_with_decision_reports_host_specific_tie_break() {
     let index = RouteIndex::from_upstreams(&upstreams);
 
     let decision = index
-        .lookup_with_decision("/api/v1", Some("api.example.com"))
+        .lookup_with_decision_for_method("/api/v1", Some("api.example.com"), None)
         .expect("decision");
     assert_eq!(decision.upstream, "host-api");
     assert_eq!(decision.reason, RouteDecisionReason::HostSpecificTieBreak);
@@ -180,7 +180,7 @@ fn lookup_with_decision_reports_default_longer_path() {
     let index = RouteIndex::from_upstreams(&upstreams);
 
     let decision = index
-        .lookup_with_decision("/api/v2/users", Some("api.example.com"))
+        .lookup_with_decision_for_method("/api/v2/users", Some("api.example.com"), None)
         .expect("decision");
     assert_eq!(decision.upstream, "default-api-v2");
     assert_eq!(decision.reason, RouteDecisionReason::DefaultPathLonger);
@@ -343,7 +343,7 @@ fn exact_host_route_beats_wildcard_on_tie() {
     );
     assert_eq!(
         index
-            .lookup_with_decision("/api/users", Some("api.example.com"))
+            .lookup_with_decision_for_method("/api/users", Some("api.example.com"), None)
             .map(|decision| decision.reason),
         Some(RouteDecisionReason::ExactHostTieBreak)
     );
@@ -373,7 +373,7 @@ fn more_specific_wildcard_beats_less_specific_wildcard() {
     );
     assert_eq!(
         index
-            .lookup_with_decision("/api/users", Some("x.a.example.com"))
+            .lookup_with_decision_for_method("/api/users", Some("x.a.example.com"), None)
             .map(|decision| decision.reason),
         Some(RouteDecisionReason::WildcardSpecificityTieBreak)
     );

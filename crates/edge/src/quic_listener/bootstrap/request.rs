@@ -10,18 +10,15 @@ use http::{HeaderMap, Request, Response, StatusCode};
 use http_body_util::{BodyExt, combinators::BoxBody};
 use hyper::body::Incoming;
 use log::warn;
-use spooky_bridge::{
-    BridgeError,
-    request::{
-        RequestBuildInput, RequestBuildPolicies, RequestBuildTarget, RequestForwardedContext,
-        RequestTraceContext, build_h1_request, build_h2_request_for_target,
-    },
+use spooky_bridge::request::{
+    RequestBuildInput, RequestBuildPolicies, RequestBuildTarget, RequestForwardedContext,
+    RequestTraceContext, build_h1_request, build_h2_request_for_target,
 };
 use spooky_config::{
     backend_endpoint::{BackendEndpoint, BackendScheme},
     runtime::RuntimeUpstreamPolicy,
 };
-use spooky_errors::ProxyError;
+use spooky_errors::{BridgeError, ProxyError};
 use spooky_lb::upstream_pool::UpstreamPool;
 
 use super::{
@@ -31,7 +28,7 @@ use super::{
             AdmissionPolicyDecision, admission_rejection_response,
             evaluate_forwarding_pre_admission_policy,
         },
-        forwarding::BootstrapResolutionInput,
+        forwarding::BootstrapTargetResolutionInput,
     },
     context::BootstrapRequestCtx,
     intake::{BootstrapRequestIntake, bootstrap_error_response},
@@ -41,32 +38,22 @@ use super::{
 use crate::runtime::connection::outcome::AdmissionOutcomeClass;
 
 /// The bootstrap request lifecycle stages, mirroring the QUIC data path so the
-/// same reasoning applies. Some stages (`Intake`, `WriteResponse`, `Terminalize`)
-/// name the full model for completeness but do not currently emit a distinct
-/// terminal *rejection* — intake failures return earlier and successful writeback
-/// is not an error terminal — so they are not yet constructed.
-#[allow(dead_code)]
+/// same reasoning applies at the currently emitted terminal boundaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::quic_listener) enum BootstrapLifecycleStage {
-    Intake,
     Validate,
     ResolveRoute,
     AdmitOrReject,
     Dispatch,
-    WriteResponse,
-    Terminalize,
 }
 
 impl BootstrapLifecycleStage {
     pub(in crate::quic_listener) fn slug(self) -> &'static str {
         match self {
-            Self::Intake => "intake",
             Self::Validate => "validate",
             Self::ResolveRoute => "resolve_route",
             Self::AdmitOrReject => "admit_or_reject",
             Self::Dispatch => "dispatch",
-            Self::WriteResponse => "write_response",
-            Self::Terminalize => "terminalize",
         }
     }
 }
@@ -100,14 +87,10 @@ pub(in crate::quic_listener) enum BootstrapBackendFailureReason {
     DispatchFailed,
 }
 
-/// Bootstrap timeout classification. `ResponseBody` names the model's
-/// response-body-phase timeout for parity with the QUIC data path; bootstrap does
-/// not yet detect that phase distinctly, so only `Upstream` is currently emitted.
-#[allow(dead_code)]
+/// Bootstrap timeout classification at the currently emitted terminal boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(in crate::quic_listener) enum BootstrapTimeoutReason {
     Upstream,
-    ResponseBody,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -180,10 +163,7 @@ impl BootstrapTerminalOutcome {
                 BootstrapBackendFailureReason::RequestBuildFailed => "backend_failed_request_build",
                 BootstrapBackendFailureReason::DispatchFailed => "backend_failed_dispatch",
             },
-            Self::TimedOut(reason) => match reason {
-                BootstrapTimeoutReason::Upstream => "timed_out_upstream",
-                BootstrapTimeoutReason::ResponseBody => "timed_out_response_body",
-            },
+            Self::TimedOut(BootstrapTimeoutReason::Upstream) => "timed_out_upstream",
         }
     }
 }
@@ -344,7 +324,7 @@ pub(in crate::quic_listener) fn evaluate_bootstrap_request_policy(
             .map(str::to_string)
     };
 
-    let resolved = match QUICListener::resolve_bootstrap_target(BootstrapResolutionInput {
+    let resolved = match QUICListener::resolve_bootstrap_target(BootstrapTargetResolutionInput {
         method: &input.intake.method,
         path: &input.intake.path,
         authority: input.intake.authority.as_deref(),
@@ -698,7 +678,6 @@ mod tests {
             ),
             BootstrapTerminalOutcome::BackendFailed(BootstrapBackendFailureReason::DispatchFailed),
             BootstrapTerminalOutcome::TimedOut(BootstrapTimeoutReason::Upstream),
-            BootstrapTerminalOutcome::TimedOut(BootstrapTimeoutReason::ResponseBody),
         ];
         let mut slugs: Vec<&str> = outcomes.iter().map(|o| o.slug()).collect();
         let count = slugs.len();

@@ -2,8 +2,7 @@ use std::net::IpAddr;
 
 use http::HeaderValue;
 use spooky_config::config::{ForwardedHeaderPolicy, ForwardedHeaderPolicyMode};
-
-use crate::BridgeError;
+use spooky_errors::BridgeError;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ForwardedHeaderChains<'a> {

@@ -7,10 +7,7 @@ use http::header::HOST;
 use http_body_util::combinators::BoxBody;
 use hyper::ext::Protocol;
 use quiche::h3::Header;
-use spooky_bridge::{
-    BridgeError,
-    request::{build_h1_request, build_h2_request_for_target},
-};
+use spooky_bridge::request::{build_h1_request, build_h2_request_for_target};
 use spooky_config::{
     backend_endpoint::BackendEndpoint,
     config::{
@@ -18,6 +15,7 @@ use spooky_config::{
         UpstreamHostPolicyMode,
     },
 };
+use spooky_errors::BridgeError;
 
 use crate::common::{RequestInputMeta, request_input, request_target};
 

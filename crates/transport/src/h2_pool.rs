@@ -92,11 +92,6 @@ impl H2Pool {
         })
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn has_backend(&self, backend: &str) -> bool {
-        self.backends.contains_key(backend)
-    }
-
     pub(crate) fn rotate_backend_client(
         &self,
         backend: &str,

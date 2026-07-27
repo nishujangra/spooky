@@ -6,9 +6,7 @@ use std::{
 use http::StatusCode;
 use log::{error, info};
 use spooky_errors::{ClassifiedUpstreamProxyError, PoolError, ProxyError};
-use spooky_lb::{
-    backend::HealthTransition, health::HealthFailureReason, upstream_pool::UpstreamPool,
-};
+use spooky_lb::{HealthTransition, health::HealthFailureReason, upstream_pool::UpstreamPool};
 
 use crate::{
     Metrics, OverloadShedReason, RouteOutcome,
@@ -61,7 +59,7 @@ pub(crate) enum CanonicalBackendOutcome {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum OutcomeStatusClass {
+pub(crate) enum ResponseStatusClass {
     Informational,
     Success,
     Redirection,
@@ -70,7 +68,7 @@ pub(crate) enum OutcomeStatusClass {
     Other,
 }
 
-impl From<StatusCode> for OutcomeStatusClass {
+impl From<StatusCode> for ResponseStatusClass {
     fn from(status: StatusCode) -> Self {
         match status.as_u16() {
             100..=199 => Self::Informational,
@@ -97,7 +95,7 @@ enum HealthEffectHint {
 /// can be traced directly to the terminal state rather than collapsing every
 /// backend failure into one bucket.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CanonicalBackendFailureKind {
+pub(crate) enum BackendFailureClass {
     Timeout,
     Transport,
     Protocol,
@@ -110,7 +108,7 @@ pub(crate) enum CanonicalBackendFailureKind {
 /// rate-limited, overload-shed, and validation/policy rejects, which the coarse
 /// route outcome would otherwise merge into a single failure bucket.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum CanonicalRejectionKind {
+pub(crate) enum RejectionClass {
     AuthDenied,
     AuthUnavailable,
     RateLimited,
@@ -119,38 +117,38 @@ pub(crate) enum CanonicalRejectionKind {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct OutcomeRouteTarget<'a> {
+pub(crate) struct RouteOutcomeTarget<'a> {
     pub(crate) route: &'a str,
 }
 
-impl<'a> OutcomeRouteTarget<'a> {
+impl<'a> RouteOutcomeTarget<'a> {
     pub(crate) const UNROUTED: Self = Self { route: "unrouted" };
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct OutcomeBackendTarget<'a> {
+pub(crate) struct BackendOutcomeTarget<'a> {
     pub(crate) upstream: &'a str,
     pub(crate) backend_addr: Option<&'a str>,
     pub(crate) backend_index: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct RequestOutcomeDecision {
+pub(crate) struct RequestOutcomeClassification {
     pub(crate) route_outcome: CanonicalRouteOutcome,
     pub(crate) backend_outcome: CanonicalBackendOutcome,
     pub(crate) overload_reason: Option<OverloadShedReason>,
     /// Fine-grained rejection class when this decision is a rejection (Phase 12).
-    pub(crate) rejection_kind: Option<CanonicalRejectionKind>,
+    pub(crate) rejection_kind: Option<RejectionClass>,
     /// Fine-grained backend-failure transport class when this decision is a
     /// backend failure (Phase 12).
-    pub(crate) backend_failure_kind: Option<CanonicalBackendFailureKind>,
+    pub(crate) backend_failure_kind: Option<BackendFailureClass>,
     health_effect: HealthEffectHint,
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct RequestMetricsObservation<'a> {
-    pub(crate) route_target: OutcomeRouteTarget<'a>,
-    pub(crate) backend_target: Option<OutcomeBackendTarget<'a>>,
+pub(crate) struct RequestOutcomeObservation<'a> {
+    pub(crate) route_target: RouteOutcomeTarget<'a>,
+    pub(crate) backend_target: Option<BackendOutcomeTarget<'a>>,
     pub(crate) elapsed: Duration,
     pub(crate) status: Option<u16>,
     pub(crate) metrics_outcome: RouteOutcome,
@@ -165,7 +163,7 @@ pub(crate) enum AdmissionOutcomeClass {
     Failed { timed_out: bool },
 }
 
-impl RequestOutcomeDecision {
+impl RequestOutcomeClassification {
     /// Base decision from a route outcome, mirroring the coarse backend outcome and
     /// leaving the fine-grained kinds unset. Call sites add `rejection_kind` /
     /// `backend_failure_kind` / `overload_reason` as applicable.
@@ -206,37 +204,40 @@ impl CanonicalBackendOutcome {
     }
 }
 
-fn health_effect_from_status_class(status_class: OutcomeStatusClass) -> HealthEffectHint {
+fn health_effect_from_status_class(status_class: ResponseStatusClass) -> HealthEffectHint {
     match status_class {
-        OutcomeStatusClass::ServerError => HealthEffectHint::Failure {
+        ResponseStatusClass::ServerError => HealthEffectHint::Failure {
             reason: HealthFailureReason::HttpStatus5xx,
         },
-        OutcomeStatusClass::ClientError => HealthEffectHint::Neutral,
-        OutcomeStatusClass::Informational
-        | OutcomeStatusClass::Success
-        | OutcomeStatusClass::Redirection => HealthEffectHint::Success,
-        OutcomeStatusClass::Other => HealthEffectHint::None,
+        ResponseStatusClass::ClientError => HealthEffectHint::Neutral,
+        ResponseStatusClass::Informational
+        | ResponseStatusClass::Success
+        | ResponseStatusClass::Redirection => HealthEffectHint::Success,
+        ResponseStatusClass::Other => HealthEffectHint::None,
     }
 }
 
-pub(crate) fn classify_status_outcome(status: StatusCode) -> RequestOutcomeDecision {
-    let status_class = OutcomeStatusClass::from(status);
+pub(crate) fn classify_status_outcome(status: StatusCode) -> RequestOutcomeClassification {
+    let status_class = ResponseStatusClass::from(status);
     let route_outcome = match status_class {
-        OutcomeStatusClass::Informational
-        | OutcomeStatusClass::Success
-        | OutcomeStatusClass::Redirection => CanonicalRouteOutcome::Success,
-        OutcomeStatusClass::ClientError => CanonicalRouteOutcome::UpstreamFailure,
-        OutcomeStatusClass::ServerError => CanonicalRouteOutcome::UpstreamFailure,
-        OutcomeStatusClass::Other => CanonicalRouteOutcome::UpstreamFailure,
+        ResponseStatusClass::Informational
+        | ResponseStatusClass::Success
+        | ResponseStatusClass::Redirection => CanonicalRouteOutcome::Success,
+        ResponseStatusClass::ClientError => CanonicalRouteOutcome::UpstreamFailure,
+        ResponseStatusClass::ServerError => CanonicalRouteOutcome::UpstreamFailure,
+        ResponseStatusClass::Other => CanonicalRouteOutcome::UpstreamFailure,
     };
 
-    RequestOutcomeDecision::from_route(route_outcome, health_effect_from_status_class(status_class))
+    RequestOutcomeClassification::from_route(
+        route_outcome,
+        health_effect_from_status_class(status_class),
+    )
 }
 
 pub(crate) fn classify_proxy_error_outcome(
     err: &ProxyError,
     overload_reason: Option<OverloadShedReason>,
-) -> RequestOutcomeDecision {
+) -> RequestOutcomeClassification {
     let (route_outcome, health_effect) = match err {
         ProxyError::Timeout => (
             CanonicalRouteOutcome::Timeout,
@@ -275,28 +276,30 @@ pub(crate) fn classify_proxy_error_outcome(
         ),
     };
 
-    RequestOutcomeDecision {
+    RequestOutcomeClassification {
         overload_reason,
-        ..RequestOutcomeDecision::from_route(route_outcome, health_effect)
+        ..RequestOutcomeClassification::from_route(route_outcome, health_effect)
     }
 }
 
-pub(crate) fn classify_admission_outcome(outcome: AdmissionOutcomeClass) -> RequestOutcomeDecision {
+pub(crate) fn classify_admission_outcome(
+    outcome: AdmissionOutcomeClass,
+) -> RequestOutcomeClassification {
     let (route_outcome, overload_reason, rejection_kind) = match outcome {
         AdmissionOutcomeClass::AuthDenied => (
             CanonicalRouteOutcome::AuthDenied,
             None,
-            Some(CanonicalRejectionKind::AuthDenied),
+            Some(RejectionClass::AuthDenied),
         ),
         AdmissionOutcomeClass::RateLimited => (
             CanonicalRouteOutcome::RateLimited,
             None,
-            Some(CanonicalRejectionKind::RateLimited),
+            Some(RejectionClass::RateLimited),
         ),
         AdmissionOutcomeClass::OverloadShed { reason } => (
             CanonicalRouteOutcome::OverloadShed,
             reason,
-            Some(CanonicalRejectionKind::OverloadShed),
+            Some(RejectionClass::OverloadShed),
         ),
         AdmissionOutcomeClass::Failed { timed_out } => (
             if timed_out {
@@ -309,18 +312,18 @@ pub(crate) fn classify_admission_outcome(outcome: AdmissionOutcomeClass) -> Requ
         ),
     };
 
-    RequestOutcomeDecision {
+    RequestOutcomeClassification {
         overload_reason,
         rejection_kind,
-        ..RequestOutcomeDecision::from_route(route_outcome, HealthEffectHint::None)
+        ..RequestOutcomeClassification::from_route(route_outcome, HealthEffectHint::None)
     }
 }
 
 pub(crate) fn record_request_metrics_observation(
     metrics: &crate::Metrics,
-    observation: RequestMetricsObservation<'_>,
+    observation: RequestOutcomeObservation<'_>,
 ) {
-    let RequestMetricsObservation {
+    let RequestOutcomeObservation {
         route_target,
         backend_target,
         elapsed,
@@ -353,19 +356,19 @@ pub(crate) fn record_request_metrics_observation(
 
 pub(crate) fn observe_request_outcome(
     metrics: &Metrics,
-    route_target: OutcomeRouteTarget<'_>,
-    backend_target: Option<OutcomeBackendTarget<'_>>,
+    route_target: RouteOutcomeTarget<'_>,
+    backend_target: Option<BackendOutcomeTarget<'_>>,
     elapsed: Duration,
     status: Option<StatusCode>,
-    decision: RequestOutcomeDecision,
-) -> RequestOutcomeDecision {
+    decision: RequestOutcomeClassification,
+) -> RequestOutcomeClassification {
     if matches!(decision.route_outcome, CanonicalRouteOutcome::Success) {
         metrics.inc_success();
     }
 
     record_request_metrics_observation(
         metrics,
-        RequestMetricsObservation {
+        RequestOutcomeObservation {
             route_target,
             backend_target,
             elapsed,
@@ -380,11 +383,11 @@ pub(crate) fn observe_request_outcome(
 
 pub(crate) fn observe_status_outcome(
     metrics: &Metrics,
-    route_target: OutcomeRouteTarget<'_>,
-    backend_target: Option<OutcomeBackendTarget<'_>>,
+    route_target: RouteOutcomeTarget<'_>,
+    backend_target: Option<BackendOutcomeTarget<'_>>,
     elapsed: Duration,
     status: StatusCode,
-) -> RequestOutcomeDecision {
+) -> RequestOutcomeClassification {
     observe_request_outcome(
         metrics,
         route_target,
@@ -397,13 +400,13 @@ pub(crate) fn observe_status_outcome(
 
 pub(crate) fn observe_proxy_error_outcome(
     metrics: &Metrics,
-    route_target: OutcomeRouteTarget<'_>,
-    backend_target: Option<OutcomeBackendTarget<'_>>,
+    route_target: RouteOutcomeTarget<'_>,
+    backend_target: Option<BackendOutcomeTarget<'_>>,
     elapsed: Duration,
     status: Option<StatusCode>,
     err: &ProxyError,
     overload_reason: Option<OverloadShedReason>,
-) -> RequestOutcomeDecision {
+) -> RequestOutcomeClassification {
     observe_request_outcome(
         metrics,
         route_target,
@@ -416,12 +419,12 @@ pub(crate) fn observe_proxy_error_outcome(
 
 pub(crate) fn observe_admission_outcome(
     metrics: &Metrics,
-    route_target: OutcomeRouteTarget<'_>,
-    backend_target: Option<OutcomeBackendTarget<'_>>,
+    route_target: RouteOutcomeTarget<'_>,
+    backend_target: Option<BackendOutcomeTarget<'_>>,
     elapsed: Duration,
     status: StatusCode,
     outcome: AdmissionOutcomeClass,
-) -> RequestOutcomeDecision {
+) -> RequestOutcomeClassification {
     observe_request_outcome(
         metrics,
         route_target,
@@ -432,7 +435,7 @@ pub(crate) fn observe_admission_outcome(
     )
 }
 
-fn terminal_route_target(state: &TerminalState) -> OutcomeRouteTarget<'_> {
+fn terminal_route_target(state: &TerminalState) -> RouteOutcomeTarget<'_> {
     let routing = match state {
         TerminalState::Completed(state) => state.snapshot.routing.as_ref(),
         TerminalState::Cancelled(state) => state.snapshot.routing.as_ref(),
@@ -440,12 +443,12 @@ fn terminal_route_target(state: &TerminalState) -> OutcomeRouteTarget<'_> {
         TerminalState::Rejected(state) => state.snapshot.routing.as_ref(),
         TerminalState::BackendFailed(state) => state.snapshot.routing.as_ref(),
     };
-    routing.map_or(OutcomeRouteTarget::UNROUTED, |routing| OutcomeRouteTarget {
+    routing.map_or(RouteOutcomeTarget::UNROUTED, |routing| RouteOutcomeTarget {
         route: &routing.upstream_name,
     })
 }
 
-fn terminal_backend_target(state: &TerminalState) -> Option<OutcomeBackendTarget<'_>> {
+fn terminal_backend_target(state: &TerminalState) -> Option<BackendOutcomeTarget<'_>> {
     let routing = match state {
         TerminalState::Completed(state) => state.snapshot.routing.as_ref(),
         TerminalState::Cancelled(state) => state.snapshot.routing.as_ref(),
@@ -453,7 +456,7 @@ fn terminal_backend_target(state: &TerminalState) -> Option<OutcomeBackendTarget
         TerminalState::Rejected(state) => state.snapshot.routing.as_ref(),
         TerminalState::BackendFailed(state) => state.snapshot.routing.as_ref(),
     }?;
-    Some(OutcomeBackendTarget {
+    Some(BackendOutcomeTarget {
         upstream: &routing.upstream_name,
         backend_addr: Some(&routing.backend_addr),
         backend_index: Some(routing.backend_index),
@@ -515,7 +518,7 @@ fn infer_terminal_status(state: &TerminalState) -> Option<StatusCode> {
     }
 }
 
-pub(crate) fn classify_terminal_outcome(state: &TerminalState) -> RequestOutcomeDecision {
+pub(crate) fn classify_terminal_outcome(state: &TerminalState) -> RequestOutcomeClassification {
     match state {
         TerminalState::Completed(state) if state.snapshot.overload_reason.is_some() => {
             classify_admission_outcome(AdmissionOutcomeClass::OverloadShed {
@@ -525,7 +528,7 @@ pub(crate) fn classify_terminal_outcome(state: &TerminalState) -> RequestOutcome
         TerminalState::Completed(_) => infer_terminal_status(state)
             .map(classify_status_outcome)
             .unwrap_or_else(|| {
-                RequestOutcomeDecision::from_route(
+                RequestOutcomeClassification::from_route(
                     CanonicalRouteOutcome::Success,
                     HealthEffectHint::Success,
                 )
@@ -533,7 +536,7 @@ pub(crate) fn classify_terminal_outcome(state: &TerminalState) -> RequestOutcome
         TerminalState::Cancelled(_) => infer_terminal_status(state)
             .map(classify_status_outcome)
             .unwrap_or_else(|| {
-                RequestOutcomeDecision::from_route(
+                RequestOutcomeClassification::from_route(
                     CanonicalRouteOutcome::UpstreamFailure,
                     HealthEffectHint::None,
                 )
@@ -562,8 +565,8 @@ pub(crate) fn classify_terminal_outcome(state: &TerminalState) -> RequestOutcome
             | RejectionReason::RequestBodyNotAllowed
             | RejectionReason::RequestBodyTooLarge => {
                 let rejection_kind = match state.reason {
-                    RejectionReason::AuthUnavailable => CanonicalRejectionKind::AuthUnavailable,
-                    _ => CanonicalRejectionKind::ValidationPolicy,
+                    RejectionReason::AuthUnavailable => RejectionClass::AuthUnavailable,
+                    _ => RejectionClass::ValidationPolicy,
                 };
                 let base = infer_terminal_status(&TerminalState::Rejected(
                     crate::runtime::connection::stream::RejectedState {
@@ -573,12 +576,12 @@ pub(crate) fn classify_terminal_outcome(state: &TerminalState) -> RequestOutcome
                 ))
                 .map(classify_status_outcome)
                 .unwrap_or_else(|| {
-                    RequestOutcomeDecision::from_route(
+                    RequestOutcomeClassification::from_route(
                         CanonicalRouteOutcome::UpstreamFailure,
                         HealthEffectHint::None,
                     )
                 });
-                RequestOutcomeDecision {
+                RequestOutcomeClassification {
                     rejection_kind: Some(rejection_kind),
                     ..base
                 }
@@ -591,24 +594,24 @@ pub(crate) fn classify_terminal_outcome(state: &TerminalState) -> RequestOutcome
             let (route_outcome, failure_kind, health_effect) = match state.reason {
                 BackendFailureReason::UpstreamTimeout => (
                     CanonicalRouteOutcome::Timeout,
-                    CanonicalBackendFailureKind::Timeout,
+                    BackendFailureClass::Timeout,
                     HealthEffectHint::Failure {
                         reason: HealthFailureReason::Timeout,
                     },
                 ),
                 BackendFailureReason::UpstreamTls => (
                     CanonicalRouteOutcome::UpstreamFailure,
-                    CanonicalBackendFailureKind::Tls,
+                    BackendFailureClass::Tls,
                     HealthEffectHint::None,
                 ),
                 BackendFailureReason::UpstreamBridge => (
                     CanonicalRouteOutcome::UpstreamFailure,
-                    CanonicalBackendFailureKind::Bridge,
+                    BackendFailureClass::Bridge,
                     HealthEffectHint::None,
                 ),
                 BackendFailureReason::UpstreamProtocol => (
                     CanonicalRouteOutcome::UpstreamFailure,
-                    CanonicalBackendFailureKind::Protocol,
+                    BackendFailureClass::Protocol,
                     HealthEffectHint::Failure {
                         reason: HealthFailureReason::Transport,
                     },
@@ -619,15 +622,15 @@ pub(crate) fn classify_terminal_outcome(state: &TerminalState) -> RequestOutcome
                 | BackendFailureReason::ResponseWriteFailed
                 | BackendFailureReason::ResponseStreamAborted => (
                     CanonicalRouteOutcome::UpstreamFailure,
-                    CanonicalBackendFailureKind::Transport,
+                    BackendFailureClass::Transport,
                     HealthEffectHint::Failure {
                         reason: HealthFailureReason::Transport,
                     },
                 ),
             };
-            RequestOutcomeDecision {
+            RequestOutcomeClassification {
                 backend_failure_kind: Some(failure_kind),
-                ..RequestOutcomeDecision::from_route(route_outcome, health_effect)
+                ..RequestOutcomeClassification::from_route(route_outcome, health_effect)
             }
         }
     }
@@ -636,7 +639,7 @@ pub(crate) fn classify_terminal_outcome(state: &TerminalState) -> RequestOutcome
 pub(crate) fn observe_terminal_request_outcome(
     metrics: &Metrics,
     state: &TerminalState,
-) -> RequestOutcomeDecision {
+) -> RequestOutcomeClassification {
     let status = infer_terminal_status(state);
     observe_request_outcome(
         metrics,
@@ -979,27 +982,24 @@ mod tests {
         let cases = [
             (
                 BackendFailureReason::UpstreamTimeout,
-                CanonicalBackendFailureKind::Timeout,
+                BackendFailureClass::Timeout,
             ),
-            (
-                BackendFailureReason::UpstreamTls,
-                CanonicalBackendFailureKind::Tls,
-            ),
+            (BackendFailureReason::UpstreamTls, BackendFailureClass::Tls),
             (
                 BackendFailureReason::UpstreamBridge,
-                CanonicalBackendFailureKind::Bridge,
+                BackendFailureClass::Bridge,
             ),
             (
                 BackendFailureReason::UpstreamProtocol,
-                CanonicalBackendFailureKind::Protocol,
+                BackendFailureClass::Protocol,
             ),
             (
                 BackendFailureReason::UpstreamTransport,
-                CanonicalBackendFailureKind::Transport,
+                BackendFailureClass::Transport,
             ),
             (
                 BackendFailureReason::DispatchSpawnFailed,
-                CanonicalBackendFailureKind::Transport,
+                BackendFailureClass::Transport,
             ),
         ];
         for (reason, expected_kind) in cases {
@@ -1036,26 +1036,20 @@ mod tests {
         }));
         assert_eq!(
             validation.rejection_kind,
-            Some(CanonicalRejectionKind::ValidationPolicy)
+            Some(RejectionClass::ValidationPolicy)
         );
 
         let auth = classify_terminal_outcome(&TerminalState::Rejected(RejectedState {
             reason: RejectionReason::AuthDenied,
             snapshot: terminal_snapshot_for_test(),
         }));
-        assert_eq!(
-            auth.rejection_kind,
-            Some(CanonicalRejectionKind::AuthDenied)
-        );
+        assert_eq!(auth.rejection_kind, Some(RejectionClass::AuthDenied));
 
         let overload = classify_terminal_outcome(&TerminalState::Rejected(RejectedState {
             reason: RejectionReason::Overloaded,
             snapshot: terminal_snapshot_for_test(),
         }));
-        assert_eq!(
-            overload.rejection_kind,
-            Some(CanonicalRejectionKind::OverloadShed)
-        );
+        assert_eq!(overload.rejection_kind, Some(RejectionClass::OverloadShed));
     }
 
     #[test]
@@ -1101,8 +1095,8 @@ mod tests {
 
         let decision = observe_status_outcome(
             &metrics,
-            OutcomeRouteTarget { route: "api" },
-            Some(OutcomeBackendTarget {
+            RouteOutcomeTarget { route: "api" },
+            Some(BackendOutcomeTarget {
                 upstream: "api",
                 backend_addr: Some("backend-a"),
                 backend_index: Some(0),
@@ -1137,8 +1131,8 @@ mod tests {
 
         let timeout = observe_proxy_error_outcome(
             &metrics,
-            OutcomeRouteTarget { route: "api" },
-            Some(OutcomeBackendTarget {
+            RouteOutcomeTarget { route: "api" },
+            Some(BackendOutcomeTarget {
                 upstream: "api",
                 backend_addr: Some("backend-a"),
                 backend_index: Some(0),
@@ -1168,8 +1162,8 @@ mod tests {
 
         let success = observe_status_outcome(
             &metrics,
-            OutcomeRouteTarget { route: "api" },
-            Some(OutcomeBackendTarget {
+            RouteOutcomeTarget { route: "api" },
+            Some(BackendOutcomeTarget {
                 upstream: "api",
                 backend_addr: Some("backend-a"),
                 backend_index: Some(0),
@@ -1197,8 +1191,8 @@ mod tests {
 
         let timeout = observe_proxy_error_outcome(
             &metrics,
-            OutcomeRouteTarget { route: "api" },
-            Some(OutcomeBackendTarget {
+            RouteOutcomeTarget { route: "api" },
+            Some(BackendOutcomeTarget {
                 upstream: "api",
                 backend_addr: Some("backend-a"),
                 backend_index: Some(0),
@@ -1210,7 +1204,7 @@ mod tests {
         );
         let unrouted = observe_proxy_error_outcome(
             &metrics,
-            OutcomeRouteTarget::UNROUTED,
+            RouteOutcomeTarget::UNROUTED,
             None,
             Duration::from_millis(5),
             Some(StatusCode::BAD_GATEWAY),
@@ -1242,8 +1236,8 @@ mod tests {
 
         let overload = observe_admission_outcome(
             &metrics,
-            OutcomeRouteTarget { route: "api" },
-            Some(OutcomeBackendTarget {
+            RouteOutcomeTarget { route: "api" },
+            Some(BackendOutcomeTarget {
                 upstream: "api",
                 backend_addr: Some("backend-a"),
                 backend_index: Some(0),
@@ -1256,8 +1250,8 @@ mod tests {
         );
         let auth = observe_admission_outcome(
             &metrics,
-            OutcomeRouteTarget { route: "api" },
-            Some(OutcomeBackendTarget {
+            RouteOutcomeTarget { route: "api" },
+            Some(BackendOutcomeTarget {
                 upstream: "api",
                 backend_addr: Some("backend-a"),
                 backend_index: Some(0),
@@ -1268,8 +1262,8 @@ mod tests {
         );
         let rate_limited = observe_admission_outcome(
             &metrics,
-            OutcomeRouteTarget { route: "api" },
-            Some(OutcomeBackendTarget {
+            RouteOutcomeTarget { route: "api" },
+            Some(BackendOutcomeTarget {
                 upstream: "api",
                 backend_addr: Some("backend-a"),
                 backend_index: Some(0),
@@ -1329,17 +1323,11 @@ mod tests {
             },
         ));
 
-        assert_eq!(
-            auth.rejection_kind,
-            Some(CanonicalRejectionKind::AuthDenied)
-        );
-        assert_eq!(
-            overload.rejection_kind,
-            Some(CanonicalRejectionKind::OverloadShed)
-        );
+        assert_eq!(auth.rejection_kind, Some(RejectionClass::AuthDenied));
+        assert_eq!(overload.rejection_kind, Some(RejectionClass::OverloadShed));
         assert_eq!(
             backend.backend_failure_kind,
-            Some(CanonicalBackendFailureKind::Protocol)
+            Some(BackendFailureClass::Protocol)
         );
         assert_eq!(auth.route_outcome, CanonicalRouteOutcome::AuthDenied);
         assert_eq!(overload.route_outcome, CanonicalRouteOutcome::OverloadShed);
@@ -1415,8 +1403,8 @@ mod tests {
 
         let forwarding = observe_proxy_error_outcome(
             &metrics,
-            OutcomeRouteTarget { route: "api" },
-            Some(OutcomeBackendTarget {
+            RouteOutcomeTarget { route: "api" },
+            Some(BackendOutcomeTarget {
                 upstream: "api",
                 backend_addr: Some("backend-a"),
                 backend_index: Some(0),
@@ -1428,8 +1416,8 @@ mod tests {
         );
         let bootstrap = observe_proxy_error_outcome(
             &metrics,
-            OutcomeRouteTarget { route: "api" },
-            Some(OutcomeBackendTarget {
+            RouteOutcomeTarget { route: "api" },
+            Some(BackendOutcomeTarget {
                 upstream: "api",
                 backend_addr: Some("backend-a"),
                 backend_index: Some(0),

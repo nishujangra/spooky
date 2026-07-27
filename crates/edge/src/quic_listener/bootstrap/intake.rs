@@ -18,7 +18,7 @@ use super::{
 use crate::{
     Metrics,
     resilience::runtime::RuntimeResilience,
-    runtime::connection::outcome::{OutcomeRouteTarget, observe_proxy_error_outcome},
+    runtime::connection::outcome::{RouteOutcomeTarget, observe_proxy_error_outcome},
 };
 
 pub(in crate::quic_listener) struct BootstrapRequestIntake {
@@ -62,7 +62,7 @@ pub(in crate::quic_listener) fn prepare_bootstrap_request_intake(
             }
             let _ = observe_proxy_error_outcome(
                 metrics,
-                OutcomeRouteTarget::UNROUTED,
+                RouteOutcomeTarget::UNROUTED,
                 None,
                 request_start.elapsed(),
                 Some(status),

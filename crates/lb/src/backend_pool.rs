@@ -6,8 +6,8 @@ use std::{
 use spooky_config::config::HealthCheck;
 
 use crate::{
-    backend::{BackendState, HealthTransition},
-    health::HealthFailureReason,
+    backend::BackendState,
+    health::{HealthFailureReason, HealthTransition},
 };
 
 pub struct BackendPool {
@@ -273,5 +273,130 @@ impl BackendPool {
 
         self.healthy_pos[index] = None;
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use spooky_config::config::{Backend, HealthCheck};
+
+    use super::BackendPool;
+    use crate::{
+        backend::BackendState,
+        health::{HealthFailureReason, HealthTransition},
+    };
+
+    fn create_backend_state(address: &str, weight: u32) -> BackendState {
+        BackendState::new(&Backend {
+            id: format!("backend-{address}"),
+            address: address.to_string(),
+            weight,
+            health_check: Some(HealthCheck {
+                path: "/health".to_string(),
+                interval: 1000,
+                timeout_ms: 1000,
+                failure_threshold: 3,
+                success_threshold: 1,
+                cooldown_ms: 0,
+            }),
+        })
+    }
+
+    #[test]
+    fn backend_pool_epoch_changes_only_on_health_membership_transition() {
+        let mut pool = BackendPool::new_from_states(vec![create_backend_state("10.0.0.1:1", 1)]);
+        assert_eq!(pool.membership_epoch(), 0);
+
+        pool.mark_failure(0);
+        pool.mark_failure(0);
+        assert_eq!(pool.membership_epoch(), 0);
+
+        pool.mark_failure(0);
+        assert_eq!(pool.membership_epoch(), 1);
+
+        pool.mark_failure(0);
+        assert_eq!(pool.membership_epoch(), 1);
+
+        pool.mark_success(0);
+        assert_eq!(pool.membership_epoch(), 2);
+
+        pool.mark_success(0);
+        assert_eq!(pool.membership_epoch(), 2);
+    }
+
+    #[test]
+    fn healthy_cache_tracks_membership_changes_without_duplicates() {
+        let mut pool = BackendPool::new_from_states(vec![
+            create_backend_state("10.0.0.1:1", 1),
+            create_backend_state("10.0.0.2:1", 1),
+            create_backend_state("10.0.0.3:1", 1),
+        ]);
+
+        assert_eq!(pool.healthy_indices(), vec![0, 1, 2]);
+
+        pool.mark_failure(1);
+        pool.mark_failure(1);
+        pool.mark_failure(1);
+        assert_eq!(pool.healthy_indices(), vec![0, 2]);
+
+        pool.mark_failure(1);
+        assert_eq!(pool.healthy_indices(), vec![0, 2]);
+
+        pool.mark_success(1);
+        let healthy = pool.healthy_indices();
+        assert_eq!(healthy.len(), 3);
+        assert!(healthy.contains(&0));
+        assert!(healthy.contains(&1));
+        assert!(healthy.contains(&2));
+    }
+
+    #[test]
+    fn backend_recovers_after_success_threshold() {
+        let mut pool = BackendPool::new_from_states(vec![create_backend_state("10.0.0.1:1", 1)]);
+        pool.mark_failure(0);
+        pool.mark_failure(0);
+        pool.mark_failure(0);
+
+        assert!(pool.healthy_indices().is_empty());
+        pool.mark_success(0);
+        assert_eq!(pool.healthy_indices(), vec![0]);
+    }
+
+    #[test]
+    fn passively_ejected_backend_recovers_after_cooldown() {
+        let backend = Backend {
+            id: "b1".to_string(),
+            address: "10.0.0.1:1".to_string(),
+            weight: 1,
+            health_check: Some(HealthCheck {
+                path: "/health".to_string(),
+                interval: 0,
+                timeout_ms: 1000,
+                failure_threshold: 2,
+                success_threshold: 1,
+                cooldown_ms: 10_000,
+            }),
+        };
+        let mut pool = BackendPool::new_from_states(vec![BackendState::new(&backend)]);
+        assert_eq!(pool.healthy_len(), 1);
+
+        pool.mark_request_failure(0, HealthFailureReason::Transport);
+        let transition = pool.mark_request_failure(0, HealthFailureReason::Transport);
+        assert!(matches!(
+            transition,
+            Some(HealthTransition::BecameUnhealthy)
+        ));
+        assert_eq!(pool.healthy_len(), 0);
+        assert!(pool.readmit_due());
+
+        pool.reconcile_readmit_at(Instant::now());
+        assert_eq!(pool.healthy_len(), 0);
+        assert!(pool.readmit_due());
+
+        pool.reconcile_readmit_at(Instant::now() + Duration::from_millis(10_001));
+        assert_eq!(pool.healthy_len(), 1);
+        assert!(!pool.readmit_due());
     }
 }

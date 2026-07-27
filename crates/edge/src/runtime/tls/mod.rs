@@ -1,2 +1,2 @@
-pub mod inventory;
-pub mod store;
+pub(crate) mod inventory;
+pub(crate) mod store;

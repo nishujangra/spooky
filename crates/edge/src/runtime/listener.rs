@@ -26,6 +26,12 @@ use crate::{
     watchdog::coordinator::WatchdogCoordinator,
 };
 
+/// Live listener worker state for the edge data plane.
+///
+/// This type owns the socket, routing/runtime handles, connection tables, and
+/// per-listener limits needed by a running worker. Runtime generation assembly
+/// happens in [`crate::runtime::bundle`]; request execution details live under
+/// [`crate::runtime::connection`].
 pub struct QUICListener {
     pub socket: UdpSocket,
     pub local_addr: SocketAddr,

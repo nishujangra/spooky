@@ -271,10 +271,10 @@ impl QUICListener {
                     metrics.inc_timeout();
                     let _ = crate::runtime::connection::outcome::observe_proxy_error_outcome(
                         metrics,
-                        crate::runtime::connection::outcome::OutcomeRouteTarget {
+                        crate::runtime::connection::outcome::RouteOutcomeTarget {
                             route: req.upstream_name.as_deref().unwrap_or("unrouted"),
                         },
-                        Some(crate::runtime::connection::outcome::OutcomeBackendTarget {
+                        Some(crate::runtime::connection::outcome::BackendOutcomeTarget {
                             upstream: req.upstream_name.as_deref().unwrap_or("unrouted"),
                             backend_addr: req.backend_addr.as_deref(),
                             backend_index: req.backend_index,

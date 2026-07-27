@@ -33,3 +33,42 @@ impl Default for LeastConnections {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use spooky_config::config::{Backend, HealthCheck};
+
+    use super::LeastConnections;
+    use crate::{backend::BackendState, backend_pool::BackendPool};
+
+    fn create_backend_state(address: &str, weight: u32) -> BackendState {
+        BackendState::new(&Backend {
+            id: format!("backend-{address}"),
+            address: address.to_string(),
+            weight,
+            health_check: Some(HealthCheck {
+                path: "/health".to_string(),
+                interval: 1000,
+                timeout_ms: 1000,
+                failure_threshold: 3,
+                success_threshold: 1,
+                cooldown_ms: 0,
+            }),
+        })
+    }
+
+    #[test]
+    fn least_connections_picks_lowest_active() {
+        let pool = BackendPool::new_from_states(vec![
+            create_backend_state("10.0.0.1:1", 1),
+            create_backend_state("10.0.0.2:1", 1),
+            create_backend_state("10.0.0.3:1", 1),
+        ]);
+        pool.begin_request(0);
+        pool.begin_request(0);
+        pool.begin_request(1);
+
+        let mut lb = LeastConnections::new();
+        assert_eq!(lb.pick(&pool), Some(2));
+    }
+}

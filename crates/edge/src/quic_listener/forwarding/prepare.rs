@@ -4,7 +4,7 @@ use http_body_util::Full;
 use spooky_config::runtime::RuntimeExternalAuth;
 use tokio::{sync::oneshot, task::AbortHandle};
 
-use super::{auth::start_external_auth_task, resolve::ForwardingResolvedTarget, *};
+use super::{auth::start_external_auth_task, resolve::ForwardTargetResolution, *};
 use crate::{
     quic_listener::admission::{
         AdmissionPolicyDecision, AdmissionRejectionResponse, admission_rejection_response,
@@ -17,7 +17,7 @@ use crate::{
             apply_auth_request_mutations, evaluate_external_auth_completion,
         },
         outcome::{
-            AdmissionOutcomeClass, OutcomeBackendTarget, OutcomeRouteTarget,
+            AdmissionOutcomeClass, BackendOutcomeTarget, RouteOutcomeTarget,
             observe_admission_outcome,
         },
         request::{PendingForward, RequestEnvelope},
@@ -410,7 +410,7 @@ impl QUICListener {
         );
 
         let prepared = match resolved {
-            Ok(ForwardingResolvedTarget {
+            Ok(ForwardTargetResolution {
                 upstream_name,
                 upstream_pool,
                 upstream_policy,
@@ -458,10 +458,10 @@ impl QUICListener {
                         metrics.inc_policy_denied();
                         let _ = observe_admission_outcome(
                             metrics,
-                            OutcomeRouteTarget {
+                            RouteOutcomeTarget {
                                 route: &upstream_name,
                             },
-                            Some(OutcomeBackendTarget {
+                            Some(BackendOutcomeTarget {
                                 upstream: &upstream_name,
                                 backend_addr: Some(backend_addr.as_str()),
                                 backend_index: Some(backend_index),
@@ -498,10 +498,10 @@ impl QUICListener {
                         metrics.inc_request_rate_limited();
                         let _ = observe_admission_outcome(
                             metrics,
-                            OutcomeRouteTarget {
+                            RouteOutcomeTarget {
                                 route: &upstream_name,
                             },
-                            Some(OutcomeBackendTarget {
+                            Some(BackendOutcomeTarget {
                                 upstream: &upstream_name,
                                 backend_addr: Some(backend_addr.as_str()),
                                 backend_index: Some(backend_index),
@@ -537,10 +537,10 @@ impl QUICListener {
                     AdmissionPolicyDecision::Overloaded(decision) => {
                         let _ = observe_admission_outcome(
                             metrics,
-                            OutcomeRouteTarget {
+                            RouteOutcomeTarget {
                                 route: &upstream_name,
                             },
-                            Some(OutcomeBackendTarget {
+                            Some(BackendOutcomeTarget {
                                 upstream: &upstream_name,
                                 backend_addr: Some(backend_addr.as_str()),
                                 backend_index: Some(backend_index),
@@ -731,10 +731,10 @@ impl QUICListener {
                                 metrics.inc_external_auth_error();
                                 let _ = observe_admission_outcome(
                                     metrics,
-                                    OutcomeRouteTarget {
+                                    RouteOutcomeTarget {
                                         route: request.request.upstream_name(),
                                     },
-                                    Some(OutcomeBackendTarget {
+                                    Some(BackendOutcomeTarget {
                                         upstream: request.request.upstream_name(),
                                         backend_addr: Some(request.request.backend_addr()),
                                         backend_index: Some(request.request.backend_index()),

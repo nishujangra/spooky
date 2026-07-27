@@ -187,7 +187,7 @@ pub enum ResponseEmissionState {
 
 #[allow(dead_code)]
 #[derive(Debug)]
-pub enum ResponseBackpressureState {
+pub(crate) enum ResponseBackpressureState {
     Ready,
     Blocked(ResponseChunk),
 }
@@ -437,7 +437,7 @@ pub struct BackendFailedState {
 
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TerminalReason {
+pub(crate) enum TerminalReason {
     Completed(CompletionReason),
     Cancelled(CancellationReason),
     TimedOut(TimeoutReason),
@@ -447,11 +447,11 @@ pub enum TerminalReason {
 
 #[allow(dead_code)]
 impl TerminalReason {
-    pub fn terminal_status(self, snapshot: &TerminalSnapshot) -> Option<StatusCode> {
+    pub(crate) fn terminal_status(self, snapshot: &TerminalSnapshot) -> Option<StatusCode> {
         snapshot.response_status
     }
 
-    pub fn into_terminal_state(self, snapshot: TerminalSnapshot) -> TerminalState {
+    pub(crate) fn into_terminal_state(self, snapshot: TerminalSnapshot) -> TerminalState {
         match self {
             Self::Completed(reason) => {
                 TerminalState::Completed(CompletedState { reason, snapshot })

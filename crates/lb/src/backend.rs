@@ -8,7 +8,7 @@ use std::{
 
 use spooky_config::config::{Backend, HealthCheck};
 
-use crate::health::HealthFailureReason;
+use crate::health::{HealthFailureReason, HealthTransition};
 
 #[derive(Clone)]
 pub struct BackendState {
@@ -93,7 +93,7 @@ impl BackendState {
         }
     }
 
-    pub fn record_failure(&mut self, reason: HealthFailureReason) -> Option<HealthTransition> {
+    pub fn record_failure(&mut self, _reason: HealthFailureReason) -> Option<HealthTransition> {
         self.consecutive_failures = self.consecutive_failures.saturating_add(1);
         let threshold = self
             .health_check
@@ -112,7 +112,6 @@ impl BackendState {
         self.health_state = HealthState::Unhealthy {
             until: Instant::now() + cooldown,
             successes: 0,
-            reason,
         };
         Some(HealthTransition::BecameUnhealthy)
     }
@@ -143,16 +142,5 @@ impl BackendState {
 #[derive(Clone)]
 enum HealthState {
     Healthy,
-    // `reason` is stored for future introspection; suppressed until wired to metrics
-    #[allow(dead_code)]
-    Unhealthy {
-        until: Instant,
-        successes: u32,
-        reason: HealthFailureReason,
-    },
-}
-
-pub enum HealthTransition {
-    BecameHealthy,
-    BecameUnhealthy,
+    Unhealthy { until: Instant, successes: u32 },
 }

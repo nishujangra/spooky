@@ -6,7 +6,7 @@ use std::{
 };
 
 use log::{debug, info, warn};
-use spooky_lb::{backend::HealthTransition, upstream_pool::UpstreamPool};
+use spooky_lb::{HealthTransition, upstream_pool::UpstreamPool};
 use spooky_transport::{SharedDnsResolver, UpstreamTransportPool};
 
 use super::{
@@ -80,7 +80,7 @@ impl From<&RuntimeBackendLifecycleState> for BackendLifecycleSnapshot {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ActiveHealthCheckEvaluation {
+pub(crate) struct ActiveHealthCheckEvaluation {
     pub observation: BackendHealthObservation,
     pub next_consecutive_failures: u32,
     pub next_delay: Duration,
@@ -95,7 +95,7 @@ pub struct ActiveHealthCheckEvaluation {
 /// addresses are recorded), but stale pooled connections may linger, so the
 /// failure is logged and counted rather than silently dropped.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ClientRotationOutcome {
+pub(crate) enum ClientRotationOutcome {
     /// Pooled clients were rotated to the new resolution.
     Rotated,
     /// No rotation was needed (transport reported the client already current).
@@ -107,12 +107,12 @@ pub enum ClientRotationOutcome {
 impl ClientRotationOutcome {
     /// Whether pooled clients were actually rotated.
     #[cfg(test)]
-    pub fn rotated(&self) -> bool {
+    pub(crate) fn rotated(&self) -> bool {
         matches!(self, Self::Rotated)
     }
 
     /// The failure reason, if rotation failed.
-    pub fn failure(&self) -> Option<&str> {
+    pub(crate) fn failure(&self) -> Option<&str> {
         match self {
             Self::Failed { error } => Some(error.as_str()),
             Self::Rotated | Self::NotRotated => None,
@@ -121,7 +121,7 @@ impl ClientRotationOutcome {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BackendDnsRefreshApplication {
+pub(crate) enum BackendDnsRefreshApplication {
     Updated {
         backend_addr: String,
         authority_host: String,
@@ -199,7 +199,7 @@ impl BackendRefreshClassification {
 
 impl BackendDnsRefreshApplication {
     /// The backend identity (canonical address) this outcome concerns.
-    pub fn backend_addr(&self) -> &str {
+    pub(crate) fn backend_addr(&self) -> &str {
         match self {
             Self::Updated { backend_addr, .. }
             | Self::Unchanged { backend_addr, .. }
@@ -209,7 +209,7 @@ impl BackendDnsRefreshApplication {
     }
 
     /// The authority host (upstream hostname) this outcome concerns.
-    pub fn authority_host(&self) -> &str {
+    pub(crate) fn authority_host(&self) -> &str {
         match self {
             Self::Updated { authority_host, .. }
             | Self::Unchanged { authority_host, .. }
@@ -219,7 +219,7 @@ impl BackendDnsRefreshApplication {
     }
 
     /// The unified operator-facing classification of this outcome.
-    pub fn classification(&self) -> BackendRefreshClassification {
+    pub(crate) fn classification(&self) -> BackendRefreshClassification {
         match self {
             Self::Updated { .. } => BackendRefreshClassification::Refreshed,
             Self::Unchanged { .. } => BackendRefreshClassification::Unchanged,
@@ -230,7 +230,7 @@ impl BackendDnsRefreshApplication {
 
     /// Whether traffic continues on the existing resolution after this outcome.
     #[cfg(test)]
-    pub fn traffic_continues_on_existing(&self) -> bool {
+    pub(crate) fn traffic_continues_on_existing(&self) -> bool {
         self.classification().traffic_continues_on_existing()
     }
 }

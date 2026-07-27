@@ -887,7 +887,7 @@ fn resolve_backend_round_robin_is_not_pinned_to_first_backend() {
 
     let mut picks = Vec::new();
     for _ in 0..4 {
-        let request = super::forwarding::TestRouteResolutionRequest::new(
+        let request = super::forwarding::TestTargetResolutionRequest::new(
             "GET",
             "/api/items",
             None,
@@ -924,7 +924,7 @@ fn resolve_backend_skips_unhealthy_backends() {
     }
 
     let request =
-        super::forwarding::TestRouteResolutionRequest::new("GET", "/api/items", None, None, None);
+        super::forwarding::TestTargetResolutionRequest::new("GET", "/api/items", None, None, None);
     let resolved = super::QUICListener::resolve_backend_request_for_test(
         &request,
         &upstream_pools,
@@ -950,7 +950,7 @@ fn resolve_backend_respects_least_connections_strategy() {
     }
 
     let request =
-        super::forwarding::TestRouteResolutionRequest::new("GET", "/api/items", None, None, None);
+        super::forwarding::TestTargetResolutionRequest::new("GET", "/api/items", None, None, None);
     let resolved = super::QUICListener::resolve_backend_request_for_test(
         &request,
         &upstream_pools,
@@ -992,7 +992,7 @@ fn resolve_backend_prefers_method_specific_route() {
     }
 
     let request =
-        super::forwarding::TestRouteResolutionRequest::new("GET", "/api/items", None, None, None);
+        super::forwarding::TestTargetResolutionRequest::new("GET", "/api/items", None, None, None);
     let resolved = super::QUICListener::resolve_backend_request_for_test(
         &request,
         &upstream_pools,
@@ -1003,7 +1003,7 @@ fn resolve_backend_prefers_method_specific_route() {
     assert_eq!(resolved.route.upstream_name, "all_methods");
 
     let request =
-        super::forwarding::TestRouteResolutionRequest::new("POST", "/api/items", None, None, None);
+        super::forwarding::TestTargetResolutionRequest::new("POST", "/api/items", None, None, None);
     let resolved = super::QUICListener::resolve_backend_request_for_test(
         &request,
         &upstream_pools,
@@ -1053,7 +1053,7 @@ fn resolve_backend_uses_configured_header_lb_key() {
         }
     };
 
-    let first_request = super::forwarding::TestRouteResolutionRequest::new(
+    let first_request = super::forwarding::TestTargetResolutionRequest::new(
         "GET",
         "/api/items",
         None,
@@ -1067,7 +1067,7 @@ fn resolve_backend_uses_configured_header_lb_key() {
         &routing_index,
     )
     .expect("first resolve");
-    let second_request = super::forwarding::TestRouteResolutionRequest::new(
+    let second_request = super::forwarding::TestTargetResolutionRequest::new(
         "GET",
         "/api/items",
         None,

@@ -12,9 +12,9 @@ use spooky_config::runtime::{
 };
 
 use crate::{
-    backend::{BackendState, HealthTransition},
+    backend::BackendState,
     backend_pool::BackendPool,
-    health::HealthFailureReason,
+    health::{HealthFailureReason, HealthTransition},
     load_balancing::LoadBalancing,
 };
 
@@ -337,7 +337,7 @@ mod tests {
             .expect("health transition");
         assert!(matches!(
             unhealthy,
-            crate::backend::HealthTransition::BecameUnhealthy
+            crate::HealthTransition::BecameUnhealthy
         ));
         let after_failure = pool.membership_summary();
         assert_eq!(after_failure.total_backends, 2);

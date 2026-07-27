@@ -17,7 +17,7 @@ use crate::runtime::connection::{
         resolve_external_auth_state_transition, validate_oidc_provider_metadata,
     },
     outcome::{
-        AdmissionOutcomeClass, OutcomeBackendTarget, OutcomeRouteTarget, observe_admission_outcome,
+        AdmissionOutcomeClass, BackendOutcomeTarget, RouteOutcomeTarget, observe_admission_outcome,
     },
     request::PendingForward,
     stream::{RejectionReason, RequestExecutionState, TerminalReason, TimeoutReason},
@@ -475,10 +475,10 @@ impl QUICListener {
                 metrics.inc_external_auth_denied();
                 let _ = observe_admission_outcome(
                     metrics,
-                    OutcomeRouteTarget {
+                    RouteOutcomeTarget {
                         route: req.upstream_name.as_deref().unwrap_or("unrouted"),
                     },
-                    Some(OutcomeBackendTarget {
+                    Some(BackendOutcomeTarget {
                         upstream: req.upstream_name.as_deref().unwrap_or("unrouted"),
                         backend_addr: req.backend_addr.as_deref(),
                         backend_index: req.backend_index,
@@ -518,10 +518,10 @@ impl QUICListener {
                 req.response_status = Some(status.as_u16());
                 let _ = observe_admission_outcome(
                     metrics,
-                    OutcomeRouteTarget {
+                    RouteOutcomeTarget {
                         route: req.upstream_name.as_deref().unwrap_or("unrouted"),
                     },
-                    Some(OutcomeBackendTarget {
+                    Some(BackendOutcomeTarget {
                         upstream: req.upstream_name.as_deref().unwrap_or("unrouted"),
                         backend_addr: req.backend_addr.as_deref(),
                         backend_index: req.backend_index,
@@ -543,10 +543,10 @@ impl QUICListener {
                 req.response_status = Some(status.as_u16());
                 let _ = observe_admission_outcome(
                     metrics,
-                    OutcomeRouteTarget {
+                    RouteOutcomeTarget {
                         route: req.upstream_name.as_deref().unwrap_or("unrouted"),
                     },
-                    Some(OutcomeBackendTarget {
+                    Some(BackendOutcomeTarget {
                         upstream: req.upstream_name.as_deref().unwrap_or("unrouted"),
                         backend_addr: req.backend_addr.as_deref(),
                         backend_index: req.backend_index,
