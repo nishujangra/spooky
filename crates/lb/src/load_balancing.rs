@@ -85,31 +85,15 @@ impl LoadBalancing {
 
 #[cfg(test)]
 mod tests {
-    use spooky_config::config::Backend;
-
     use super::LoadBalancing;
-    use crate::backend_pool::BackendPool;
-
-    fn pool() -> BackendPool {
-        BackendPool::new_from_states(vec![
-            crate::backend::BackendState::new(&Backend {
-                id: "a".to_string(),
-                address: "http://127.0.0.1:7001".to_string(),
-                weight: 1,
-                health_check: None,
-            }),
-            crate::backend::BackendState::new(&Backend {
-                id: "b".to_string(),
-                address: "http://127.0.0.1:7002".to_string(),
-                weight: 1,
-                health_check: None,
-            }),
-        ])
-    }
+    use crate::{
+        backend_pool::BackendPool,
+        test_support::{backend_pool_from_addresses, health_checked_backend_state},
+    };
 
     #[test]
-    fn pick_readonly_is_available_only_for_readonly_strategies() {
-        let pool = pool();
+    fn readonly_pick_is_exposed_only_for_readonly_strategies() {
+        let pool = backend_pool_from_addresses(&["http://127.0.0.1:7001", "http://127.0.0.1:7002"]);
 
         assert!(
             LoadBalancing::from_config("round-robin")
@@ -147,5 +131,50 @@ mod tests {
                 .pick_readonly("cid-1", &pool)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn every_strategy_returns_none_for_empty_backend_inventory() {
+        let empty_pool = BackendPool::new_from_states(Vec::new());
+
+        for strategy in [
+            "round-robin",
+            "consistent-hash",
+            "random",
+            "least-connections",
+            "latency-aware",
+            "sticky-cid",
+        ] {
+            let mut lb = LoadBalancing::from_config(strategy).expect("strategy");
+            assert!(
+                lb.pick("tenant:alpha", &empty_pool).is_none(),
+                "strategy {strategy} should not select from an empty backend pool"
+            );
+        }
+    }
+
+    #[test]
+    fn every_strategy_returns_none_when_all_backends_are_unhealthy() {
+        let mut unhealthy_pool = BackendPool::new_from_states(vec![
+            health_checked_backend_state("10.0.0.1:443"),
+            health_checked_backend_state("10.0.0.2:443"),
+        ]);
+        let _ = unhealthy_pool.mark_failure(0);
+        let _ = unhealthy_pool.mark_failure(1);
+
+        for strategy in [
+            "round-robin",
+            "consistent-hash",
+            "random",
+            "least-connections",
+            "latency-aware",
+            "sticky-cid",
+        ] {
+            let mut lb = LoadBalancing::from_config(strategy).expect("strategy");
+            assert!(
+                lb.pick("tenant:alpha", &unhealthy_pool).is_none(),
+                "strategy {strategy} should not select from an all-unhealthy backend pool"
+            );
+        }
     }
 }

@@ -249,4 +249,75 @@ mod tests {
             }
         ));
     }
+
+    #[test]
+    fn request_feedback_from_status_maps_success_client_error_and_server_error() {
+        let identity = BackendIdentity::new("https://backend.internal:8443");
+
+        let success = BackendRequestFeedback::from_status(
+            identity.clone(),
+            Duration::from_millis(5),
+            StatusCode::OK,
+        );
+        assert!(matches!(
+            success.outcome,
+            BackendRequestFeedbackOutcome::Success
+        ));
+        assert_eq!(success.status, Some(200));
+
+        let client_error = BackendRequestFeedback::from_status(
+            identity.clone(),
+            Duration::from_millis(5),
+            StatusCode::TOO_MANY_REQUESTS,
+        );
+        assert!(matches!(
+            client_error.outcome,
+            BackendRequestFeedbackOutcome::Neutral
+        ));
+        assert_eq!(client_error.status, Some(429));
+
+        let server_error = BackendRequestFeedback::from_status(
+            identity,
+            Duration::from_millis(5),
+            StatusCode::BAD_GATEWAY,
+        );
+        assert!(matches!(
+            server_error.outcome,
+            BackendRequestFeedbackOutcome::Failure {
+                reason: Some(HealthFailureReason::HttpStatus5xx)
+            }
+        ));
+        assert_eq!(server_error.status, Some(502));
+    }
+
+    #[test]
+    fn explicit_request_feedback_failure_preserves_reason_mapping() {
+        let timeout = BackendRequestFeedback::failure(
+            BackendIdentity::new("https://backend.internal:8443"),
+            Duration::from_millis(50),
+            None,
+            Some(HealthFailureReason::Timeout),
+        );
+        assert!(matches!(
+            timeout.outcome,
+            BackendRequestFeedbackOutcome::Failure {
+                reason: Some(HealthFailureReason::Timeout)
+            }
+        ));
+        assert_eq!(timeout.status, None);
+
+        let transport = BackendRequestFeedback::failure(
+            BackendIdentity::new("https://backend.internal:8443"),
+            Duration::from_millis(50),
+            Some(0),
+            Some(HealthFailureReason::Transport),
+        );
+        assert!(matches!(
+            transport.outcome,
+            BackendRequestFeedbackOutcome::Failure {
+                reason: Some(HealthFailureReason::Transport)
+            }
+        ));
+        assert_eq!(transport.status, Some(0));
+    }
 }

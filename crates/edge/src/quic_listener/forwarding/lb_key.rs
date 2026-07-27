@@ -505,4 +505,122 @@ mod tests {
             LbKeySource::DefaultFallback,
         );
     }
+
+    #[test]
+    fn runtime_key_resolver_extracts_each_canonical_source_type() {
+        let request = request_parts_with_headers(
+            "POST",
+            "/api/items?tenant=acme&region=us",
+            Some("api.example.com"),
+            Some("cid-123"),
+            Some("203.0.113.9:443".parse().expect("client addr")),
+            HashMap::from([
+                ("authorization".to_string(), "Bearer token-3".to_string()),
+                (
+                    "cookie".to_string(),
+                    "session=s123; theme=dark; empty=".to_string(),
+                ),
+                ("x-user-id".to_string(), "alice".to_string()),
+            ]),
+        );
+
+        let assert_runtime_key = |spec: RuntimeRequestKeySpec, expected: &str| {
+            let resolved = QUICListener::resolve_lb_key_for_runtime_input(
+                RuntimeLoadBalancingStrategy::ConsistentHash,
+                Some(&spec),
+                &request,
+            );
+            assert_resolved(resolved, expected, LbKeySource::ConfiguredSpec);
+        };
+
+        assert_runtime_key(
+            RuntimeRequestKeySpec::Header("x-user-id".to_string()),
+            "alice",
+        );
+        assert_runtime_key(RuntimeRequestKeySpec::Cookie("session".to_string()), "s123");
+        assert_runtime_key(RuntimeRequestKeySpec::Query("tenant".to_string()), "acme");
+        assert_runtime_key(RuntimeRequestKeySpec::BearerToken, "token-3");
+        assert_runtime_key(RuntimeRequestKeySpec::Cid, "cid-123");
+        assert_runtime_key(RuntimeRequestKeySpec::StickyCid, "cid-123");
+        assert_runtime_key(RuntimeRequestKeySpec::PeerIp, "203.0.113.9");
+        assert_runtime_key(RuntimeRequestKeySpec::ClientIp, "203.0.113.9");
+        assert_runtime_key(RuntimeRequestKeySpec::Path, "/api/items");
+        assert_runtime_key(RuntimeRequestKeySpec::Authority, "api.example.com");
+        assert_runtime_key(RuntimeRequestKeySpec::Method, "POST");
+    }
+
+    #[test]
+    fn direct_key_resolver_falls_back_for_invalid_or_missing_key_sources() {
+        let request = request_parts_with_headers(
+            "GET",
+            "/resource?tenant=&region=us",
+            Some("api.example.com"),
+            Some("cid-456"),
+            Some("198.51.100.2:443".parse().expect("client addr")),
+            HashMap::from([
+                ("authorization".to_string(), "Basic abc".to_string()),
+                ("cookie".to_string(), "session=; theme=dark".to_string()),
+            ]),
+        );
+
+        let assert_default_fallback = |spec: &str, expected: &str| {
+            let resolved = QUICListener::resolve_lb_key(
+                "",
+                Some(spec),
+                request.method,
+                request.path,
+                request.authority,
+                request.cid_key,
+                request.client_addr,
+                request.header_lookup,
+            );
+            assert_resolved(resolved, expected, LbKeySource::DefaultFallback);
+        };
+
+        assert_default_fallback("header:x-user-id", "api.example.com");
+        assert_default_fallback("header:", "api.example.com");
+        assert_default_fallback("cookie:session", "api.example.com");
+        assert_default_fallback("query:tenant", "api.example.com");
+        assert_default_fallback("bearer_token", "api.example.com");
+        assert_default_fallback("not-a-real-spec", "api.example.com");
+    }
+
+    #[test]
+    fn sticky_cid_runtime_strategy_uses_cid_before_default_fallback() {
+        let sticky_request = request_parts_with_headers(
+            "GET",
+            "/resource",
+            Some("api.example.com"),
+            Some("cid-999"),
+            None,
+            HashMap::new(),
+        );
+        assert_resolved(
+            QUICListener::resolve_lb_key_for_runtime_input(
+                RuntimeLoadBalancingStrategy::StickyCid,
+                Some(&RuntimeRequestKeySpec::Header("x-missing".to_string())),
+                &sticky_request,
+            ),
+            "cid-999",
+            LbKeySource::StickyCidFallback,
+        );
+
+        let no_cid_request = request_parts_with_headers(
+            "GET",
+            "/resource",
+            Some("api.example.com"),
+            None,
+            None,
+            HashMap::new(),
+        );
+        assert_resolved(
+            QUICListener::resolve_lb_key_for_runtime_input(
+                RuntimeLoadBalancingStrategy::StickyCid,
+                Some(&RuntimeRequestKeySpec::Header("x-missing".to_string())),
+                &no_cid_request,
+            ),
+            "api.example.com",
+            LbKeySource::DefaultFallback,
+        );
+    }
 }

@@ -290,6 +290,41 @@ fn control_api_state_sees_the_active_runtime_generation_after_bundle_replace() {
 }
 
 #[test]
+fn control_api_backend_inventory_and_summary_share_one_canonical_snapshot_contract() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config = test_config(cert, key);
+    let bundle = runtime_bundle_from_config("runtime.yaml", &config);
+    let (state, _) = runtime_bundle_control_api_state(bundle);
+
+    let service_state = state.current_service_state();
+    let inventory = service_state.snapshot_backend_inventory();
+    let summary = service_state.snapshot_backend_health();
+
+    assert_eq!(summary, inventory.summary());
+    assert_eq!(inventory.backends.len(), 1);
+
+    let backend = &inventory.backends[0];
+    assert_eq!(backend.identity.backend_addr, "http://127.0.0.1:7001");
+    assert_eq!(backend.resolution.authority_host, "127.0.0.1");
+    assert_eq!(backend.resolution.authority_port, 7001);
+    assert_eq!(backend.resolution.refresh_generation, 0);
+    assert_eq!(
+        backend.membership,
+        crate::runtime::backend::state::BackendMembershipState::Active
+    );
+    assert!(matches!(
+        backend.health,
+        crate::runtime::backend::state::BackendHealthState::Healthy
+    ));
+    assert_eq!(backend.placements.len(), 1);
+    assert_eq!(backend.placements[0].upstream_name, "api");
+    assert!(backend.placements[0].healthy);
+    assert_eq!(summary.total_backends, 1);
+    assert_eq!(summary.healthy_backends, 1);
+}
+
+#[test]
 fn reload_preserves_process_scoped_watchdog_and_dns_resolver() {
     // Regression: process-shared services must be carried across a reload, not
     // rebuilt. Rebuilding the watchdog silently discards an in-flight

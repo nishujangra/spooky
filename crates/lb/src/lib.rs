@@ -12,6 +12,8 @@ mod backend_pool;
 pub(crate) mod hash;
 pub mod health;
 pub mod load_balancing;
+#[cfg(test)]
+pub(crate) mod test_support;
 pub mod upstream_pool;
 
 pub use health::HealthTransition;

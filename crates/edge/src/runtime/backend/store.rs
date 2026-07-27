@@ -177,4 +177,51 @@ mod tests {
             }
         ));
     }
+
+    #[test]
+    fn lifecycle_store_returns_unchanged_refresh_mutation_and_increments_generation() {
+        let backend_addr = "https://backend.internal:8443";
+        let refreshed_at = SystemTime::UNIX_EPOCH;
+        let resolved_addrs = vec!["10.0.0.10:8443".parse::<SocketAddr>().expect("addr")];
+        let store = RuntimeBackendResolutionStore::new([RuntimeBackendResolution::hostname(
+            backend_addr.to_string(),
+            "backend.internal".to_string(),
+            8443,
+        )]);
+
+        let first_mutation = store
+            .apply_resolution_refresh(backend_addr, resolved_addrs.clone(), refreshed_at)
+            .expect("first refresh mutation");
+        assert!(matches!(
+            first_mutation,
+            BackendLifecycleMutation::ResolutionUpdated {
+                result: BackendRefreshResult {
+                    outcome: BackendRefreshOutcome::Updated {
+                        refresh_generation: 1,
+                        ..
+                    },
+                    ..
+                },
+                ..
+            }
+        ));
+
+        let second_mutation = store
+            .apply_resolution_refresh(backend_addr, resolved_addrs.clone(), refreshed_at)
+            .expect("second refresh mutation");
+        assert!(matches!(
+            second_mutation,
+            BackendLifecycleMutation::ResolutionUpdated {
+                result: BackendRefreshResult {
+                    outcome: BackendRefreshOutcome::Unchanged {
+                        refresh_generation: 2,
+                        ..
+                    },
+                    ..
+                },
+                state,
+                ..
+            } if state.resolved_addrs == resolved_addrs && state.refresh_generation == 2
+        ));
+    }
 }
