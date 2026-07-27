@@ -96,7 +96,7 @@ impl QUICListener {
     pub(in crate::quic_listener::forwarding) fn resolve_lb_key_for_runtime_request(
         lb_strategy: RuntimeLoadBalancingStrategy,
         lb_key_spec: Option<&RuntimeRequestKeySpec>,
-        request: &super::resolve::RouteResolutionRequest<'_>,
+        request: &super::resolve::TargetResolutionRequest<'_>,
     ) -> ResolvedLbKey {
         let request = LbKeyRequestParts::new(
             request.method,

@@ -28,7 +28,7 @@ use super::{
             AdmissionPolicyDecision, admission_rejection_response,
             evaluate_forwarding_pre_admission_policy,
         },
-        forwarding::BootstrapResolutionInput,
+        forwarding::BootstrapTargetResolutionInput,
     },
     context::BootstrapRequestCtx,
     intake::{BootstrapRequestIntake, bootstrap_error_response},
@@ -324,7 +324,7 @@ pub(in crate::quic_listener) fn evaluate_bootstrap_request_policy(
             .map(str::to_string)
     };
 
-    let resolved = match QUICListener::resolve_bootstrap_target(BootstrapResolutionInput {
+    let resolved = match QUICListener::resolve_bootstrap_target(BootstrapTargetResolutionInput {
         method: &input.intake.method,
         path: &input.intake.path,
         authority: input.intake.authority.as_deref(),

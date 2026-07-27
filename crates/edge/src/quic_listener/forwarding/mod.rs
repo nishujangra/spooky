@@ -13,13 +13,13 @@ use spooky_config::config::ScopedRateLimitScope;
 use spooky_errors::ClassifiedUpstreamProxyError;
 
 use self::prepare::{RequestFinalizationConfig, StartedRequestEnvelope};
-pub(in crate::quic_listener) use self::resolve::BootstrapResolutionInput;
+pub(in crate::quic_listener) use self::resolve::BootstrapTargetResolutionInput;
 #[cfg(test)]
-pub(in crate::quic_listener) use self::resolve::RouteResolutionRequest as TestRouteResolutionRequest;
+pub(in crate::quic_listener) use self::resolve::TargetResolutionRequest as TestTargetResolutionRequest;
 use super::*;
 use crate::runtime::connection::{
     outcome::{
-        OutcomeBackendTarget, OutcomeRouteTarget, observe_admission_outcome,
+        BackendOutcomeTarget, RouteOutcomeTarget, observe_admission_outcome,
         observe_proxy_error_outcome,
     },
     request::PendingForward,
@@ -211,16 +211,16 @@ impl QUICListener {
         }
     }
 
-    fn request_outcome_route_target(req: &RequestEnvelope) -> OutcomeRouteTarget<'_> {
-        OutcomeRouteTarget {
+    fn request_outcome_route_target(req: &RequestEnvelope) -> RouteOutcomeTarget<'_> {
+        RouteOutcomeTarget {
             route: req.upstream_name.as_deref().unwrap_or("unrouted"),
         }
     }
 
-    fn request_outcome_backend_target(req: &RequestEnvelope) -> Option<OutcomeBackendTarget<'_>> {
+    fn request_outcome_backend_target(req: &RequestEnvelope) -> Option<BackendOutcomeTarget<'_>> {
         req.upstream_name
             .as_deref()
-            .map(|upstream| OutcomeBackendTarget {
+            .map(|upstream| BackendOutcomeTarget {
                 upstream,
                 backend_addr: req.backend_addr.as_deref(),
                 backend_index: req.backend_index,
@@ -240,7 +240,7 @@ impl QUICListener {
         let Some(pending_forward) = req.pending_forward().cloned() else {
             let _ = observe_proxy_error_outcome(
                 metrics,
-                OutcomeRouteTarget::UNROUTED,
+                RouteOutcomeTarget::UNROUTED,
                 None,
                 req.start.elapsed(),
                 Some(http::StatusCode::INTERNAL_SERVER_ERROR),
@@ -264,7 +264,7 @@ impl QUICListener {
         let Some(upstream_name) = req.upstream_name.clone() else {
             let _ = observe_proxy_error_outcome(
                 metrics,
-                OutcomeRouteTarget::UNROUTED,
+                RouteOutcomeTarget::UNROUTED,
                 None,
                 req.start.elapsed(),
                 Some(http::StatusCode::INTERNAL_SERVER_ERROR),
@@ -324,10 +324,10 @@ impl QUICListener {
             ) => {
                 let _ = observe_admission_outcome(
                     metrics,
-                    OutcomeRouteTarget {
+                    RouteOutcomeTarget {
                         route: &upstream_name,
                     },
-                    Some(OutcomeBackendTarget {
+                    Some(BackendOutcomeTarget {
                         upstream: &upstream_name,
                         backend_addr: Some(pending_forward.backend_addr.as_ref()),
                         backend_index: Some(pending_forward.backend_index),
@@ -371,10 +371,10 @@ impl QUICListener {
                 };
                 let _ = observe_admission_outcome(
                     metrics,
-                    OutcomeRouteTarget {
+                    RouteOutcomeTarget {
                         route: &upstream_name,
                     },
-                    Some(OutcomeBackendTarget {
+                    Some(BackendOutcomeTarget {
                         upstream: &upstream_name,
                         backend_addr: Some(pending_forward.backend_addr.as_ref()),
                         backend_index: Some(pending_forward.backend_index),
@@ -415,10 +415,10 @@ impl QUICListener {
         else {
             let _ = observe_proxy_error_outcome(
                 metrics,
-                OutcomeRouteTarget {
+                RouteOutcomeTarget {
                     route: &upstream_name,
                 },
-                Some(OutcomeBackendTarget {
+                Some(BackendOutcomeTarget {
                     upstream: &upstream_name,
                     backend_addr: Some(pending_forward.backend_addr.as_ref()),
                     backend_index: Some(backend_index),
@@ -471,10 +471,10 @@ impl QUICListener {
                     let err_text = err.to_string();
                     let _ = observe_proxy_error_outcome(
                         metrics,
-                        OutcomeRouteTarget {
+                        RouteOutcomeTarget {
                             route: &upstream_name,
                         },
-                        Some(OutcomeBackendTarget {
+                        Some(BackendOutcomeTarget {
                             upstream: &upstream_name,
                             backend_addr: Some(pending_forward.backend_addr.as_ref()),
                             backend_index: Some(backend_index),
@@ -518,10 +518,10 @@ impl QUICListener {
             Err(err) => {
                 let _ = observe_proxy_error_outcome(
                     metrics,
-                    OutcomeRouteTarget {
+                    RouteOutcomeTarget {
                         route: &upstream_name,
                     },
-                    Some(OutcomeBackendTarget {
+                    Some(BackendOutcomeTarget {
                         upstream: &upstream_name,
                         backend_addr: Some(pending_forward.backend_addr.as_ref()),
                         backend_index: Some(backend_index),
@@ -668,7 +668,7 @@ impl QUICListener {
                             }
                             let _ = observe_proxy_error_outcome(
                                 &metrics,
-                                OutcomeRouteTarget::UNROUTED,
+                                RouteOutcomeTarget::UNROUTED,
                                 None,
                                 Duration::from_millis(0),
                                 Some(status),
@@ -709,7 +709,7 @@ impl QUICListener {
                             metrics.inc_policy_denied();
                             let _ = observe_proxy_error_outcome(
                                 &metrics,
-                                OutcomeRouteTarget::UNROUTED,
+                                RouteOutcomeTarget::UNROUTED,
                                 None,
                                 request_start.elapsed(),
                                 Some(http::StatusCode::TOO_EARLY),
@@ -941,7 +941,7 @@ impl QUICListener {
                             if let Some((route_label, elapsed)) = reject_body_for_bodyless {
                                 let _ = observe_proxy_error_outcome(
                                     &metrics,
-                                    OutcomeRouteTarget {
+                                    RouteOutcomeTarget {
                                         route: &route_label,
                                     },
                                     None,
@@ -973,7 +973,7 @@ impl QUICListener {
                             if let Some((route_label, elapsed)) = payload_too_large {
                                 let _ = observe_proxy_error_outcome(
                                     &metrics,
-                                    OutcomeRouteTarget {
+                                    RouteOutcomeTarget {
                                         route: &route_label,
                                     },
                                     None,
@@ -1007,10 +1007,10 @@ impl QUICListener {
                             {
                                 let _ = observe_proxy_error_outcome(
                                     &metrics,
-                                    OutcomeRouteTarget {
+                                    RouteOutcomeTarget {
                                         route: req.upstream_name.as_deref().unwrap_or("unrouted"),
                                     },
-                                    Some(OutcomeBackendTarget {
+                                    Some(BackendOutcomeTarget {
                                         upstream: req
                                             .upstream_name
                                             .as_deref()
@@ -1062,10 +1062,10 @@ impl QUICListener {
                             if let Some(req) = connection.streams.get(&stream_id) {
                                 let _ = observe_proxy_error_outcome(
                                     &metrics,
-                                    OutcomeRouteTarget {
+                                    RouteOutcomeTarget {
                                         route: req.upstream_name.as_deref().unwrap_or("unrouted"),
                                     },
-                                    Some(OutcomeBackendTarget {
+                                    Some(BackendOutcomeTarget {
                                         upstream: req
                                             .upstream_name
                                             .as_deref()
@@ -1626,7 +1626,7 @@ mod tests {
         .into_iter()
         .collect::<std::collections::HashMap<_, _>>();
         let lookup = |name: &str| headers.get(&name.to_ascii_lowercase()).cloned();
-        let route_request = TestRouteResolutionRequest::new(
+        let route_request = TestTargetResolutionRequest::new(
             "GET",
             "/api/items?tenant=acme",
             Some("api.example.com"),

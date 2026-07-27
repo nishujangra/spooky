@@ -7,7 +7,7 @@ use super::request::BootstrapPreparedRoute;
 use crate::{
     Metrics, OverloadShedReason,
     runtime::connection::outcome::{
-        AdmissionOutcomeClass, OutcomeBackendTarget, OutcomeRouteTarget, observe_admission_outcome,
+        AdmissionOutcomeClass, BackendOutcomeTarget, RouteOutcomeTarget, observe_admission_outcome,
         observe_backend_response_status_and_log, observe_proxy_error_outcome,
         observe_status_outcome,
     },
@@ -15,16 +15,16 @@ use crate::{
 
 pub(in crate::quic_listener) fn bootstrap_route_target<'a>(
     route: &'a str,
-) -> OutcomeRouteTarget<'a> {
-    OutcomeRouteTarget { route }
+) -> RouteOutcomeTarget<'a> {
+    RouteOutcomeTarget { route }
 }
 
 pub(in crate::quic_listener) fn bootstrap_backend_target<'a>(
     upstream_name: &'a str,
     backend_addr: &'a str,
     backend_index: usize,
-) -> OutcomeBackendTarget<'a> {
-    OutcomeBackendTarget {
+) -> BackendOutcomeTarget<'a> {
+    BackendOutcomeTarget {
         upstream: upstream_name,
         backend_addr: Some(backend_addr),
         backend_index: Some(backend_index),
@@ -33,13 +33,13 @@ pub(in crate::quic_listener) fn bootstrap_backend_target<'a>(
 
 pub(in crate::quic_listener) fn bootstrap_route_target_for_prepared(
     prepared_route: &BootstrapPreparedRoute,
-) -> OutcomeRouteTarget<'_> {
+) -> RouteOutcomeTarget<'_> {
     bootstrap_route_target(&prepared_route.upstream_name)
 }
 
 pub(in crate::quic_listener) fn bootstrap_backend_target_for_prepared(
     prepared_route: &BootstrapPreparedRoute,
-) -> OutcomeBackendTarget<'_> {
+) -> BackendOutcomeTarget<'_> {
     bootstrap_backend_target(
         &prepared_route.upstream_name,
         &prepared_route.backend_addr,
@@ -204,7 +204,7 @@ mod tests {
             BootstrapRejectionReason, BootstrapTerminalOutcome, BootstrapTimeoutReason,
         },
         runtime::connection::outcome::{
-            OutcomeBackendTarget, OutcomeRouteTarget, observe_admission_outcome,
+            BackendOutcomeTarget, RouteOutcomeTarget, observe_admission_outcome,
             observe_proxy_error_outcome,
         },
     };
@@ -264,8 +264,8 @@ mod tests {
         );
         let forwarding = observe_proxy_error_outcome(
             &forwarding_metrics,
-            OutcomeRouteTarget { route: "api" },
-            Some(OutcomeBackendTarget {
+            RouteOutcomeTarget { route: "api" },
+            Some(BackendOutcomeTarget {
                 upstream: "api",
                 backend_addr: Some("backend-a"),
                 backend_index: Some(0),
@@ -321,8 +321,8 @@ mod tests {
         );
         let forwarding = observe_admission_outcome(
             &forwarding_metrics,
-            OutcomeRouteTarget { route: "api" },
-            Some(OutcomeBackendTarget {
+            RouteOutcomeTarget { route: "api" },
+            Some(BackendOutcomeTarget {
                 upstream: "api",
                 backend_addr: Some("backend-a"),
                 backend_index: Some(0),
