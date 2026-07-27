@@ -8,14 +8,7 @@ use spooky_config::{
     config::{ForwardedHeaderPolicy, UpstreamHostPolicy},
 };
 
-use crate::common::{RequestInputMeta, request_input, request_target};
-
-fn bootstrap_headers(headers: &HeaderMap) -> Vec<Header> {
-    headers
-        .iter()
-        .map(|(name, value)| Header::new(name.as_str().as_bytes(), value.as_bytes()))
-        .collect()
-}
+use crate::common::{RequestInputMeta, bridge_headers, request_input, request_target};
 
 #[test]
 fn legacy_websocket_headers_from_bootstrap_and_forwarding_shape_identically() {
@@ -35,7 +28,7 @@ fn legacy_websocket_headers_from_bootstrap_and_forwarding_shape_identically() {
         "sec-websocket-key",
         HeaderValue::from_static("dGhlIHNhbXBsZSBub25jZQ=="),
     );
-    let bootstrap_headers = bootstrap_headers(&bootstrap_headers_map);
+    let bootstrap_headers = bridge_headers(&bootstrap_headers_map);
 
     let build = |headers: &[Header]| {
         build_h1_request(

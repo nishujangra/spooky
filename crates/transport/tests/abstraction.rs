@@ -1,17 +1,13 @@
-use std::{
-    collections::HashMap,
-    net::TcpListener as StdTcpListener,
-    sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    },
-    time::Duration,
-};
+//! Transport facade contract tests.
+//!
+//! These assertions lock the edge-facing behavior of the transport layer while
+//! keeping H1/H2 implementation details hidden behind the canonical facade.
+
+mod support;
+
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full};
-use hyper::{Request, Response, body::Incoming, service::service_fn};
-use hyper_util::rt::{TokioExecutor, TokioIo};
 use spooky_config::{
     config::{
         ClientAuth, Config, Listen, LoadBalancing, Log, Observability, Performance, Resilience,
@@ -21,179 +17,12 @@ use spooky_config::{
 };
 use spooky_errors::{PoolError, ProxyError};
 use spooky_transport::{SharedDnsResolver, UpstreamTransportPool};
-use tokio::net::TcpListener;
 
-struct ConcurrencyTracker {
-    current: AtomicUsize,
-    max: AtomicUsize,
-}
-
-impl ConcurrencyTracker {
-    fn new() -> Self {
-        Self {
-            current: AtomicUsize::new(0),
-            max: AtomicUsize::new(0),
-        }
-    }
-
-    fn enter(&self) {
-        let now = self.current.fetch_add(1, Ordering::SeqCst) + 1;
-        let mut prev = self.max.load(Ordering::SeqCst);
-        while now > prev {
-            match self
-                .max
-                .compare_exchange(prev, now, Ordering::SeqCst, Ordering::SeqCst)
-            {
-                Ok(_) => break,
-                Err(next) => prev = next,
-            }
-        }
-    }
-
-    fn exit(&self) {
-        self.current.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-
-fn loopback_bind_restricted(err: &std::io::Error) -> bool {
-    err.kind() == std::io::ErrorKind::PermissionDenied
-        || matches!(err.raw_os_error(), Some(1) | Some(13))
-}
-
-fn request(
-    uri: &str,
-) -> Request<http_body_util::combinators::BoxBody<Bytes, std::convert::Infallible>> {
-    Request::builder()
-        .method("GET")
-        .uri(uri)
-        .body(Full::new(Bytes::new()).boxed())
-        .expect("request")
-}
-
-fn reserve_unused_port() -> u16 {
-    StdTcpListener::bind("127.0.0.1:0")
-        .expect("bind ephemeral port")
-        .local_addr()
-        .expect("local addr")
-        .port()
-}
-
-fn test_connection_policy(
-    max_inflight: usize,
-) -> spooky_config::runtime::RuntimeBackendConnectionPolicy {
-    spooky_config::runtime::RuntimeBackendConnectionPolicy {
-        max_inflight,
-        max_idle_per_backend: 64,
-        pool_idle_timeout: Duration::from_secs(30),
-        connect_timeout: Duration::from_secs(2),
-        execution_timeout: Duration::from_secs(5),
-    }
-}
-
-fn build_pool(
-    backends: impl IntoIterator<Item = (String, RuntimeBackendTransportKind)>,
-    max_inflight: usize,
-    resolver: SharedDnsResolver,
-) -> UpstreamTransportPool {
-    build_pool_with_policy(
-        backends,
-        test_connection_policy(max_inflight),
-        resolver,
-    )
-}
-
-fn build_pool_with_policy(
-    backends: impl IntoIterator<Item = (String, RuntimeBackendTransportKind)>,
-    connection_policy: spooky_config::runtime::RuntimeBackendConnectionPolicy,
-    resolver: SharedDnsResolver,
-) -> UpstreamTransportPool {
-    UpstreamTransportPool::new_from_runtime_backends(
-        backends,
-        HashMap::new(),
-        connection_policy,
-        resolver,
-    )
-    .expect("transport pool")
-}
-
-async fn read_body(response: Response<Incoming>) -> Bytes {
-    response
-        .into_body()
-        .collect()
-        .await
-        .expect("collect body")
-        .to_bytes()
-}
-
-async fn start_h1_server(body: &'static [u8], delay: Duration) -> std::io::Result<u16> {
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let port = listener.local_addr()?.port();
-
-    tokio::spawn(async move {
-        loop {
-            let (stream, _) = match listener.accept().await {
-                Ok(v) => v,
-                Err(_) => break,
-            };
-            let service = service_fn(move |_req: Request<Incoming>| async move {
-                tokio::time::sleep(delay).await;
-                Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::from_static(
-                    body,
-                ))))
-            });
-
-            tokio::spawn(async move {
-                let _ = hyper::server::conn::http1::Builder::new()
-                    .serve_connection(TokioIo::new(stream), service)
-                    .await;
-            });
-        }
-    });
-
-    Ok(port)
-}
-
-async fn start_h2_server(
-    body: &'static [u8],
-    delay: Duration,
-    tracker: Option<Arc<ConcurrencyTracker>>,
-) -> std::io::Result<u16> {
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let port = listener.local_addr()?.port();
-
-    tokio::spawn(async move {
-        loop {
-            let (stream, _) = match listener.accept().await {
-                Ok(v) => v,
-                Err(_) => break,
-            };
-            let tracker = tracker.clone();
-            let service = service_fn(move |_req: Request<Incoming>| {
-                let tracker = tracker.clone();
-                async move {
-                    if let Some(tracker) = &tracker {
-                        tracker.enter();
-                    }
-                    tokio::time::sleep(delay).await;
-                    if let Some(tracker) = &tracker {
-                        tracker.exit();
-                    }
-                    Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::from_static(
-                        body,
-                    ))))
-                }
-            });
-
-            tokio::spawn(async move {
-                let _ = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
-                    .serve_connection(TokioIo::new(stream), service)
-                    .await;
-            });
-        }
-    });
-
-    Ok(port)
-}
+use crate::support::{
+    ConcurrencyTracker, build_pool, build_pool_with_policy, connection_policy,
+    loopback_bind_restricted, read_body, request, reserve_unused_port, start_h1_server,
+    start_h2_server,
+};
 
 fn transport_test_config(http_backend: &str, https_backend: &str) -> Config {
     let mut config = Config {
@@ -254,7 +83,7 @@ fn transport_test_config(http_backend: &str, https_backend: &str) -> Config {
 }
 
 #[test]
-fn runtime_upstream_interpretation_selects_protocol_internally() {
+fn runtime_upstream_interpretation_selects_protocol_without_caller_branching() {
     let config = transport_test_config("http://127.0.0.1:8080", "https://127.0.0.1:8443");
     let runtime = RuntimeConfig::from_config(&config).expect("runtime config");
 
@@ -280,8 +109,8 @@ fn runtime_upstream_interpretation_selects_protocol_internally() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn request_execution_routes_without_protocol_branching() {
-    let h1_port = match start_h1_server(b"h1", Duration::ZERO).await {
+async fn transport_facade_executes_requests_without_protocol_specific_callers() {
+    let h1_port = match start_h1_server(b"h1", Duration::ZERO, None).await {
         Ok(port) => port,
         Err(err) if loopback_bind_restricted(&err) => return,
         Err(err) => panic!("failed to start h1 server: {err}"),
@@ -323,7 +152,7 @@ async fn request_execution_routes_without_protocol_branching() {
 }
 
 #[test]
-fn client_rotation_behavior_is_stable_across_h1_and_h2() {
+fn transport_facade_exposes_stable_rotation_contract_across_protocols() {
     let pool = build_pool(
         [
             ("h1-backend".to_string(), RuntimeBackendTransportKind::Http1),
@@ -359,7 +188,7 @@ fn client_rotation_behavior_is_stable_across_h1_and_h2() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn canonical_error_mapping_is_consistent() {
+async fn transport_facade_maps_unknown_backend_send_failure_and_overload_consistently() {
     let unknown_pool = build_pool(
         [("known".to_string(), RuntimeBackendTransportKind::Http1)],
         1,
@@ -399,7 +228,13 @@ async fn canonical_error_mapping_is_consistent() {
     assert!(matches!(h2_err, ProxyError::Pool(PoolError::Send(_))));
 
     let h1_tracker = Arc::new(ConcurrencyTracker::new());
-    let h1_overload_port = match start_h1_server(b"h1", Duration::from_millis(50)).await {
+    let h1_overload_port = match start_h1_server(
+        b"h1",
+        Duration::from_millis(50),
+        Some(Arc::clone(&h1_tracker)),
+    )
+    .await
+    {
         Ok(port) => port,
         Err(err) if loopback_bind_restricted(&err) => return,
         Err(err) => panic!("failed to start h1 overload server: {err}"),
@@ -433,7 +268,11 @@ async fn canonical_error_mapping_is_consistent() {
         Err(ProxyError::Pool(PoolError::BackendOverloaded(_)))
     ));
     let _ = h1_task.await.expect("h1 task join");
-    assert_eq!(h1_tracker.max.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        h1_tracker.max_observed(),
+        1,
+        "tracked h1 overload fixture should observe only one admitted request"
+    );
 
     let h2_tracker = Arc::new(ConcurrencyTracker::new());
     let h2_overload_port = match start_h2_server(
@@ -473,12 +312,16 @@ async fn canonical_error_mapping_is_consistent() {
         Err(ProxyError::Pool(PoolError::BackendOverloaded(_)))
     ));
     let _ = h2_task.await.expect("h2 task join");
-    assert_eq!(h2_tracker.max.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        h2_tracker.max_observed(),
+        1,
+        "tracked h2 overload fixture should observe only one admitted request"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn execution_timeout_maps_to_proxy_timeout_for_h1_and_h2() {
-    let h1_port = match start_h1_server(b"h1", Duration::from_millis(50)).await {
+async fn transport_facade_maps_execution_timeouts_to_proxy_timeout_across_protocols() {
+    let h1_port = match start_h1_server(b"h1", Duration::from_millis(50), None).await {
         Ok(port) => port,
         Err(err) if loopback_bind_restricted(&err) => return,
         Err(err) => panic!("failed to start h1 timeout server: {err}"),
@@ -491,7 +334,7 @@ async fn execution_timeout_maps_to_proxy_timeout_for_h1_and_h2() {
 
     let timeout_policy = spooky_config::runtime::RuntimeBackendConnectionPolicy {
         execution_timeout: Duration::from_millis(5),
-        ..test_connection_policy(4)
+        ..connection_policy(4)
     };
 
     let pool = build_pool_with_policy(
@@ -523,7 +366,7 @@ async fn execution_timeout_maps_to_proxy_timeout_for_h1_and_h2() {
 }
 
 #[test]
-fn dns_refresh_rotation_works_through_unified_surface() {
+fn transport_facade_preserves_dns_refresh_rotation_contract() {
     let resolver = SharedDnsResolver::new();
     let backend = "https://api.example.com:443".to_string();
     let pool = build_pool(

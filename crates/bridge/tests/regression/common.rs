@@ -3,6 +3,7 @@
 use std::{convert::Infallible, net::SocketAddr};
 
 use bytes::Bytes;
+use http::HeaderMap;
 use http_body_util::{BodyExt, Empty, combinators::BoxBody};
 use quiche::h3::Header;
 use spooky_bridge::request::{
@@ -36,6 +37,13 @@ pub fn request_target<'a>(
             forwarded_header_policy,
         },
     }
+}
+
+pub fn bridge_headers(headers: &HeaderMap) -> Vec<Header> {
+    headers
+        .iter()
+        .map(|(name, value)| Header::new(name.as_str().as_bytes(), value.as_bytes()))
+        .collect()
 }
 
 pub fn request_input<'a>(
