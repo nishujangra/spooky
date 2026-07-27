@@ -1,3 +1,5 @@
+//! Runtime-upstream pool contract tests.
+
 use std::collections::HashMap;
 
 use spooky_config::{
@@ -7,7 +9,7 @@ use spooky_config::{
 use spooky_lb::upstream_pool::UpstreamPool;
 
 #[test]
-fn upstream_pool_from_config() {
+fn runtime_upstream_builds_a_pool_with_canonical_lb_contract() {
     let upstream = spooky_config::config::Upstream {
         load_balancing: spooky_config::config::LoadBalancing {
             lb_type: "round-robin".to_string(),
