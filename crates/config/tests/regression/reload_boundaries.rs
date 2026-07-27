@@ -4,13 +4,13 @@ use std::time::Duration;
 
 use spooky_config::{
     config::{Listen, LogFormat, Tls},
-    runtime::{RuntimeConfig, RuntimeListenerSource},
+    runtime::RuntimeListenerSource,
 };
 
-use crate::common::sample_config;
+use crate::common::{runtime_config, sample_config};
 
 #[test]
-fn runtime_policies_are_normalized_while_listener_runtime_inputs_stay_raw() {
+fn runtime_config_keeps_generation_policies_normalized_and_listener_inputs_raw() {
     let mut config = sample_config();
     config.performance.backend_timeout_ms = 2_400;
     config.performance.backend_connect_timeout_ms = 600;
@@ -27,7 +27,7 @@ fn runtime_policies_are_normalized_while_listener_runtime_inputs_stay_raw() {
     config.observability.tracing.otlp_endpoint =
         Some("http://otel-collector.internal:4317".to_string());
 
-    let runtime = RuntimeConfig::from_config(&config).expect("runtime config");
+    let runtime = runtime_config(&config);
     let policies = runtime.policies();
     let listener = runtime
         .primary_listener_runtime_config()
@@ -61,7 +61,7 @@ fn runtime_policies_are_normalized_while_listener_runtime_inputs_stay_raw() {
 }
 
 #[test]
-fn explicit_listener_topology_and_tls_identities_stay_listener_owned() {
+fn runtime_config_keeps_explicit_listener_topology_and_tls_identities_listener_owned() {
     let mut config = sample_config();
     config.performance.backend_timeout_ms = 1_750;
     config.performance.backend_connect_timeout_ms = 500;
@@ -96,7 +96,7 @@ fn explicit_listener_topology_and_tls_identities_stay_listener_owned() {
         },
     ];
 
-    let runtime = RuntimeConfig::from_config(&config).expect("runtime config");
+    let runtime = runtime_config(&config);
     let listeners = runtime.listener_runtime_configs();
 
     assert_eq!(listeners.len(), 2);
@@ -125,7 +125,7 @@ fn explicit_listener_topology_and_tls_identities_stay_listener_owned() {
 }
 
 #[test]
-fn log_sink_shape_stays_outside_runtime_generation_contract() {
+fn runtime_config_excludes_log_sink_shape_from_generation_owned_runtime_state() {
     let mut plain = sample_config();
     plain.log.level = "warn".to_string();
     plain.log.file.enabled = false;
@@ -137,8 +137,8 @@ fn log_sink_shape_stays_outside_runtime_generation_contract() {
     json.log.file.path = "/var/log/spooky/edge.json".to_string();
     json.log.format = LogFormat::Json;
 
-    let plain_runtime = RuntimeConfig::from_config(&plain).expect("plain runtime config");
-    let json_runtime = RuntimeConfig::from_config(&json).expect("json runtime config");
+    let plain_runtime = runtime_config(&plain);
+    let json_runtime = runtime_config(&json);
 
     assert_eq!(plain_runtime.policies().timeouts, json_runtime.policies().timeouts);
     assert_eq!(plain_runtime.policies().transport, json_runtime.policies().transport);

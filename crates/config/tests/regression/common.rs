@@ -7,6 +7,9 @@ use spooky_config::config::{
     LoadBalancing, Log, Observability, Performance, Resilience, RouteMatch, Security, Tls,
     Upstream, UpstreamHostPolicy, UpstreamHostPolicyMode, UpstreamTls,
 };
+use spooky_config::runtime::{RuntimeConfig, RuntimeConfigError, RuntimeUpstream};
+
+const API_UPSTREAM: &str = "api";
 
 /// A minimal, valid single-upstream config used as the base for regression cases.
 pub fn sample_config() -> Config {
@@ -65,4 +68,38 @@ pub fn sample_config() -> Config {
     );
 
     config
+}
+
+pub fn api_upstream_mut(config: &mut Config) -> &mut Upstream {
+    config
+        .upstream
+        .get_mut(API_UPSTREAM)
+        .expect("shared regression fixture must include the 'api' upstream")
+}
+
+pub fn runtime_config(config: &Config) -> RuntimeConfig {
+    RuntimeConfig::from_config(config).unwrap_or_else(|err| {
+        panic!("shared regression fixture should lower successfully: {err}")
+    })
+}
+
+pub fn runtime_config_err(config: &Config) -> RuntimeConfigError {
+    RuntimeConfig::from_config(config)
+        .expect_err("regression case must reject the runtime lowering input")
+}
+
+pub fn api_runtime_upstream<'a>(runtime: &'a RuntimeConfig) -> &'a RuntimeUpstream {
+    runtime
+        .upstreams
+        .get(API_UPSTREAM)
+        .expect("runtime lowering output must include the 'api' upstream")
+}
+
+pub fn assert_config_error_contains(err: &RuntimeConfigError, category: &str, needle: &str) {
+    assert_eq!(err.category(), category, "unexpected runtime error category");
+    let message = err.to_string();
+    assert!(
+        message.contains(needle),
+        "expected runtime error to contain '{needle}', got '{message}'"
+    );
 }

@@ -1,70 +1,53 @@
 //! Policy-combination and route-matcher rejection cases.
 
-use spooky_config::{config::UpstreamHostPolicyMode, runtime::RuntimeConfig};
+use spooky_config::config::UpstreamHostPolicyMode;
 
-use crate::common::sample_config;
+use crate::common::{
+    api_upstream_mut, assert_config_error_contains, runtime_config_err, sample_config,
+};
 
 #[test]
-fn runtime_config_rejects_ignored_host_rewrite_value() {
+fn runtime_config_rejects_host_override_when_host_policy_is_not_rewrite() {
     let mut config = sample_config();
-    config
-        .upstream
-        .get_mut("api")
-        .expect("upstream")
-        .host_policy
-        .mode = UpstreamHostPolicyMode::Upstream;
-    config
-        .upstream
-        .get_mut("api")
-        .expect("upstream")
-        .host_policy
-        .host = Some("ignored.example.com".to_string());
+    let upstream = api_upstream_mut(&mut config);
+    upstream.host_policy.mode = UpstreamHostPolicyMode::Upstream;
+    upstream.host_policy.host = Some("ignored.example.com".to_string());
 
-    let err = RuntimeConfig::from_config(&config).expect_err("conflicting host policy");
-    assert_eq!(err.category(), "unsupported_policy_combination");
-    assert!(err.to_string().contains("mode is not rewrite"));
+    let err = runtime_config_err(&config);
+    assert_config_error_contains(&err, "unsupported_policy_combination", "mode is not rewrite");
 }
 
 #[test]
-fn runtime_config_rejects_duplicate_route_matchers() {
+fn runtime_config_rejects_duplicate_route_matchers_across_upstreams() {
     let mut config = sample_config();
     config.upstream.insert(
         "api-copy".to_string(),
-        config.upstream.get("api").expect("api").clone(),
+        config
+            .upstream
+            .get("api")
+            .expect("shared regression fixture must include the 'api' upstream")
+            .clone(),
     );
 
-    let err = RuntimeConfig::from_config(&config).expect_err("duplicate routes");
-    assert_eq!(err.category(), "duplicate_route_ambiguity");
-    assert!(err.to_string().contains("conflicts with upstream"));
+    let err = runtime_config_err(&config);
+    assert_config_error_contains(&err, "duplicate_route_ambiguity", "conflicts with upstream");
 }
 
 #[test]
-fn runtime_config_rejects_invalid_lb_key_spec() {
+fn runtime_config_rejects_invalid_request_key_spec() {
     let mut config = sample_config();
-    config
-        .upstream
-        .get_mut("api")
-        .expect("api")
-        .load_balancing
-        .key = Some("header:   ".to_string());
+    api_upstream_mut(&mut config).load_balancing.key = Some("header:   ".to_string());
 
-    let err = RuntimeConfig::from_config(&config).expect_err("invalid key spec must fail");
-    assert_eq!(err.category(), "config_invalid");
-    assert!(err.to_string().contains("unsupported request key spec"));
+    let err = runtime_config_err(&config);
+    assert_config_error_contains(&err, "config_invalid", "unsupported request key spec");
 }
 
 #[test]
-fn runtime_config_rejects_connect_route_when_protocol_disallows_connect() {
+fn runtime_config_rejects_connect_route_when_protocol_policy_disallows_it() {
     let mut config = sample_config();
-    config
-        .upstream
-        .get_mut("api")
-        .expect("upstream")
-        .route
-        .method = Some("CONNECT".to_string());
+    api_upstream_mut(&mut config).route.method = Some("CONNECT".to_string());
     config.resilience.protocol.allow_connect = false;
 
-    let err = RuntimeConfig::from_config(&config).expect_err("connect route must fail");
-    assert_eq!(err.category(), "unsupported_policy_combination");
-    assert!(err.to_string().contains("allow_connect=false"));
+    let err = runtime_config_err(&config);
+    assert_config_error_contains(&err, "unsupported_policy_combination", "allow_connect=false");
 }
