@@ -16,6 +16,9 @@ use spooky_config::{
 };
 use spooky_errors::BridgeError;
 
+pub type CanonicalBridgeRequest = http::Request<BoxBody<Bytes, Infallible>>;
+pub type CanonicalBridgeRequestPair = (CanonicalBridgeRequest, CanonicalBridgeRequest);
+
 #[derive(Clone, Copy)]
 pub struct RequestInputMeta<'a> {
     pub authority: Option<&'a str>,
@@ -92,13 +95,7 @@ pub fn build_h1_and_h2_requests<'a>(
     path: &'a str,
     headers: &'a [Header],
     meta: RequestInputMeta<'a>,
-) -> Result<
-    (
-        http::Request<BoxBody<Bytes, Infallible>>,
-        http::Request<BoxBody<Bytes, Infallible>>,
-    ),
-    BridgeError,
-> {
+) -> Result<CanonicalBridgeRequestPair, BridgeError> {
     let h1 = build_h1_request(
         request_target(endpoint, host_policy, forwarded_header_policy),
         request_input(method, path, headers, meta),
