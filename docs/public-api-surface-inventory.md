@@ -91,6 +91,7 @@ This document classifies current visibility. It does not by itself change policy
 - `runtime::{connection,generation,tasks,tls}` and `watchdog::{config,service,state,time}` are legitimate crate-local collaboration seams.
 - `constants`, `hash`, and `observability` are no longer public module trees.
 - edge root exports now provide the only deliberate import path for hash helpers, runtime defaults, and observability vocabulary.
+- `#![warn(unreachable_pub)]` is enabled at the crate root, so items that are `pub` but unreachable from the façade are reported rather than accumulating silently.
 
 ## `spooky-config`
 
@@ -231,14 +232,14 @@ This document classifies current visibility. It does not by itself change policy
 - `edge`: `benchmark`, `body`, `cid_radix`, `metrics`, `resilience`, `routing`, `runtime`, `watchdog`, and the narrow worker/runtime re-exports
 - `config`: `backend_endpoint`, `config`, `default`, `loader`, `runtime`, `validator`, plus runtime policy and normalized runtime types
 - `bridge`: `request`, `response`, `websocket`
-- `lb`: `alternate_backend`, `health`, `load_balancing`, `upstream_pool`
+- `lb`: `alternate_backend`, `health`, `load_balancing`, `upstream_pool`, plus the `HealthTransition` root re-export
 - `transport`: `ConnectObservation`, `ConnectObserver`, `SharedDnsResolver`, `TlsClientConfig`, `TransportClientRotation`, `UpstreamTransportPool`
 
 ### Internal-to-crate collaboration surfaces
 
-- `edge`: `REQUEST_ID_COUNTER`, `runtime::{connection,generation,tasks,tls}`, `watchdog::{config,service,state,time}`
+- `edge`: `REQUEST_ID_COUNTER`, `constants`, `hash`, `observability`, `runtime::{connection,generation,tasks,tls}`, `watchdog::{config,service,state,time}`
 - `config`: `RuntimeConfig::upstreams_as_config`, `RuntimeUpstream::backend_tls_policy` field
-- `lb`: `hash`
+- `lb`: `algorithms`, `backend`, `backend_pool`, `hash`
 
 ### Temporary compatibility surfaces
 
@@ -253,3 +254,12 @@ This document classifies current visibility. It does not by itself change policy
 - every non-private boundary item in the scoped crates has an explicit classification
 - the current baseline no longer relies on “probably needed” wording
 - the main unresolved Phase 2 targets are now named rather than implicit
+
+## Phase 8 Verification Pass
+
+- `cargo fmt --all` applied; the only changes were whitespace reflow caused by earlier renames and field removals
+- `cargo check --workspace --all-targets` is clean, and `spooky-edge` reports no `unreachable_pub` warnings
+- crate-targeted tests pass for `lb`, `bridge`, `transport`, `config`, and `edge`
+- `cargo test --workspace --no-fail-fast` passes: 725 tests, 0 failures, 2 ignored
+- the five scoped crate roots were re-read and match the intended architecture; `runtime` and `watchdog` submodule visibility also matches this document
+- known pre-existing flake: `edge` integration test `concurrent_large_body_pressure_is_bounded` intermittently observes a `502` where it asserts only `200`/`503`. Reproduced on `e089628` (before this branch's cleanup), so it is not a regression from the lockdown work.
