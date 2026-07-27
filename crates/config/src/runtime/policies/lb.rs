@@ -160,12 +160,24 @@ mod tests {
             ("round-robin", RuntimeLoadBalancingStrategy::RoundRobin),
             ("round_robin", RuntimeLoadBalancingStrategy::RoundRobin),
             ("rr", RuntimeLoadBalancingStrategy::RoundRobin),
-            ("consistent-hash", RuntimeLoadBalancingStrategy::ConsistentHash),
-            ("consistent_hash", RuntimeLoadBalancingStrategy::ConsistentHash),
+            (
+                "consistent-hash",
+                RuntimeLoadBalancingStrategy::ConsistentHash,
+            ),
+            (
+                "consistent_hash",
+                RuntimeLoadBalancingStrategy::ConsistentHash,
+            ),
             ("ch", RuntimeLoadBalancingStrategy::ConsistentHash),
             ("random", RuntimeLoadBalancingStrategy::Random),
-            ("least-connections", RuntimeLoadBalancingStrategy::LeastConnections),
-            ("least_connections", RuntimeLoadBalancingStrategy::LeastConnections),
+            (
+                "least-connections",
+                RuntimeLoadBalancingStrategy::LeastConnections,
+            ),
+            (
+                "least_connections",
+                RuntimeLoadBalancingStrategy::LeastConnections,
+            ),
             ("lc", RuntimeLoadBalancingStrategy::LeastConnections),
             ("latency-aware", RuntimeLoadBalancingStrategy::LatencyAware),
             ("latency_aware", RuntimeLoadBalancingStrategy::LatencyAware),
@@ -273,7 +285,10 @@ mod tests {
         })
         .expect("round robin policy");
 
-        assert_eq!(round_robin.strategy, RuntimeLoadBalancingStrategy::RoundRobin);
+        assert_eq!(
+            round_robin.strategy,
+            RuntimeLoadBalancingStrategy::RoundRobin
+        );
         assert_eq!(round_robin.key.as_deref(), Some("header:x-user-id"));
         assert_eq!(
             round_robin.key_spec,

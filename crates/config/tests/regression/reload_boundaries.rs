@@ -37,7 +37,10 @@ fn runtime_config_keeps_generation_policies_normalized_and_listener_inputs_raw()
         policies.timeouts.backend_request,
         Duration::from_millis(2_400)
     );
-    assert_eq!(policies.timeouts.backend_connect, Duration::from_millis(600));
+    assert_eq!(
+        policies.timeouts.backend_connect,
+        Duration::from_millis(600)
+    );
     assert_eq!(policies.transport.quic_initial_max_data, 2_000_000);
     assert_eq!(listener.policies.timeouts, policies.timeouts);
     assert_eq!(listener.policies.transport, policies.transport);
@@ -100,8 +103,14 @@ fn runtime_config_keeps_explicit_listener_topology_and_tls_identities_listener_o
     let listeners = runtime.listener_runtime_configs();
 
     assert_eq!(listeners.len(), 2);
-    assert_eq!(listeners[0].listen.source, RuntimeListenerSource::ExplicitListeners);
-    assert_eq!(listeners[1].listen.source, RuntimeListenerSource::ExplicitListeners);
+    assert_eq!(
+        listeners[0].listen.source,
+        RuntimeListenerSource::ExplicitListeners
+    );
+    assert_eq!(
+        listeners[1].listen.source,
+        RuntimeListenerSource::ExplicitListeners
+    );
     assert_eq!(listeners[0].listen.listen.address, "127.0.0.1");
     assert_eq!(listeners[0].listen.listen.port, 8443);
     assert_eq!(listeners[1].listen.listen.address, "127.0.0.2");
@@ -115,8 +124,14 @@ fn runtime_config_keeps_explicit_listener_topology_and_tls_identities_listener_o
         "/tmp/tls/edge-b.pem"
     );
 
-    assert_eq!(listeners[0].policies.timeouts, listeners[1].policies.timeouts);
-    assert_eq!(listeners[0].policies.transport, listeners[1].policies.transport);
+    assert_eq!(
+        listeners[0].policies.timeouts,
+        listeners[1].policies.timeouts
+    );
+    assert_eq!(
+        listeners[0].policies.transport,
+        listeners[1].policies.transport
+    );
 
     assert!(listeners[0].observability.control_api.enabled);
     assert_eq!(listeners[0].observability.control_api.port, 9891);
@@ -140,8 +155,14 @@ fn runtime_config_excludes_log_sink_shape_from_generation_owned_runtime_state() 
     let plain_runtime = runtime_config(&plain);
     let json_runtime = runtime_config(&json);
 
-    assert_eq!(plain_runtime.policies().timeouts, json_runtime.policies().timeouts);
-    assert_eq!(plain_runtime.policies().transport, json_runtime.policies().transport);
+    assert_eq!(
+        plain_runtime.policies().timeouts,
+        json_runtime.policies().timeouts
+    );
+    assert_eq!(
+        plain_runtime.policies().transport,
+        json_runtime.policies().transport
+    );
     assert_eq!(plain_runtime.listeners.len(), json_runtime.listeners.len());
     assert_eq!(
         plain_runtime.listeners[0].listen.address,
@@ -158,7 +179,10 @@ fn runtime_config_excludes_log_sink_shape_from_generation_owned_runtime_state() 
     let json_listener = json_runtime
         .primary_listener_runtime_config()
         .expect("json primary listener");
-    assert_eq!(plain_listener.policies.timeouts, json_listener.policies.timeouts);
+    assert_eq!(
+        plain_listener.policies.timeouts,
+        json_listener.policies.timeouts
+    );
     assert_eq!(
         plain_listener.policies.transport,
         json_listener.policies.transport

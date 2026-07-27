@@ -228,7 +228,10 @@ mod tests {
         );
         assert_eq!(http_endpoint.authority_host, "127.0.0.1");
         assert_eq!(http_endpoint.authority_port, 8080);
-        assert_eq!(http_endpoint.address_kind, RuntimeBackendAddressKind::IpLiteral);
+        assert_eq!(
+            http_endpoint.address_kind,
+            RuntimeBackendAddressKind::IpLiteral
+        );
         assert_eq!(http_endpoint.canonical.scheme(), BackendScheme::Http);
 
         assert_eq!(
@@ -237,7 +240,10 @@ mod tests {
         );
         assert_eq!(https_endpoint.authority_host, "api.example.com");
         assert_eq!(https_endpoint.authority_port, 8443);
-        assert_eq!(https_endpoint.address_kind, RuntimeBackendAddressKind::Hostname);
+        assert_eq!(
+            https_endpoint.address_kind,
+            RuntimeBackendAddressKind::Hostname
+        );
         assert_eq!(https_endpoint.canonical.scheme(), BackendScheme::Https);
     }
 
@@ -294,9 +300,8 @@ mod tests {
             cooldown_ms: 1_500,
         };
 
-        let normalized =
-            RuntimeBackendHealthCheck::normalize("payments", "primary", &health_check)
-                .expect("health check");
+        let normalized = RuntimeBackendHealthCheck::normalize("payments", "primary", &health_check)
+            .expect("health check");
 
         assert_eq!(
             normalized,

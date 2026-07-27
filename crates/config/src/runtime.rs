@@ -644,7 +644,10 @@ mod tests {
 
         let err = runtime_listeners(&config).expect_err("normalized duplicates must fail");
         assert_eq!(err.category(), "listener_bind_conflict");
-        assert_eq!(err.to_string(), "listener_bind_conflict:  localhost :8443 (listener #1) duplicates LOCALHOST:8443 (listener #0) on  localhost :8443");
+        assert_eq!(
+            err.to_string(),
+            "listener_bind_conflict:  localhost :8443 (listener #1) duplicates LOCALHOST:8443 (listener #0) on  localhost :8443"
+        );
     }
 
     #[test]

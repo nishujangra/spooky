@@ -2,12 +2,14 @@
 
 use std::collections::HashMap;
 
-use spooky_config::config::{
-    Backend, ClientAuth, Config, ForwardedHeaderPolicy, ForwardedHeaderPolicyMode, Listen,
-    LoadBalancing, Log, Observability, Performance, Resilience, RouteMatch, Security, Tls,
-    Upstream, UpstreamHostPolicy, UpstreamHostPolicyMode, UpstreamTls,
+use spooky_config::{
+    config::{
+        Backend, ClientAuth, Config, ForwardedHeaderPolicy, ForwardedHeaderPolicyMode, Listen,
+        LoadBalancing, Log, Observability, Performance, Resilience, RouteMatch, Security, Tls,
+        Upstream, UpstreamHostPolicy, UpstreamHostPolicyMode, UpstreamTls,
+    },
+    runtime::{RuntimeConfig, RuntimeConfigError, RuntimeUpstream},
 };
-use spooky_config::runtime::{RuntimeConfig, RuntimeConfigError, RuntimeUpstream};
 
 const API_UPSTREAM: &str = "api";
 
@@ -78,9 +80,8 @@ pub fn api_upstream_mut(config: &mut Config) -> &mut Upstream {
 }
 
 pub fn runtime_config(config: &Config) -> RuntimeConfig {
-    RuntimeConfig::from_config(config).unwrap_or_else(|err| {
-        panic!("shared regression fixture should lower successfully: {err}")
-    })
+    RuntimeConfig::from_config(config)
+        .unwrap_or_else(|err| panic!("shared regression fixture should lower successfully: {err}"))
 }
 
 pub fn runtime_config_err(config: &Config) -> RuntimeConfigError {
@@ -96,7 +97,11 @@ pub fn api_runtime_upstream<'a>(runtime: &'a RuntimeConfig) -> &'a RuntimeUpstre
 }
 
 pub fn assert_config_error_contains(err: &RuntimeConfigError, category: &str, needle: &str) {
-    assert_eq!(err.category(), category, "unexpected runtime error category");
+    assert_eq!(
+        err.category(),
+        category,
+        "unexpected runtime error category"
+    );
     let message = err.to_string();
     assert!(
         message.contains(needle),

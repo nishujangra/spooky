@@ -398,10 +398,7 @@ mod tests {
         RouteAuth,
     };
 
-    fn assert_config_invalid(
-        err: RuntimeConfigError,
-        expected: impl AsRef<str>,
-    ) {
+    fn assert_config_invalid(err: RuntimeConfigError, expected: impl AsRef<str>) {
         let expected = expected.as_ref();
         assert_eq!(err.category(), "config_invalid");
         assert_eq!(err.to_string(), format!("config_invalid: {expected}"));
@@ -552,8 +549,8 @@ mod tests {
             ..JwtAuth::default()
         };
 
-        let err = RuntimeJwtAuth::normalize(&jwt, "payments")
-            .expect_err("empty jwt secret must fail");
+        let err =
+            RuntimeJwtAuth::normalize(&jwt, "payments").expect_err("empty jwt secret must fail");
 
         assert_config_invalid(err, "upstream 'payments' auth.jwt.secret must be non-empty");
     }

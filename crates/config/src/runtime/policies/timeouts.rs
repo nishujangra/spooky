@@ -297,8 +297,8 @@ mod tests {
     }
 
     #[test]
-    fn runtime_timeout_policy_rejects_body_total_timeout_longer_than_backend_total_request_timeout(
-    ) {
+    fn runtime_timeout_policy_rejects_body_total_timeout_longer_than_backend_total_request_timeout()
+    {
         let mut performance = valid_performance();
         performance.backend_body_total_timeout_ms = 4_001;
         performance.backend_total_request_timeout_ms = 4_000;

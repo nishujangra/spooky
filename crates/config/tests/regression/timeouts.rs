@@ -2,7 +2,9 @@
 
 use std::time::Duration;
 
-use crate::common::{assert_config_error_contains, runtime_config, runtime_config_err, sample_config};
+use crate::common::{
+    assert_config_error_contains, runtime_config, runtime_config_err, sample_config,
+};
 
 #[test]
 fn runtime_config_normalizes_timeout_and_transport_knobs_into_runtime_policies() {

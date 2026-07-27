@@ -14,7 +14,11 @@ fn runtime_config_rejects_host_override_when_host_policy_is_not_rewrite() {
     upstream.host_policy.host = Some("ignored.example.com".to_string());
 
     let err = runtime_config_err(&config);
-    assert_config_error_contains(&err, "unsupported_policy_combination", "mode is not rewrite");
+    assert_config_error_contains(
+        &err,
+        "unsupported_policy_combination",
+        "mode is not rewrite",
+    );
 }
 
 #[test]
@@ -49,5 +53,9 @@ fn runtime_config_rejects_connect_route_when_protocol_policy_disallows_it() {
     config.resilience.protocol.allow_connect = false;
 
     let err = runtime_config_err(&config);
-    assert_config_error_contains(&err, "unsupported_policy_combination", "allow_connect=false");
+    assert_config_error_contains(
+        &err,
+        "unsupported_policy_combination",
+        "allow_connect=false",
+    );
 }

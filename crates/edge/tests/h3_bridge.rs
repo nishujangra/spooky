@@ -908,9 +908,7 @@ fn run_h3_client_two_chunk_post(
                     match h3c.send_body(&mut conn, sid, &chunk1[chunk1_written..], false) {
                         Ok(written) => chunk1_written += written,
                         Err(quiche::h3::Error::Done | quiche::h3::Error::StreamBlocked) => {}
-                        Err(quiche::h3::Error::TransportError(quiche::Error::StreamStopped(
-                            _,
-                        ))) => {
+                        Err(quiche::h3::Error::TransportError(quiche::Error::StreamStopped(_))) => {
                             request_stream_stopped = true;
                             chunk1_written = chunk1.len();
                             chunk2_written = chunk2.len();

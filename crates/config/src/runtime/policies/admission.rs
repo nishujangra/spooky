@@ -461,10 +461,7 @@ mod tests {
     use super::*;
     use crate::config::{Resilience, ScopedRateLimit, ScopedRateLimitScope};
 
-    fn assert_config_invalid(
-        err: RuntimeConfigError,
-        expected: impl AsRef<str>,
-    ) {
+    fn assert_config_invalid(err: RuntimeConfigError, expected: impl AsRef<str>) {
         let expected = expected.as_ref();
         assert_eq!(err.category(), "config_invalid");
         assert_eq!(err.to_string(), format!("config_invalid: {expected}"));
@@ -561,7 +558,10 @@ mod tests {
         resilience.route_queue.default_cap = 9;
         resilience.route_queue.global_cap = 40;
         resilience.route_queue.shed_retry_after_seconds = 12;
-        resilience.route_queue.caps.insert("payments".to_string(), 3);
+        resilience
+            .route_queue
+            .caps
+            .insert("payments".to_string(), 3);
         resilience.brownout.enabled = true;
         resilience.brownout.trigger_inflight_percent = 85;
         resilience.brownout.recover_inflight_percent = 55;
