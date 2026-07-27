@@ -2,12 +2,12 @@
 
 use std::time::Duration;
 
-use spooky_config::runtime::RuntimeConfig;
-
-use crate::common::sample_config;
+use crate::common::{
+    assert_config_error_contains, runtime_config, runtime_config_err, sample_config,
+};
 
 #[test]
-fn runtime_policy_set_normalizes_timeout_and_transport_knobs() {
+fn runtime_config_normalizes_timeout_and_transport_knobs_into_runtime_policies() {
     let mut config = sample_config();
     config.performance.backend_timeout_ms = 2_500;
     config.performance.backend_connect_timeout_ms = 400;
@@ -20,7 +20,7 @@ fn runtime_policy_set_normalizes_timeout_and_transport_knobs() {
     config.performance.request_buffer_global_cap_bytes = 9_999;
     config.resilience.route_queue.shed_retry_after_seconds = 17;
 
-    let runtime = RuntimeConfig::from_config(&config).expect("runtime config");
+    let runtime = runtime_config(&config);
     let policies = runtime.policies();
 
     assert_eq!(
@@ -41,9 +41,9 @@ fn runtime_policy_set_normalizes_timeout_and_transport_knobs() {
 }
 
 #[test]
-fn runtime_defaults_produce_listener_and_runtime_policy_parity() {
+fn runtime_config_keeps_listener_and_runtime_policy_views_in_sync_for_defaults() {
     let config = sample_config();
-    let runtime = RuntimeConfig::from_config(&config).expect("runtime config");
+    let runtime = runtime_config(&config);
     let listener = runtime
         .primary_listener_runtime_config()
         .expect("primary listener");
@@ -73,15 +73,15 @@ fn runtime_defaults_produce_listener_and_runtime_policy_parity() {
 }
 
 #[test]
-fn runtime_config_rejects_invalid_timeout_ordering() {
+fn runtime_config_rejects_timeout_ordering_that_breaks_runtime_contract() {
     let mut config = sample_config();
     config.performance.backend_connect_timeout_ms = 2_000;
     config.performance.backend_timeout_ms = 1_000;
 
-    let err = RuntimeConfig::from_config(&config).expect_err("timeout ordering must be validated");
-    assert_eq!(err.category(), "config_invalid");
-    assert!(
-        err.to_string()
-            .contains("backend_connect_timeout_ms must be <= backend_timeout_ms")
+    let err = runtime_config_err(&config);
+    assert_config_error_contains(
+        &err,
+        "config_invalid",
+        "backend_connect_timeout_ms must be <= backend_timeout_ms",
     );
 }

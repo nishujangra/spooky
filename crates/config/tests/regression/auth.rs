@@ -6,20 +6,15 @@ use spooky_config::{
     config::{
         ExternalAuth, ExternalAuthFailureMode, JwtAuth, ScopedRateLimit, ScopedRateLimitScope,
     },
-    runtime::{RuntimeConfig, RuntimeExternalAuth},
+    runtime::RuntimeExternalAuth,
 };
 
-use crate::common::sample_config;
+use crate::common::{api_runtime_upstream, api_upstream_mut, runtime_config, sample_config};
 
 #[test]
-fn runtime_config_preserves_external_auth_contract() {
+fn runtime_config_lowers_http_external_auth_into_canonical_contract() {
     let mut config = sample_config();
-    config
-        .upstream
-        .get_mut("api")
-        .expect("api")
-        .auth
-        .external_auth = Some(ExternalAuth::Http {
+    api_upstream_mut(&mut config).auth.external_auth = Some(ExternalAuth::Http {
         endpoint: "https://auth.internal/check".to_string(),
         request_headers: Vec::new(),
         response_header_allowlist: Vec::new(),
@@ -27,13 +22,8 @@ fn runtime_config_preserves_external_auth_contract() {
         failure_mode: ExternalAuthFailureMode::FailClosed,
     });
 
-    let runtime = RuntimeConfig::from_config(&config).expect("runtime config");
-    let auth = &runtime
-        .upstreams
-        .get("api")
-        .expect("api")
-        .policy
-        .upstream_auth;
+    let runtime = runtime_config(&config);
+    let auth = &api_runtime_upstream(&runtime).policy.upstream_auth;
     match auth.external_auth.as_ref() {
         Some(RuntimeExternalAuth::Http {
             endpoint,
@@ -52,14 +42,9 @@ fn runtime_config_preserves_external_auth_contract() {
 }
 
 #[test]
-fn runtime_config_preserves_oidc_external_auth_metadata() {
+fn runtime_config_lowers_oidc_external_auth_metadata_into_canonical_contract() {
     let mut config = sample_config();
-    config
-        .upstream
-        .get_mut("api")
-        .expect("api")
-        .auth
-        .external_auth = Some(ExternalAuth::Oidc {
+    api_upstream_mut(&mut config).auth.external_auth = Some(ExternalAuth::Oidc {
         discovery_url: Some(
             "https://issuer.example.com/.well-known/openid-configuration".to_string(),
         ),
@@ -74,11 +59,8 @@ fn runtime_config_preserves_oidc_external_auth_metadata() {
         failure_mode: ExternalAuthFailureMode::FailClosed,
     });
 
-    let runtime = RuntimeConfig::from_config(&config).expect("runtime config");
-    match runtime
-        .upstreams
-        .get("api")
-        .expect("api")
+    let runtime = runtime_config(&config);
+    match api_runtime_upstream(&runtime)
         .policy
         .upstream_auth
         .external_auth
@@ -114,9 +96,9 @@ fn runtime_config_preserves_oidc_external_auth_metadata() {
 }
 
 #[test]
-fn runtime_config_normalizes_jwt_and_scoped_rate_limit_shapes() {
+fn runtime_config_normalizes_jwt_and_scoped_rate_limit_contracts() {
     let mut config = sample_config();
-    let upstream = config.upstream.get_mut("api").expect("api upstream");
+    let upstream = api_upstream_mut(&mut config);
     upstream.auth.jwt = Some(JwtAuth {
         secret: "jwt-secret".to_string(),
         issuer: Some(" issuer-1 ".to_string()),
@@ -135,8 +117,8 @@ fn runtime_config_normalizes_jwt_and_scoped_rate_limit_shapes() {
         idle_ttl_secs: 9,
     }];
 
-    let runtime = RuntimeConfig::from_config(&config).expect("runtime config");
-    let api = runtime.upstreams.get("api").expect("api runtime upstream");
+    let runtime = runtime_config(&config);
+    let api = api_runtime_upstream(&runtime);
     let jwt = api.policy.upstream_auth.jwt.as_ref().expect("jwt policy");
     let scoped_limit = runtime
         .policies

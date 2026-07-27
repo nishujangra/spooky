@@ -143,3 +143,201 @@ impl RuntimeLoadBalancingPolicy {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_config_invalid(err: RuntimeConfigError, expected: impl AsRef<str>) {
+        let expected = expected.as_ref();
+        assert_eq!(err.category(), "config_invalid");
+        assert_eq!(err.to_string(), format!("config_invalid: {expected}"));
+    }
+
+    #[test]
+    fn load_balancing_strategy_normalizes_supported_aliases_and_canonical_names() {
+        let cases = [
+            ("round-robin", RuntimeLoadBalancingStrategy::RoundRobin),
+            ("round_robin", RuntimeLoadBalancingStrategy::RoundRobin),
+            ("rr", RuntimeLoadBalancingStrategy::RoundRobin),
+            (
+                "consistent-hash",
+                RuntimeLoadBalancingStrategy::ConsistentHash,
+            ),
+            (
+                "consistent_hash",
+                RuntimeLoadBalancingStrategy::ConsistentHash,
+            ),
+            ("ch", RuntimeLoadBalancingStrategy::ConsistentHash),
+            ("random", RuntimeLoadBalancingStrategy::Random),
+            (
+                "least-connections",
+                RuntimeLoadBalancingStrategy::LeastConnections,
+            ),
+            (
+                "least_connections",
+                RuntimeLoadBalancingStrategy::LeastConnections,
+            ),
+            ("lc", RuntimeLoadBalancingStrategy::LeastConnections),
+            ("latency-aware", RuntimeLoadBalancingStrategy::LatencyAware),
+            ("latency_aware", RuntimeLoadBalancingStrategy::LatencyAware),
+            ("la", RuntimeLoadBalancingStrategy::LatencyAware),
+            ("sticky-cid", RuntimeLoadBalancingStrategy::StickyCid),
+            ("sticky_cid", RuntimeLoadBalancingStrategy::StickyCid),
+            ("cid-sticky", RuntimeLoadBalancingStrategy::StickyCid),
+            ("cid_sticky", RuntimeLoadBalancingStrategy::StickyCid),
+        ];
+
+        for (raw, expected) in cases {
+            assert_eq!(RuntimeLoadBalancingStrategy::from_lb_type(raw), expected);
+        }
+
+        assert_eq!(
+            RuntimeLoadBalancingStrategy::RoundRobin.canonical_name(),
+            "round-robin"
+        );
+        assert_eq!(
+            RuntimeLoadBalancingStrategy::ConsistentHash.canonical_name(),
+            "consistent-hash"
+        );
+        assert_eq!(
+            RuntimeLoadBalancingStrategy::LeastConnections.canonical_name(),
+            "least-connections"
+        );
+        assert_eq!(
+            RuntimeLoadBalancingStrategy::LatencyAware.canonical_name(),
+            "latency-aware"
+        );
+        assert_eq!(
+            RuntimeLoadBalancingStrategy::StickyCid.canonical_name(),
+            "sticky-cid"
+        );
+    }
+
+    #[test]
+    fn load_balancing_policy_rejects_unsupported_strategy() {
+        let err = RuntimeLoadBalancingPolicy::normalize(&LoadBalancing {
+            lb_type: "maglev".to_string(),
+            key: None,
+        })
+        .expect_err("unsupported strategy must fail");
+
+        assert_config_invalid(err, "unsupported load balancing type 'maglev'");
+    }
+
+    #[test]
+    fn request_key_spec_normalizes_builtin_key_types() {
+        let cases = [
+            ("path", RuntimeRequestKeySpec::Path),
+            ("authority", RuntimeRequestKeySpec::Authority),
+            ("method", RuntimeRequestKeySpec::Method),
+            ("cid", RuntimeRequestKeySpec::Cid),
+            ("sticky-cid", RuntimeRequestKeySpec::StickyCid),
+            ("peer_ip", RuntimeRequestKeySpec::PeerIp),
+            ("client_ip", RuntimeRequestKeySpec::ClientIp),
+            ("bearer_token", RuntimeRequestKeySpec::BearerToken),
+        ];
+
+        for (raw, expected) in cases {
+            assert_eq!(RuntimeRequestKeySpec::normalize(raw).expect(raw), expected);
+        }
+    }
+
+    #[test]
+    fn request_key_spec_normalizes_header_cookie_and_query_forms() {
+        assert_eq!(
+            RuntimeRequestKeySpec::normalize(" header:X-Tenant-ID ").expect("header key"),
+            RuntimeRequestKeySpec::Header("x-tenant-id".to_string())
+        );
+        assert_eq!(
+            RuntimeRequestKeySpec::normalize("cookie:Session_Id").expect("cookie key"),
+            RuntimeRequestKeySpec::Cookie("session_id".to_string())
+        );
+        assert_eq!(
+            RuntimeRequestKeySpec::normalize("query:user_id").expect("query key"),
+            RuntimeRequestKeySpec::Query("user_id".to_string())
+        );
+    }
+
+    #[test]
+    fn request_key_spec_rejects_invalid_forms() {
+        let cases = [
+            "tenant_id",
+            "header:",
+            "cookie:   ",
+            "query:",
+            "body:user",
+            "header",
+        ];
+
+        for raw in cases {
+            let err =
+                RuntimeRequestKeySpec::normalize(raw).expect_err("invalid key spec must fail");
+            assert_config_invalid(err, format!("unsupported request key spec '{}'", raw));
+        }
+    }
+
+    #[test]
+    fn load_balancing_policy_shapes_key_spec_and_alternate_backend_policy() {
+        let round_robin = RuntimeLoadBalancingPolicy::normalize(&LoadBalancing {
+            lb_type: "rr".to_string(),
+            key: Some(" header:x-user-id ".to_string()),
+        })
+        .expect("round robin policy");
+
+        assert_eq!(
+            round_robin.strategy,
+            RuntimeLoadBalancingStrategy::RoundRobin
+        );
+        assert_eq!(round_robin.key.as_deref(), Some("header:x-user-id"));
+        assert_eq!(
+            round_robin.key_spec,
+            Some(RuntimeRequestKeySpec::Header("x-user-id".to_string()))
+        );
+        assert_eq!(
+            round_robin.alternate_backend,
+            RuntimeAlternateBackendPolicy {
+                readonly_lb_pick: true,
+                healthy_fallback: true,
+            }
+        );
+
+        let consistent_hash = RuntimeLoadBalancingPolicy::normalize(&LoadBalancing {
+            lb_type: "consistent_hash".to_string(),
+            key: Some("sticky-cid".to_string()),
+        })
+        .expect("consistent hash policy");
+
+        assert_eq!(
+            consistent_hash.strategy,
+            RuntimeLoadBalancingStrategy::ConsistentHash
+        );
+        assert_eq!(
+            consistent_hash.key_spec,
+            Some(RuntimeRequestKeySpec::StickyCid)
+        );
+        assert_eq!(
+            consistent_hash.alternate_backend,
+            RuntimeAlternateBackendPolicy {
+                readonly_lb_pick: false,
+                healthy_fallback: true,
+            }
+        );
+
+        let sticky_cid = RuntimeLoadBalancingPolicy::normalize(&LoadBalancing {
+            lb_type: "sticky-cid".to_string(),
+            key: None,
+        })
+        .expect("sticky cid policy");
+
+        assert_eq!(sticky_cid.strategy, RuntimeLoadBalancingStrategy::StickyCid);
+        assert_eq!(sticky_cid.key_spec, None);
+        assert_eq!(
+            sticky_cid.alternate_backend,
+            RuntimeAlternateBackendPolicy {
+                readonly_lb_pick: false,
+                healthy_fallback: true,
+            }
+        );
+    }
+}

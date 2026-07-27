@@ -636,6 +636,7 @@ fn run_h3_client_chunked_post(
     let mut current_chunk_len = 0usize;
     let mut should_fin_for_chunk = false;
     let mut body_done = total_len == 0;
+    let mut request_stream_stopped = false;
     let mut status = String::new();
     let mut body = Vec::new();
     let payload = vec![0u8; chunk_size.max(1)];
@@ -706,6 +707,8 @@ fn run_h3_client_chunked_post(
 
             if let Some(sid) = req_stream_id
                 && !body_done
+                && !request_stream_stopped
+                && status.is_empty()
             {
                 if current_chunk_len == 0 {
                     current_chunk_len = chunk_size.min(remaining);
@@ -732,6 +735,10 @@ fn run_h3_client_chunked_post(
                         }
                     }
                     Err(quiche::h3::Error::Done | quiche::h3::Error::StreamBlocked) => {}
+                    Err(quiche::h3::Error::TransportError(quiche::Error::StreamStopped(_))) => {
+                        request_stream_stopped = true;
+                        body_done = true;
+                    }
                     Err(e) => return Err(format!("send_body: {e:?}")),
                 }
             }
@@ -825,6 +832,7 @@ fn run_h3_client_two_chunk_post(
     let mut status = String::new();
     let mut response_body = Vec::new();
     let start = Instant::now();
+    let mut request_stream_stopped = false;
 
     let (write, send_info) = conn.send(&mut out).map_err(|e| format!("send: {e:?}"))?;
     socket
@@ -889,10 +897,22 @@ fn run_h3_client_two_chunk_post(
             }
 
             if let Some(sid) = stream_id {
-                if chunk1_written < chunk1.len() {
+                if request_stream_stopped {
+                    // Keep polling for the response after the server has
+                    // stopped the request body stream.
+                } else if !status.is_empty() {
+                    request_stream_stopped = true;
+                    chunk1_written = chunk1.len();
+                    chunk2_written = chunk2.len();
+                } else if chunk1_written < chunk1.len() {
                     match h3c.send_body(&mut conn, sid, &chunk1[chunk1_written..], false) {
                         Ok(written) => chunk1_written += written,
                         Err(quiche::h3::Error::Done | quiche::h3::Error::StreamBlocked) => {}
+                        Err(quiche::h3::Error::TransportError(quiche::Error::StreamStopped(_))) => {
+                            request_stream_stopped = true;
+                            chunk1_written = chunk1.len();
+                            chunk2_written = chunk2.len();
+                        }
                         Err(e) => return Err(format!("send_body chunk1: {e:?}")),
                     }
                 } else {
@@ -904,6 +924,12 @@ fn run_h3_client_two_chunk_post(
                         match h3c.send_body(&mut conn, sid, &chunk2[chunk2_written..], true) {
                             Ok(written) => chunk2_written += written,
                             Err(quiche::h3::Error::Done | quiche::h3::Error::StreamBlocked) => {}
+                            Err(quiche::h3::Error::TransportError(
+                                quiche::Error::StreamStopped(_),
+                            )) => {
+                                request_stream_stopped = true;
+                                chunk2_written = chunk2.len();
+                            }
                             Err(e) => return Err(format!("send_body chunk2: {e:?}")),
                         }
                     }
@@ -3173,7 +3199,7 @@ fn concurrent_large_body_pressure_is_bounded() {
             let chunk2 = vec![0u8; (MAX_REQUEST_BODY_BYTES - 8 * 1024) - chunk1.len()];
             run_h3_client_two_chunk_post(
                 listen_addr,
-                "/slow",
+                "/",
                 chunk1,
                 chunk2,
                 Duration::from_millis(20),

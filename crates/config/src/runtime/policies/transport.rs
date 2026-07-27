@@ -266,6 +266,222 @@ mod tests {
     use super::*;
     use crate::config::Performance;
 
+    fn valid_performance() -> Performance {
+        Performance::default()
+    }
+
+    #[test]
+    fn normalize_preserves_worker_and_control_plane_thread_values() {
+        let mut performance = valid_performance();
+        performance.worker_threads = 8;
+        performance.control_plane_threads = 3;
+        performance.packet_shards_per_worker = 2;
+        performance.reuseport = true;
+
+        let policy =
+            RuntimeTransportPolicy::normalize(&performance).expect("normalization must succeed");
+
+        assert_eq!(policy.worker_threads, 8);
+        assert_eq!(policy.control_plane_threads, 3);
+        assert_eq!(policy.packet_shards_per_worker, 2);
+        assert!(policy.reuseport);
+    }
+
+    #[test]
+    fn normalize_preserves_shard_and_queue_settings() {
+        let mut performance = valid_performance();
+        performance.packet_shards_per_worker = 4;
+        performance.packet_shard_queue_capacity = 512;
+        performance.packet_shard_queue_max_bytes = 2 * 1024 * 1024;
+
+        let policy =
+            RuntimeTransportPolicy::normalize(&performance).expect("normalization must succeed");
+
+        assert_eq!(policy.packet_shards_per_worker, 4);
+        assert_eq!(policy.packet_shard_queue_capacity, 512);
+        assert_eq!(policy.packet_shard_queue_max_bytes, 2 * 1024 * 1024);
+    }
+
+    #[test]
+    fn normalize_shapes_inflight_limits_and_backend_pool_capacity() {
+        let mut performance = valid_performance();
+        performance.worker_threads = 4;
+        performance.reuseport = true;
+        performance.global_inflight_limit = 1000;
+        performance.per_upstream_inflight_limit = 250;
+        performance.per_backend_inflight_limit = 32;
+        performance.max_active_connections = 4096;
+
+        let policy =
+            RuntimeTransportPolicy::normalize(&performance).expect("normalization must succeed");
+
+        assert_eq!(policy.global_inflight_limit, 1000);
+        assert_eq!(policy.per_upstream_inflight_limit, 250);
+        assert_eq!(policy.per_backend_inflight_limit, 32);
+        assert_eq!(policy.connection_limits.global_inflight, 1000);
+        assert_eq!(policy.connection_limits.per_upstream_inflight, 250);
+        assert_eq!(policy.connection_limits.per_backend, 32);
+        assert_eq!(policy.connection_limits.backend_pool_max_inflight, 128);
+        assert_eq!(policy.connection_limits.max_active_connections, 4096);
+    }
+
+    #[test]
+    fn normalize_preserves_udp_buffer_sizes() {
+        let mut performance = valid_performance();
+        performance.udp_recv_buffer_bytes = 4 * 1024 * 1024;
+        performance.udp_send_buffer_bytes = 2 * 1024 * 1024;
+
+        let policy =
+            RuntimeTransportPolicy::normalize(&performance).expect("normalization must succeed");
+
+        assert_eq!(policy.udp_recv_buffer_bytes, 4 * 1024 * 1024);
+        assert_eq!(policy.udp_send_buffer_bytes, 2 * 1024 * 1024);
+    }
+
+    #[test]
+    fn normalize_shapes_backend_connection_policy_from_transport_knobs() {
+        let mut performance = valid_performance();
+        performance.worker_threads = 3;
+        performance.reuseport = true;
+        performance.per_backend_inflight_limit = 20;
+        performance.h2_pool_max_idle_per_backend = 11;
+        performance.h2_pool_idle_timeout_ms = 7_500;
+        performance.backend_connect_timeout_ms = 600;
+        performance.backend_timeout_ms = 2_500;
+
+        let policy =
+            RuntimeTransportPolicy::normalize(&performance).expect("normalization must succeed");
+
+        assert_eq!(policy.backend_connections.max_inflight, 60);
+        assert_eq!(policy.backend_connections.max_idle_per_backend, 11);
+        assert_eq!(
+            policy.backend_connections.pool_idle_timeout,
+            Duration::from_millis(7_500)
+        );
+        assert_eq!(
+            policy.backend_connections.connect_timeout,
+            Duration::from_millis(600)
+        );
+        assert_eq!(
+            policy.backend_connections.execution_timeout,
+            Duration::from_millis(2_500)
+        );
+    }
+
+    #[test]
+    fn normalize_rejects_missing_reuseport_when_multiple_workers_are_configured() {
+        let mut performance = valid_performance();
+        performance.worker_threads = 2;
+        performance.reuseport = false;
+
+        let err =
+            RuntimeTransportPolicy::normalize(&performance).expect_err("normalization must fail");
+
+        assert_eq!(err.category(), "config_invalid");
+        assert_eq!(
+            err.to_string(),
+            "config_invalid: performance.reuseport must be true when performance.worker_threads > 1"
+        );
+    }
+
+    #[test]
+    fn normalize_rejects_zero_for_required_worker_and_queue_knobs() {
+        let cases = [
+            (
+                "performance.worker_threads must be greater than 0",
+                zero_worker_threads as fn(&mut Performance),
+            ),
+            (
+                "performance.control_plane_threads must be greater than 0",
+                zero_control_plane_threads as fn(&mut Performance),
+            ),
+            (
+                "performance.packet_shards_per_worker must be greater than 0",
+                zero_packet_shards_per_worker as fn(&mut Performance),
+            ),
+            (
+                "performance.packet_shard_queue_capacity must be greater than 0",
+                zero_packet_shard_queue_capacity as fn(&mut Performance),
+            ),
+            (
+                "performance.packet_shard_queue_max_bytes must be greater than 0",
+                zero_packet_shard_queue_max_bytes as fn(&mut Performance),
+            ),
+        ];
+
+        for (expected, mutate) in cases {
+            let mut performance = valid_performance();
+            mutate(&mut performance);
+
+            let err = RuntimeTransportPolicy::normalize(&performance).expect_err(expected);
+
+            assert_eq!(err.category(), "config_invalid");
+            assert_eq!(err.to_string(), format!("config_invalid: {expected}"));
+        }
+    }
+
+    #[test]
+    fn normalize_rejects_worker_and_shard_values_above_supported_bounds() {
+        let cases = [
+            (
+                "config_invalid: performance.worker_threads=1025 exceeds the maximum of 1024",
+                excessive_worker_threads as fn(&mut Performance),
+            ),
+            (
+                "config_invalid: performance.control_plane_threads=1025 exceeds the maximum of 1024",
+                excessive_control_plane_threads as fn(&mut Performance),
+            ),
+            (
+                "config_invalid: performance.packet_shards_per_worker=257 exceeds the maximum of 256",
+                excessive_packet_shards_per_worker as fn(&mut Performance),
+            ),
+        ];
+
+        for (expected, mutate) in cases {
+            let mut performance = valid_performance();
+            mutate(&mut performance);
+            if performance.worker_threads > 1 {
+                performance.reuseport = true;
+            }
+
+            let err = RuntimeTransportPolicy::normalize(&performance).expect_err(expected);
+
+            assert_eq!(err.to_string(), expected);
+        }
+    }
+
+    fn zero_worker_threads(performance: &mut Performance) {
+        performance.worker_threads = 0;
+    }
+
+    fn zero_control_plane_threads(performance: &mut Performance) {
+        performance.control_plane_threads = 0;
+    }
+
+    fn zero_packet_shards_per_worker(performance: &mut Performance) {
+        performance.packet_shards_per_worker = 0;
+    }
+
+    fn zero_packet_shard_queue_capacity(performance: &mut Performance) {
+        performance.packet_shard_queue_capacity = 0;
+    }
+
+    fn zero_packet_shard_queue_max_bytes(performance: &mut Performance) {
+        performance.packet_shard_queue_max_bytes = 0;
+    }
+
+    fn excessive_worker_threads(performance: &mut Performance) {
+        performance.worker_threads = 1025;
+    }
+
+    fn excessive_control_plane_threads(performance: &mut Performance) {
+        performance.control_plane_threads = 1025;
+    }
+
+    fn excessive_packet_shards_per_worker(performance: &mut Performance) {
+        performance.packet_shards_per_worker = 257;
+    }
+
     #[test]
     fn normalize_rejects_unknown_length_prebuffer_above_response_cap() {
         let performance = Performance {

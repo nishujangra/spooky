@@ -505,6 +505,10 @@ mod tests {
             listeners[0].source,
             RuntimeListenerSource::ExplicitListeners
         );
+        assert_eq!(
+            listeners[1].source,
+            RuntimeListenerSource::ExplicitListeners
+        );
         assert_eq!(listeners[0].listen.port, 8443);
         assert_eq!(listeners[1].listen.port, 9443);
     }
@@ -531,6 +535,50 @@ mod tests {
             }
         );
         assert!(tls.sni_identities.contains_key("api.example.com"));
+    }
+
+    #[test]
+    fn runtime_listener_tls_uses_first_sni_identity_as_default_when_legacy_pair_is_absent() {
+        let mut config = sample_config();
+        config.listen.tls.cert.clear();
+        config.listen.tls.key.clear();
+        config.listen.tls.certificates = vec![
+            TlsCertificate {
+                server_name: "api.example.com".to_string(),
+                cert: "/tmp/tls/api.pem".to_string(),
+                key: "/tmp/tls/api.key".to_string(),
+            },
+            TlsCertificate {
+                server_name: "WWW.EXAMPLE.COM".to_string(),
+                cert: "/tmp/tls/www.pem".to_string(),
+                key: "/tmp/tls/www.key".to_string(),
+            },
+        ];
+
+        let listeners = runtime_listeners(&config).expect("runtime listeners");
+        let tls = &listeners[0].tls;
+
+        assert_eq!(
+            tls.default_identity,
+            RuntimeTlsIdentity {
+                cert_path: "/tmp/tls/api.pem".to_string(),
+                key_path: "/tmp/tls/api.key".to_string(),
+            }
+        );
+        assert_eq!(
+            tls.sni_identities.get("api.example.com"),
+            Some(&RuntimeTlsIdentity {
+                cert_path: "/tmp/tls/api.pem".to_string(),
+                key_path: "/tmp/tls/api.key".to_string(),
+            })
+        );
+        assert_eq!(
+            tls.sni_identities.get("www.example.com"),
+            Some(&RuntimeTlsIdentity {
+                cert_path: "/tmp/tls/www.pem".to_string(),
+                key_path: "/tmp/tls/www.key".to_string(),
+            })
+        );
     }
 
     #[test]
@@ -564,6 +612,42 @@ mod tests {
         let err = runtime_listeners(&config).expect_err("duplicate listeners must fail");
         assert_eq!(err.category(), "listener_bind_conflict");
         assert!(err.to_string().contains("duplicates"));
+    }
+
+    #[test]
+    fn runtime_listeners_reject_duplicate_bindings_after_address_normalization() {
+        let mut config = sample_config();
+        config.listeners = vec![
+            Listen {
+                protocol: "http3".to_string(),
+                port: 8443,
+                address: "LOCALHOST".to_string(),
+                tls: Tls {
+                    cert: "/tmp/tls/dup-1.pem".to_string(),
+                    key: "/tmp/tls/dup-1.key".to_string(),
+                    certificates: Vec::new(),
+                    client_auth: ClientAuth::default(),
+                },
+            },
+            Listen {
+                protocol: "http3".to_string(),
+                port: 8443,
+                address: " localhost ".to_string(),
+                tls: Tls {
+                    cert: "/tmp/tls/dup-2.pem".to_string(),
+                    key: "/tmp/tls/dup-2.key".to_string(),
+                    certificates: Vec::new(),
+                    client_auth: ClientAuth::default(),
+                },
+            },
+        ];
+
+        let err = runtime_listeners(&config).expect_err("normalized duplicates must fail");
+        assert_eq!(err.category(), "listener_bind_conflict");
+        assert_eq!(
+            err.to_string(),
+            "listener_bind_conflict:  localhost :8443 (listener #1) duplicates LOCALHOST:8443 (listener #0) on  localhost :8443"
+        );
     }
 
     #[test]
