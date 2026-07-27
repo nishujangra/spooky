@@ -8,8 +8,10 @@ use spooky_lb::alternate_backend::{
 };
 
 use super::*;
-use crate::observability::{HedgeDecisionReason, RetryDecisionReason};
-use crate::runtime::connection::response::ForwardingPolicyTelemetry;
+use crate::{
+    observability::{HedgeDecisionReason, RetryDecisionReason},
+    runtime::connection::response::ForwardingPolicyTelemetry,
+};
 
 const MAX_UPSTREAM_RETRY_ATTEMPTS: u8 = 1;
 type UpstreamRequest = Request<BoxBody<Bytes, Infallible>>;

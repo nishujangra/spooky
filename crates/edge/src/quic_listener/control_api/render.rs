@@ -3,13 +3,13 @@ use std::collections::HashMap;
 use bytes::Bytes;
 use http_body_util::Full;
 use serde::Serialize;
+use spooky_lb::health::HealthFailureReason;
 
 use super::{state::ControlApiState, *};
 use crate::runtime::backend::state::{
     BackendHealthState, BackendLifecycleInventorySnapshot, BackendMembershipState,
     BackendPoolPlacementSnapshot,
 };
-use spooky_lb::health::HealthFailureReason;
 
 /// Map a backend health-failure reason to the canonical control-plane token.
 ///

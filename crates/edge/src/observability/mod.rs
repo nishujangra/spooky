@@ -514,8 +514,9 @@ pub struct MetricReasonLabels<'a> {
 // (spooky_errors) are mapped here; `OverloadShedReason::canonical()` lives with
 // that enum. These impls are the single source that keeps the surfaces aligned.
 
-use crate::runtime::connection::stream::{BackendFailureReason, RejectionReason, TimeoutReason};
 use spooky_errors::{HedgePolicyDenialReason, RetryPolicyDenialReason, UpstreamRetryReason};
+
+use crate::runtime::connection::stream::{BackendFailureReason, RejectionReason, TimeoutReason};
 
 /// Request rejection → canonical request outcome. Alias mapping.
 impl From<RejectionReason> for RequestOutcomeReason {
@@ -916,8 +917,9 @@ mod tests {
 
     #[test]
     fn admission_outcome_maps_to_canonical_decision_reason() {
-        use crate::metrics::OverloadShedReason;
-        use crate::runtime::connection::outcome::AdmissionOutcomeClass;
+        use crate::{
+            metrics::OverloadShedReason, runtime::connection::outcome::AdmissionOutcomeClass,
+        };
         assert_eq!(
             AdmissionDecisionReason::from(AdmissionOutcomeClass::AuthDenied),
             AdmissionDecisionReason::AuthDenied
@@ -1026,10 +1028,11 @@ mod tests {
 
     #[test]
     fn retry_and_outcome_mappings_stay_aligned_but_distinct_by_failure_class() {
-        use crate::runtime::connection::stream::BackendFailureReason;
         use spooky_errors::{
             RetryPolicyDenialReason, UpstreamRetryReason, UpstreamTerminalErrorKind,
         };
+
+        use crate::runtime::connection::stream::BackendFailureReason;
 
         assert_eq!(
             RetryDecisionReason::from(UpstreamRetryReason::Transport),

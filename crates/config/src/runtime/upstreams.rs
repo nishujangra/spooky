@@ -649,6 +649,7 @@ fn is_valid_connect_authority(value: &str) -> bool {
 mod tests {
     use std::collections::HashMap;
 
+    use super::normalize_upstreams;
     use crate::{
         config::{
             ApiKeyAuth, Backend, Config, ExternalAuth, ExternalAuthFailureMode,
@@ -657,8 +658,6 @@ mod tests {
         },
         runtime::{RuntimeConfigError, RuntimePolicySet},
     };
-
-    use super::normalize_upstreams;
 
     fn upstream(host: Option<&str>, path_prefix: &str, method: Option<&str>) -> Upstream {
         Upstream {

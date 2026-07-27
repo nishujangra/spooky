@@ -111,12 +111,14 @@ pub fn escape_forwarded_host(host: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+
+    use spooky_config::config::{ForwardedHeaderPolicy, ForwardedHeaderPolicyMode};
+
     use super::{
         ForwardedHeaderChains, build_forwarded_header_values, escape_forwarded_host,
         forwarded_for_value, merge_forwarded_chain,
     };
-    use spooky_config::config::{ForwardedHeaderPolicy, ForwardedHeaderPolicyMode};
-    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
     #[test]
     fn escape_forwarded_host_escapes_backslash_and_quote() {

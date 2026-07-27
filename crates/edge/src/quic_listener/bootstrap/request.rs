@@ -632,7 +632,6 @@ pub(in crate::quic_listener) fn build_bootstrap_upstream_request(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::{collections::BTreeMap, sync::Arc};
 
     use quiche::h3::NameValue;
@@ -641,6 +640,7 @@ mod tests {
         runtime::{RuntimeAuthPolicy, RuntimeForwardedHeaderPolicy, RuntimeHostPolicy},
     };
 
+    use super::*;
     use crate::runtime::connection::request::PendingForward;
 
     #[test]
@@ -702,8 +702,10 @@ mod tests {
         // obs Phase 10 (step 1): equivalent outcomes on the bootstrap and QUIC
         // data planes must report the SAME canonical reason — closing Phase 0
         // finding #1 (two parallel terminal vocabularies).
-        use crate::observability::RequestOutcomeReason;
-        use crate::runtime::connection::stream::{BackendFailureReason, RejectionReason};
+        use crate::{
+            observability::RequestOutcomeReason,
+            runtime::connection::stream::{BackendFailureReason, RejectionReason},
+        };
 
         // Auth denied.
         assert_eq!(

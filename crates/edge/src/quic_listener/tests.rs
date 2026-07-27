@@ -29,13 +29,10 @@ use super::{
     should_strip_bootstrap_request_header, should_strip_bootstrap_response_header,
     should_strip_h3_response_header, sweep_closed_connections,
 };
-use crate::quic_listener::forwarding::terminalize_stream;
-use crate::runtime::connection::stream::{
-    BackendFailureReason, CancellationReason, TerminalReason, TimeoutReason,
-};
 use crate::{
     REQUEST_ID_COUNTER,
     cid_radix::CidRadix,
+    quic_listener::forwarding::terminalize_stream,
     runtime::connection::{
         guardrails::{
             BodyLimitKind, ResponseBodyGuardrailConfig, ResponseBodyGuardrailDecision,
@@ -43,9 +40,10 @@ use crate::{
         },
         request::{PendingForward, RequestEnvelope},
         stream::{
-            AdmissionPermits, AwaitingAuthState, DispatchReadyState, RequestBodyRuntime,
-            RequestBodyState, RequestContext, RequestExecutionState, RequestMode,
-            ResponseEmissionState, RoutingSnapshot, StreamAdmissionState, StreamPhase, TunnelMode,
+            AdmissionPermits, AwaitingAuthState, BackendFailureReason, CancellationReason,
+            DispatchReadyState, RequestBodyRuntime, RequestBodyState, RequestContext,
+            RequestExecutionState, RequestMode, ResponseEmissionState, RoutingSnapshot,
+            StreamAdmissionState, StreamPhase, TerminalReason, TimeoutReason, TunnelMode,
         },
     },
 };
