@@ -1177,6 +1177,42 @@ mod tests {
         }
 
         #[test]
+        fn backend_snapshot_exposes_resolved_addresses_and_refresh_generation() {
+            let backend_addr = "https://backend.internal:8443";
+            let resolved_addrs = vec![
+                "10.0.0.10:8443".parse::<SocketAddr>().expect("addr"),
+                "10.0.0.11:8443".parse::<SocketAddr>().expect("addr"),
+            ];
+            let store = Arc::new(RuntimeBackendResolutionStore::new([
+                RuntimeBackendResolution::hostname(
+                    backend_addr.to_string(),
+                    "backend.internal".to_string(),
+                    8443,
+                ),
+            ]));
+            store
+                .apply_resolution_refresh(backend_addr, resolved_addrs.clone(), SystemTime::UNIX_EPOCH)
+                .expect("seed refresh");
+            let coordinator = BackendLifecycleCoordinator::new(store);
+
+            let snapshot = coordinator
+                .snapshot_backend(backend_addr)
+                .expect("backend snapshot");
+
+            assert_eq!(snapshot.identity.backend_addr, backend_addr);
+            assert_eq!(snapshot.resolution.authority_host, "backend.internal");
+            assert_eq!(snapshot.resolution.authority_port, 8443);
+            assert_eq!(snapshot.resolution.resolved_addrs, resolved_addrs);
+            assert_eq!(snapshot.resolution.refresh_generation, 1);
+            assert_eq!(
+                snapshot.resolution.last_refresh_success_at,
+                Some(SystemTime::UNIX_EPOCH)
+            );
+            assert!(matches!(snapshot.health, BackendHealthState::Unknown));
+            assert_eq!(snapshot.membership, BackendMembershipState::Active);
+        }
+
+        #[test]
         fn lifecycle_coordinator_merges_resolution_and_pool_health_into_inventory() {
             let store = Arc::new(RuntimeBackendResolutionStore::new([
                 RuntimeBackendResolution::hostname(
@@ -1238,6 +1274,77 @@ mod tests {
             assert_eq!(removed.membership, BackendMembershipState::Removed);
             assert!(removed.placements.is_empty());
             assert_eq!(inventory.summary().total_backends, 1);
+        }
+
+        #[test]
+        fn inventory_exposes_canonical_health_membership_and_resolution_views() {
+            let placed_backend = "127.0.0.1:8080";
+            let removed_backend = "127.0.0.1:9090";
+            let resolved_addrs = vec!["10.0.0.10:8080".parse::<SocketAddr>().expect("addr")];
+            let store = Arc::new(RuntimeBackendResolutionStore::new([
+                RuntimeBackendResolution::hostname(
+                    placed_backend.to_string(),
+                    "backend-a.internal".to_string(),
+                    8080,
+                ),
+                RuntimeBackendResolution::hostname(
+                    removed_backend.to_string(),
+                    "backend-b.internal".to_string(),
+                    9090,
+                ),
+            ]));
+            store
+                .apply_resolution_refresh(placed_backend, resolved_addrs.clone(), SystemTime::UNIX_EPOCH)
+                .expect("seed refresh");
+            let coordinator = BackendLifecycleCoordinator::new(Arc::clone(&store));
+            let pool = test_active_health_upstream_pool();
+            let failure = evaluate_active_health_check(
+                BackendIdentity::new(placed_backend),
+                BackendHealthObservationOutcome::Failure,
+                Some(spooky_lb::health::HealthFailureReason::Transport),
+                100,
+                0,
+            );
+            let transition =
+                coordinator.apply_health_observation(Some(&pool), Some(0), &failure.observation);
+            assert!(matches!(
+                transition,
+                Some(HealthTransition::BecameUnhealthy)
+            ));
+
+            let mut pools = HashMap::new();
+            pools.insert("api".to_string(), pool);
+            let inventory = coordinator.snapshot_inventory(&pools);
+
+            let active = inventory
+                .backends
+                .iter()
+                .find(|backend| backend.identity.backend_addr == placed_backend)
+                .expect("active backend");
+            assert_eq!(active.identity.backend_addr, placed_backend);
+            assert_eq!(active.membership, BackendMembershipState::Active);
+            assert!(matches!(
+                active.health,
+                BackendHealthState::Unhealthy { reason: None }
+            ));
+            assert_eq!(active.resolution.resolved_addrs, resolved_addrs);
+            assert_eq!(active.resolution.refresh_generation, 1);
+            assert_eq!(active.resolution.last_refresh_success_at, Some(SystemTime::UNIX_EPOCH));
+            assert_eq!(active.placements.len(), 1);
+            assert!(!active.placements[0].healthy);
+
+            let removed = inventory
+                .backends
+                .iter()
+                .find(|backend| backend.identity.backend_addr == removed_backend)
+                .expect("removed backend");
+            assert_eq!(removed.identity.backend_addr, removed_backend);
+            assert_eq!(removed.membership, BackendMembershipState::Removed);
+            assert!(matches!(removed.health, BackendHealthState::Unknown));
+            assert!(removed.placements.is_empty());
+
+            assert_eq!(inventory.summary().total_backends, 1);
+            assert_eq!(inventory.summary().healthy_backends, 0);
         }
     }
 
