@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0-beta] - 2026-07-27
+
+### Added
+
+- Canonical observability vocabulary — reasons and event fields (admission outcomes, local reason enums, overload metric labels, backend health-failure reasons) now map to a single canonical set, with bounded connect-attempt label cardinality.
+- Deterministic runtime lifecycle state machine that gates reload commits, driving drain and shutdown through explicit lifecycle states.
+- Unified backend refresh classification with explicit traffic-continuity reporting, and canonical backend health-failure reason surfaced in the control-plane snapshot.
+- Structured operator-facing reload rejections with preflight messages, backed by a typed operational-policy vocabulary for runtime ownership and reload rules.
+- Live `log.level` changes applied on config reload via a runtime `set_log_level` on the logger.
+- Fine-grained rejection and backend-failure kinds carried through terminal outcome mapping; bootstrap terminal outcomes observed and aligned with the request lifecycle model.
+
+### Fixed
+
+- Drain and shutdown now flow through the runtime lifecycle state machine instead of ad-hoc paths.
+- Process-shared watchdog and DNS resolver are carried across reload instead of being rebuilt.
+- Bundle-lock panic and control-API unreachable paths replaced with fail-safe recovery; backend client-rotation failure is now an explicit operator-visible outcome.
+- Pre-response requests still reading the body now time out under the request-body bucket.
+- Restored stateful round-robin backend selection, failover availability on circuit-open retries, and streaming guardrail failure semantics.
+- WebSocket upgrade headers preserved in bootstrap `101` responses.
+- Upstreams iterated in name order so route conflicts report deterministically.
+
+### Changed
+
+- Public API surface locked down across crates — crate-internal items demoted, `unreachable_pub` enabled, dead code removed, and public runtime bundle/listener/connection surfaces documented.
+- Documentation realigned to the post-refactor architecture: edge runtime ownership, runtime generation and backend lifecycle, request lifecycle and transport boundaries, observability, control plane, and reload behavior.
+- Integration and unit tests hardened with per-contract cases asserting QUIC/bootstrap parity, metric label vocabularies, retry/hedge accounting, and wire-shape stability.
+
 ## [0.3.1-beta] - 2026-06-27
 
 ### Added
@@ -25,9 +52,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Large runtime modules split into focused submodules: `quic_listener/mod.rs` → `bootstrap_tls`, `control_api/`, `forwarding`, `metrics_endpoint`, `tls_runtime`; `spooky/main.rs` → `app`, `listener_group`; `config/validator.rs` → `helpers`; `config/runtime.rs` → `listeners`, `upstreams`.
 - Integration tests extracted into per-subsystem modules (`h3_edge/`, `h3_bridge/protocol`, `lb/tests`, `control_api/tests`).
-- Phase 1 to Phase 3 refactor foundations completed across the main runtime layers: shared admission, route/backend resolution, LB key resolution, upstream error classification, canonical request/response shaping, external auth decision mapping, runtime generation ownership, backend lifecycle coordination, transport façade cleanup, and public API hardening.
-- `spooky-edge`, `spooky-config`, `spooky-bridge`, `spooky-transport`, and `spooky-lb` now expose narrower, more intentional façades; internal orchestration and protocol details were pushed back behind owning modules.
-- Control-plane, observability, backend lifecycle, and runtime reload flows now share canonical runtime views and reason vocabularies instead of relying on listener-local wiring or duplicated interpretation paths.
 
 ## [0.3.0-beta] - 2026-06-20
 
