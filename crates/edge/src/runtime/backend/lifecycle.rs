@@ -1279,6 +1279,23 @@ mod tests {
         }
 
         #[test]
+        fn success_observation_keeps_healthy_backend_aligned_with_pool_state() {
+            let pool = test_active_health_upstream_pool();
+            let observation = BackendHealthObservation::active_check(
+                BackendIdentity::new("127.0.0.1:8080"),
+                BackendHealthObservationOutcome::Success,
+                None,
+            );
+
+            let transition = apply_backend_health_observation(Some(&pool), Some(0), &observation);
+            assert!(transition.is_none(), "healthy backend should not re-transition");
+
+            let guard = pool.read().expect("read");
+            let state = guard.backend_runtime_state(0).expect("backend state");
+            assert!(state.healthy, "pool runtime state must remain healthy");
+        }
+
+        #[test]
         fn coordinator_health_observation_marks_backend_unhealthy_and_recovers() {
             let pool = test_active_health_upstream_pool();
             let store = Arc::new(RuntimeBackendResolutionStore::new([
@@ -1323,6 +1340,145 @@ mod tests {
 
             let summary = coordinator.snapshot_inventory(&pools).summary();
             assert_eq!(summary.healthy_backends, 1);
+
+            let backend = coordinator
+                .snapshot_inventory(&pools)
+                .backends
+                .into_iter()
+                .find(|backend| backend.identity.backend_addr == "127.0.0.1:8080")
+                .expect("backend inventory");
+            assert!(matches!(backend.health, BackendHealthState::Healthy));
+            assert!(backend.placements[0].healthy);
+        }
+
+        #[test]
+        fn passive_failure_observation_requires_reason_and_threshold_before_unhealthy() {
+            let pool = test_upstream_pool();
+            let no_reason = BackendHealthObservation {
+                identity: BackendIdentity::new("127.0.0.1:8080"),
+                source: BackendHealthObservationSource::PassiveRequest,
+                outcome: BackendHealthObservationOutcome::Failure,
+                reason: None,
+            };
+
+            let transition = apply_backend_health_observation(Some(&pool), Some(0), &no_reason);
+            assert!(transition.is_none(), "missing reason must not mutate health");
+            assert!(
+                pool.read().expect("read").is_backend_healthy(0),
+                "pool should remain healthy without a mapped reason"
+            );
+
+            let failure = BackendHealthObservation {
+                identity: BackendIdentity::new("127.0.0.1:8080"),
+                source: BackendHealthObservationSource::PassiveRequest,
+                outcome: BackendHealthObservationOutcome::Failure,
+                reason: Some(spooky_lb::health::HealthFailureReason::Timeout),
+            };
+
+            assert!(
+                apply_backend_health_observation(Some(&pool), Some(0), &failure).is_none()
+            );
+            assert!(
+                apply_backend_health_observation(Some(&pool), Some(0), &failure).is_none()
+            );
+            let transition = apply_backend_health_observation(Some(&pool), Some(0), &failure);
+            assert!(matches!(
+                transition,
+                Some(HealthTransition::BecameUnhealthy)
+            ));
+
+            let guard = pool.read().expect("read");
+            let state = guard.backend_runtime_state(0).expect("backend state");
+            assert!(
+                !state.healthy,
+                "pool runtime state must reflect passive failure threshold crossing"
+            );
+        }
+
+        #[test]
+        fn passive_failure_observation_keeps_inventory_aligned_with_pool_state() {
+            let pool = test_upstream_pool();
+            let store = Arc::new(RuntimeBackendResolutionStore::new([
+                RuntimeBackendResolution::hostname(
+                    "127.0.0.1:8080".to_string(),
+                    "backend.internal".to_string(),
+                    8080,
+                ),
+            ]));
+            let coordinator = BackendLifecycleCoordinator::new(store);
+            let mut pools = HashMap::new();
+            pools.insert("api".to_string(), Arc::clone(&pool));
+
+            let failure = BackendHealthObservation {
+                identity: BackendIdentity::new("127.0.0.1:8080"),
+                source: BackendHealthObservationSource::PassiveRequest,
+                outcome: BackendHealthObservationOutcome::Failure,
+                reason: Some(spooky_lb::health::HealthFailureReason::Transport),
+            };
+            assert!(
+                coordinator
+                    .apply_health_observation(Some(&pool), Some(0), &failure)
+                    .is_none()
+            );
+            assert!(
+                coordinator
+                    .apply_health_observation(Some(&pool), Some(0), &failure)
+                    .is_none()
+            );
+            let transition =
+                coordinator.apply_health_observation(Some(&pool), Some(0), &failure);
+            assert!(matches!(
+                transition,
+                Some(HealthTransition::BecameUnhealthy)
+            ));
+
+            let inventory = coordinator.snapshot_inventory(&pools);
+            let backend = inventory
+                .backends
+                .iter()
+                .find(|backend| backend.identity.backend_addr == "127.0.0.1:8080")
+                .expect("backend inventory after failure");
+            assert!(matches!(
+                backend.health,
+                BackendHealthState::Unhealthy { reason: None }
+            ));
+            assert!(
+                !backend.placements[0].healthy,
+                "placement health must match lifecycle unhealthy state"
+            );
+        }
+
+        #[test]
+        fn passive_success_does_not_override_health_without_transition() {
+            let pool = test_upstream_pool();
+            let failure = BackendHealthObservation {
+                identity: BackendIdentity::new("127.0.0.1:8080"),
+                source: BackendHealthObservationSource::PassiveRequest,
+                outcome: BackendHealthObservationOutcome::Failure,
+                reason: Some(spooky_lb::health::HealthFailureReason::Transport),
+            };
+            assert!(apply_backend_health_observation(Some(&pool), Some(0), &failure).is_none());
+            assert!(apply_backend_health_observation(Some(&pool), Some(0), &failure).is_none());
+            assert!(matches!(
+                apply_backend_health_observation(Some(&pool), Some(0), &failure),
+                Some(HealthTransition::BecameUnhealthy)
+            ));
+
+            let success = BackendHealthObservation {
+                identity: BackendIdentity::new("127.0.0.1:8080"),
+                source: BackendHealthObservationSource::PassiveRequest,
+                outcome: BackendHealthObservationOutcome::Success,
+                reason: None,
+            };
+            let transition = apply_backend_health_observation(Some(&pool), Some(0), &success);
+            assert!(
+                transition.is_none(),
+                "passive success should not invent a recovery transition on its own"
+            );
+            assert!(
+                !pool.read().expect("read").is_backend_healthy(0),
+                "pool should remain unhealthy until the proper recovery path runs"
+            );
         }
     }
 
