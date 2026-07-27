@@ -389,3 +389,218 @@ impl RuntimeAuthPolicy {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{
+        ApiKeyAuth, ExternalAuth, ExternalAuthFailureMode, ExternalAuthRequestHeader, JwtAuth,
+        RouteAuth,
+    };
+
+    fn assert_config_invalid(
+        err: RuntimeConfigError,
+        expected: impl AsRef<str>,
+    ) {
+        let expected = expected.as_ref();
+        assert_eq!(err.category(), "config_invalid");
+        assert_eq!(err.to_string(), format!("config_invalid: {expected}"));
+    }
+
+    #[test]
+    fn api_key_auth_normalization_trims_header_and_keys() {
+        let api_key = ApiKeyAuth {
+            header_name: "  x-api-key  ".to_string(),
+            keys: vec![" primary ".to_string(), "backup".to_string()],
+        };
+
+        let normalized = RuntimeApiKeyAuth::normalize(&api_key, "payments").expect("api key auth");
+
+        assert_eq!(normalized.header_name, "x-api-key");
+        assert_eq!(normalized.keys, vec!["primary", "backup"]);
+    }
+
+    #[test]
+    fn jwt_auth_normalization_trims_optional_fields_and_converts_clock_skew() {
+        let jwt = JwtAuth {
+            secret: "  signing-secret  ".to_string(),
+            issuer: Some("  issuer.example  ".to_string()),
+            audience: Some("  payments-api  ".to_string()),
+            clock_skew_secs: 45,
+        };
+
+        let normalized = RuntimeJwtAuth::normalize(&jwt, "payments").expect("jwt auth");
+
+        assert_eq!(normalized.secret, "signing-secret");
+        assert_eq!(normalized.issuer.as_deref(), Some("issuer.example"));
+        assert_eq!(normalized.audience.as_deref(), Some("payments-api"));
+        assert_eq!(normalized.clock_skew, Duration::from_secs(45));
+    }
+
+    #[test]
+    fn external_http_auth_normalization_preserves_failure_mode_and_request_headers() {
+        let external_auth = ExternalAuth::Http {
+            endpoint: "http://auth.internal/check".to_string(),
+            request_headers: vec![ExternalAuthRequestHeader {
+                name: "  x-tenant-id  ".to_string(),
+                value: "{route.tenant}".to_string(),
+            }],
+            response_header_allowlist: vec![" x-auth-user ".to_string(), "x-auth-role".to_string()],
+            timeout_ms: 2_500,
+            failure_mode: ExternalAuthFailureMode::FailOpen,
+        };
+
+        let normalized =
+            RuntimeExternalAuth::normalize(&external_auth, "payments").expect("external auth");
+
+        assert_eq!(
+            normalized,
+            RuntimeExternalAuth::Http {
+                endpoint: "http://auth.internal/check".to_string(),
+                request_headers: vec![RuntimeExternalAuthRequestHeader {
+                    name: "x-tenant-id".to_string(),
+                    value: "{route.tenant}".to_string(),
+                }],
+                response_header_allowlist: vec![
+                    "x-auth-user".to_string(),
+                    "x-auth-role".to_string()
+                ],
+                timeout: Duration::from_millis(2_500),
+                failure_mode: RuntimeExternalAuthFailureMode::FailOpen,
+            }
+        );
+    }
+
+    #[test]
+    fn external_oidc_auth_normalization_shapes_client_and_scope_fields() {
+        let external_auth = ExternalAuth::Oidc {
+            discovery_url: Some(" https://issuer.example/.well-known/openid-configuration ".into()),
+            issuer_url: Some(" https://issuer.example ".into()),
+            client_id: "  spooky-edge  ".to_string(),
+            client_secret: Some("  secret-value  ".to_string()),
+            audience: Some("  payments-api  ".to_string()),
+            scopes: vec!["openid".to_string(), " profile ".to_string()],
+            request_headers: vec![ExternalAuthRequestHeader {
+                name: " x-request-id ".to_string(),
+                value: "{trace.id}".to_string(),
+            }],
+            response_header_allowlist: vec![" x-user ".to_string()],
+            timeout_ms: 3_000,
+            failure_mode: ExternalAuthFailureMode::FailClosed,
+        };
+
+        let normalized =
+            RuntimeExternalAuth::normalize(&external_auth, "payments").expect("oidc auth");
+
+        assert_eq!(
+            normalized,
+            RuntimeExternalAuth::Oidc {
+                discovery_url: Some(
+                    "https://issuer.example/.well-known/openid-configuration".to_string(),
+                ),
+                issuer_url: Some("https://issuer.example".to_string()),
+                client_id: "spooky-edge".to_string(),
+                client_secret: Some("secret-value".to_string()),
+                audience: Some("payments-api".to_string()),
+                scopes: vec!["openid".to_string(), "profile".to_string()],
+                request_headers: vec![RuntimeExternalAuthRequestHeader {
+                    name: "x-request-id".to_string(),
+                    value: "{trace.id}".to_string(),
+                }],
+                response_header_allowlist: vec!["x-user".to_string()],
+                timeout: Duration::from_millis(3_000),
+                failure_mode: RuntimeExternalAuthFailureMode::FailClosed,
+            }
+        );
+    }
+
+    #[test]
+    fn auth_policy_normalization_rejects_invalid_empty_values() {
+        let auth = RouteAuth {
+            required_scopes: vec!["payments:write".to_string(), "   ".to_string()],
+            ..RouteAuth::default()
+        };
+
+        let err = RuntimeAuthPolicy::normalize(&auth, "payments").expect_err("empty scope");
+
+        assert_config_invalid(
+            err,
+            "upstream 'payments' auth.required_scopes must not contain empty values",
+        );
+    }
+
+    #[test]
+    fn api_key_auth_normalization_rejects_empty_header_name() {
+        let api_key = ApiKeyAuth {
+            header_name: "   ".to_string(),
+            keys: vec!["secret".to_string()],
+        };
+
+        let err = RuntimeApiKeyAuth::normalize(&api_key, "payments")
+            .expect_err("empty api key header must fail");
+
+        assert_config_invalid(
+            err,
+            "upstream 'payments' auth.api_key.header_name must be non-empty",
+        );
+    }
+
+    #[test]
+    fn jwt_auth_normalization_rejects_empty_secret() {
+        let jwt = JwtAuth {
+            secret: "   ".to_string(),
+            ..JwtAuth::default()
+        };
+
+        let err = RuntimeJwtAuth::normalize(&jwt, "payments")
+            .expect_err("empty jwt secret must fail");
+
+        assert_config_invalid(err, "upstream 'payments' auth.jwt.secret must be non-empty");
+    }
+
+    #[test]
+    fn external_auth_normalization_rejects_invalid_header_name() {
+        let external_auth = ExternalAuth::Http {
+            endpoint: "http://auth.internal/check".to_string(),
+            request_headers: vec![ExternalAuthRequestHeader {
+                name: "bad header".to_string(),
+                value: "value".to_string(),
+            }],
+            response_header_allowlist: Vec::new(),
+            timeout_ms: 1_000,
+            failure_mode: ExternalAuthFailureMode::FailClosed,
+        };
+
+        let err = RuntimeExternalAuth::normalize(&external_auth, "payments")
+            .expect_err("invalid external auth header must fail");
+
+        assert_config_invalid(
+            err,
+            "upstream 'payments' auth.external_auth.http.request_headers[0].name must be a valid HTTP header name",
+        );
+    }
+
+    #[test]
+    fn external_oidc_auth_normalization_rejects_empty_client_id() {
+        let external_auth = ExternalAuth::Oidc {
+            discovery_url: None,
+            issuer_url: None,
+            client_id: "   ".to_string(),
+            client_secret: None,
+            audience: None,
+            scopes: vec!["openid".to_string()],
+            request_headers: Vec::new(),
+            response_header_allowlist: Vec::new(),
+            timeout_ms: 1_000,
+            failure_mode: ExternalAuthFailureMode::FailClosed,
+        };
+
+        let err = RuntimeExternalAuth::normalize(&external_auth, "payments")
+            .expect_err("empty oidc client id must fail");
+
+        assert_config_invalid(
+            err,
+            "upstream 'payments' auth.external_auth.oidc.client_id must be non-empty",
+        );
+    }
+}

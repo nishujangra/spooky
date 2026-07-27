@@ -455,3 +455,233 @@ impl RuntimeAdmissionPolicy {
         updated
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::{Resilience, ScopedRateLimit, ScopedRateLimitScope};
+
+    fn assert_config_invalid(
+        err: RuntimeConfigError,
+        expected: impl AsRef<str>,
+    ) {
+        let expected = expected.as_ref();
+        assert_eq!(err.category(), "config_invalid");
+        assert_eq!(err.to_string(), format!("config_invalid: {expected}"));
+    }
+
+    fn valid_scoped_rule(scope: ScopedRateLimitScope) -> ScopedRateLimit {
+        ScopedRateLimit {
+            name: "tenant-budget".to_string(),
+            scope,
+            requests_per_sec: 25,
+            burst: 50,
+            key: None,
+            route_allowlist: vec!["payments".to_string()],
+            idle_ttl_secs: 60,
+        }
+    }
+
+    fn valid_resilience() -> Resilience {
+        Resilience::default()
+    }
+
+    #[test]
+    fn scoped_rate_limit_normalization_shapes_route_client_tenant_and_token_scopes() {
+        let route = RuntimeScopedRateLimitPolicy::normalize(&ScopedRateLimit {
+            name: "route-limit".to_string(),
+            scope: ScopedRateLimitScope::Route,
+            ..valid_scoped_rule(ScopedRateLimitScope::Route)
+        })
+        .expect("route rule");
+        assert_eq!(route.scope, ScopedRateLimitScope::Route);
+        assert_eq!(route.key, None);
+
+        let client = RuntimeScopedRateLimitPolicy::normalize(&ScopedRateLimit {
+            name: "client-limit".to_string(),
+            scope: ScopedRateLimitScope::Client,
+            key: Some("  header:x-client-id  ".to_string()),
+            ..valid_scoped_rule(ScopedRateLimitScope::Client)
+        })
+        .expect("client rule");
+        assert_eq!(client.key.as_deref(), Some("header:x-client-id"));
+
+        let tenant = RuntimeScopedRateLimitPolicy::normalize(&ScopedRateLimit {
+            name: "tenant-limit".to_string(),
+            scope: ScopedRateLimitScope::Tenant,
+            key: Some(" query:tenant ".to_string()),
+            ..valid_scoped_rule(ScopedRateLimitScope::Tenant)
+        })
+        .expect("tenant rule");
+        assert_eq!(tenant.key.as_deref(), Some("query:tenant"));
+
+        let token = RuntimeScopedRateLimitPolicy::normalize(&ScopedRateLimit {
+            name: "token-limit".to_string(),
+            scope: ScopedRateLimitScope::Token,
+            key: Some(" bearer_token ".to_string()),
+            ..valid_scoped_rule(ScopedRateLimitScope::Token)
+        })
+        .expect("token rule");
+        assert_eq!(token.key.as_deref(), Some("bearer_token"));
+        assert_eq!(token.idle_ttl, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn rate_limit_normalization_rejects_duplicate_rule_names() {
+        let mut resilience = valid_resilience();
+        resilience.scoped_rate_limits = vec![
+            ScopedRateLimit {
+                name: "client-limit".to_string(),
+                scope: ScopedRateLimitScope::Client,
+                key: Some("header:x-client-id".to_string()),
+                ..valid_scoped_rule(ScopedRateLimitScope::Client)
+            },
+            ScopedRateLimit {
+                name: "client-limit".to_string(),
+                scope: ScopedRateLimitScope::Token,
+                key: Some("bearer_token".to_string()),
+                ..valid_scoped_rule(ScopedRateLimitScope::Token)
+            },
+        ];
+
+        let err = RuntimeRateLimitPolicy::normalize(&resilience).expect_err("duplicate names");
+
+        assert_config_invalid(
+            err,
+            "resilience.scoped_rate_limits contains duplicate rule name 'client-limit'",
+        );
+    }
+
+    #[test]
+    fn admission_policy_normalization_shapes_brownout_and_route_queue() {
+        let mut resilience = valid_resilience();
+        resilience.adaptive_admission.min_limit = 10;
+        resilience.adaptive_admission.max_limit = Some(25);
+        resilience.adaptive_admission.high_latency_ms = 1_500;
+        resilience.route_queue.default_cap = 9;
+        resilience.route_queue.global_cap = 40;
+        resilience.route_queue.shed_retry_after_seconds = 12;
+        resilience.route_queue.caps.insert("payments".to_string(), 3);
+        resilience.brownout.enabled = true;
+        resilience.brownout.trigger_inflight_percent = 85;
+        resilience.brownout.recover_inflight_percent = 55;
+        resilience.brownout.core_routes = vec![" /ledger ".to_string(), " /payments ".to_string()];
+
+        let policy = RuntimeAdmissionPolicy::normalize(&resilience, 100).expect("admission");
+
+        assert!(policy.brownout.enabled);
+        assert_eq!(policy.brownout.trigger_inflight_percent, 85);
+        assert_eq!(policy.brownout.recover_inflight_percent, 55);
+        assert_eq!(
+            policy.brownout.core_routes,
+            vec!["/ledger".to_string(), "/payments".to_string()]
+        );
+        assert_eq!(policy.route_queue.default_cap, 9);
+        assert_eq!(policy.route_queue.global_cap, 40);
+        assert_eq!(policy.route_queue.shed_retry_after_seconds, 12);
+        assert_eq!(policy.route_queue.caps.get("payments"), Some(&3));
+        assert_eq!(policy.adaptive_admission.min_limit, 10);
+        assert_eq!(policy.adaptive_admission.max_limit, 25);
+        assert_eq!(
+            policy.adaptive_admission.high_latency,
+            Duration::from_millis(1_500)
+        );
+    }
+
+    #[test]
+    fn scoped_rate_limit_normalization_rejects_invalid_empty_values_and_scope_mismatches() {
+        let route_with_key = ScopedRateLimit {
+            key: Some("header:x-route-id".to_string()),
+            ..valid_scoped_rule(ScopedRateLimitScope::Route)
+        };
+        let err = RuntimeScopedRateLimitPolicy::normalize(&route_with_key)
+            .expect_err("route scope with key must fail");
+        assert_config_invalid(
+            err,
+            "resilience.scoped_rate_limits['tenant-budget'].key is invalid for scope=route",
+        );
+
+        let tenant_without_key = valid_scoped_rule(ScopedRateLimitScope::Tenant);
+        let err = RuntimeScopedRateLimitPolicy::normalize(&tenant_without_key)
+            .expect_err("tenant scope without key must fail");
+        assert_config_invalid(
+            err,
+            "resilience.scoped_rate_limits['tenant-budget'].key is required for scope=tenant",
+        );
+
+        let invalid_key = ScopedRateLimit {
+            scope: ScopedRateLimitScope::Client,
+            key: Some("header:   ".to_string()),
+            ..valid_scoped_rule(ScopedRateLimitScope::Client)
+        };
+        let err = RuntimeScopedRateLimitPolicy::normalize(&invalid_key)
+            .expect_err("invalid key spec must fail");
+        assert_config_invalid(
+            err,
+            "resilience.scoped_rate_limits['tenant-budget'].key must be a supported request key spec",
+        );
+
+        let empty_route_allowlist = ScopedRateLimit {
+            route_allowlist: vec!["payments".to_string(), "   ".to_string()],
+            ..valid_scoped_rule(ScopedRateLimitScope::Token)
+        };
+        let err = RuntimeScopedRateLimitPolicy::normalize(&empty_route_allowlist)
+            .expect_err("empty route allowlist entry must fail");
+        assert_config_invalid(
+            err,
+            "resilience.scoped_rate_limits['tenant-budget'].route_allowlist must not contain empty values",
+        );
+    }
+
+    #[test]
+    fn admission_policy_normalization_rejects_unsupported_protocol_and_brownout_combinations() {
+        let mut resilience = valid_resilience();
+        resilience.protocol.allow_connect = false;
+        resilience.protocol.connect_allowed_ports = vec![443];
+
+        let err = RuntimeAdmissionPolicy::normalize(&resilience, 100)
+            .expect_err("connect restrictions without allow_connect must fail");
+        assert_config_invalid(
+            err,
+            "resilience.protocol.connect_allowed_ports/connect_allowed_authorities require allow_connect=true",
+        );
+
+        let mut resilience = valid_resilience();
+        resilience.protocol.allowed_methods = vec!["GET".to_string(), "BAD METHOD".to_string()];
+        let err = RuntimeAdmissionPolicy::normalize(&resilience, 100)
+            .expect_err("invalid http token must fail");
+        assert_config_invalid(
+            err,
+            "resilience.protocol.allowed_methods must contain valid HTTP method tokens",
+        );
+
+        let mut resilience = valid_resilience();
+        resilience.protocol.denied_path_prefixes = vec!["payments".to_string()];
+        let err = RuntimeAdmissionPolicy::normalize(&resilience, 100)
+            .expect_err("non slash-prefixed path must fail");
+        assert_config_invalid(
+            err,
+            "resilience.protocol.denied_path_prefixes must contain '/'-prefixed paths",
+        );
+
+        let mut resilience = valid_resilience();
+        resilience.protocol.allow_0rtt = true;
+        resilience.protocol.early_data_safe_methods = Vec::new();
+        let err =
+            RuntimeAdmissionPolicy::normalize(&resilience, 100).expect_err("0-rtt guard must fail");
+        assert_config_invalid(
+            err,
+            "resilience.protocol.early_data_safe_methods must be non-empty when allow_0rtt=true",
+        );
+
+        let mut resilience = valid_resilience();
+        resilience.brownout.trigger_inflight_percent = 70;
+        resilience.brownout.recover_inflight_percent = 70;
+        let err = RuntimeAdmissionPolicy::normalize(&resilience, 100)
+            .expect_err("brownout recover threshold must fail");
+        assert_config_invalid(
+            err,
+            "resilience.brownout.recover_inflight_percent must be < trigger_inflight_percent",
+        );
+    }
+}
