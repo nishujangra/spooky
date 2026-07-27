@@ -1501,6 +1501,105 @@ mod tests {
         }
 
         #[test]
+        fn request_feedback_success_keeps_backend_healthy_without_transition() {
+            let pool = test_upstream_pool();
+            let feedback = BackendRequestFeedback::from_status(
+                BackendIdentity::new("127.0.0.1:8080"),
+                Duration::from_millis(10),
+                http::StatusCode::OK,
+            );
+
+            let transition = apply_backend_request_feedback(Some(&pool), Some(0), &feedback);
+            assert!(
+                transition.is_none(),
+                "healthy request completion should not invent a transition"
+            );
+            assert!(
+                pool.read().expect("read").is_backend_healthy(0),
+                "success feedback must preserve healthy state"
+            );
+        }
+
+        #[test]
+        fn request_feedback_client_error_is_neutral_for_health() {
+            let pool = test_upstream_pool();
+            let feedback = BackendRequestFeedback::from_status(
+                BackendIdentity::new("127.0.0.1:8080"),
+                Duration::from_millis(10),
+                http::StatusCode::NOT_FOUND,
+            );
+
+            let transition = apply_backend_request_feedback(Some(&pool), Some(0), &feedback);
+            assert!(
+                transition.is_none(),
+                "client errors should not mutate backend health"
+            );
+            assert!(
+                pool.read().expect("read").is_backend_healthy(0),
+                "neutral feedback must leave pool health unchanged"
+            );
+        }
+
+        #[test]
+        fn request_feedback_timeout_and_transport_failures_share_health_effect_contract() {
+            let timeout_pool = test_upstream_pool();
+            let timeout_feedback = BackendRequestFeedback::failure(
+                BackendIdentity::new("127.0.0.1:8080"),
+                Duration::from_millis(100),
+                None,
+                Some(spooky_lb::health::HealthFailureReason::Timeout),
+            );
+            assert!(apply_backend_request_feedback(Some(&timeout_pool), Some(0), &timeout_feedback).is_none());
+            assert!(apply_backend_request_feedback(Some(&timeout_pool), Some(0), &timeout_feedback).is_none());
+            let timeout_transition =
+                apply_backend_request_feedback(Some(&timeout_pool), Some(0), &timeout_feedback);
+            assert!(matches!(
+                timeout_transition,
+                Some(HealthTransition::BecameUnhealthy)
+            ));
+
+            let transport_pool = test_upstream_pool();
+            let transport_feedback = BackendRequestFeedback::failure(
+                BackendIdentity::new("127.0.0.1:8080"),
+                Duration::from_millis(100),
+                None,
+                Some(spooky_lb::health::HealthFailureReason::Transport),
+            );
+            assert!(apply_backend_request_feedback(Some(&transport_pool), Some(0), &transport_feedback).is_none());
+            assert!(apply_backend_request_feedback(Some(&transport_pool), Some(0), &transport_feedback).is_none());
+            let transport_transition = apply_backend_request_feedback(
+                Some(&transport_pool),
+                Some(0),
+                &transport_feedback,
+            );
+            assert!(matches!(
+                transport_transition,
+                Some(HealthTransition::BecameUnhealthy)
+            ));
+        }
+
+        #[test]
+        fn request_feedback_without_reason_does_not_change_health() {
+            let pool = test_upstream_pool();
+            let feedback = BackendRequestFeedback::failure(
+                BackendIdentity::new("127.0.0.1:8080"),
+                Duration::from_millis(25),
+                Some(503),
+                None,
+            );
+
+            let transition = apply_backend_request_feedback(Some(&pool), Some(0), &feedback);
+            assert!(
+                transition.is_none(),
+                "failure feedback without a mapped health reason must not mutate health"
+            );
+            assert!(
+                pool.read().expect("read").is_backend_healthy(0),
+                "reasonless failure feedback should stay a no-op for health"
+            );
+        }
+
+        #[test]
         fn request_accounting_applier_finishes_inflight_request() {
             let pool = test_upstream_pool();
             {
@@ -1519,6 +1618,50 @@ mod tests {
             let state = guard.backend_runtime_state(0).expect("backend state");
             assert_eq!(state.active_requests, 0);
             assert!(state.ewma_latency_ms.is_some());
+        }
+
+        #[test]
+        fn request_feedback_coordinator_inventory_tracks_timeout_failures() {
+            let pool = test_upstream_pool();
+            let store = Arc::new(RuntimeBackendResolutionStore::new([
+                RuntimeBackendResolution::hostname(
+                    "127.0.0.1:8080".to_string(),
+                    "backend.internal".to_string(),
+                    8080,
+                ),
+            ]));
+            let coordinator = BackendLifecycleCoordinator::new(store);
+            let mut pools = HashMap::new();
+            pools.insert("api".to_string(), Arc::clone(&pool));
+
+            let feedback = BackendRequestFeedback::failure(
+                BackendIdentity::new("127.0.0.1:8080"),
+                Duration::from_millis(10),
+                None,
+                Some(spooky_lb::health::HealthFailureReason::Timeout),
+            );
+            assert!(apply_backend_request_feedback(Some(&pool), Some(0), &feedback).is_none());
+            assert!(apply_backend_request_feedback(Some(&pool), Some(0), &feedback).is_none());
+            let transition = apply_backend_request_feedback(Some(&pool), Some(0), &feedback);
+            assert!(matches!(
+                transition,
+                Some(HealthTransition::BecameUnhealthy)
+            ));
+
+            let inventory = coordinator.snapshot_inventory(&pools);
+            let backend = inventory
+                .backends
+                .iter()
+                .find(|backend| backend.identity.backend_addr == "127.0.0.1:8080")
+                .expect("backend inventory");
+            assert!(matches!(
+                backend.health,
+                BackendHealthState::Unhealthy { reason: None }
+            ));
+            assert!(
+                !backend.placements[0].healthy,
+                "coordinator inventory must reflect the pool mutation contract instead of caller-local branching"
+            );
         }
 
         #[test]
