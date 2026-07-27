@@ -79,7 +79,10 @@ pub(super) fn normalize_upstreams(
     let mut seen_backend_origins: HashMap<String, (String, String)> = HashMap::new();
     let mut normalized = HashMap::new();
 
-    for (upstream_name, upstream) in &config.upstream {
+    let mut ordered_upstreams: Vec<(&String, &Upstream)> = config.upstream.iter().collect();
+    ordered_upstreams.sort_by_key(|(upstream_name, _)| *upstream_name);
+
+    for (upstream_name, upstream) in ordered_upstreams {
         validate_upstream_policy(config, upstream_name, upstream)?;
 
         let route_key = RuntimeRouteMatchPolicy::normalize(upstream_name, &upstream.route)?;
@@ -640,4 +643,253 @@ fn is_valid_connect_authority(value: &str) -> bool {
         return false;
     }
     port.parse::<u16>().ok().is_some_and(|value| value > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use crate::{
+        config::{
+            ApiKeyAuth, Backend, Config, ExternalAuth, ExternalAuthFailureMode,
+            ExternalAuthRequestHeader, ForwardedHeaderPolicy, Listen, LoadBalancing, Resilience,
+            RouteAuth, RouteMatch, Tls, Upstream, UpstreamHostPolicy,
+        },
+        runtime::{RuntimeConfigError, RuntimePolicySet},
+    };
+
+    use super::normalize_upstreams;
+
+    fn upstream(host: Option<&str>, path_prefix: &str, method: Option<&str>) -> Upstream {
+        Upstream {
+            load_balancing: LoadBalancing {
+                lb_type: "round-robin".to_string(),
+                key: None,
+            },
+            auth: RouteAuth::default(),
+            host_policy: UpstreamHostPolicy::default(),
+            forwarded_headers: ForwardedHeaderPolicy::default(),
+            tls: None,
+            route: RouteMatch {
+                host: host.map(str::to_string),
+                path_prefix: Some(path_prefix.to_string()),
+                method: method.map(str::to_string),
+            },
+            backends: vec![Backend {
+                id: "b1".to_string(),
+                address: "http://127.0.0.1:7001".to_string(),
+                weight: 1,
+                health_check: None,
+            }],
+        }
+    }
+
+    fn config_with_upstreams(upstreams: HashMap<String, Upstream>) -> Config {
+        Config {
+            version: 1,
+            listen: Listen {
+                protocol: "http1".to_string(),
+                tls: Tls {
+                    cert: "/tmp/test-cert.pem".to_string(),
+                    key: "/tmp/test-key.pem".to_string(),
+                    ..Tls::default()
+                },
+                ..Listen::default()
+            },
+            listeners: Vec::new(),
+            upstream: upstreams,
+            load_balancing: None,
+            upstream_tls: Default::default(),
+            log: Default::default(),
+            performance: Default::default(),
+            observability: Default::default(),
+            resilience: Resilience::default(),
+            security: Default::default(),
+        }
+    }
+
+    #[test]
+    fn duplicate_route_ambiguity_is_reported_deterministically() {
+        let mut first_order = HashMap::new();
+        first_order.insert(
+            "zeta".to_string(),
+            upstream(Some("api.example.com"), "/v1", None),
+        );
+        first_order.insert(
+            "alpha".to_string(),
+            upstream(Some("api.example.com"), "/v1", None),
+        );
+
+        let mut second_order = HashMap::new();
+        second_order.insert(
+            "alpha".to_string(),
+            upstream(Some("api.example.com"), "/v1", None),
+        );
+        second_order.insert(
+            "zeta".to_string(),
+            upstream(Some("api.example.com"), "/v1", None),
+        );
+
+        let first_config = config_with_upstreams(first_order);
+        let second_config = config_with_upstreams(second_order);
+        let first_policies = RuntimePolicySet::from_config(&first_config).expect("policies");
+        let second_policies = RuntimePolicySet::from_config(&second_config).expect("policies");
+
+        let first_err = normalize_upstreams(&first_config, &first_policies).expect_err("duplicate");
+        let second_err =
+            normalize_upstreams(&second_config, &second_policies).expect_err("duplicate");
+
+        assert_eq!(first_err, second_err);
+        assert_eq!(
+            first_err,
+            RuntimeConfigError::DuplicateRouteAmbiguity {
+                upstream: "zeta".to_string(),
+                existing_upstream: "alpha".to_string(),
+                host: Some("api.example.com".to_string()),
+                path_prefix: Some("/v1".to_string()),
+                method: None,
+            }
+        );
+    }
+
+    #[test]
+    fn connect_route_requires_allow_connect_during_normalization() {
+        let config = config_with_upstreams(HashMap::from([(
+            "tunnel".to_string(),
+            upstream(None, "/", Some("CONNECT")),
+        )]));
+        let policies = RuntimePolicySet::from_config(&config).expect("policies");
+
+        let err = normalize_upstreams(&config, &policies).expect_err("connect must be rejected");
+        assert_eq!(
+            err,
+            RuntimeConfigError::UnsupportedPolicyCombination(
+                "upstream 'tunnel' routes CONNECT but resilience.protocol.allow_connect=false"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn connect_route_normalizes_when_protocol_policy_allows_it() {
+        let mut config = config_with_upstreams(HashMap::from([(
+            "tunnel".to_string(),
+            upstream(None, "/", Some("connect")),
+        )]));
+        config.resilience.protocol.allow_connect = true;
+        let policies = RuntimePolicySet::from_config(&config).expect("policies");
+
+        let normalized = normalize_upstreams(&config, &policies).expect("normalized upstreams");
+        assert_eq!(
+            normalized
+                .get("tunnel")
+                .expect("tunnel upstream")
+                .route
+                .method
+                .as_deref(),
+            Some("CONNECT")
+        );
+    }
+
+    #[test]
+    fn external_auth_misconfiguration_is_rejected_during_normalization() {
+        let mut invalid_header = upstream(None, "/", None);
+        invalid_header.auth.external_auth = Some(ExternalAuth::Http {
+            endpoint: "https://auth.example.com/check".to_string(),
+            request_headers: vec![ExternalAuthRequestHeader {
+                name: "bad header".to_string(),
+                value: "value".to_string(),
+            }],
+            response_header_allowlist: vec!["x-auth-user".to_string()],
+            timeout_ms: 1000,
+            failure_mode: ExternalAuthFailureMode::FailClosed,
+        });
+        let config = config_with_upstreams(HashMap::from([("api".to_string(), invalid_header)]));
+        let policies = RuntimePolicySet::from_config(&config).expect("policies");
+
+        let err = normalize_upstreams(&config, &policies).expect_err("invalid external auth");
+        assert_eq!(
+            err,
+            RuntimeConfigError::ConfigInvalid(
+                "upstream 'api' auth.external_auth.http.request_headers[].name must be a valid HTTP header name"
+                    .to_string()
+            )
+        );
+
+        let mut duplicate_allowlist = upstream(None, "/", None);
+        duplicate_allowlist.auth.external_auth = Some(ExternalAuth::Http {
+            endpoint: "https://auth.example.com/check".to_string(),
+            request_headers: Vec::new(),
+            response_header_allowlist: vec!["x-auth-user".to_string(), "X-Auth-User".to_string()],
+            timeout_ms: 1000,
+            failure_mode: ExternalAuthFailureMode::FailClosed,
+        });
+        let config =
+            config_with_upstreams(HashMap::from([("api".to_string(), duplicate_allowlist)]));
+        let policies = RuntimePolicySet::from_config(&config).expect("policies");
+
+        let err = normalize_upstreams(&config, &policies).expect_err("duplicate allowlist");
+        assert_eq!(
+            err,
+            RuntimeConfigError::ConfigInvalid(
+                "upstream 'api' auth.external_auth.http.response_header_allowlist contains duplicate header names"
+                    .to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn external_auth_precedence_is_explicit_at_normalization_time() {
+        let mut external_plus_api_key = upstream(None, "/", None);
+        external_plus_api_key.auth = RouteAuth {
+            api_key: Some(ApiKeyAuth {
+                header_name: "x-api-key".to_string(),
+                keys: vec!["secret".to_string()],
+            }),
+            jwt: None,
+            external_auth: Some(ExternalAuth::Http {
+                endpoint: "https://auth.example.com/check".to_string(),
+                request_headers: Vec::new(),
+                response_header_allowlist: Vec::new(),
+                timeout_ms: 1000,
+                failure_mode: ExternalAuthFailureMode::FailClosed,
+            }),
+            required_scopes: Vec::new(),
+            required_roles: Vec::new(),
+        };
+        let config =
+            config_with_upstreams(HashMap::from([("api".to_string(), external_plus_api_key)]));
+        let policies = RuntimePolicySet::from_config(&config).expect("policies");
+
+        let err = normalize_upstreams(&config, &policies).expect_err("external auth precedence");
+        assert_eq!(
+            err,
+            RuntimeConfigError::UnsupportedPolicyCombination(
+                "upstream 'api' auth.external_auth cannot be combined with auth.api_key or auth.jwt in v1"
+                    .to_string()
+            )
+        );
+
+        let mut external_plus_scopes = upstream(None, "/", None);
+        external_plus_scopes.auth.external_auth = Some(ExternalAuth::Http {
+            endpoint: "https://auth.example.com/check".to_string(),
+            request_headers: Vec::new(),
+            response_header_allowlist: Vec::new(),
+            timeout_ms: 1000,
+            failure_mode: ExternalAuthFailureMode::FailClosed,
+        });
+        external_plus_scopes.auth.required_scopes = vec!["read".to_string()];
+        let config =
+            config_with_upstreams(HashMap::from([("api".to_string(), external_plus_scopes)]));
+        let policies = RuntimePolicySet::from_config(&config).expect("policies");
+
+        let err = normalize_upstreams(&config, &policies).expect_err("external auth scope mix");
+        assert_eq!(
+            err,
+            RuntimeConfigError::UnsupportedPolicyCombination(
+                "upstream 'api' auth.external_auth cannot be combined with auth.required_scopes or auth.required_roles in v1"
+                    .to_string()
+            )
+        );
+    }
 }

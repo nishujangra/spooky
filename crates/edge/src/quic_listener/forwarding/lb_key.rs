@@ -312,3 +312,197 @@ impl QUICListener {
         Some(token.to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, net::SocketAddr};
+
+    use spooky_config::runtime::{RuntimeLoadBalancingStrategy, RuntimeRequestKeySpec};
+
+    use super::{LbKeyRequestParts, LbKeySource, QUICListener, ResolvedLbKey};
+
+    fn request_parts_with_headers(
+        method: &'static str,
+        path: &'static str,
+        authority: Option<&'static str>,
+        cid_key: Option<&'static str>,
+        client_addr: Option<SocketAddr>,
+        headers: HashMap<String, String>,
+    ) -> LbKeyRequestParts<'static> {
+        let leaked = Box::leak(Box::new(headers));
+        let lookup = Box::leak(Box::new(move |name: &str| {
+            leaked.get(&name.to_ascii_lowercase()).cloned()
+        }));
+        LbKeyRequestParts::new(method, path, authority, cid_key, client_addr, Some(lookup))
+    }
+
+    fn assert_resolved(
+        resolved: ResolvedLbKey,
+        expected_value: &str,
+        expected_source: LbKeySource,
+    ) {
+        assert_eq!(resolved.value, expected_value);
+        assert_eq!(resolved.source, expected_source);
+    }
+
+    #[test]
+    fn missing_hash_inputs_fall_back_to_authority_path_or_method_as_intended() {
+        let header_request = request_parts_with_headers(
+            "POST",
+            "/orders?tenant=acme",
+            Some("api.example.com"),
+            None,
+            None,
+            HashMap::new(),
+        );
+        assert_resolved(
+            QUICListener::resolve_lb_key_for_runtime_input(
+                RuntimeLoadBalancingStrategy::ConsistentHash,
+                Some(&RuntimeRequestKeySpec::Header("x-user-id".to_string())),
+                &header_request,
+            ),
+            "api.example.com",
+            LbKeySource::DefaultFallback,
+        );
+
+        let path_request = request_parts_with_headers(
+            "POST",
+            "/orders?tenant=acme",
+            None,
+            None,
+            None,
+            HashMap::new(),
+        );
+        assert_resolved(
+            QUICListener::resolve_lb_key_for_runtime_input(
+                RuntimeLoadBalancingStrategy::ConsistentHash,
+                Some(&RuntimeRequestKeySpec::Header("x-user-id".to_string())),
+                &path_request,
+            ),
+            "/orders?tenant=acme",
+            LbKeySource::DefaultFallback,
+        );
+
+        let method_request =
+            request_parts_with_headers("POST", "", None, None, None, HashMap::new());
+        assert_resolved(
+            QUICListener::resolve_lb_key_for_runtime_input(
+                RuntimeLoadBalancingStrategy::ConsistentHash,
+                Some(&RuntimeRequestKeySpec::Header("x-user-id".to_string())),
+                &method_request,
+            ),
+            "POST",
+            LbKeySource::DefaultFallback,
+        );
+
+        let sticky_request = request_parts_with_headers(
+            "GET",
+            "/resource",
+            Some("api.example.com"),
+            Some("cid-123"),
+            None,
+            HashMap::new(),
+        );
+        assert_resolved(
+            QUICListener::resolve_lb_key_for_runtime_input(
+                RuntimeLoadBalancingStrategy::StickyCid,
+                Some(&RuntimeRequestKeySpec::Header("x-user-id".to_string())),
+                &sticky_request,
+            ),
+            "cid-123",
+            LbKeySource::StickyCidFallback,
+        );
+    }
+
+    #[test]
+    fn equivalent_requests_build_identical_keys_across_direct_and_runtime_paths() {
+        let headers = HashMap::from([
+            ("cookie".to_string(), "session=s123; theme=dark".to_string()),
+            ("authorization".to_string(), "Bearer token-1".to_string()),
+        ]);
+        let request = request_parts_with_headers(
+            "GET",
+            "/orders?tenant=acme",
+            Some("api.example.com"),
+            Some("cid-777"),
+            Some("203.0.113.9:443".parse().expect("client addr")),
+            headers,
+        );
+
+        let direct = QUICListener::resolve_lb_key(
+            "consistent-hash",
+            Some("cookie:session"),
+            request.method,
+            request.path,
+            request.authority,
+            request.cid_key,
+            request.client_addr,
+            request.header_lookup,
+        );
+        let runtime = QUICListener::resolve_lb_key_for_runtime_input(
+            RuntimeLoadBalancingStrategy::ConsistentHash,
+            Some(&RuntimeRequestKeySpec::Cookie("session".to_string())),
+            &request,
+        );
+
+        assert_eq!(direct.value, runtime.value);
+        assert_eq!(direct.source, runtime.source);
+    }
+
+    #[test]
+    fn key_resolution_does_not_drift_with_header_order_or_absent_optional_fields() {
+        let first = request_parts_with_headers(
+            "GET",
+            "/orders?tenant=acme",
+            Some("api.example.com"),
+            None,
+            None,
+            HashMap::from([
+                ("x-user-id".to_string(), "alice".to_string()),
+                ("cookie".to_string(), "session=s123".to_string()),
+            ]),
+        );
+        let second = request_parts_with_headers(
+            "GET",
+            "/orders?tenant=acme",
+            Some("api.example.com"),
+            None,
+            None,
+            HashMap::from([
+                ("cookie".to_string(), "session=s123".to_string()),
+                ("x-user-id".to_string(), "alice".to_string()),
+            ]),
+        );
+
+        let first_header = QUICListener::resolve_lb_key_for_runtime_input(
+            RuntimeLoadBalancingStrategy::ConsistentHash,
+            Some(&RuntimeRequestKeySpec::Header("x-user-id".to_string())),
+            &first,
+        );
+        let second_header = QUICListener::resolve_lb_key_for_runtime_input(
+            RuntimeLoadBalancingStrategy::ConsistentHash,
+            Some(&RuntimeRequestKeySpec::Header("x-user-id".to_string())),
+            &second,
+        );
+        assert_eq!(first_header.value, second_header.value);
+        assert_eq!(first_header.source, second_header.source);
+
+        let missing_cookie = request_parts_with_headers(
+            "GET",
+            "/orders?tenant=acme",
+            Some("api.example.com"),
+            None,
+            None,
+            HashMap::from([("x-user-id".to_string(), "alice".to_string())]),
+        );
+        assert_resolved(
+            QUICListener::resolve_lb_key_for_runtime_input(
+                RuntimeLoadBalancingStrategy::ConsistentHash,
+                Some(&RuntimeRequestKeySpec::Cookie("session".to_string())),
+                &missing_cookie,
+            ),
+            "api.example.com",
+            LbKeySource::DefaultFallback,
+        );
+    }
+}

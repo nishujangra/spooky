@@ -192,6 +192,20 @@ mod tests {
     }
 
     #[test]
+    fn retry_denial_does_not_count_as_executed_retry_attempt() {
+        let mut telemetry = RetryTelemetry::default();
+
+        telemetry.record_denial(Some(RetryPolicyDenialReason::BudgetDenied));
+
+        assert_eq!(telemetry.count, 0);
+        assert_eq!(telemetry.attempt_reason, None);
+        assert_eq!(
+            telemetry.denial_reason,
+            Some(RetryPolicyDenialReason::BudgetDenied)
+        );
+    }
+
+    #[test]
     fn hedge_telemetry_records_typed_trigger_and_outcome() {
         let mut telemetry = HedgeTelemetry::default();
 
@@ -208,5 +222,25 @@ mod tests {
             Some(HedgeOutcomeTelemetryReason::HedgeWon)
         );
         assert_eq!(telemetry.primary_late_ms, 42);
+    }
+
+    #[test]
+    fn hedge_telemetry_keeps_primary_win_and_hedge_win_outcomes_distinct() {
+        let mut primary_won = HedgeTelemetry::default();
+        primary_won.record_trigger(HedgeTriggerTelemetryReason::DelayElapsed);
+        primary_won.record_outcome(HedgeOutcomeTelemetryReason::PrimaryWonAfterTrigger);
+
+        let mut hedge_won = HedgeTelemetry::default();
+        hedge_won.record_trigger(HedgeTriggerTelemetryReason::DelayElapsed);
+        hedge_won.record_outcome(HedgeOutcomeTelemetryReason::HedgeWon);
+
+        assert_eq!(
+            primary_won.outcome_reason,
+            Some(HedgeOutcomeTelemetryReason::PrimaryWonAfterTrigger)
+        );
+        assert_eq!(
+            hedge_won.outcome_reason,
+            Some(HedgeOutcomeTelemetryReason::HedgeWon)
+        );
     }
 }

@@ -222,6 +222,27 @@ pub(in crate::quic_listener) fn boxed_full(body: Bytes) -> BoxBody<Bytes, Infall
     Full::new(body).map_err(|never| match never {}).boxed()
 }
 
+fn bootstrap_response_constraints(
+    response_mode: BootstrapResponseMode,
+) -> ResponseProtocolConstraints {
+    ResponseProtocolConstraints {
+        protocol: ResponseNormalizationProtocol::Http1,
+        strip_connection_headers: true,
+        allow_trailers: false,
+        preserve_upgrade: matches!(response_mode, BootstrapResponseMode::WebsocketUpgrade),
+    }
+}
+
+fn bootstrap_response_body_too_large_response(
+    alt_svc: &str,
+) -> Response<BoxBody<Bytes, Infallible>> {
+    Response::builder()
+        .status(StatusCode::SERVICE_UNAVAILABLE)
+        .header("alt-svc", alt_svc)
+        .body(boxed_full(Bytes::from_static(RESPONSE_BODY_TOO_LARGE_BODY)))
+        .unwrap_or_else(|_| Response::new(boxed_full(Bytes::from_static(b"error\n"))))
+}
+
 pub(in crate::quic_listener) struct BootstrapWritebackInput<'a> {
     pub(in crate::quic_listener) upstream_resp: Response<Incoming>,
     pub(in crate::quic_listener) prepared_route: &'a BootstrapPreparedRoute,
@@ -247,12 +268,7 @@ pub(in crate::quic_listener) fn write_bootstrap_response(
         } else {
             ResponseBodyMode::Normal
         },
-        constraints: ResponseProtocolConstraints {
-            protocol: ResponseNormalizationProtocol::Http1,
-            strip_connection_headers: true,
-            allow_trailers: false,
-            preserve_upgrade: matches!(response_mode, BootstrapResponseMode::WebsocketUpgrade),
-        },
+        constraints: bootstrap_response_constraints(response_mode),
     });
     let upstream_content_length = input
         .upstream_resp
@@ -310,11 +326,9 @@ pub(in crate::quic_listener) fn write_bootstrap_response(
         );
         return Ok(BootstrapWritebackOutcome {
             terminal: BootstrapTerminalOutcome::Rejected(BootstrapRejectionReason::Overloaded),
-            response: Response::builder()
-                .status(StatusCode::SERVICE_UNAVAILABLE)
-                .header("alt-svc", &input.dispatch_ctx.request.runtime.alt_svc)
-                .body(boxed_full(Bytes::from_static(RESPONSE_BODY_TOO_LARGE_BODY)))
-                .unwrap_or_else(|_| Response::new(boxed_full(Bytes::from_static(b"error\n")))),
+            response: bootstrap_response_body_too_large_response(
+                &input.dispatch_ctx.request.runtime.alt_svc,
+            ),
         });
     }
     observe_bootstrap_response_status(
@@ -380,4 +394,145 @@ pub(in crate::quic_listener) fn write_bootstrap_response(
             .body(resp_body)
             .unwrap_or_else(|_| Response::new(boxed_full(Bytes::new()))),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use http::{HeaderMap, HeaderValue};
+    use spooky_bridge::response::{
+        ResponseBodyMode, ResponseBodyPolicy, ResponseNormalizationInput,
+        ResponseNormalizationProtocol, normalize_upstream_response,
+    };
+
+    use super::*;
+
+    fn header_value<'a>(
+        headers: &'a [spooky_bridge::response::NormalizedHeader],
+        name: &str,
+    ) -> Option<&'a str> {
+        let name = http::header::HeaderName::from_bytes(name.as_bytes()).ok()?;
+        headers
+            .iter()
+            .find(|header| header.name == name)
+            .and_then(|header| header.value.to_str().ok())
+    }
+
+    #[test]
+    fn bootstrap_overflow_response_has_stable_local_wire_shape() {
+        let response = bootstrap_response_body_too_large_response("h3=\":443\"; ma=86400");
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("alt-svc")
+                .and_then(|value| value.to_str().ok()),
+            Some("h3=\":443\"; ma=86400")
+        );
+    }
+
+    #[test]
+    fn bootstrap_constraints_strip_hop_headers_and_preserve_upgrade_only_for_websocket() {
+        let standard = bootstrap_response_constraints(BootstrapResponseMode::StandardResponse);
+        assert_eq!(standard.protocol, ResponseNormalizationProtocol::Http1);
+        assert!(standard.strip_connection_headers);
+        assert!(!standard.allow_trailers);
+        assert!(!standard.preserve_upgrade);
+
+        let websocket = bootstrap_response_constraints(BootstrapResponseMode::WebsocketUpgrade);
+        assert!(websocket.preserve_upgrade);
+    }
+
+    #[test]
+    fn bootstrap_and_quic_normalization_keep_same_end_to_end_response_contract() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            http::header::CONNECTION,
+            HeaderValue::from_static("x-hop-token"),
+        );
+        headers.insert(
+            http::header::TRANSFER_ENCODING,
+            HeaderValue::from_static("chunked"),
+        );
+        headers.insert(
+            http::HeaderName::from_static("x-hop-token"),
+            HeaderValue::from_static("secret"),
+        );
+        headers.insert(http::header::CONTENT_LENGTH, HeaderValue::from_static("9"));
+        headers.insert(
+            http::header::CACHE_CONTROL,
+            HeaderValue::from_static("max-age=60"),
+        );
+        headers.insert(http::header::ETAG, HeaderValue::from_static("\"etag-1\""));
+
+        let quic = normalize_upstream_response(ResponseNormalizationInput {
+            upstream: spooky_bridge::response::UpstreamResponseView {
+                status: StatusCode::OK,
+                headers: &headers,
+                trailers: None,
+            },
+            body_mode: ResponseBodyMode::Normal,
+            constraints: ResponseProtocolConstraints {
+                protocol: ResponseNormalizationProtocol::Http3,
+                strip_connection_headers: true,
+                allow_trailers: true,
+                preserve_upgrade: false,
+            },
+        });
+        let bootstrap = normalize_upstream_response(ResponseNormalizationInput {
+            upstream: spooky_bridge::response::UpstreamResponseView {
+                status: StatusCode::OK,
+                headers: &headers,
+                trailers: None,
+            },
+            body_mode: ResponseBodyMode::Normal,
+            constraints: bootstrap_response_constraints(BootstrapResponseMode::StandardResponse),
+        });
+
+        assert_eq!(quic.head.status, bootstrap.head.status);
+        assert_eq!(quic.emission.body, ResponseBodyPolicy::Forward);
+        assert_eq!(bootstrap.emission.body, ResponseBodyPolicy::Forward);
+        assert!(!quic.emission.emit_end_stream_on_headers);
+        assert!(!bootstrap.emission.emit_end_stream_on_headers);
+        assert_eq!(
+            header_value(&quic.head.headers, "cache-control"),
+            header_value(&bootstrap.head.headers, "cache-control")
+        );
+        assert_eq!(
+            header_value(&quic.head.headers, "etag"),
+            header_value(&bootstrap.head.headers, "etag")
+        );
+        assert_eq!(header_value(&quic.head.headers, "x-hop-token"), None);
+        assert_eq!(header_value(&bootstrap.head.headers, "x-hop-token"), None);
+    }
+
+    #[test]
+    fn bootstrap_head_and_no_content_responses_stay_terminal_and_bodyless() {
+        let mut headers = HeaderMap::new();
+        headers.insert(http::header::CONTENT_LENGTH, HeaderValue::from_static("0"));
+
+        let head = normalize_upstream_response(ResponseNormalizationInput {
+            upstream: spooky_bridge::response::UpstreamResponseView {
+                status: StatusCode::OK,
+                headers: &headers,
+                trailers: None,
+            },
+            body_mode: ResponseBodyMode::HeadRequest,
+            constraints: bootstrap_response_constraints(BootstrapResponseMode::StandardResponse),
+        });
+        let no_content = normalize_upstream_response(ResponseNormalizationInput {
+            upstream: spooky_bridge::response::UpstreamResponseView {
+                status: StatusCode::NO_CONTENT,
+                headers: &headers,
+                trailers: None,
+            },
+            body_mode: ResponseBodyMode::Normal,
+            constraints: bootstrap_response_constraints(BootstrapResponseMode::StandardResponse),
+        });
+
+        assert_eq!(head.emission.body, ResponseBodyPolicy::Suppress);
+        assert!(head.emission.emit_end_stream_on_headers);
+        assert_eq!(no_content.emission.body, ResponseBodyPolicy::Suppress);
+        assert!(no_content.emission.emit_end_stream_on_headers);
+    }
 }

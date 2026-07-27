@@ -1269,6 +1269,91 @@ mod tests {
     }
 
     #[test]
+    fn failed_refresh_preserves_existing_resolution_and_generation() {
+        let backend_addr = "http://backend.internal:8080";
+        let retained_addrs = vec!["10.0.0.10:8080".parse::<SocketAddr>().expect("addr")];
+        let store = Arc::new(RuntimeBackendResolutionStore::new([
+            RuntimeBackendResolution::hostname(
+                backend_addr.to_string(),
+                "backend.internal".to_string(),
+                8080,
+            ),
+        ]));
+        store
+            .apply_resolution_refresh(
+                backend_addr,
+                retained_addrs.clone(),
+                std::time::SystemTime::UNIX_EPOCH,
+            )
+            .expect("seed refresh");
+        let coordinator = BackendLifecycleCoordinator::new(Arc::clone(&store));
+        let resolver = SharedDnsResolver::new();
+        let transport_pool = test_transport_pool(backend_addr);
+        let backend = coordinator.backend(backend_addr).expect("backend");
+
+        let outcome = coordinator.apply_refresh(
+            &backend,
+            Err("nxdomain".to_string()),
+            &resolver,
+            &transport_pool,
+        );
+
+        assert!(matches!(
+            outcome,
+            BackendDnsRefreshApplication::LookupFailed {
+                retained_addrs: ref actual,
+                ..
+            } if *actual == retained_addrs
+        ));
+        let snapshot = coordinator
+            .snapshot_backend(backend_addr)
+            .expect("snapshot after failed refresh");
+        assert_eq!(snapshot.resolution.resolved_addrs, retained_addrs);
+        assert_eq!(snapshot.resolution.refresh_generation, 1);
+        assert_eq!(
+            outcome.classification(),
+            BackendRefreshClassification::FailedActivePreserved
+        );
+    }
+
+    #[test]
+    fn inventory_marks_missing_pool_members_as_removed_without_losing_live_placements() {
+        let store = Arc::new(RuntimeBackendResolutionStore::new([
+            RuntimeBackendResolution::hostname(
+                "127.0.0.1:8080".to_string(),
+                "backend-a.internal".to_string(),
+                8080,
+            ),
+            RuntimeBackendResolution::hostname(
+                "127.0.0.1:9090".to_string(),
+                "backend-b.internal".to_string(),
+                9090,
+            ),
+        ]));
+        let coordinator = BackendLifecycleCoordinator::new(store);
+        let mut pools = HashMap::new();
+        pools.insert("api".to_string(), test_upstream_pool());
+
+        let inventory = coordinator.snapshot_inventory(&pools);
+        let active = inventory
+            .backends
+            .iter()
+            .find(|backend| backend.identity.backend_addr == "127.0.0.1:8080")
+            .expect("active backend");
+        let removed = inventory
+            .backends
+            .iter()
+            .find(|backend| backend.identity.backend_addr == "127.0.0.1:9090")
+            .expect("removed backend");
+
+        assert_eq!(active.membership, BackendMembershipState::Active);
+        assert_eq!(active.placements.len(), 1);
+        assert_eq!(removed.membership, BackendMembershipState::Removed);
+        assert!(removed.placements.is_empty());
+        assert_eq!(inventory.summary().total_backends, 1);
+    }
+
+    #[test]
     fn request_feedback_does_not_duplicate_active_health_check_ownership() {
         let pool = test_active_health_upstream_pool();
         let store = Arc::new(RuntimeBackendResolutionStore::new([

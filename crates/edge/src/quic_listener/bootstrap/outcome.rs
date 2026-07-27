@@ -194,3 +194,182 @@ pub(in crate::quic_listener) fn finish_bootstrap_backend_request_accounting(
         },
     );
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        observability::RequestOutcomeReason,
+        quic_listener::bootstrap::request::{
+            BootstrapRejectionReason, BootstrapTerminalOutcome, BootstrapTimeoutReason,
+        },
+        runtime::connection::outcome::{
+            OutcomeBackendTarget, OutcomeRouteTarget, observe_admission_outcome,
+            observe_proxy_error_outcome,
+        },
+    };
+
+    fn upstream_request_count(
+        metrics: &Metrics,
+        upstream: &str,
+        status_class: &str,
+        outcome: &str,
+    ) -> u64 {
+        metrics
+            .snapshot_upstream_request_counts()
+            .into_iter()
+            .find(|(key, _)| {
+                key.upstream == upstream
+                    && key.status_class == status_class
+                    && key.outcome == outcome
+            })
+            .map(|(_, count)| count)
+            .unwrap_or_default()
+    }
+
+    fn backend_request_count(
+        metrics: &Metrics,
+        upstream: &str,
+        backend: &str,
+        status_class: &str,
+        outcome: &str,
+    ) -> u64 {
+        metrics
+            .snapshot_backend_request_counts()
+            .into_iter()
+            .find(|(key, _)| {
+                key.upstream == upstream
+                    && key.backend == backend
+                    && key.status_class == status_class
+                    && key.outcome == outcome
+            })
+            .map(|(_, count)| count)
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn bootstrap_and_quic_timeout_failures_record_same_reason_and_label_set() {
+        let bootstrap_metrics = Metrics::new(1, [String::from("api")]);
+        let forwarding_metrics = Metrics::new(1, [String::from("api")]);
+        let request_start = Instant::now() - std::time::Duration::from_millis(25);
+
+        observe_bootstrap_request_proxy_error(
+            &bootstrap_metrics,
+            "api",
+            "backend-a",
+            0,
+            request_start,
+            StatusCode::GATEWAY_TIMEOUT,
+            &ProxyError::Timeout,
+        );
+        let forwarding = observe_proxy_error_outcome(
+            &forwarding_metrics,
+            OutcomeRouteTarget { route: "api" },
+            Some(OutcomeBackendTarget {
+                upstream: "api",
+                backend_addr: Some("backend-a"),
+                backend_index: Some(0),
+            }),
+            request_start.elapsed(),
+            Some(StatusCode::GATEWAY_TIMEOUT),
+            &ProxyError::Timeout,
+            None,
+        );
+
+        assert_eq!(
+            BootstrapTerminalOutcome::TimedOut(BootstrapTimeoutReason::Upstream).canonical_reason(),
+            Some(RequestOutcomeReason::TimedOut)
+        );
+        assert_eq!(
+            forwarding.route_outcome,
+            crate::runtime::connection::outcome::CanonicalRouteOutcome::Timeout
+        );
+        assert_eq!(
+            upstream_request_count(&bootstrap_metrics, "api", "5xx", "timeout"),
+            1
+        );
+        assert_eq!(
+            upstream_request_count(&forwarding_metrics, "api", "5xx", "timeout"),
+            1
+        );
+        assert_eq!(
+            backend_request_count(&bootstrap_metrics, "api", "backend-a", "5xx", "timeout"),
+            1
+        );
+        assert_eq!(
+            backend_request_count(&forwarding_metrics, "api", "backend-a", "5xx", "timeout"),
+            1
+        );
+    }
+
+    #[test]
+    fn bootstrap_and_quic_admission_failures_record_same_reason_and_label_set() {
+        let bootstrap_metrics = Metrics::new(1, [String::from("api")]);
+        let forwarding_metrics = Metrics::new(1, [String::from("api")]);
+        let request_start = Instant::now() - std::time::Duration::from_millis(5);
+
+        observe_bootstrap_admission_outcome(
+            &bootstrap_metrics,
+            "api",
+            "backend-a",
+            0,
+            request_start,
+            StatusCode::SERVICE_UNAVAILABLE,
+            AdmissionOutcomeClass::OverloadShed {
+                reason: Some(OverloadShedReason::GlobalInflight),
+            },
+        );
+        let forwarding = observe_admission_outcome(
+            &forwarding_metrics,
+            OutcomeRouteTarget { route: "api" },
+            Some(OutcomeBackendTarget {
+                upstream: "api",
+                backend_addr: Some("backend-a"),
+                backend_index: Some(0),
+            }),
+            request_start.elapsed(),
+            StatusCode::SERVICE_UNAVAILABLE,
+            AdmissionOutcomeClass::OverloadShed {
+                reason: Some(OverloadShedReason::GlobalInflight),
+            },
+        );
+
+        assert_eq!(
+            BootstrapTerminalOutcome::Rejected(BootstrapRejectionReason::Overloaded)
+                .canonical_reason(),
+            Some(RequestOutcomeReason::Overloaded)
+        );
+        assert_eq!(
+            forwarding.route_outcome,
+            crate::runtime::connection::outcome::CanonicalRouteOutcome::OverloadShed
+        );
+        assert_eq!(
+            upstream_request_count(&bootstrap_metrics, "api", "5xx", "overload_shed"),
+            1
+        );
+        assert_eq!(
+            upstream_request_count(&forwarding_metrics, "api", "5xx", "overload_shed"),
+            1
+        );
+        assert_eq!(
+            backend_request_count(
+                &bootstrap_metrics,
+                "api",
+                "backend-a",
+                "5xx",
+                "overload_shed"
+            ),
+            1
+        );
+        assert_eq!(
+            backend_request_count(
+                &forwarding_metrics,
+                "api",
+                "backend-a",
+                "5xx",
+                "overload_shed"
+            ),
+            1
+        );
+    }
+}

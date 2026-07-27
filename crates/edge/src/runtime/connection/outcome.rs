@@ -935,6 +935,19 @@ mod tests {
             .unwrap_or_default()
     }
 
+    fn upstream_latency_stats(
+        metrics: &Metrics,
+        upstream: &str,
+        outcome: &str,
+    ) -> crate::metrics::RequestLatencyStats {
+        metrics
+            .snapshot_upstream_request_latency()
+            .into_iter()
+            .find(|(key, _)| key.upstream == upstream && key.outcome == outcome)
+            .map(|(_, stats)| stats)
+            .unwrap_or_default()
+    }
+
     fn terminal_snapshot_for_test() -> crate::runtime::connection::stream::TerminalSnapshot {
         use crate::runtime::connection::stream::{RequestContext, RequestMode, TerminalSnapshot};
         let now = std::time::Instant::now();
@@ -1119,6 +1132,66 @@ mod tests {
     }
 
     #[test]
+    fn timeout_outcome_records_5xx_labels_and_matching_latency_bucket() {
+        let metrics = test_metrics();
+
+        let timeout = observe_proxy_error_outcome(
+            &metrics,
+            OutcomeRouteTarget { route: "api" },
+            Some(OutcomeBackendTarget {
+                upstream: "api",
+                backend_addr: Some("backend-a"),
+                backend_index: Some(0),
+            }),
+            Duration::from_millis(320),
+            Some(StatusCode::GATEWAY_TIMEOUT),
+            &ProxyError::Timeout,
+            None,
+        );
+
+        assert_eq!(timeout.route_outcome, CanonicalRouteOutcome::Timeout);
+        assert_eq!(upstream_request_count(&metrics, "api", "5xx", "timeout"), 1);
+        assert_eq!(
+            backend_request_count(&metrics, "api", "backend-a", "5xx", "timeout"),
+            1
+        );
+
+        let latency = upstream_latency_stats(&metrics, "api", "timeout");
+        assert_eq!(latency.count, 1);
+        assert_eq!(latency.latency_ms_sum, 320);
+        assert_eq!(latency.latency_buckets[7], 1);
+    }
+
+    #[test]
+    fn success_outcome_records_2xx_labels_and_matching_latency_bucket() {
+        let metrics = test_metrics();
+
+        let success = observe_status_outcome(
+            &metrics,
+            OutcomeRouteTarget { route: "api" },
+            Some(OutcomeBackendTarget {
+                upstream: "api",
+                backend_addr: Some("backend-a"),
+                backend_index: Some(0),
+            }),
+            Duration::from_millis(12),
+            StatusCode::OK,
+        );
+
+        assert_eq!(success.route_outcome, CanonicalRouteOutcome::Success);
+        assert_eq!(upstream_request_count(&metrics, "api", "2xx", "success"), 1);
+        assert_eq!(
+            backend_request_count(&metrics, "api", "backend-a", "2xx", "success"),
+            1
+        );
+
+        let latency = upstream_latency_stats(&metrics, "api", "success");
+        assert_eq!(latency.count, 1);
+        assert_eq!(latency.latency_ms_sum, 12);
+        assert_eq!(latency.latency_buckets[3], 1);
+    }
+
+    #[test]
     fn observe_proxy_error_outcome_records_timeout_and_unrouted_failure() {
         let metrics = test_metrics();
 
@@ -1232,6 +1305,47 @@ mod tests {
         assert_eq!(
             upstream_request_count(&metrics, "api", "4xx", "rate_limited"),
             1
+        );
+    }
+
+    #[test]
+    fn outcome_reason_mapping_stays_canonical_for_admission_and_backend_failures() {
+        let auth = classify_terminal_outcome(&TerminalState::Rejected(
+            crate::runtime::connection::stream::RejectedState {
+                reason: RejectionReason::AuthDenied,
+                snapshot: terminal_snapshot_for_test(),
+            },
+        ));
+        let overload = classify_terminal_outcome(&TerminalState::Rejected(
+            crate::runtime::connection::stream::RejectedState {
+                reason: RejectionReason::Overloaded,
+                snapshot: terminal_snapshot_for_test(),
+            },
+        ));
+        let backend = classify_terminal_outcome(&TerminalState::BackendFailed(
+            crate::runtime::connection::stream::BackendFailedState {
+                reason: BackendFailureReason::UpstreamProtocol,
+                snapshot: terminal_snapshot_for_test(),
+            },
+        ));
+
+        assert_eq!(
+            auth.rejection_kind,
+            Some(CanonicalRejectionKind::AuthDenied)
+        );
+        assert_eq!(
+            overload.rejection_kind,
+            Some(CanonicalRejectionKind::OverloadShed)
+        );
+        assert_eq!(
+            backend.backend_failure_kind,
+            Some(CanonicalBackendFailureKind::Protocol)
+        );
+        assert_eq!(auth.route_outcome, CanonicalRouteOutcome::AuthDenied);
+        assert_eq!(overload.route_outcome, CanonicalRouteOutcome::OverloadShed);
+        assert_eq!(
+            backend.route_outcome,
+            CanonicalRouteOutcome::UpstreamFailure
         );
     }
 

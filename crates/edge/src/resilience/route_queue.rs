@@ -80,3 +80,51 @@ impl Drop for RouteQueuePermit {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::HashMap, sync::Arc};
+
+    use super::{RouteQueueLimiter, RouteQueueRejection};
+
+    #[test]
+    fn try_acquire_distinguishes_route_cap_from_global_cap() {
+        let limiter = Arc::new(RouteQueueLimiter::new(
+            2,
+            3,
+            HashMap::from([(String::from("api"), 1usize)]),
+        ));
+
+        let api = limiter.try_acquire("api").expect("api permit");
+        assert!(matches!(
+            limiter.try_acquire("api"),
+            Err(RouteQueueRejection::RouteCap)
+        ));
+
+        let other_a = limiter.try_acquire("other-a").expect("other-a permit");
+        let other_b = limiter.try_acquire("other-b").expect("other-b permit");
+        assert!(matches!(
+            limiter.try_acquire("other-c"),
+            Err(RouteQueueRejection::GlobalCap)
+        ));
+
+        drop(api);
+        drop(other_a);
+        drop(other_b);
+    }
+
+    #[test]
+    fn dropping_permit_releases_capacity_for_same_route() {
+        let limiter = Arc::new(RouteQueueLimiter::new(1, 1, HashMap::new()));
+
+        let permit = limiter.try_acquire("api").expect("first permit");
+        assert!(matches!(
+            limiter.try_acquire("api"),
+            Err(RouteQueueRejection::GlobalCap)
+        ));
+
+        drop(permit);
+
+        assert!(limiter.try_acquire("api").is_ok());
+    }
+}

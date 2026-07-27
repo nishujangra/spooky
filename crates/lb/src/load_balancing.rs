@@ -82,3 +82,70 @@ impl LoadBalancing {
         Self::from_config(strategy.canonical_name())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use spooky_config::config::Backend;
+
+    use super::LoadBalancing;
+    use crate::backend_pool::BackendPool;
+
+    fn pool() -> BackendPool {
+        BackendPool::new_from_states(vec![
+            crate::backend::BackendState::new(&Backend {
+                id: "a".to_string(),
+                address: "http://127.0.0.1:7001".to_string(),
+                weight: 1,
+                health_check: None,
+            }),
+            crate::backend::BackendState::new(&Backend {
+                id: "b".to_string(),
+                address: "http://127.0.0.1:7002".to_string(),
+                weight: 1,
+                health_check: None,
+            }),
+        ])
+    }
+
+    #[test]
+    fn pick_readonly_is_available_only_for_readonly_strategies() {
+        let pool = pool();
+
+        assert!(
+            LoadBalancing::from_config("round-robin")
+                .expect("round robin")
+                .pick_readonly("ignored", &pool)
+                .is_some()
+        );
+        assert!(
+            LoadBalancing::from_config("random")
+                .expect("random")
+                .pick_readonly("ignored", &pool)
+                .is_some()
+        );
+        assert!(
+            LoadBalancing::from_config("least-connections")
+                .expect("least")
+                .pick_readonly("ignored", &pool)
+                .is_some()
+        );
+        assert!(
+            LoadBalancing::from_config("latency-aware")
+                .expect("latency")
+                .pick_readonly("ignored", &pool)
+                .is_some()
+        );
+        assert!(
+            LoadBalancing::from_config("consistent-hash")
+                .expect("consistent")
+                .pick_readonly("tenant=a", &pool)
+                .is_none()
+        );
+        assert!(
+            LoadBalancing::from_config("sticky-cid")
+                .expect("sticky")
+                .pick_readonly("cid-1", &pool)
+                .is_none()
+        );
+    }
+}

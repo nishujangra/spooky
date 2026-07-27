@@ -476,3 +476,196 @@ impl QUICListener {
         )
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::HashMap,
+        sync::{Arc, RwLock},
+    };
+
+    use spooky_config::{
+        config::{
+            Backend, Config, ForwardedHeaderPolicy, Listen, LoadBalancing, RouteAuth, RouteMatch,
+            Tls, Upstream, UpstreamHostPolicy,
+        },
+        runtime::RuntimeConfig,
+    };
+
+    use super::*;
+    use crate::routing::index::RouteIndex;
+
+    fn upstream(
+        path_prefix: &str,
+        host: Option<&str>,
+        method: Option<&str>,
+        backend_addr: &str,
+    ) -> Upstream {
+        Upstream {
+            load_balancing: LoadBalancing {
+                lb_type: "round-robin".to_string(),
+                key: None,
+            },
+            auth: RouteAuth::default(),
+            host_policy: UpstreamHostPolicy::default(),
+            forwarded_headers: ForwardedHeaderPolicy::default(),
+            tls: None,
+            route: RouteMatch {
+                host: host.map(str::to_string),
+                path_prefix: Some(path_prefix.to_string()),
+                method: method.map(str::to_string),
+            },
+            backends: vec![Backend {
+                id: "b1".to_string(),
+                address: backend_addr.to_string(),
+                weight: 1,
+                health_check: None,
+            }],
+        }
+    }
+
+    fn runtime_config(upstreams: HashMap<String, Upstream>) -> RuntimeConfig {
+        RuntimeConfig::from_config(&Config {
+            version: 1,
+            listen: Listen {
+                protocol: "http1".to_string(),
+                tls: Tls {
+                    cert: "/tmp/test-cert.pem".to_string(),
+                    key: "/tmp/test-key.pem".to_string(),
+                    ..Tls::default()
+                },
+                ..Listen::default()
+            },
+            listeners: Vec::new(),
+            upstream: upstreams,
+            load_balancing: None,
+            upstream_tls: Default::default(),
+            log: Default::default(),
+            performance: Default::default(),
+            observability: Default::default(),
+            resilience: Default::default(),
+            security: Default::default(),
+        })
+        .expect("runtime config")
+    }
+
+    fn upstream_pools(runtime: &RuntimeConfig) -> HashMap<String, Arc<RwLock<UpstreamPool>>> {
+        runtime
+            .upstreams
+            .iter()
+            .map(|(name, upstream)| {
+                (
+                    name.clone(),
+                    Arc::new(RwLock::new(
+                        UpstreamPool::from_runtime_upstream(upstream).expect("pool"),
+                    )),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn resolve_route_target_prefers_method_specific_host_route_in_overlapping_scenarios() {
+        let runtime = runtime_config(HashMap::from([
+            (
+                "default".to_string(),
+                upstream("/api", None, None, "http://127.0.0.1:7001"),
+            ),
+            (
+                "host_only".to_string(),
+                upstream(
+                    "/api",
+                    Some("pay.example.com"),
+                    None,
+                    "http://127.0.0.1:7002",
+                ),
+            ),
+            (
+                "method_host".to_string(),
+                upstream(
+                    "/api",
+                    Some("pay.example.com"),
+                    Some("POST"),
+                    "http://127.0.0.1:7003",
+                ),
+            ),
+        ]));
+        let routing_index = RouteIndex::from_runtime_upstreams(&runtime.upstreams);
+        let pools = upstream_pools(&runtime);
+        let request =
+            RouteResolutionRequest::new("POST", "/api/orders", Some("pay.example.com"), None, None);
+
+        let route = QUICListener::resolve_route_target(
+            &request,
+            &pools,
+            &runtime
+                .upstreams
+                .iter()
+                .map(|(name, upstream)| (name.clone(), upstream.policy.clone()))
+                .collect(),
+            &routing_index,
+        )
+        .expect("resolved route");
+
+        assert_eq!(route.upstream_name, "method_host");
+        assert!(route.route_host_specific);
+        assert_eq!(route.route_path_len, "/api".len());
+        assert_eq!(
+            route.route_reason,
+            RouteDecisionReason::MethodSpecificTieBreak
+        );
+    }
+
+    #[test]
+    fn resolve_route_target_returns_stable_unrouted_error_and_bootstrap_mapping() {
+        let runtime = runtime_config(HashMap::from([(
+            "api".to_string(),
+            upstream(
+                "/api",
+                Some("api.example.com"),
+                None,
+                "http://127.0.0.1:7001",
+            ),
+        )]));
+        let routing_index = RouteIndex::from_runtime_upstreams(&runtime.upstreams);
+        let pools = upstream_pools(&runtime);
+        let policies = runtime
+            .upstreams
+            .iter()
+            .map(|(name, upstream)| (name.clone(), upstream.policy.clone()))
+            .collect::<HashMap<_, _>>();
+
+        let request =
+            RouteResolutionRequest::new("GET", "/missing", Some("unknown.example.com"), None, None);
+        let first =
+            match QUICListener::resolve_route_target(&request, &pools, &policies, &routing_index) {
+                Err(err) => err,
+                Ok(_) => panic!("expected unrouted resolution failure"),
+            };
+        let second =
+            match QUICListener::resolve_route_target(&request, &pools, &policies, &routing_index) {
+                Err(err) => err,
+                Ok(_) => panic!("expected unrouted resolution failure"),
+            };
+
+        assert_eq!(first.to_string(), second.to_string());
+        assert_eq!(first.to_string(), "transport error: no route for /missing");
+
+        let (status, body) = QUICListener::bootstrap_route_resolution_error_response(&first);
+        assert_eq!(status, http::StatusCode::BAD_GATEWAY);
+        assert_eq!(body, b"no route\n");
+    }
+
+    #[test]
+    fn bootstrap_route_resolution_error_response_maps_missing_pool_and_empty_request_stably() {
+        let missing_pool = ProxyError::Transport("pool not found: payments".to_string());
+        let (status, body) = QUICListener::bootstrap_route_resolution_error_response(&missing_pool);
+        assert_eq!(status, http::StatusCode::BAD_GATEWAY);
+        assert_eq!(body, b"no pool\n");
+
+        let other = ProxyError::Transport("empty method or path".to_string());
+        let (status, body) = QUICListener::bootstrap_route_resolution_error_response(&other);
+        assert_eq!(status, http::StatusCode::BAD_GATEWAY);
+        assert_eq!(body, b"route/backend resolution failed\n");
+    }
+}

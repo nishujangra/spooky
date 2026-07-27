@@ -970,12 +970,96 @@ mod tests {
             RetryDecisionReason::IdempotencyDenied
         );
         assert_eq!(
+            RetryDecisionReason::from(RetryPolicyDenialReason::RequestBodyNotReplayable),
+            RetryDecisionReason::IdempotencyDenied
+        );
+        assert_eq!(
+            RetryDecisionReason::from(RetryPolicyDenialReason::AttemptLimitReached),
+            RetryDecisionReason::RetryPolicyDisabled
+        );
+        assert_eq!(
+            RetryDecisionReason::from(RetryPolicyDenialReason::AlternateBackendUnavailable(
+                spooky_lb::alternate_backend::AlternateBackendFailureReason::NoHealthyBackends
+            )),
+            RetryDecisionReason::RetryPolicyDisabled
+        );
+        assert_eq!(
             HedgeDecisionReason::from(HedgePolicyDenialReason::TunnelRequest),
             HedgeDecisionReason::TunnelRequest
         );
         assert_eq!(
+            HedgeDecisionReason::from(HedgePolicyDenialReason::PrimaryRequestCompleted),
+            HedgeDecisionReason::PrimaryCompleted
+        );
+        assert_eq!(
+            HedgeDecisionReason::from(HedgePolicyDenialReason::AlternateBackendUnavailable(
+                spooky_lb::alternate_backend::AlternateBackendFailureReason::NoHealthyBackends
+            )),
+            HedgeDecisionReason::AlternateBackendUnavailable
+        );
+        assert_eq!(
             HedgeDecisionReason::from(HedgePolicyDenialReason::BudgetDenied),
             HedgeDecisionReason::HedgeBudgetDenied
+        );
+    }
+
+    #[test]
+    fn retry_and_hedge_reason_slugs_preserve_trigger_vs_denial_contract() {
+        assert_eq!(
+            RetryDecisionReason::UpstreamTimeout.slug(),
+            "upstream_timeout"
+        );
+        assert!(RetryDecisionReason::UpstreamTimeout.is_retry());
+        assert_eq!(
+            RetryDecisionReason::RetryBudgetDenied.slug(),
+            "retry_budget_denied"
+        );
+        assert!(!RetryDecisionReason::RetryBudgetDenied.is_retry());
+        assert_eq!(HedgeDecisionReason::DelayElapsed.slug(), "delay_elapsed");
+        assert!(HedgeDecisionReason::DelayElapsed.is_triggered());
+        assert_eq!(
+            HedgeDecisionReason::HedgeBudgetDenied.slug(),
+            "hedge_budget_denied"
+        );
+        assert!(!HedgeDecisionReason::HedgeBudgetDenied.is_triggered());
+    }
+
+    #[test]
+    fn retry_and_outcome_mappings_stay_aligned_but_distinct_by_failure_class() {
+        use crate::runtime::connection::stream::BackendFailureReason;
+        use spooky_errors::{
+            RetryPolicyDenialReason, UpstreamRetryReason, UpstreamTerminalErrorKind,
+        };
+
+        assert_eq!(
+            RetryDecisionReason::from(UpstreamRetryReason::Transport),
+            RetryDecisionReason::UpstreamTransportFailure
+        );
+        assert_eq!(
+            RequestOutcomeReason::from(BackendFailureReason::UpstreamTransport),
+            RequestOutcomeReason::BackendTransportFailed
+        );
+
+        assert_eq!(
+            RetryDecisionReason::from(RetryPolicyDenialReason::TerminalError(
+                UpstreamTerminalErrorKind::Protocol
+            )),
+            RetryDecisionReason::RetryPolicyDisabled
+        );
+        assert_eq!(
+            RequestOutcomeReason::from(BackendFailureReason::UpstreamProtocol),
+            RequestOutcomeReason::BackendProtocolFailed
+        );
+
+        assert_eq!(
+            RetryDecisionReason::from(RetryPolicyDenialReason::TerminalError(
+                UpstreamTerminalErrorKind::Bridge
+            )),
+            RetryDecisionReason::RetryPolicyDisabled
+        );
+        assert_eq!(
+            RequestOutcomeReason::from(BackendFailureReason::UpstreamBridge),
+            RequestOutcomeReason::BackendBridgeFailed
         );
     }
 }

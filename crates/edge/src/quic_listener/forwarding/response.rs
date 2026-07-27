@@ -61,6 +61,86 @@ fn response_body_wait_timeout_reason(
     }
 }
 
+fn simple_response_headers(status: http::StatusCode, body: &[u8]) -> Vec<quiche::h3::Header> {
+    vec![
+        quiche::h3::Header::new(b":status", status.as_str().as_bytes()),
+        quiche::h3::Header::new(b"content-type", b"text/plain"),
+        quiche::h3::Header::new(b"content-length", body.len().to_string().as_bytes()),
+    ]
+}
+
+fn overload_response_headers(body: &[u8], retry_after_seconds: u32) -> Vec<quiche::h3::Header> {
+    let retry_after = retry_after_seconds.max(1).to_string();
+    vec![
+        quiche::h3::Header::new(
+            b":status",
+            http::StatusCode::SERVICE_UNAVAILABLE.as_str().as_bytes(),
+        ),
+        quiche::h3::Header::new(b"content-type", b"text/plain"),
+        quiche::h3::Header::new(b"retry-after", retry_after.as_bytes()),
+        quiche::h3::Header::new(b"content-length", body.len().to_string().as_bytes()),
+    ]
+}
+
+fn admission_rejection_headers(
+    response: &crate::quic_listener::admission::AdmissionRejectionResponse,
+) -> Vec<quiche::h3::Header> {
+    let mut headers = vec![
+        quiche::h3::Header::new(b":status", response.status.as_str().as_bytes()),
+        quiche::h3::Header::new(b"content-type", b"text/plain"),
+    ];
+    if let Some(challenge) = response.www_authenticate {
+        headers.push(quiche::h3::Header::new(
+            b"www-authenticate",
+            challenge.as_bytes(),
+        ));
+    }
+    if let Some(retry_after_seconds) = response.retry_after_seconds {
+        let retry_after = retry_after_seconds.max(1).to_string();
+        headers.push(quiche::h3::Header::new(
+            b"retry-after",
+            retry_after.as_bytes(),
+        ));
+    }
+    headers.push(quiche::h3::Header::new(
+        b"content-length",
+        response.body.len().to_string().as_bytes(),
+    ));
+    headers
+}
+
+fn response_headers_with_defaults(
+    status: http::StatusCode,
+    body: &[u8],
+    headers: &[(String, String)],
+) -> Vec<quiche::h3::Header> {
+    let mut resp_headers = vec![quiche::h3::Header::new(
+        b":status",
+        status.as_str().as_bytes(),
+    )];
+    let mut has_content_type = false;
+    let mut has_content_length = false;
+    for (name, value) in headers {
+        if name.eq_ignore_ascii_case(http::header::CONTENT_TYPE.as_str()) {
+            has_content_type = true;
+        }
+        if name.eq_ignore_ascii_case(http::header::CONTENT_LENGTH.as_str()) {
+            has_content_length = true;
+        }
+        resp_headers.push(quiche::h3::Header::new(name.as_bytes(), value.as_bytes()));
+    }
+    if !has_content_type {
+        resp_headers.push(quiche::h3::Header::new(b"content-type", b"text/plain"));
+    }
+    if !has_content_length {
+        resp_headers.push(quiche::h3::Header::new(
+            b"content-length",
+            body.len().to_string().as_bytes(),
+        ));
+    }
+    resp_headers
+}
+
 impl QUICListener {
     pub(super) fn prepare_response_start_decision(
         req: &RequestEnvelope,
@@ -527,11 +607,7 @@ impl QUICListener {
         status: http::StatusCode,
         body: &[u8],
     ) -> Result<(), quiche::h3::Error> {
-        let resp_headers = vec![
-            quiche::h3::Header::new(b":status", status.as_str().as_bytes()),
-            quiche::h3::Header::new(b"content-type", b"text/plain"),
-            quiche::h3::Header::new(b"content-length", body.len().to_string().as_bytes()),
-        ];
+        let resp_headers = simple_response_headers(status, body);
 
         h3.send_response(quic, stream_id, &resp_headers, false)?;
         h3.send_body(quic, stream_id, body, true)?;
@@ -545,16 +621,7 @@ impl QUICListener {
         body: &[u8],
         retry_after_seconds: u32,
     ) -> Result<(), quiche::h3::Error> {
-        let retry_after = retry_after_seconds.max(1).to_string();
-        let resp_headers = vec![
-            quiche::h3::Header::new(
-                b":status",
-                http::StatusCode::SERVICE_UNAVAILABLE.as_str().as_bytes(),
-            ),
-            quiche::h3::Header::new(b"content-type", b"text/plain"),
-            quiche::h3::Header::new(b"retry-after", retry_after.as_bytes()),
-            quiche::h3::Header::new(b"content-length", body.len().to_string().as_bytes()),
-        ];
+        let resp_headers = overload_response_headers(body, retry_after_seconds);
 
         h3.send_response(quic, stream_id, &resp_headers, false)?;
         h3.send_body(quic, stream_id, body, true)?;
@@ -567,27 +634,7 @@ impl QUICListener {
         stream_id: u64,
         response: &crate::quic_listener::admission::AdmissionRejectionResponse,
     ) -> Result<(), quiche::h3::Error> {
-        let mut headers = vec![
-            quiche::h3::Header::new(b":status", response.status.as_str().as_bytes()),
-            quiche::h3::Header::new(b"content-type", b"text/plain"),
-        ];
-        if let Some(challenge) = response.www_authenticate {
-            headers.push(quiche::h3::Header::new(
-                b"www-authenticate",
-                challenge.as_bytes(),
-            ));
-        }
-        if let Some(retry_after_seconds) = response.retry_after_seconds {
-            let retry_after = retry_after_seconds.max(1).to_string();
-            headers.push(quiche::h3::Header::new(
-                b"retry-after",
-                retry_after.as_bytes(),
-            ));
-        }
-        headers.push(quiche::h3::Header::new(
-            b"content-length",
-            response.body.len().to_string().as_bytes(),
-        ));
+        let headers = admission_rejection_headers(response);
 
         h3.send_response(quic, stream_id, &headers, false)?;
         h3.send_body(quic, stream_id, response.body, true)?;
@@ -602,30 +649,7 @@ impl QUICListener {
         body: &[u8],
         headers: &[(String, String)],
     ) -> Result<(), quiche::h3::Error> {
-        let mut resp_headers = vec![quiche::h3::Header::new(
-            b":status",
-            status.as_str().as_bytes(),
-        )];
-        let mut has_content_type = false;
-        let mut has_content_length = false;
-        for (name, value) in headers {
-            if name.eq_ignore_ascii_case(http::header::CONTENT_TYPE.as_str()) {
-                has_content_type = true;
-            }
-            if name.eq_ignore_ascii_case(http::header::CONTENT_LENGTH.as_str()) {
-                has_content_length = true;
-            }
-            resp_headers.push(quiche::h3::Header::new(name.as_bytes(), value.as_bytes()));
-        }
-        if !has_content_type {
-            resp_headers.push(quiche::h3::Header::new(b"content-type", b"text/plain"));
-        }
-        if !has_content_length {
-            resp_headers.push(quiche::h3::Header::new(
-                b"content-length",
-                body.len().to_string().as_bytes(),
-            ));
-        }
+        let resp_headers = response_headers_with_defaults(status, body, headers);
         h3.send_response(quic, stream_id, &resp_headers, false)?;
         h3.send_body(quic, stream_id, body, true)?;
         Ok(())
@@ -1395,5 +1419,168 @@ impl QUICListener {
         }
 
         terminal
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::runtime::connection::auth::{
+        ExternalAuthChallengeResponse, ExternalAuthDenyResponse, ExternalAuthRedirectResponse,
+    };
+    use quiche::h3::NameValue;
+
+    use super::*;
+    use crate::quic_listener::admission::AdmissionRejectionResponse;
+
+    fn header_value<'a>(headers: &'a [quiche::h3::Header], name: &[u8]) -> Option<&'a [u8]> {
+        headers
+            .iter()
+            .find(|header| header.name().eq_ignore_ascii_case(name))
+            .map(|header| header.value())
+    }
+
+    #[test]
+    fn simple_and_overload_local_responses_have_stable_wire_shape() {
+        let simple = simple_response_headers(http::StatusCode::BAD_GATEWAY, b"upstream error\n");
+        assert_eq!(header_value(&simple, b":status"), Some(&b"502"[..]));
+        assert_eq!(
+            header_value(&simple, b"content-type"),
+            Some(&b"text/plain"[..])
+        );
+        assert_eq!(header_value(&simple, b"content-length"), Some(&b"15"[..]));
+
+        let overload = overload_response_headers(b"busy\n", 0);
+        assert_eq!(header_value(&overload, b":status"), Some(&b"503"[..]));
+        assert_eq!(header_value(&overload, b"retry-after"), Some(&b"1"[..]));
+        assert_eq!(header_value(&overload, b"content-length"), Some(&b"5"[..]));
+    }
+
+    #[test]
+    fn admission_rejection_headers_preserve_only_supported_challenge_and_retry_metadata() {
+        let auth = AdmissionRejectionResponse {
+            status: http::StatusCode::UNAUTHORIZED,
+            body: b"auth denied\n",
+            www_authenticate: Some("Bearer realm=\"spooky\""),
+            retry_after_seconds: None,
+        };
+        let auth_headers = admission_rejection_headers(&auth);
+        assert_eq!(header_value(&auth_headers, b":status"), Some(&b"401"[..]));
+        assert_eq!(
+            header_value(&auth_headers, b"www-authenticate"),
+            Some(&b"Bearer realm=\"spooky\""[..])
+        );
+        assert_eq!(header_value(&auth_headers, b"retry-after"), None);
+
+        let overload = AdmissionRejectionResponse {
+            status: http::StatusCode::SERVICE_UNAVAILABLE,
+            body: b"overloaded\n",
+            www_authenticate: None,
+            retry_after_seconds: Some(0),
+        };
+        let overload_headers = admission_rejection_headers(&overload);
+        assert_eq!(
+            header_value(&overload_headers, b":status"),
+            Some(&b"503"[..])
+        );
+        assert_eq!(header_value(&overload_headers, b"www-authenticate"), None);
+        assert_eq!(
+            header_value(&overload_headers, b"retry-after"),
+            Some(&b"1"[..])
+        );
+    }
+
+    #[test]
+    fn response_headers_with_defaults_adds_only_missing_framing_headers() {
+        let headers = response_headers_with_defaults(
+            http::StatusCode::FORBIDDEN,
+            b"denied\n",
+            &[
+                ("x-auth-reason".to_string(), "policy".to_string()),
+                ("content-type".to_string(), "application/json".to_string()),
+            ],
+        );
+
+        assert_eq!(header_value(&headers, b":status"), Some(&b"403"[..]));
+        assert_eq!(
+            header_value(&headers, b"content-type"),
+            Some(&b"application/json"[..])
+        );
+        assert_eq!(header_value(&headers, b"content-length"), Some(&b"7"[..]));
+        assert_eq!(
+            header_value(&headers, b"x-auth-reason"),
+            Some(&b"policy"[..])
+        );
+    }
+
+    #[test]
+    fn external_auth_deny_wire_shape_carries_allowed_headers_without_challenge_metadata() {
+        let response = ExternalAuthDenyResponse {
+            status: http::StatusCode::FORBIDDEN,
+            headers: vec![("x-auth-reason".to_string(), "policy".to_string())],
+            body: b"denied\n".to_vec(),
+        };
+
+        let headers =
+            response_headers_with_defaults(response.status, &response.body, &response.headers);
+
+        assert_eq!(header_value(&headers, b":status"), Some(&b"403"[..]));
+        assert_eq!(
+            header_value(&headers, b"x-auth-reason"),
+            Some(&b"policy"[..])
+        );
+        assert_eq!(header_value(&headers, b"location"), None);
+        assert_eq!(header_value(&headers, b"www-authenticate"), None);
+    }
+
+    #[test]
+    fn external_auth_redirect_wire_shape_emits_location_and_zero_length_body() {
+        let response = ExternalAuthRedirectResponse {
+            status: http::StatusCode::TEMPORARY_REDIRECT,
+            headers: vec![("x-auth-reason".to_string(), "login".to_string())],
+            location: "https://login.example.com".to_string(),
+        };
+
+        let mut headers = response.headers.clone();
+        headers.push((
+            http::header::LOCATION.as_str().to_string(),
+            response.location.clone(),
+        ));
+        let headers = response_headers_with_defaults(response.status, &[], &headers);
+
+        assert_eq!(header_value(&headers, b":status"), Some(&b"307"[..]));
+        assert_eq!(
+            header_value(&headers, b"location"),
+            Some(&b"https://login.example.com"[..])
+        );
+        assert_eq!(header_value(&headers, b"content-length"), Some(&b"0"[..]));
+        assert_eq!(header_value(&headers, b"www-authenticate"), None);
+    }
+
+    #[test]
+    fn external_auth_challenge_wire_shape_emits_www_authenticate_with_body_length() {
+        let response = ExternalAuthChallengeResponse {
+            status: http::StatusCode::UNAUTHORIZED,
+            headers: vec![("x-auth-reason".to_string(), "expired".to_string())],
+            www_authenticate: "Bearer".to_string(),
+            body: b"challenge\n".to_vec(),
+        };
+
+        let mut headers = response.headers.clone();
+        headers.push((
+            http::header::WWW_AUTHENTICATE.as_str().to_string(),
+            response.www_authenticate.clone(),
+        ));
+        let headers = response_headers_with_defaults(response.status, &response.body, &headers);
+
+        assert_eq!(header_value(&headers, b":status"), Some(&b"401"[..]));
+        assert_eq!(
+            header_value(&headers, b"x-auth-reason"),
+            Some(&b"expired"[..])
+        );
+        assert_eq!(
+            header_value(&headers, b"www-authenticate"),
+            Some(&b"Bearer"[..])
+        );
+        assert_eq!(header_value(&headers, b"content-length"), Some(&b"10"[..]));
     }
 }

@@ -954,3 +954,243 @@ pub struct PendingForward {
     pub forwarded_header_policy: ForwardedHeaderPolicy,
     pub(crate) auth_header_mutations: Vec<PendingHeaderMutation>,
 }
+
+#[cfg(test)]
+impl PendingForward {
+    /// Baseline forward for tests: a plain GET with default host and forwarded
+    /// policies. Override individual fields with struct update syntax so adding a
+    /// field to `PendingForward` only touches this constructor.
+    pub(crate) fn sample_for_test(headers: Vec<quiche::h3::Header>) -> Self {
+        Self {
+            method: Arc::<str>::from("GET"),
+            path: Arc::<str>::from("/v1/chat"),
+            authority: Some(Arc::<str>::from("api.example.com")),
+            headers: Arc::new(headers),
+            upstream_name: Arc::<str>::from("api"),
+            route_reason: Arc::<str>::from("path_prefix"),
+            route_path_len: 8,
+            route_host_specific: true,
+            backend_addr: Arc::<str>::from("backend.internal:443"),
+            backend_index: 0,
+            backend_lb: None,
+            client_addr: "203.0.113.55:43210".parse().expect("client addr"),
+            request_id: 17,
+            trace_id: None,
+            span_id: None,
+            traceparent: None,
+            host_policy: UpstreamHostPolicy::default(),
+            forwarded_header_policy: ForwardedHeaderPolicy::default(),
+            auth_header_mutations: Vec::new(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        collections::VecDeque,
+        sync::{Arc, atomic::Ordering},
+        time::{Duration, Instant},
+    };
+
+    use bytes::Bytes;
+    use http::StatusCode;
+    use tokio::sync::{Semaphore, mpsc, oneshot};
+
+    use super::*;
+    use crate::resilience::{
+        adaptive_admission::AdaptiveAdmission, route_queue::RouteQueueLimiter,
+    };
+
+    fn make_request_context(start: Instant) -> RequestContext {
+        RequestContext {
+            request_id: 42,
+            trace_id: None,
+            span_id: None,
+            traceparent: None,
+            trace_span: None,
+            method: "POST".into(),
+            path: "/upload".into(),
+            authority: Some("example.com".into()),
+            start,
+            total_request_deadline: start + Duration::from_secs(30),
+        }
+    }
+
+    fn make_routing_snapshot() -> crate::runtime::connection::stream::RoutingSnapshot {
+        crate::runtime::connection::stream::RoutingSnapshot {
+            backend_addr: "http://127.0.0.1:8080".into(),
+            backend_index: 0,
+            upstream_name: "api".into(),
+            route_reason: "path_prefix".into(),
+            route_path_len: 1,
+            route_host_specific: false,
+            backend_lb: None,
+        }
+    }
+
+    fn make_pending_forward() -> Arc<PendingForward> {
+        Arc::new(PendingForward {
+            method: Arc::<str>::from("POST"),
+            path: Arc::<str>::from("/upload"),
+            authority: Some(Arc::<str>::from("example.com")),
+            upstream_name: Arc::<str>::from("api"),
+            route_path_len: 1,
+            route_host_specific: false,
+            backend_addr: Arc::<str>::from("http://127.0.0.1:8080"),
+            client_addr: "127.0.0.1:443".parse().expect("client addr"),
+            request_id: 42,
+            ..PendingForward::sample_for_test(vec![quiche::h3::Header::new(b":method", b"POST")])
+        })
+    }
+
+    fn make_admitted_envelope(
+        start: Instant,
+        body_buf: VecDeque<Bytes>,
+        body_buf_bytes: usize,
+        request_fin_received: bool,
+    ) -> (
+        RequestEnvelope,
+        Arc<Semaphore>,
+        Arc<Semaphore>,
+        Arc<AdaptiveAdmission>,
+        Arc<RouteQueueLimiter>,
+    ) {
+        let global_sem = Arc::new(Semaphore::new(1));
+        let upstream_sem = Arc::new(Semaphore::new(1));
+        let adaptive = Arc::new(AdaptiveAdmission::new(false, 1, 100, 1, 1, 1000));
+        let route_limiter = Arc::new(RouteQueueLimiter::new(100, 1000, Default::default()));
+        let context = make_request_context(start);
+        let routing = make_routing_snapshot();
+
+        let req = RequestEnvelope {
+            request_id: context.request_id,
+            trace_id: context.trace_id.clone(),
+            span_id: context.span_id.clone(),
+            traceparent: context.traceparent.clone(),
+            trace_span: context.trace_span.clone(),
+            method: context.method.clone(),
+            path: context.path.clone(),
+            authority: context.authority.clone(),
+            backend_addr: Some(routing.backend_addr.clone()),
+            backend_index: Some(routing.backend_index),
+            upstream_name: Some(routing.upstream_name.clone()),
+            route_reason: Some(routing.route_reason.clone()),
+            route_path_len: Some(routing.route_path_len),
+            route_host_specific: Some(routing.route_host_specific),
+            backend_lb: routing.backend_lb.clone(),
+            upstream_pool: None,
+            routing_transparency_enabled: false,
+            routing_transparency_include_reason: false,
+            response_status: None,
+            start,
+            total_request_deadline: context.total_request_deadline,
+            bodyless_mode: false,
+            tunnel_mode: TunnelMode::None,
+            retry_count: 0,
+            error_kind: None,
+            terminal_overload_reason: None,
+            terminal_outcome_recorded: false,
+            execution: RequestExecutionState::Admitted(AdmittedState {
+                context,
+                routing,
+                request_mode: RequestMode::Normal,
+                request_body: RequestBodyState::Open,
+                request_body_runtime: RequestBodyRuntime {
+                    body_buf,
+                    body_buf_bytes,
+                    body_bytes_received: body_buf_bytes,
+                    last_body_activity: start,
+                    request_fin_received,
+                },
+                pending_forward: make_pending_forward(),
+                permits: AdmissionPermits {
+                    global: global_sem
+                        .clone()
+                        .try_acquire_owned()
+                        .expect("global permit"),
+                    upstream: upstream_sem
+                        .clone()
+                        .try_acquire_owned()
+                        .expect("upstream permit"),
+                    adaptive: adaptive.try_acquire().expect("adaptive permit"),
+                    route_queue: route_limiter
+                        .try_acquire("test")
+                        .expect("route queue permit"),
+                },
+            }),
+        };
+
+        (req, global_sem, upstream_sem, adaptive, route_limiter)
+    }
+
+    #[test]
+    fn transition_to_terminal_releases_buffer_and_records_once() {
+        let metrics = Metrics::default();
+        let start = Instant::now();
+        let mut body_buf = VecDeque::new();
+        body_buf.push_back(Bytes::from_static(b"payload"));
+        let (mut req, global_sem, upstream_sem, _adaptive, route_limiter) =
+            make_admitted_envelope(start, body_buf, 7, false);
+
+        assert!(metrics.try_reserve_request_buffer(7, 64));
+
+        let phase = req.transition_to_terminal_with_cleanup(
+            TerminalReason::Rejected(
+                crate::runtime::connection::stream::RejectionReason::RequestBodyTooLarge,
+            ),
+            &metrics,
+        );
+
+        assert_eq!(phase, StreamPhase::ReceivingRequest);
+        assert_eq!(req.phase(), StreamPhase::Terminal);
+        assert!(req.terminal_outcome_recorded);
+        assert_eq!(metrics.request_buffered_bytes.load(Ordering::Relaxed), 0);
+        assert_eq!(metrics.requests_failure.load(Ordering::Relaxed), 1);
+        assert_eq!(global_sem.available_permits(), 1);
+        assert_eq!(upstream_sem.available_permits(), 1);
+        assert!(route_limiter.try_acquire("test").is_ok());
+
+        let second_phase = req.transition_to_terminal_with_cleanup(
+            TerminalReason::Cancelled(CancellationReason::ClientReset),
+            &metrics,
+        );
+
+        assert_eq!(second_phase, StreamPhase::Terminal);
+        assert_eq!(metrics.request_buffered_bytes.load(Ordering::Relaxed), 0);
+        assert_eq!(metrics.requests_failure.load(Ordering::Relaxed), 1);
+        assert_eq!(global_sem.available_permits(), 1);
+        assert_eq!(upstream_sem.available_permits(), 1);
+    }
+
+    #[test]
+    fn transition_to_terminal_does_not_record_duplicate_outcome() {
+        let metrics = Metrics::default();
+        let start = Instant::now();
+        let (mut req, global_sem, upstream_sem, _adaptive, route_limiter) =
+            make_admitted_envelope(start, VecDeque::new(), 0, true);
+        let (_result_tx, result_rx) = oneshot::channel();
+        let (_chunk_tx, chunk_rx) = mpsc::channel(1);
+
+        req.transition_admitted_to_awaiting_upstream(None, result_rx);
+        req.transition_to_streaming_response(
+            chunk_rx,
+            ResponseEmissionState::HeadersSent,
+            StatusCode::OK,
+        );
+        req.mark_terminal_outcome_recorded();
+
+        let phase = req.transition_to_terminal_with_cleanup(
+            TerminalReason::BackendFailed(BackendFailureReason::ResponseStreamAborted),
+            &metrics,
+        );
+
+        assert_eq!(phase, StreamPhase::SendingResponse);
+        assert_eq!(req.phase(), StreamPhase::Terminal);
+        assert!(req.terminal_outcome_recorded);
+        assert_eq!(metrics.requests_failure.load(Ordering::Relaxed), 0);
+        assert_eq!(global_sem.available_permits(), 1);
+        assert_eq!(upstream_sem.available_permits(), 1);
+        assert!(route_limiter.try_acquire("test").is_ok());
+    }
+}

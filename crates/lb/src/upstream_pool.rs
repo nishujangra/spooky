@@ -174,3 +174,183 @@ impl UpstreamPool {
         self.lb_policy.alternate_backend = policy;
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use spooky_config::{
+        config::{Backend, Config, HealthCheck, Listen, LoadBalancing, RouteMatch, Tls, Upstream},
+        runtime::{RuntimeConfig, RuntimeLoadBalancingStrategy, RuntimeRequestKeySpec},
+    };
+
+    use super::UpstreamPool;
+
+    fn runtime_upstream(
+        lb_type: &str,
+        key: Option<&str>,
+    ) -> spooky_config::runtime::RuntimeUpstream {
+        let mut upstreams = HashMap::new();
+        upstreams.insert(
+            "api".to_string(),
+            Upstream {
+                tls: None,
+                load_balancing: LoadBalancing {
+                    lb_type: lb_type.to_string(),
+                    key: key.map(str::to_string),
+                },
+                auth: Default::default(),
+                host_policy: Default::default(),
+                forwarded_headers: Default::default(),
+                route: RouteMatch::default(),
+                backends: vec![
+                    Backend {
+                        id: "backend-a".to_string(),
+                        address: "http://127.0.0.1:7001".to_string(),
+                        weight: 1,
+                        health_check: Some(HealthCheck {
+                            path: "/health".to_string(),
+                            interval: 1,
+                            timeout_ms: 1000,
+                            failure_threshold: 1,
+                            success_threshold: 1,
+                            cooldown_ms: 1000,
+                        }),
+                    },
+                    Backend {
+                        id: "backend-b".to_string(),
+                        address: "http://127.0.0.1:7002".to_string(),
+                        weight: 1,
+                        health_check: Some(HealthCheck {
+                            path: "/health".to_string(),
+                            interval: 1,
+                            timeout_ms: 1000,
+                            failure_threshold: 1,
+                            success_threshold: 1,
+                            cooldown_ms: 1000,
+                        }),
+                    },
+                ],
+            },
+        );
+
+        RuntimeConfig::from_config(&Config {
+            version: 1,
+            listen: Listen {
+                protocol: "http1".to_string(),
+                tls: Tls {
+                    cert: "/tmp/test-cert.pem".to_string(),
+                    key: "/tmp/test-key.pem".to_string(),
+                    ..Tls::default()
+                },
+                ..Listen::default()
+            },
+            listeners: Vec::new(),
+            upstream: upstreams,
+            load_balancing: None,
+            upstream_tls: Default::default(),
+            log: Default::default(),
+            performance: Default::default(),
+            observability: Default::default(),
+            resilience: Default::default(),
+            security: Default::default(),
+        })
+        .expect("runtime config")
+        .upstreams
+        .remove("api")
+        .expect("runtime upstream")
+    }
+
+    #[test]
+    fn pick_without_begin_preserves_active_request_count_but_pick_increments_it() {
+        let runtime_upstream = runtime_upstream("round-robin", None);
+        let mut pool = UpstreamPool::from_runtime_upstream(&runtime_upstream).expect("pool");
+
+        let idx = pool.pick_without_begin("key").expect("readonly pick");
+        assert_eq!(
+            pool.backend_runtime_state(idx)
+                .expect("runtime state")
+                .active_requests,
+            0
+        );
+
+        let picked = pool.pick("key").expect("mutable pick");
+        assert_eq!(
+            pool.backend_runtime_state(picked)
+                .expect("runtime state")
+                .active_requests,
+            1
+        );
+    }
+
+    #[test]
+    fn pool_exposes_lb_key_spec_and_alternate_policy_from_runtime() {
+        let consistent = UpstreamPool::from_runtime_upstream(&runtime_upstream(
+            "consistent-hash",
+            Some("header:x-user-id"),
+        ))
+        .expect("consistent pool");
+        assert_eq!(
+            consistent.lb_strategy(),
+            RuntimeLoadBalancingStrategy::ConsistentHash
+        );
+        assert!(matches!(
+            consistent.lb_key_spec(),
+            Some(RuntimeRequestKeySpec::Header(name)) if name == "x-user-id"
+        ));
+        assert!(!consistent.alternate_backend_policy().readonly_lb_pick);
+        assert!(consistent.alternate_backend_policy().healthy_fallback);
+
+        let round_robin = UpstreamPool::from_runtime_upstream(&runtime_upstream(
+            "round-robin",
+            Some("authority"),
+        ))
+        .expect("round robin pool");
+        assert_eq!(
+            round_robin.lb_strategy(),
+            RuntimeLoadBalancingStrategy::RoundRobin
+        );
+        assert!(matches!(
+            round_robin.lb_key_spec(),
+            Some(RuntimeRequestKeySpec::Authority)
+        ));
+        assert!(round_robin.alternate_backend_policy().readonly_lb_pick);
+        assert!(round_robin.alternate_backend_policy().healthy_fallback);
+    }
+
+    #[test]
+    fn membership_summary_and_runtime_state_stay_coherent_after_health_updates() {
+        let runtime_upstream = runtime_upstream("round-robin", None);
+        let mut pool = UpstreamPool::from_runtime_upstream(&runtime_upstream).expect("pool");
+
+        let before = pool.membership_summary();
+        assert_eq!(before.total_backends, 2);
+        assert_eq!(before.healthy_backends, 2);
+
+        let picked = pool.pick("client-a").expect("pick");
+        let runtime = pool.backend_runtime_state(picked).expect("runtime state");
+        assert_eq!(runtime.active_requests, 1);
+        assert!(runtime.healthy);
+
+        let unhealthy = pool
+            .mark_backend_failure_from_active_check(picked)
+            .expect("health transition");
+        assert!(matches!(
+            unhealthy,
+            crate::backend::HealthTransition::BecameUnhealthy
+        ));
+        let after_failure = pool.membership_summary();
+        assert_eq!(after_failure.total_backends, 2);
+        assert_eq!(after_failure.healthy_backends, 1);
+
+        pool.finish_request(picked, std::time::Duration::from_millis(25), Some(503));
+        let runtime = pool.backend_runtime_state(picked).expect("runtime state");
+        assert_eq!(runtime.active_requests, 0);
+        assert!(!runtime.healthy);
+
+        assert!(pool.mark_backend_healthy(picked).is_none());
+        let after_early_success = pool.membership_summary();
+        assert_eq!(after_early_success.total_backends, 2);
+        assert_eq!(after_early_success.healthy_backends, 1);
+    }
+}

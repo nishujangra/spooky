@@ -244,6 +244,7 @@ pub fn is_retryable(err: &ProxyError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{BridgeError, PoolError, ProxyError};
 
     fn retry_facts() -> RetryPolicyFacts {
         RetryPolicyFacts {
@@ -366,6 +367,37 @@ mod tests {
     }
 
     #[test]
+    fn retry_denial_precedence_stays_stable_before_budget_or_alternate_checks() {
+        let mut facts = retry_facts();
+        facts.method_idempotent = false;
+        facts.request_body_replayable = false;
+        facts.budget_available = false;
+        facts.alternate_backend_available = false;
+        facts.alternate_backend_failure = Some(AlternateBackendFailureReason::NoHealthyBackends);
+
+        assert_eq!(
+            evaluate_retry_policy(facts),
+            RetryPolicyDecision::DoNotRetry {
+                denial: Some(RetryPolicyDenialReason::MethodNotIdempotent),
+            }
+        );
+
+        let mut replayability_after_method = retry_facts();
+        replayability_after_method.request_body_replayable = false;
+        replayability_after_method.budget_available = false;
+        replayability_after_method.alternate_backend_available = false;
+        replayability_after_method.alternate_backend_failure =
+            Some(AlternateBackendFailureReason::NoHealthyBackends);
+
+        assert_eq!(
+            evaluate_retry_policy(replayability_after_method),
+            RetryPolicyDecision::DoNotRetry {
+                denial: Some(RetryPolicyDenialReason::RequestBodyNotReplayable),
+            }
+        );
+    }
+
+    #[test]
     fn retryable_transport_allows_retry() {
         let mut facts = retry_facts();
         facts.retryability = UpstreamRetryability::Retryable(UpstreamRetryReason::Transport);
@@ -414,6 +446,86 @@ mod tests {
             RetryPolicyDecision::Retry {
                 reason: UpstreamRetryReason::Timeout,
             }
+        );
+    }
+
+    #[test]
+    fn failure_classes_permit_or_deny_retry_according_to_policy() {
+        assert_eq!(
+            evaluate_retry_policy(RetryPolicyFacts {
+                retryability: classify_retryability(&ProxyError::Timeout),
+                ..retry_facts()
+            }),
+            RetryPolicyDecision::Retry {
+                reason: UpstreamRetryReason::Timeout,
+            }
+        );
+        assert_eq!(
+            evaluate_retry_policy(RetryPolicyFacts {
+                retryability: classify_retryability(&ProxyError::Transport(
+                    "connection reset".into()
+                )),
+                ..retry_facts()
+            }),
+            RetryPolicyDecision::Retry {
+                reason: UpstreamRetryReason::Transport,
+            }
+        );
+        assert_eq!(
+            evaluate_retry_policy(RetryPolicyFacts {
+                retryability: classify_retryability(&ProxyError::Protocol(
+                    "bad response frame".into()
+                )),
+                ..retry_facts()
+            }),
+            RetryPolicyDecision::DoNotRetry {
+                denial: Some(RetryPolicyDenialReason::TerminalError(
+                    UpstreamTerminalErrorKind::Protocol
+                )),
+            }
+        );
+        assert_eq!(
+            evaluate_retry_policy(RetryPolicyFacts {
+                retryability: classify_retryability(&ProxyError::Bridge(
+                    BridgeError::InvalidHeader
+                )),
+                ..retry_facts()
+            }),
+            RetryPolicyDecision::DoNotRetry {
+                denial: Some(RetryPolicyDenialReason::TerminalError(
+                    UpstreamTerminalErrorKind::Bridge
+                )),
+            }
+        );
+    }
+
+    #[test]
+    fn classify_retryability_keeps_retryable_and_terminal_classes_explicit() {
+        assert_eq!(
+            classify_retryability(&ProxyError::Transport("connection reset".to_string())),
+            UpstreamRetryability::Retryable(UpstreamRetryReason::Transport)
+        );
+        assert_eq!(
+            classify_retryability(&ProxyError::Timeout),
+            UpstreamRetryability::Retryable(UpstreamRetryReason::Timeout)
+        );
+        assert_eq!(
+            classify_retryability(&ProxyError::Pool(PoolError::UnknownBackend(
+                "missing".to_string()
+            ))),
+            UpstreamRetryability::Retryable(UpstreamRetryReason::Pool)
+        );
+        assert_eq!(
+            classify_retryability(&ProxyError::Protocol("bad response frame".to_string())),
+            UpstreamRetryability::Terminal(UpstreamTerminalErrorKind::Protocol)
+        );
+        assert_eq!(
+            classify_retryability(&ProxyError::Bridge(BridgeError::InvalidHeader)),
+            UpstreamRetryability::Terminal(UpstreamTerminalErrorKind::Bridge)
+        );
+        assert_eq!(
+            classify_retryability(&ProxyError::Tls("unknown issuer".to_string())),
+            UpstreamRetryability::Terminal(UpstreamTerminalErrorKind::Tls)
         );
     }
 
@@ -557,6 +669,58 @@ mod tests {
             evaluate_hedge_policy(facts),
             HedgePolicyDecision::DoNotHedge {
                 denial: HedgePolicyDenialReason::BudgetDenied,
+            }
+        );
+    }
+
+    #[test]
+    fn hedge_denial_reasons_remain_distinct_by_scenario() {
+        assert_eq!(
+            evaluate_hedge_policy(HedgePolicyFacts {
+                hedging_configured: false,
+                ..hedge_facts()
+            }),
+            HedgePolicyDecision::DoNotHedge {
+                denial: HedgePolicyDenialReason::HedgingDisabled,
+            }
+        );
+        assert_eq!(
+            evaluate_hedge_policy(HedgePolicyFacts {
+                method_allowed: false,
+                ..hedge_facts()
+            }),
+            HedgePolicyDecision::DoNotHedge {
+                denial: HedgePolicyDenialReason::MethodNotAllowed,
+            }
+        );
+        assert_eq!(
+            evaluate_hedge_policy(HedgePolicyFacts {
+                request_body_replayable: false,
+                ..hedge_facts()
+            }),
+            HedgePolicyDecision::DoNotHedge {
+                denial: HedgePolicyDenialReason::RequestBodyNotReplayable,
+            }
+        );
+        assert_eq!(
+            evaluate_hedge_policy(HedgePolicyFacts {
+                tunnel_request: true,
+                ..hedge_facts()
+            }),
+            HedgePolicyDecision::DoNotHedge {
+                denial: HedgePolicyDenialReason::TunnelRequest,
+            }
+        );
+        assert_eq!(
+            evaluate_hedge_policy(HedgePolicyFacts {
+                alternate_backend_available: false,
+                alternate_backend_failure: Some(AlternateBackendFailureReason::NoHealthyBackends),
+                ..hedge_facts()
+            }),
+            HedgePolicyDecision::DoNotHedge {
+                denial: HedgePolicyDenialReason::AlternateBackendUnavailable(
+                    AlternateBackendFailureReason::NoHealthyBackends
+                ),
             }
         );
     }

@@ -241,6 +241,18 @@ mod tests {
             classify_upstream_error_detail("connection reset by peer", false),
             UpstreamErrorClassification::transport()
         );
+        assert_eq!(
+            classify_upstream_error_detail("x509 certificate validity error", true),
+            UpstreamErrorClassification::tls(UpstreamTlsReason::ExpiredCertificate)
+        );
+        assert_eq!(
+            classify_upstream_error_detail("subjectAltName mismatch for backend", true),
+            UpstreamErrorClassification::tls(UpstreamTlsReason::HostnameMismatch)
+        );
+        assert_eq!(
+            classify_upstream_error_detail("rustls alert handshake failure", true),
+            UpstreamErrorClassification::tls(UpstreamTlsReason::Handshake)
+        );
     }
 
     #[test]
