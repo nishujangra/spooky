@@ -1442,6 +1442,79 @@
 <li><code>Partial</code>: implemented with important caveats or limited scope</li>
 <li><code>Missing</code>: not implemented as a first-class feature</li>
 </ul>
+<h2 id="refactor-foundations">Refactor Foundations</h2>
+<p>These are architectural foundations rather than user-facing product features, but they now materially define how the codebase behaves and how future work should be added.</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Area</th>
+<th>Status</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Request admission and policy evaluation</td>
+<td><code>Done</code></td>
+<td>Shared admission flow covers auth checks, scoped rate limits, brownout, overload, and rejection mapping</td>
+</tr>
+<tr>
+<td>Route resolution and backend selection pipeline</td>
+<td><code>Done</code></td>
+<td>Shared route match, upstream lookup, LB strategy, backend selection, and resolution telemetry flow</td>
+</tr>
+<tr>
+<td>Canonical load-balancing key resolution</td>
+<td><code>Done</code></td>
+<td>Cookie/query/header/bearer/CID/peer-IP extraction plus shared fallback behavior</td>
+</tr>
+<tr>
+<td>Shared upstream error classification</td>
+<td><code>Done</code></td>
+<td>Timeout/transport/TLS/protocol normalization with shared health and retry interpretation</td>
+</tr>
+<tr>
+<td>Canonical request building</td>
+<td><code>Done</code></td>
+<td>Host policy, forwarded-header policy, and shared H1/H2 request construction live behind <code>bridge</code></td>
+</tr>
+<tr>
+<td>Canonical response normalization</td>
+<td><code>Done</code></td>
+<td>Hop-header stripping, trailer handling, bodyless/no-content shaping, and bootstrap/QUIC parity</td>
+</tr>
+<tr>
+<td>External auth decision layer</td>
+<td><code>Done</code></td>
+<td>Timeout/failure-mode handling, allowlist filtering, mutation safety, deny/challenge/redirect mapping</td>
+</tr>
+<tr>
+<td>Runtime generation model</td>
+<td><code>Done</code></td>
+<td>Startup-owned, generation-owned, and shared runtime ownership boundaries are formalized</td>
+</tr>
+<tr>
+<td>Unified backend lifecycle model</td>
+<td><code>Done</code></td>
+<td>DNS refresh, health observations, request feedback, pool placement, and lifecycle snapshots are coordinated</td>
+</tr>
+<tr>
+<td>Canonical transport façade</td>
+<td><code>Done</code></td>
+<td>Edge depends on transport execution contract instead of H1/H2 pool details</td>
+</tr>
+<tr>
+<td>Listener/runtime façade split</td>
+<td><code>Done</code></td>
+<td><code>quic_listener</code> and bootstrap paths are decomposed into orchestration-oriented modules</td>
+</tr>
+<tr>
+<td>Public API and visibility hardening</td>
+<td><code>Done</code></td>
+<td>Canonical crate façades and reduced accidental exports across edge, config, bridge, lb, transport, and errors</td>
+</tr>
+</tbody>
+</table></div>
 <h2 id="protocols">Protocols</h2>
 <div class="table-wrapper"><table>
 <thead>
@@ -1775,7 +1848,7 @@
 <tr>
 <td>Full config hot reload</td>
 <td><code>Partial</code></td>
-<td>Startup-owned settings + listner removal, bind still need restart</td>
+<td>Broad runtime swap exists; startup-owned settings and bind/topology changes still require restart or explicit compatibility handling</td>
 </tr>
 <tr>
 <td>Dynamic route updates</td>
@@ -1877,6 +1950,16 @@
 <td>Plain and JSON formats</td>
 </tr>
 <tr>
+<td>Canonical observability vocabulary</td>
+<td><code>Done</code></td>
+<td>Shared reason slugs align metrics, logs, and control-plane snapshot fields</td>
+</tr>
+<tr>
+<td>Control-plane runtime snapshots</td>
+<td><code>Done</code></td>
+<td>Backend lifecycle, runtime generation, watchdog, TLS, and coarse metrics summary exposed through shared runtime views</td>
+</tr>
+<tr>
 <td>OTLP tracing hooks</td>
 <td><code>Done</code></td>
 <td>Optional</td>
@@ -1909,6 +1992,7 @@
 <li>an HTTP/3-first edge proxy</li>
 <li>a deterministic routing and balancing layer with scheme-driven H1/H2 upstream transport</li>
 <li>a proxy with strong resource-bound and teardown behavior</li>
+<li>a codebase with shared policy/runtime boundaries in place across request path, runtime ownership, backend lifecycle, transport, and observability</li>
 </ul>
 <p>Spooky is not yet strongest as:</p>
 <ul>
@@ -2372,6 +2456,14 @@
         
         
         
+        
+        <a href="#refactor-foundations"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#refactor-foundations');">
+            Refactor Foundations
+        </a>
+        
+
         
         <a href="#protocols"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"

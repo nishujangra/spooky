@@ -1409,12 +1409,20 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Phase 1 baseline for <code>refactor/final-api-lockdown-and-deletion</code>.</p>
+    <p>How to use this file:</p>
+<ul>
+<li>use it as the canonical map of intentional crate façades before adding or widening visibility</li>
+<li>check whether a type or module is meant to be a public entrypoint, a crate-local collaboration seam, or an accidental leak</li>
+<li>update this file when a refactor deliberately changes a crate boundary, instead of letting visibility drift silently</li>
+<li>do not use this file as a substitute for module docs; use it to answer "should this be public at all?"</li>
+<li>prefer adding new logic behind an owning façade or crate-local seam instead of widening visibility for convenience</li>
+<li>if a type belongs to runtime ownership, transport execution, bridge shaping, or load-balancing substrate, keep it in that owning layer rather than re-exporting it from an unrelated crate root</li>
+</ul>
 <p>Purpose:
-- re-state the current crate façades exactly as the branch exposes them
+- re-state the current crate façades exactly as the codebase exposes them
 - classify every non-private boundary item in the primary architecture crates
 - identify which exposed items are canonical API, crate-local collaboration seams, compatibility surfaces, or stale leftovers</p>
-<p>Scope for this baseline:
+<p>Scope:
 - <code>crates/edge</code>
 - <code>crates/config</code>
 - <code>crates/bridge</code>
@@ -1425,7 +1433,7 @@
 - <code>internal-to-crate collaboration surface</code>: <code>pub(crate)</code> seam used inside a crate boundary
 - <code>temporary compatibility surface</code>: intentionally exposed, but not the recommended long-term owning surface
 - <code>stale leftover</code>: exposed item that no longer has a clear architectural reason to stay visible</p>
-<p>This document classifies current visibility. It does not by itself change policy.</p>
+<p>This document classifies current visibility. It is a contributor aid for deciding whether code belongs on a public crate surface, an internal collaboration seam, or nowhere visible at all.</p>
 <h2 id="spooky-edge"><code>spooky-edge</code></h2>
 <h3 id="crate-facade">Crate façade</h3>
 <ul>
@@ -1458,7 +1466,7 @@
 <td><code>cid_radix</code></td>
 <td><code>pub mod</code></td>
 <td>canonical public API</td>
-<td>Still treated as a direct crate surface on this branch.</td>
+<td>Direct crate surface today.</td>
 </tr>
 <tr>
 <td><code>constants</code></td>
@@ -1669,7 +1677,7 @@
 <td><code>runtime::shared_state</code></td>
 <td><code>pub mod</code></td>
 <td>canonical public API</td>
-<td>Stable shared-state surface on this branch.</td>
+<td>Stable shared-state surface.</td>
 </tr>
 <tr>
 <td><code>runtime::tasks</code></td>
@@ -1728,7 +1736,7 @@
 </tr>
 </tbody>
 </table></div>
-<h3 id="phase-1-baseline-calls">Phase 1 baseline calls</h3>
+<h3 id="edge-boundary-notes">Edge boundary notes</h3>
 <ul>
 <li><code>quic_listener</code> staying private is correct and should remain the baseline.</li>
 <li><code>runtime::{connection,generation,tasks,tls}</code> and <code>watchdog::{config,service,state,time}</code> are legitimate crate-local collaboration seams.</li>
@@ -1768,7 +1776,7 @@
 <td><code>default</code></td>
 <td><code>pub mod</code></td>
 <td>canonical public API</td>
-<td>Explicit defaults surface on this branch.</td>
+<td>Explicit defaults surface.</td>
 </tr>
 <tr>
 <td><code>loader</code></td>
@@ -1917,7 +1925,7 @@
 </tr>
 </tbody>
 </table></div>
-<h3 id="phase-1-baseline-calls_1">Phase 1 baseline calls</h3>
+<h3 id="config-boundary-notes">Config boundary notes</h3>
 <ul>
 <li><code>runtime</code> remains the correct canonical API owner for lowered policy/config state.</li>
 <li>policy interpreter modules are correctly private already.</li>
@@ -1990,7 +1998,7 @@
 </tr>
 </tbody>
 </table></div>
-<h3 id="phase-1-baseline-calls_2">Phase 1 baseline calls</h3>
+<h3 id="bridge-boundary-notes">Bridge boundary notes</h3>
 <ul>
 <li>the bridge crate façade is already narrow and aligned with intended ownership.</li>
 <li><code>BridgeError</code> no longer escapes through the bridge root; callers use the owning <code>spooky-errors</code> path.</li>
@@ -2068,7 +2076,7 @@
 </tr>
 </tbody>
 </table></div>
-<h3 id="phase-1-baseline-calls_3">Phase 1 baseline calls</h3>
+<h3 id="lb-boundary-notes">LB boundary notes</h3>
 <ul>
 <li><code>algorithms</code>, <code>backend</code>, and <code>backend_pool</code> are no longer public module trees.</li>
 <li><code>HealthTransition</code> remains public as the only deliberate cross-crate lifecycle type from the prior backend substrate.</li>
@@ -2190,7 +2198,7 @@
 </tr>
 </tbody>
 </table></div>
-<h3 id="phase-1-baseline-calls_4">Phase 1 baseline calls</h3>
+<h3 id="transport-boundary-notes">Transport boundary notes</h3>
 <ul>
 <li>the transport crate boundary is already in the intended shape: private protocol modules plus narrow façade re-exports.</li>
 <li>no hidden compatibility modules remain at the crate root.</li>
@@ -2213,26 +2221,22 @@
 </ul>
 <h3 id="temporary-compatibility-surfaces">Temporary compatibility surfaces</h3>
 <ul>
-<li>none in the scoped crates after the Phase 3 hidden-surface audit</li>
+<li>none in the scoped crates</li>
 </ul>
-<h3 id="stale-leftovers-requiring-phase-2-review">Stale leftovers requiring Phase 2 review</h3>
+<h3 id="stale-leftovers">Stale leftovers</h3>
 <ul>
-<li>none at the crate-root façade level in the scoped crates after the Phase 2 lockdown pass</li>
+<li>none at the crate-root façade level in the scoped crates</li>
 </ul>
-<h2 id="phase-1-exit-check">Phase 1 Exit Check</h2>
+<h2 id="placement-guidance">Placement Guidance</h2>
 <ul>
 <li>every non-private boundary item in the scoped crates has an explicit classification</li>
-<li>the current baseline no longer relies on “probably needed” wording</li>
-<li>the main unresolved Phase 2 targets are now named rather than implicit</li>
-</ul>
-<h2 id="phase-8-verification-pass">Phase 8 Verification Pass</h2>
-<ul>
-<li><code>cargo fmt --all</code> applied; the only changes were whitespace reflow caused by earlier renames and field removals</li>
-<li><code>cargo check --workspace --all-targets</code> is clean, and <code>spooky-edge</code> reports no <code>unreachable_pub</code> warnings</li>
-<li>crate-targeted tests pass for <code>lb</code>, <code>bridge</code>, <code>transport</code>, <code>config</code>, and <code>edge</code></li>
-<li><code>cargo test --workspace --no-fail-fast</code> passes: 725 tests, 0 failures, 2 ignored</li>
-<li>the five scoped crate roots were re-read and match the intended architecture; <code>runtime</code> and <code>watchdog</code> submodule visibility also matches this document</li>
-<li>known pre-existing flake: <code>edge</code> integration test <code>concurrent_large_body_pressure_is_bounded</code> intermittently observes a <code>502</code> where it asserts only <code>200</code>/<code>503</code>. Reproduced on <code>e089628</code> (before this branch's cleanup), so it is not a regression from the lockdown work.</li>
+<li>if a new item does not clearly fit <code>canonical public API</code> or <code>internal-to-crate collaboration surface</code>, it probably should not be exposed</li>
+<li>public crate roots should stay narrow and intentional</li>
+<li>protocol details belong in owning crates such as <code>bridge</code> and <code>transport</code>, not in unrelated façade exports</li>
+<li>runtime state and lifecycle ownership belong under <code>edge::runtime</code>, not under request-ingress helpers</li>
+<li>request shaping and response normalization belong under <code>bridge</code></li>
+<li>balancing substrate belongs under <code>lb</code></li>
+<li>normalized runtime policy output belongs under <code>config::runtime</code></li>
 </ul>
   </div>
   
@@ -2689,10 +2693,10 @@
             Public subsystem seams under watchdog
         </a>
         
-        <a href="#phase-1-baseline-calls"
+        <a href="#edge-boundary-notes"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#phase-1-baseline-calls');">
-            Phase 1 baseline calls
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#edge-boundary-notes');">
+            Edge boundary notes
         </a>
         
         
@@ -2723,10 +2727,10 @@
             Runtime lowering seams
         </a>
         
-        <a href="#phase-1-baseline-calls_1"
+        <a href="#config-boundary-notes"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#phase-1-baseline-calls_1');">
-            Phase 1 baseline calls
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#config-boundary-notes');">
+            Config boundary notes
         </a>
         
         
@@ -2751,10 +2755,10 @@
             Current façade declarations
         </a>
         
-        <a href="#phase-1-baseline-calls_2"
+        <a href="#bridge-boundary-notes"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#phase-1-baseline-calls_2');">
-            Phase 1 baseline calls
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#bridge-boundary-notes');">
+            Bridge boundary notes
         </a>
         
         
@@ -2779,10 +2783,10 @@
             Current façade declarations
         </a>
         
-        <a href="#phase-1-baseline-calls_3"
+        <a href="#lb-boundary-notes"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#phase-1-baseline-calls_3');">
-            Phase 1 baseline calls
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#lb-boundary-notes');">
+            LB boundary notes
         </a>
         
         
@@ -2813,10 +2817,10 @@
             Public façade types owned by transport_pool
         </a>
         
-        <a href="#phase-1-baseline-calls_4"
+        <a href="#transport-boundary-notes"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#phase-1-baseline-calls_4');">
-            Phase 1 baseline calls
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#transport-boundary-notes');">
+            Transport boundary notes
         </a>
         
         
@@ -2847,27 +2851,19 @@
             Temporary compatibility surfaces
         </a>
         
-        <a href="#stale-leftovers-requiring-phase-2-review"
+        <a href="#stale-leftovers"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#stale-leftovers-requiring-phase-2-review');">
-            Stale leftovers requiring Phase 2 review
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#stale-leftovers');">
+            Stale leftovers
         </a>
         
         
 
         
-        <a href="#phase-1-exit-check"
+        <a href="#placement-guidance"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#phase-1-exit-check');">
-            Phase 1 Exit Check
-        </a>
-        
-
-        
-        <a href="#phase-8-verification-pass"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#phase-8-verification-pass');">
-            Phase 8 Verification Pass
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#placement-guidance');">
+            Placement Guidance
         </a>
         
 

@@ -29,11 +29,39 @@
          <lastmod>2026-07-27</lastmod>
     </url>
     <url>
+         <loc>https://supernova-labs-org.github.io/spooky/architecture/backend-lifecycle/</loc>
+         <lastmod>2026-07-27</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/architecture/bootstrap-vs-quic/</loc>
+         <lastmod>2026-07-27</lastmod>
+    </url>
+    <url>
          <loc>https://supernova-labs-org.github.io/spooky/architecture/components/</loc>
          <lastmod>2026-07-27</lastmod>
     </url>
     <url>
+         <loc>https://supernova-labs-org.github.io/spooky/architecture/edge-runtime/</loc>
+         <lastmod>2026-07-27</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/architecture/observability-contract/</loc>
+         <lastmod>2026-07-27</lastmod>
+    </url>
+    <url>
          <loc>https://supernova-labs-org.github.io/spooky/architecture/overview/</loc>
+         <lastmod>2026-07-27</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/architecture/request-lifecycle/</loc>
+         <lastmod>2026-07-27</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/architecture/runtime-generation/</loc>
+         <lastmod>2026-07-27</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/architecture/transport/</loc>
          <lastmod>2026-07-27</lastmod>
     </url>
     <url>
@@ -129,6 +157,10 @@
          <lastmod>2026-07-27</lastmod>
     </url>
     <url>
+         <loc>https://supernova-labs-org.github.io/spooky/operations/control-plane/</loc>
+         <lastmod>2026-07-27</lastmod>
+    </url>
+    <url>
          <loc>https://supernova-labs-org.github.io/spooky/operations/deployment-patterns/</loc>
          <lastmod>2026-07-27</lastmod>
     </url>
@@ -141,11 +173,19 @@
          <lastmod>2026-07-27</lastmod>
     </url>
     <url>
+         <loc>https://supernova-labs-org.github.io/spooky/operations/metrics-and-alerts/</loc>
+         <lastmod>2026-07-27</lastmod>
+    </url>
+    <url>
          <loc>https://supernova-labs-org.github.io/spooky/operations/overview/</loc>
          <lastmod>2026-07-27</lastmod>
     </url>
     <url>
          <loc>https://supernova-labs-org.github.io/spooky/operations/production-readiness/</loc>
+         <lastmod>2026-07-27</lastmod>
+    </url>
+    <url>
+         <loc>https://supernova-labs-org.github.io/spooky/operations/reload-and-drain/</loc>
          <lastmod>2026-07-27</lastmod>
     </url>
     <url>

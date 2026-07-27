@@ -1464,7 +1464,7 @@
 </tr>
 </tbody>
 </table></div>
-<h3 id="developer-understand-the-architecture-contribute">Developer — understand the architecture, contribute</h3>
+<h3 id="architecture-understand-the-runtime-and-subsystem-ownership">Architecture — understand the runtime and subsystem ownership</h3>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1482,16 +1482,121 @@
 <td>Per-crate responsibilities, inter-crate boundaries, key types</td>
 </tr>
 <tr>
-<td><a href="user-guide/load-balancing/">Load Balancing</a></td>
-<td>All six algorithms with characteristics, use-case guidance, and config examples</td>
+<td><a href="development/codebase-map/">Codebase Map</a></td>
+<td>Current crate/module map and where major logic lives</td>
 </tr>
+<tr>
+<td><a href="development/invariants/">Development Invariants</a></td>
+<td>Core runtime invariants, ownership assumptions, and rules the code depends on</td>
+</tr>
+<tr>
+<td><a href="public-api-surface-inventory/">Public API Surface Inventory</a></td>
+<td>Current canonical public surfaces, hidden internals, and remaining intentional exports</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="control-plane-and-operations-runtime-control-observability-and-failure-handling">Control Plane and Operations — runtime control, observability, and failure handling</h3>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>What you'll find</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="api/overview/">API Overview</a></td>
+<td>Metrics endpoint and control-plane HTTP surfaces at a high level</td>
+</tr>
+<tr>
+<td><a href="reference/control-api-reference/">Control API Reference</a></td>
+<td>Endpoint-by-endpoint control API contract</td>
+</tr>
+<tr>
+<td><a href="reference/metrics-reference/">Metrics Reference</a></td>
+<td>Metric names, labels, and exported runtime signals</td>
+</tr>
+<tr>
+<td><a href="operations/overview/">Operations Overview</a></td>
+<td>Operator map for deployment, sizing, tuning, and failure handling</td>
+</tr>
+<tr>
+<td><a href="operations/runbook/">Runbook</a></td>
+<td>Day-2 operational procedures and troubleshooting flow</td>
+</tr>
+<tr>
+<td><a href="operations/failure-modes/">Failure Modes</a></td>
+<td>Expected degraded behaviors and what they mean operationally</td>
+</tr>
+<tr>
+<td><a href="operations/sizing-and-capacity/">Sizing and Capacity</a></td>
+<td>Capacity planning and scaling guidance</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="protocol-traffic-and-policy-reference">Protocol, traffic, and policy reference</h3>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>What you'll find</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="user-guide/load-balancing/">Load Balancing</a></td>
+<td>Current balancing strategies, selection behavior, and config examples</td>
+</tr>
+<tr>
+<td><a href="protocols/http3/">HTTP/3</a></td>
+<td>HTTP/3 behavior and protocol-specific operational notes</td>
+</tr>
+<tr>
+<td><a href="protocols/quic/">QUIC</a></td>
+<td>QUIC transport behavior, constraints, and terminology</td>
+</tr>
+<tr>
+<td><a href="concepts/security-model/">Security Model</a></td>
+<td>Current trust boundaries, admin-plane assumptions, and missing security layers</td>
+</tr>
+<tr>
+<td><a href="reference/terminology/">Terminology</a></td>
+<td>Canonical definitions for listener, upstream, backend, route, drain, and related terms</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="developer-contribute-safely-against-the-current-architecture">Developer — contribute safely against the current architecture</h3>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>What you'll find</th>
+</tr>
+</thead>
+<tbody>
 <tr>
 <td><a href="https://github.com/Supernova-Labs-Org/spooky/blob/master/CONTRIBUTING.md">Contributing Guide</a></td>
 <td>Dev setup, build commands, test matrix, PR conventions</td>
 </tr>
+<tr>
+<td><a href="development/overview/">Development Overview</a></td>
+<td>Contributor-oriented guide to working in the repo</td>
+</tr>
+<tr>
+<td><a href="development/testing-strategy/">Testing Strategy</a></td>
+<td>Contract, regression, and parity test expectations</td>
+</tr>
+<tr>
+<td><a href="development/benchmarking/">Benchmarking</a></td>
+<td>Benchmark crate, micro/macro suites, and regression-gate workflow</td>
+</tr>
+<tr>
+<td><a href="development/adding-features/">Adding Features</a></td>
+<td>Expectations for new features against the current architecture</td>
+</tr>
 </tbody>
 </table></div>
-<h3 id="reference-config-schema-api-benchmarks-changelog">Reference — config schema, API, benchmarks, changelog</h3>
+<h3 id="reference-schema-maturity-roadmap-and-release-state">Reference — schema, maturity, roadmap, and release state</h3>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1509,20 +1614,8 @@
 <td>Strict feature-by-feature inventory of what is done, partial, and missing</td>
 </tr>
 <tr>
-<td><a href="concepts/security-model/">Security Model</a></td>
-<td>Current trust boundaries, admin-plane assumptions, and missing security layers</td>
-</tr>
-<tr>
-<td><a href="reference/terminology/">Terminology</a></td>
-<td>Canonical definitions for listener, upstream, backend, route, drain, and related terms</td>
-</tr>
-<tr>
-<td><a href="api/overview/">API Overview</a></td>
-<td>Metrics endpoint, control API (health, ready, runtime), bearer auth</td>
-</tr>
-<tr>
-<td><a href="development/benchmarking/">Benchmarking</a></td>
-<td>Benchmark crate, micro/macro suites, and regression-gate workflow</td>
+<td><a href="reference/overview/">Reference Overview</a></td>
+<td>Index of the strict reference material and product limits</td>
 </tr>
 <tr>
 <td><a href="roadmap/">Roadmap</a></td>
@@ -2098,16 +2191,34 @@ curl -k https://127.0.0.1:9902/ready
             Operator — install, configure, run in production
         </a>
         
-        <a href="#developer-understand-the-architecture-contribute"
+        <a href="#architecture-understand-the-runtime-and-subsystem-ownership"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#developer-understand-the-architecture-contribute');">
-            Developer — understand the architecture, contribute
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#architecture-understand-the-runtime-and-subsystem-ownership');">
+            Architecture — understand the runtime and subsystem ownership
         </a>
         
-        <a href="#reference-config-schema-api-benchmarks-changelog"
+        <a href="#control-plane-and-operations-runtime-control-observability-and-failure-handling"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#reference-config-schema-api-benchmarks-changelog');">
-            Reference — config schema, API, benchmarks, changelog
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#control-plane-and-operations-runtime-control-observability-and-failure-handling');">
+            Control Plane and Operations — runtime control, observability, and failure handling
+        </a>
+        
+        <a href="#protocol-traffic-and-policy-reference"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#protocol-traffic-and-policy-reference');">
+            Protocol, traffic, and policy reference
+        </a>
+        
+        <a href="#developer-contribute-safely-against-the-current-architecture"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#developer-contribute-safely-against-the-current-architecture');">
+            Developer — contribute safely against the current architecture
+        </a>
+        
+        <a href="#reference-schema-maturity-roadmap-and-release-state"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#reference-schema-maturity-roadmap-and-release-state');">
+            Reference — schema, maturity, roadmap, and release state
         </a>
         
         
