@@ -95,10 +95,22 @@ fn build_pool(
     max_inflight: usize,
     resolver: SharedDnsResolver,
 ) -> UpstreamTransportPool {
+    build_pool_with_policy(
+        backends,
+        test_connection_policy(max_inflight),
+        resolver,
+    )
+}
+
+fn build_pool_with_policy(
+    backends: impl IntoIterator<Item = (String, RuntimeBackendTransportKind)>,
+    connection_policy: spooky_config::runtime::RuntimeBackendConnectionPolicy,
+    resolver: SharedDnsResolver,
+) -> UpstreamTransportPool {
     UpstreamTransportPool::new_from_runtime_backends(
         backends,
         HashMap::new(),
-        test_connection_policy(max_inflight),
+        connection_policy,
         resolver,
     )
     .expect("transport pool")
@@ -462,6 +474,52 @@ async fn canonical_error_mapping_is_consistent() {
     ));
     let _ = h2_task.await.expect("h2 task join");
     assert_eq!(h2_tracker.max.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn execution_timeout_maps_to_proxy_timeout_for_h1_and_h2() {
+    let h1_port = match start_h1_server(b"h1", Duration::from_millis(50)).await {
+        Ok(port) => port,
+        Err(err) if loopback_bind_restricted(&err) => return,
+        Err(err) => panic!("failed to start h1 timeout server: {err}"),
+    };
+    let h2_port = match start_h2_server(b"h2", Duration::from_millis(50), None).await {
+        Ok(port) => port,
+        Err(err) if loopback_bind_restricted(&err) => return,
+        Err(err) => panic!("failed to start h2 timeout server: {err}"),
+    };
+
+    let timeout_policy = spooky_config::runtime::RuntimeBackendConnectionPolicy {
+        execution_timeout: Duration::from_millis(5),
+        ..test_connection_policy(4)
+    };
+
+    let pool = build_pool_with_policy(
+        [
+            ("h1-timeout".to_string(), RuntimeBackendTransportKind::Http1),
+            ("h2-timeout".to_string(), RuntimeBackendTransportKind::H2),
+        ],
+        timeout_policy,
+        SharedDnsResolver::new(),
+    );
+
+    let h1_err = pool
+        .send_backend_request(
+            "h1-timeout",
+            request(&format!("http://127.0.0.1:{h1_port}/")),
+        )
+        .await
+        .expect_err("h1 execution should time out");
+    assert!(matches!(h1_err, ProxyError::Timeout));
+
+    let h2_err = pool
+        .send_backend_request(
+            "h2-timeout",
+            request(&format!("http://127.0.0.1:{h2_port}/")),
+        )
+        .await
+        .expect_err("h2 execution should time out");
+    assert!(matches!(h2_err, ProxyError::Timeout));
 }
 
 #[test]
