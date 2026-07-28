@@ -34,3 +34,10 @@ impl QUICListener {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    // Domain anchor: metrics endpoint path and response handling contract tests
+    // live here so they stay local to the HTTP handling surface rather than
+    // drifting into listener/control-plane integration coverage.
+}

@@ -670,399 +670,407 @@ impl From<HedgePolicyDenialReason> for HedgeDecisionReason {
 mod tests {
     use super::*;
 
-    #[test]
-    fn every_slug_is_unique_within_each_family() {
-        fn assert_unique(slugs: &[&str], family: &str) {
-            let mut v = slugs.to_vec();
-            let before = v.len();
-            v.sort_unstable();
-            v.dedup();
-            assert_eq!(before, v.len(), "duplicate slug in {family}");
+    mod canonical_observability_slug_stability {
+        use super::*;
+
+        #[test]
+        fn every_slug_is_unique_within_each_family() {
+            fn assert_unique(slugs: &[&str], family: &str) {
+                let mut v = slugs.to_vec();
+                let before = v.len();
+                v.sort_unstable();
+                v.dedup();
+                assert_eq!(before, v.len(), "duplicate slug in {family}");
+            }
+            assert_unique(
+                &[
+                    RequestOutcomeReason::Completed.slug(),
+                    RequestOutcomeReason::Cancelled.slug(),
+                    RequestOutcomeReason::TimedOut.slug(),
+                    RequestOutcomeReason::AuthDenied.slug(),
+                    RequestOutcomeReason::RateLimited.slug(),
+                    RequestOutcomeReason::Overloaded.slug(),
+                    RequestOutcomeReason::ValidationRejected.slug(),
+                    RequestOutcomeReason::BackendTransportFailed.slug(),
+                    RequestOutcomeReason::BackendProtocolFailed.slug(),
+                    RequestOutcomeReason::BackendTlsFailed.slug(),
+                    RequestOutcomeReason::BackendBridgeFailed.slug(),
+                ],
+                "RequestOutcomeReason",
+            );
+            assert_unique(
+                &[
+                    AdmissionOverloadCause::Brownout.slug(),
+                    AdmissionOverloadCause::AdaptiveAdmission.slug(),
+                    AdmissionOverloadCause::RouteCap.slug(),
+                    AdmissionOverloadCause::RouteGlobalCap.slug(),
+                    AdmissionOverloadCause::GlobalInflight.slug(),
+                    AdmissionOverloadCause::UpstreamInflight.slug(),
+                    AdmissionOverloadCause::BackendInflight.slug(),
+                    AdmissionOverloadCause::CircuitOpen.slug(),
+                    AdmissionOverloadCause::RequestBufferCap.slug(),
+                    AdmissionOverloadCause::ResponsePrebufferCap.slug(),
+                    AdmissionOverloadCause::ConnectionCap.slug(),
+                ],
+                "AdmissionOverloadCause",
+            );
         }
-        assert_unique(
-            &[
-                RequestOutcomeReason::Completed.slug(),
-                RequestOutcomeReason::Cancelled.slug(),
-                RequestOutcomeReason::TimedOut.slug(),
-                RequestOutcomeReason::AuthDenied.slug(),
-                RequestOutcomeReason::RateLimited.slug(),
-                RequestOutcomeReason::Overloaded.slug(),
-                RequestOutcomeReason::ValidationRejected.slug(),
-                RequestOutcomeReason::BackendTransportFailed.slug(),
-                RequestOutcomeReason::BackendProtocolFailed.slug(),
-                RequestOutcomeReason::BackendTlsFailed.slug(),
-                RequestOutcomeReason::BackendBridgeFailed.slug(),
-            ],
-            "RequestOutcomeReason",
-        );
-        assert_unique(
-            &[
-                AdmissionOverloadCause::Brownout.slug(),
-                AdmissionOverloadCause::AdaptiveAdmission.slug(),
-                AdmissionOverloadCause::RouteCap.slug(),
-                AdmissionOverloadCause::RouteGlobalCap.slug(),
+
+        #[test]
+        fn metrics_overload_reason_routes_through_canonical_vocabulary() {
+            // obs Phase 2 (step 5): the metrics `reason=` label must come from the
+            // canonical vocabulary. Every OverloadShedReason maps to a canonical cause
+            // whose slug is the emitted label.
+            use crate::metrics::OverloadShedReason;
+            let cases = [
+                (
+                    OverloadShedReason::Brownout,
+                    AdmissionOverloadCause::Brownout,
+                ),
+                (
+                    OverloadShedReason::AdaptiveAdmission,
+                    AdmissionOverloadCause::AdaptiveAdmission,
+                ),
+                (
+                    OverloadShedReason::RouteCap,
+                    AdmissionOverloadCause::RouteCap,
+                ),
+                (
+                    OverloadShedReason::RouteGlobalCap,
+                    AdmissionOverloadCause::RouteGlobalCap,
+                ),
+                (
+                    OverloadShedReason::GlobalInflight,
+                    AdmissionOverloadCause::GlobalInflight,
+                ),
+                (
+                    OverloadShedReason::UpstreamInflight,
+                    AdmissionOverloadCause::UpstreamInflight,
+                ),
+                (
+                    OverloadShedReason::BackendInflight,
+                    AdmissionOverloadCause::BackendInflight,
+                ),
+                (
+                    OverloadShedReason::CircuitOpen,
+                    AdmissionOverloadCause::CircuitOpen,
+                ),
+                (
+                    OverloadShedReason::RequestBufferCap,
+                    AdmissionOverloadCause::RequestBufferCap,
+                ),
+                (
+                    OverloadShedReason::ResponsePrebufferCap,
+                    AdmissionOverloadCause::ResponsePrebufferCap,
+                ),
+                (
+                    OverloadShedReason::ConnectionCap,
+                    AdmissionOverloadCause::ConnectionCap,
+                ),
+            ];
+            for (reason, cause) in cases {
+                assert_eq!(reason.canonical(), cause);
+                assert_eq!(reason.reason_label(), cause.slug());
+            }
+        }
+
+        #[test]
+        fn overload_cause_slugs_match_legacy_metric_labels() {
+            // These must stay byte-identical to `OverloadShedReason` labels so a later
+            // migration of the overload emitter does not change the `reason=` series.
+            assert_eq!(
                 AdmissionOverloadCause::GlobalInflight.slug(),
-                AdmissionOverloadCause::UpstreamInflight.slug(),
-                AdmissionOverloadCause::BackendInflight.slug(),
-                AdmissionOverloadCause::CircuitOpen.slug(),
-                AdmissionOverloadCause::RequestBufferCap.slug(),
+                "global_inflight"
+            );
+            assert_eq!(
                 AdmissionOverloadCause::ResponsePrebufferCap.slug(),
-                AdmissionOverloadCause::ConnectionCap.slug(),
-            ],
-            "AdmissionOverloadCause",
-        );
-    }
+                "response_prebuffer_cap"
+            );
+        }
 
-    #[test]
-    fn metrics_overload_reason_routes_through_canonical_vocabulary() {
-        // obs Phase 2 (step 5): the metrics `reason=` label must come from the
-        // canonical vocabulary. Every OverloadShedReason maps to a canonical cause
-        // whose slug is the emitted label.
-        use crate::metrics::OverloadShedReason;
-        let cases = [
-            (
-                OverloadShedReason::Brownout,
-                AdmissionOverloadCause::Brownout,
-            ),
-            (
-                OverloadShedReason::AdaptiveAdmission,
-                AdmissionOverloadCause::AdaptiveAdmission,
-            ),
-            (
-                OverloadShedReason::RouteCap,
-                AdmissionOverloadCause::RouteCap,
-            ),
-            (
-                OverloadShedReason::RouteGlobalCap,
-                AdmissionOverloadCause::RouteGlobalCap,
-            ),
-            (
-                OverloadShedReason::GlobalInflight,
-                AdmissionOverloadCause::GlobalInflight,
-            ),
-            (
-                OverloadShedReason::UpstreamInflight,
-                AdmissionOverloadCause::UpstreamInflight,
-            ),
-            (
-                OverloadShedReason::BackendInflight,
-                AdmissionOverloadCause::BackendInflight,
-            ),
-            (
-                OverloadShedReason::CircuitOpen,
-                AdmissionOverloadCause::CircuitOpen,
-            ),
-            (
-                OverloadShedReason::RequestBufferCap,
-                AdmissionOverloadCause::RequestBufferCap,
-            ),
-            (
-                OverloadShedReason::ResponsePrebufferCap,
-                AdmissionOverloadCause::ResponsePrebufferCap,
-            ),
-            (
-                OverloadShedReason::ConnectionCap,
-                AdmissionOverloadCause::ConnectionCap,
-            ),
-        ];
-        for (reason, cause) in cases {
-            assert_eq!(reason.canonical(), cause);
-            assert_eq!(reason.reason_label(), cause.slug());
+        #[test]
+        fn request_outcome_coarse_label_matches_legacy_buckets() {
+            assert_eq!(
+                RequestOutcomeReason::Completed.coarse_outcome_label(),
+                "success"
+            );
+            assert_eq!(
+                RequestOutcomeReason::TimedOut.coarse_outcome_label(),
+                "timeout"
+            );
+            assert_eq!(
+                RequestOutcomeReason::Overloaded.coarse_outcome_label(),
+                "overload_shed"
+            );
+            assert_eq!(
+                RequestOutcomeReason::AuthDenied.coarse_outcome_label(),
+                "failure"
+            );
         }
     }
 
-    #[test]
-    fn overload_cause_slugs_match_legacy_metric_labels() {
-        // These must stay byte-identical to `OverloadShedReason` labels so a later
-        // migration of the overload emitter does not change the `reason=` series.
-        assert_eq!(
-            AdmissionOverloadCause::GlobalInflight.slug(),
-            "global_inflight"
-        );
-        assert_eq!(
-            AdmissionOverloadCause::ResponsePrebufferCap.slug(),
-            "response_prebuffer_cap"
-        );
-    }
+    mod cross_surface_reason_alignment {
+        use super::*;
 
-    #[test]
-    fn request_outcome_coarse_label_matches_legacy_buckets() {
-        assert_eq!(
-            RequestOutcomeReason::Completed.coarse_outcome_label(),
-            "success"
-        );
-        assert_eq!(
-            RequestOutcomeReason::TimedOut.coarse_outcome_label(),
-            "timeout"
-        );
-        assert_eq!(
-            RequestOutcomeReason::Overloaded.coarse_outcome_label(),
-            "overload_shed"
-        );
-        assert_eq!(
-            RequestOutcomeReason::AuthDenied.coarse_outcome_label(),
-            "failure"
-        );
-    }
+        #[test]
+        fn event_context_renders_canonical_fields_in_order() {
+            let ctx = OperationalEventContext::new()
+                .with_request_id(42)
+                .with_upstream("api")
+                .with_backend("10.0.0.1:8080")
+                .with_reason("timed_out");
+            assert_eq!(
+                ctx.to_string(),
+                "request_id=42 upstream=api backend=10.0.0.1:8080 reason=timed_out"
+            );
+        }
 
-    #[test]
-    fn event_context_renders_canonical_fields_in_order() {
-        let ctx = OperationalEventContext::new()
-            .with_request_id(42)
-            .with_upstream("api")
-            .with_backend("10.0.0.1:8080")
-            .with_reason("timed_out");
-        assert_eq!(
-            ctx.to_string(),
-            "request_id=42 upstream=api backend=10.0.0.1:8080 reason=timed_out"
-        );
-    }
+        #[test]
+        fn empty_event_context_renders_nothing() {
+            assert_eq!(OperationalEventContext::new().to_string(), "");
+        }
 
-    #[test]
-    fn empty_event_context_renders_nothing() {
-        assert_eq!(OperationalEventContext::new().to_string(), "");
-    }
+        #[test]
+        fn local_rejection_maps_to_canonical_request_outcome() {
+            use crate::runtime::connection::stream::RejectionReason;
+            assert_eq!(
+                RequestOutcomeReason::from(RejectionReason::AuthDenied),
+                RequestOutcomeReason::AuthDenied
+            );
+            assert_eq!(
+                RequestOutcomeReason::from(RejectionReason::AuthUnavailable),
+                RequestOutcomeReason::AuthDenied
+            );
+            assert_eq!(
+                RequestOutcomeReason::from(RejectionReason::RequestBodyTooLarge),
+                RequestOutcomeReason::ValidationRejected
+            );
+            assert_eq!(
+                RequestOutcomeReason::from(RejectionReason::ResponsePrebufferCap),
+                RequestOutcomeReason::Overloaded
+            );
+        }
 
-    #[test]
-    fn local_rejection_maps_to_canonical_request_outcome() {
-        use crate::runtime::connection::stream::RejectionReason;
-        assert_eq!(
-            RequestOutcomeReason::from(RejectionReason::AuthDenied),
-            RequestOutcomeReason::AuthDenied
-        );
-        assert_eq!(
-            RequestOutcomeReason::from(RejectionReason::AuthUnavailable),
-            RequestOutcomeReason::AuthDenied
-        );
-        assert_eq!(
-            RequestOutcomeReason::from(RejectionReason::RequestBodyTooLarge),
-            RequestOutcomeReason::ValidationRejected
-        );
-        assert_eq!(
-            RequestOutcomeReason::from(RejectionReason::ResponsePrebufferCap),
-            RequestOutcomeReason::Overloaded
-        );
-    }
+        #[test]
+        fn local_backend_failure_maps_to_canonical_transport_class() {
+            use crate::runtime::connection::stream::BackendFailureReason;
+            assert_eq!(
+                RequestOutcomeReason::from(BackendFailureReason::UpstreamTimeout),
+                RequestOutcomeReason::TimedOut
+            );
+            assert_eq!(
+                RequestOutcomeReason::from(BackendFailureReason::UpstreamTls),
+                RequestOutcomeReason::BackendTlsFailed
+            );
+            assert_eq!(
+                RequestOutcomeReason::from(BackendFailureReason::UpstreamProtocol),
+                RequestOutcomeReason::BackendProtocolFailed
+            );
+            assert_eq!(
+                RequestOutcomeReason::from(BackendFailureReason::UpstreamBridge),
+                RequestOutcomeReason::BackendBridgeFailed
+            );
+            assert_eq!(
+                RequestOutcomeReason::from(BackendFailureReason::DispatchSpawnFailed),
+                RequestOutcomeReason::BackendTransportFailed
+            );
+        }
 
-    #[test]
-    fn local_backend_failure_maps_to_canonical_transport_class() {
-        use crate::runtime::connection::stream::BackendFailureReason;
-        assert_eq!(
-            RequestOutcomeReason::from(BackendFailureReason::UpstreamTimeout),
-            RequestOutcomeReason::TimedOut
-        );
-        assert_eq!(
-            RequestOutcomeReason::from(BackendFailureReason::UpstreamTls),
-            RequestOutcomeReason::BackendTlsFailed
-        );
-        assert_eq!(
-            RequestOutcomeReason::from(BackendFailureReason::UpstreamProtocol),
-            RequestOutcomeReason::BackendProtocolFailed
-        );
-        assert_eq!(
-            RequestOutcomeReason::from(BackendFailureReason::UpstreamBridge),
-            RequestOutcomeReason::BackendBridgeFailed
-        );
-        assert_eq!(
-            RequestOutcomeReason::from(BackendFailureReason::DispatchSpawnFailed),
-            RequestOutcomeReason::BackendTransportFailed
-        );
-    }
+        #[test]
+        fn backend_health_observation_maps_to_canonical_health_reason() {
+            use crate::runtime::backend::event::{
+                BackendHealthObservationOutcome as O, BackendHealthObservationSource as S,
+            };
+            assert_eq!(
+                backend_health_reason(S::ActiveCheck, O::Success),
+                Some(BackendHealthReason::ActiveProbeSuccess)
+            );
+            assert_eq!(
+                backend_health_reason(S::ActiveCheck, O::Failure),
+                Some(BackendHealthReason::ActiveProbeFailure)
+            );
+            assert_eq!(
+                backend_health_reason(S::PassiveRequest, O::Failure),
+                Some(BackendHealthReason::PassiveFailure)
+            );
+            assert_eq!(
+                backend_health_reason(S::RequestCompletion, O::Success),
+                Some(BackendHealthReason::PassiveSuccess)
+            );
+            // Neutral and control-plane observations carry no health reason.
+            assert_eq!(backend_health_reason(S::ActiveCheck, O::Neutral), None);
+            assert_eq!(backend_health_reason(S::ControlPlane, O::Success), None);
+        }
 
-    #[test]
-    fn backend_health_observation_maps_to_canonical_health_reason() {
-        use crate::runtime::backend::event::{
-            BackendHealthObservationOutcome as O, BackendHealthObservationSource as S,
-        };
-        assert_eq!(
-            backend_health_reason(S::ActiveCheck, O::Success),
-            Some(BackendHealthReason::ActiveProbeSuccess)
-        );
-        assert_eq!(
-            backend_health_reason(S::ActiveCheck, O::Failure),
-            Some(BackendHealthReason::ActiveProbeFailure)
-        );
-        assert_eq!(
-            backend_health_reason(S::PassiveRequest, O::Failure),
-            Some(BackendHealthReason::PassiveFailure)
-        );
-        assert_eq!(
-            backend_health_reason(S::RequestCompletion, O::Success),
-            Some(BackendHealthReason::PassiveSuccess)
-        );
-        // Neutral and control-plane observations carry no health reason.
-        assert_eq!(backend_health_reason(S::ActiveCheck, O::Neutral), None);
-        assert_eq!(backend_health_reason(S::ControlPlane, O::Success), None);
-    }
+        #[test]
+        fn refresh_classification_maps_only_failures_to_health_reason() {
+            use crate::runtime::backend::lifecycle::BackendRefreshClassification as C;
+            // Refresh axis is distinct from probe-health axis: only failures map.
+            assert_eq!(
+                Option::<BackendHealthReason>::from(C::FailedActivePreserved),
+                Some(BackendHealthReason::DnsRefreshFailed)
+            );
+            assert_eq!(
+                Option::<BackendHealthReason>::from(C::Rejected),
+                Some(BackendHealthReason::EmptyResolutionRetained)
+            );
+            assert_eq!(Option::<BackendHealthReason>::from(C::Refreshed), None);
+            assert_eq!(Option::<BackendHealthReason>::from(C::Unchanged), None);
+            // The failure health-reasons are themselves classified as failures.
+            assert!(BackendHealthReason::DnsRefreshFailed.is_failure());
+            assert!(BackendHealthReason::PassiveFailure.is_failure());
+            assert!(!BackendHealthReason::ActiveProbeSuccess.is_failure());
+        }
 
-    #[test]
-    fn refresh_classification_maps_only_failures_to_health_reason() {
-        use crate::runtime::backend::lifecycle::BackendRefreshClassification as C;
-        // Refresh axis is distinct from probe-health axis: only failures map.
-        assert_eq!(
-            Option::<BackendHealthReason>::from(C::FailedActivePreserved),
-            Some(BackendHealthReason::DnsRefreshFailed)
-        );
-        assert_eq!(
-            Option::<BackendHealthReason>::from(C::Rejected),
-            Some(BackendHealthReason::EmptyResolutionRetained)
-        );
-        assert_eq!(Option::<BackendHealthReason>::from(C::Refreshed), None);
-        assert_eq!(Option::<BackendHealthReason>::from(C::Unchanged), None);
-        // The failure health-reasons are themselves classified as failures.
-        assert!(BackendHealthReason::DnsRefreshFailed.is_failure());
-        assert!(BackendHealthReason::PassiveFailure.is_failure());
-        assert!(!BackendHealthReason::ActiveProbeSuccess.is_failure());
-    }
+        #[test]
+        fn admission_outcome_maps_to_canonical_decision_reason() {
+            use crate::{
+                metrics::OverloadShedReason, runtime::connection::outcome::AdmissionOutcomeClass,
+            };
+            assert_eq!(
+                AdmissionDecisionReason::from(AdmissionOutcomeClass::AuthDenied),
+                AdmissionDecisionReason::AuthDenied
+            );
+            assert_eq!(
+                AdmissionDecisionReason::from(AdmissionOutcomeClass::RateLimited),
+                AdmissionDecisionReason::RateLimited
+            );
+            assert_eq!(
+                AdmissionDecisionReason::from(AdmissionOutcomeClass::OverloadShed {
+                    reason: Some(OverloadShedReason::GlobalInflight)
+                }),
+                AdmissionDecisionReason::Overloaded
+            );
+            assert_eq!(
+                AdmissionDecisionReason::from(AdmissionOutcomeClass::Failed { timed_out: true }),
+                AdmissionDecisionReason::PolicyRejected
+            );
+        }
 
-    #[test]
-    fn admission_outcome_maps_to_canonical_decision_reason() {
-        use crate::{
-            metrics::OverloadShedReason, runtime::connection::outcome::AdmissionOutcomeClass,
-        };
-        assert_eq!(
-            AdmissionDecisionReason::from(AdmissionOutcomeClass::AuthDenied),
-            AdmissionDecisionReason::AuthDenied
-        );
-        assert_eq!(
-            AdmissionDecisionReason::from(AdmissionOutcomeClass::RateLimited),
-            AdmissionDecisionReason::RateLimited
-        );
-        assert_eq!(
-            AdmissionDecisionReason::from(AdmissionOutcomeClass::OverloadShed {
-                reason: Some(OverloadShedReason::GlobalInflight)
-            }),
-            AdmissionDecisionReason::Overloaded
-        );
-        assert_eq!(
-            AdmissionDecisionReason::from(AdmissionOutcomeClass::Failed { timed_out: true }),
-            AdmissionDecisionReason::PolicyRejected
-        );
-    }
+        #[test]
+        fn admission_log_reason_literals_match_canonical_slugs() {
+            // obs Phase 7: the `reason=` values emitted by the forwarding/bootstrap
+            // admission logs are the canonical AdmissionDecisionReason slugs. This
+            // guards those hand-written literals against enum drift.
+            assert_eq!(AdmissionDecisionReason::AuthDenied.slug(), "auth_denied");
+            assert_eq!(
+                AdmissionDecisionReason::AuthUnavailable.slug(),
+                "auth_unavailable"
+            );
+            assert_eq!(AdmissionDecisionReason::RateLimited.slug(), "rate_limited");
+            assert_eq!(AdmissionDecisionReason::Overloaded.slug(), "overloaded");
+        }
 
-    #[test]
-    fn admission_log_reason_literals_match_canonical_slugs() {
-        // obs Phase 7: the `reason=` values emitted by the forwarding/bootstrap
-        // admission logs are the canonical AdmissionDecisionReason slugs. This
-        // guards those hand-written literals against enum drift.
-        assert_eq!(AdmissionDecisionReason::AuthDenied.slug(), "auth_denied");
-        assert_eq!(
-            AdmissionDecisionReason::AuthUnavailable.slug(),
-            "auth_unavailable"
-        );
-        assert_eq!(AdmissionDecisionReason::RateLimited.slug(), "rate_limited");
-        assert_eq!(AdmissionDecisionReason::Overloaded.slug(), "overloaded");
-    }
+        #[test]
+        fn retry_and_hedge_denials_map_to_canonical_reasons() {
+            use spooky_errors::{
+                HedgePolicyDenialReason, RetryPolicyDenialReason, UpstreamRetryReason,
+            };
+            assert_eq!(
+                RetryDecisionReason::from(UpstreamRetryReason::Timeout),
+                RetryDecisionReason::UpstreamTimeout
+            );
+            assert_eq!(
+                RetryDecisionReason::from(RetryPolicyDenialReason::BudgetDenied),
+                RetryDecisionReason::RetryBudgetDenied
+            );
+            assert_eq!(
+                RetryDecisionReason::from(RetryPolicyDenialReason::MethodNotIdempotent),
+                RetryDecisionReason::IdempotencyDenied
+            );
+            assert_eq!(
+                RetryDecisionReason::from(RetryPolicyDenialReason::RequestBodyNotReplayable),
+                RetryDecisionReason::IdempotencyDenied
+            );
+            assert_eq!(
+                RetryDecisionReason::from(RetryPolicyDenialReason::AttemptLimitReached),
+                RetryDecisionReason::RetryPolicyDisabled
+            );
+            assert_eq!(
+                RetryDecisionReason::from(RetryPolicyDenialReason::AlternateBackendUnavailable(
+                    spooky_lb::alternate_backend::AlternateBackendFailureReason::NoHealthyBackends
+                )),
+                RetryDecisionReason::RetryPolicyDisabled
+            );
+            assert_eq!(
+                HedgeDecisionReason::from(HedgePolicyDenialReason::TunnelRequest),
+                HedgeDecisionReason::TunnelRequest
+            );
+            assert_eq!(
+                HedgeDecisionReason::from(HedgePolicyDenialReason::PrimaryRequestCompleted),
+                HedgeDecisionReason::PrimaryCompleted
+            );
+            assert_eq!(
+                HedgeDecisionReason::from(HedgePolicyDenialReason::AlternateBackendUnavailable(
+                    spooky_lb::alternate_backend::AlternateBackendFailureReason::NoHealthyBackends
+                )),
+                HedgeDecisionReason::AlternateBackendUnavailable
+            );
+            assert_eq!(
+                HedgeDecisionReason::from(HedgePolicyDenialReason::BudgetDenied),
+                HedgeDecisionReason::HedgeBudgetDenied
+            );
+        }
 
-    #[test]
-    fn retry_and_hedge_denials_map_to_canonical_reasons() {
-        use spooky_errors::{
-            HedgePolicyDenialReason, RetryPolicyDenialReason, UpstreamRetryReason,
-        };
-        assert_eq!(
-            RetryDecisionReason::from(UpstreamRetryReason::Timeout),
-            RetryDecisionReason::UpstreamTimeout
-        );
-        assert_eq!(
-            RetryDecisionReason::from(RetryPolicyDenialReason::BudgetDenied),
-            RetryDecisionReason::RetryBudgetDenied
-        );
-        assert_eq!(
-            RetryDecisionReason::from(RetryPolicyDenialReason::MethodNotIdempotent),
-            RetryDecisionReason::IdempotencyDenied
-        );
-        assert_eq!(
-            RetryDecisionReason::from(RetryPolicyDenialReason::RequestBodyNotReplayable),
-            RetryDecisionReason::IdempotencyDenied
-        );
-        assert_eq!(
-            RetryDecisionReason::from(RetryPolicyDenialReason::AttemptLimitReached),
-            RetryDecisionReason::RetryPolicyDisabled
-        );
-        assert_eq!(
-            RetryDecisionReason::from(RetryPolicyDenialReason::AlternateBackendUnavailable(
-                spooky_lb::alternate_backend::AlternateBackendFailureReason::NoHealthyBackends
-            )),
-            RetryDecisionReason::RetryPolicyDisabled
-        );
-        assert_eq!(
-            HedgeDecisionReason::from(HedgePolicyDenialReason::TunnelRequest),
-            HedgeDecisionReason::TunnelRequest
-        );
-        assert_eq!(
-            HedgeDecisionReason::from(HedgePolicyDenialReason::PrimaryRequestCompleted),
-            HedgeDecisionReason::PrimaryCompleted
-        );
-        assert_eq!(
-            HedgeDecisionReason::from(HedgePolicyDenialReason::AlternateBackendUnavailable(
-                spooky_lb::alternate_backend::AlternateBackendFailureReason::NoHealthyBackends
-            )),
-            HedgeDecisionReason::AlternateBackendUnavailable
-        );
-        assert_eq!(
-            HedgeDecisionReason::from(HedgePolicyDenialReason::BudgetDenied),
-            HedgeDecisionReason::HedgeBudgetDenied
-        );
-    }
+        #[test]
+        fn retry_and_hedge_reason_slugs_preserve_trigger_vs_denial_contract() {
+            assert_eq!(
+                RetryDecisionReason::UpstreamTimeout.slug(),
+                "upstream_timeout"
+            );
+            assert!(RetryDecisionReason::UpstreamTimeout.is_retry());
+            assert_eq!(
+                RetryDecisionReason::RetryBudgetDenied.slug(),
+                "retry_budget_denied"
+            );
+            assert!(!RetryDecisionReason::RetryBudgetDenied.is_retry());
+            assert_eq!(HedgeDecisionReason::DelayElapsed.slug(), "delay_elapsed");
+            assert!(HedgeDecisionReason::DelayElapsed.is_triggered());
+            assert_eq!(
+                HedgeDecisionReason::HedgeBudgetDenied.slug(),
+                "hedge_budget_denied"
+            );
+            assert!(!HedgeDecisionReason::HedgeBudgetDenied.is_triggered());
+        }
 
-    #[test]
-    fn retry_and_hedge_reason_slugs_preserve_trigger_vs_denial_contract() {
-        assert_eq!(
-            RetryDecisionReason::UpstreamTimeout.slug(),
-            "upstream_timeout"
-        );
-        assert!(RetryDecisionReason::UpstreamTimeout.is_retry());
-        assert_eq!(
-            RetryDecisionReason::RetryBudgetDenied.slug(),
-            "retry_budget_denied"
-        );
-        assert!(!RetryDecisionReason::RetryBudgetDenied.is_retry());
-        assert_eq!(HedgeDecisionReason::DelayElapsed.slug(), "delay_elapsed");
-        assert!(HedgeDecisionReason::DelayElapsed.is_triggered());
-        assert_eq!(
-            HedgeDecisionReason::HedgeBudgetDenied.slug(),
-            "hedge_budget_denied"
-        );
-        assert!(!HedgeDecisionReason::HedgeBudgetDenied.is_triggered());
-    }
+        #[test]
+        fn retry_and_outcome_mappings_stay_aligned_but_distinct_by_failure_class() {
+            use spooky_errors::{
+                RetryPolicyDenialReason, UpstreamRetryReason, UpstreamTerminalErrorKind,
+            };
 
-    #[test]
-    fn retry_and_outcome_mappings_stay_aligned_but_distinct_by_failure_class() {
-        use spooky_errors::{
-            RetryPolicyDenialReason, UpstreamRetryReason, UpstreamTerminalErrorKind,
-        };
+            use crate::runtime::connection::stream::BackendFailureReason;
 
-        use crate::runtime::connection::stream::BackendFailureReason;
+            assert_eq!(
+                RetryDecisionReason::from(UpstreamRetryReason::Transport),
+                RetryDecisionReason::UpstreamTransportFailure
+            );
+            assert_eq!(
+                RequestOutcomeReason::from(BackendFailureReason::UpstreamTransport),
+                RequestOutcomeReason::BackendTransportFailed
+            );
 
-        assert_eq!(
-            RetryDecisionReason::from(UpstreamRetryReason::Transport),
-            RetryDecisionReason::UpstreamTransportFailure
-        );
-        assert_eq!(
-            RequestOutcomeReason::from(BackendFailureReason::UpstreamTransport),
-            RequestOutcomeReason::BackendTransportFailed
-        );
+            assert_eq!(
+                RetryDecisionReason::from(RetryPolicyDenialReason::TerminalError(
+                    UpstreamTerminalErrorKind::Protocol
+                )),
+                RetryDecisionReason::RetryPolicyDisabled
+            );
+            assert_eq!(
+                RequestOutcomeReason::from(BackendFailureReason::UpstreamProtocol),
+                RequestOutcomeReason::BackendProtocolFailed
+            );
 
-        assert_eq!(
-            RetryDecisionReason::from(RetryPolicyDenialReason::TerminalError(
-                UpstreamTerminalErrorKind::Protocol
-            )),
-            RetryDecisionReason::RetryPolicyDisabled
-        );
-        assert_eq!(
-            RequestOutcomeReason::from(BackendFailureReason::UpstreamProtocol),
-            RequestOutcomeReason::BackendProtocolFailed
-        );
-
-        assert_eq!(
-            RetryDecisionReason::from(RetryPolicyDenialReason::TerminalError(
-                UpstreamTerminalErrorKind::Bridge
-            )),
-            RetryDecisionReason::RetryPolicyDisabled
-        );
-        assert_eq!(
-            RequestOutcomeReason::from(BackendFailureReason::UpstreamBridge),
-            RequestOutcomeReason::BackendBridgeFailed
-        );
+            assert_eq!(
+                RetryDecisionReason::from(RetryPolicyDenialReason::TerminalError(
+                    UpstreamTerminalErrorKind::Bridge
+                )),
+                RetryDecisionReason::RetryPolicyDisabled
+            );
+            assert_eq!(
+                RequestOutcomeReason::from(BackendFailureReason::UpstreamBridge),
+                RequestOutcomeReason::BackendBridgeFailed
+            );
+        }
     }
 }

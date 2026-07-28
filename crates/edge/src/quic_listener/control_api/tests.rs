@@ -131,6 +131,7 @@ fn runtime_bundle_control_api_state(
     (state, runtime_handle)
 }
 
+// Domain: watchdog service state transitions and restart environment handling.
 #[test]
 fn watchdog_restart_env_keeps_path_when_present() {
     let env = crate::watchdog::service::watchdog_restart_env(
@@ -161,6 +162,7 @@ fn watchdog_restart_env_omits_path_when_missing() {
     );
 }
 
+// Domain: control API auth and route gating contracts.
 #[test]
 fn bearer_authorization_scheme_is_case_insensitive() {
     assert_eq!(
@@ -193,6 +195,7 @@ fn bearer_authorization_rejects_malformed_headers() {
     );
 }
 
+// Domain: runtime snapshot rendering and live runtime-view selection.
 #[test]
 fn control_api_state_prefers_reloaded_paths_and_auth_token() {
     let dir = tempdir().expect("tempdir");
@@ -324,6 +327,7 @@ fn control_api_backend_inventory_and_summary_share_one_canonical_snapshot_contra
     assert_eq!(summary.healthy_backends, 1);
 }
 
+// Domain: watchdog/runtime ownership alignment across reload boundaries.
 #[test]
 fn reload_preserves_process_scoped_watchdog_and_dns_resolver() {
     // Regression: process-shared services must be carried across a reload, not
@@ -382,6 +386,7 @@ fn reload_preserves_process_scoped_watchdog_and_dns_resolver() {
     );
 }
 
+// Domain: reload compatibility classification and lifecycle gatekeeping.
 #[test]
 fn live_reloadable_upstream_change_is_accepted() {
     // Phase 9 (#1): a generation-owned change (upstream/route table) must pass
@@ -779,6 +784,7 @@ fn apply_live_log_level_reload_updates_global_filter() {
     assert_eq!(log::max_level(), LevelFilter::Debug);
 }
 
+// Domain: control-plane certificate reload and atomic service update behavior.
 #[tokio::test]
 async fn runtime_bundle_cert_reload_ignores_unrelated_config_drift_and_bundle_swap() {
     let dir = tempdir().expect("tempdir");

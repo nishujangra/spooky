@@ -375,54 +375,58 @@ impl ControlApiBackendPlacementPayload {
 mod tests {
     use super::*;
 
-    #[test]
-    fn health_reason_labels_match_metric_reason_tokens() {
-        // obs Phase 4: control-plane `health_reason` must use the same tokens as
-        // the `spooky_health_failures_total{reason=…}` metric label so operators
-        // don't translate between surfaces.
-        assert_eq!(
-            health_failure_reason_label(HealthFailureReason::HttpStatus5xx),
-            "5xx"
-        );
-        assert_eq!(
-            health_failure_reason_label(HealthFailureReason::Timeout),
-            "timeout"
-        );
-        assert_eq!(
-            health_failure_reason_label(HealthFailureReason::Transport),
-            "transport"
-        );
-        assert_eq!(health_failure_reason_label(HealthFailureReason::Tls), "tls");
-        assert_eq!(
-            health_failure_reason_label(HealthFailureReason::CircuitOpen),
-            "circuit_open"
-        );
-    }
+    mod runtime_snapshot_rendering {
+        use super::*;
 
-    #[test]
-    fn backend_payload_serializes_health_reason_when_present() {
-        // The field appears only when unhealthy with a known reason, and is
-        // omitted otherwise (skip_serializing_if).
-        let with_reason = ControlApiBackendLifecyclePayload {
-            backend: "b".to_string(),
-            health: "unhealthy",
-            health_reason: Some("timeout"),
-            membership: "active",
-            authority_host: "h".to_string(),
-            authority_port: 443,
-            resolved_addrs: vec![],
-            resolution_generation: 0,
-            last_refresh_success_at_unix_seconds: None,
-            placements: vec![],
-        };
-        let json = serde_json::to_string(&with_reason).expect("serialize");
-        assert!(json.contains("\"health_reason\":\"timeout\""));
+        #[test]
+        fn health_reason_labels_match_metric_reason_tokens() {
+            // obs Phase 4: control-plane `health_reason` must use the same tokens as
+            // the `spooky_health_failures_total{reason=…}` metric label so operators
+            // don't translate between surfaces.
+            assert_eq!(
+                health_failure_reason_label(HealthFailureReason::HttpStatus5xx),
+                "5xx"
+            );
+            assert_eq!(
+                health_failure_reason_label(HealthFailureReason::Timeout),
+                "timeout"
+            );
+            assert_eq!(
+                health_failure_reason_label(HealthFailureReason::Transport),
+                "transport"
+            );
+            assert_eq!(health_failure_reason_label(HealthFailureReason::Tls), "tls");
+            assert_eq!(
+                health_failure_reason_label(HealthFailureReason::CircuitOpen),
+                "circuit_open"
+            );
+        }
 
-        let without = ControlApiBackendLifecyclePayload {
-            health_reason: None,
-            ..with_reason
-        };
-        let json = serde_json::to_string(&without).expect("serialize");
-        assert!(!json.contains("health_reason"));
+        #[test]
+        fn backend_payload_serializes_health_reason_when_present() {
+            // The field appears only when unhealthy with a known reason, and is
+            // omitted otherwise (skip_serializing_if).
+            let with_reason = ControlApiBackendLifecyclePayload {
+                backend: "b".to_string(),
+                health: "unhealthy",
+                health_reason: Some("timeout"),
+                membership: "active",
+                authority_host: "h".to_string(),
+                authority_port: 443,
+                resolved_addrs: vec![],
+                resolution_generation: 0,
+                last_refresh_success_at_unix_seconds: None,
+                placements: vec![],
+            };
+            let json = serde_json::to_string(&with_reason).expect("serialize");
+            assert!(json.contains("\"health_reason\":\"timeout\""));
+
+            let without = ControlApiBackendLifecyclePayload {
+                health_reason: None,
+                ..with_reason
+            };
+            let json = serde_json::to_string(&without).expect("serialize");
+            assert!(!json.contains("health_reason"));
+        }
     }
 }
