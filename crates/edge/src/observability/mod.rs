@@ -670,19 +670,47 @@ impl From<HedgePolicyDenialReason> for HedgeDecisionReason {
 mod tests {
     use super::*;
 
+    fn assert_unique_slug_family(slugs: &[&str], family: &str) {
+        let mut values = slugs.to_vec();
+        let before = values.len();
+        values.sort_unstable();
+        values.dedup();
+        assert_eq!(
+            before,
+            values.len(),
+            "canonical slug family `{family}` must not contain duplicate values"
+        );
+    }
+
+    fn assert_reason_surface_alignment(reason: &'static str) {
+        let metric_labels = MetricReasonLabels {
+            outcome: None,
+            reason: Some(reason),
+            failure_class: None,
+        };
+        let control_plane_reason = reason;
+        let log_ctx = OperationalEventContext::new()
+            .with_reason(reason)
+            .to_string();
+
+        assert_eq!(
+            metric_labels.reason,
+            Some(control_plane_reason),
+            "metric reason label should keep the canonical token"
+        );
+        assert_eq!(
+            log_ctx,
+            format!("reason={reason}"),
+            "structured logs should render the canonical reason token verbatim"
+        );
+    }
+
     mod canonical_observability_slug_stability {
         use super::*;
 
         #[test]
-        fn every_slug_is_unique_within_each_family() {
-            fn assert_unique(slugs: &[&str], family: &str) {
-                let mut v = slugs.to_vec();
-                let before = v.len();
-                v.sort_unstable();
-                v.dedup();
-                assert_eq!(before, v.len(), "duplicate slug in {family}");
-            }
-            assert_unique(
+        fn canonical_reason_families_use_unique_slug_values() {
+            assert_unique_slug_family(
                 &[
                     RequestOutcomeReason::Completed.slug(),
                     RequestOutcomeReason::Cancelled.slug(),
@@ -698,7 +726,7 @@ mod tests {
                 ],
                 "RequestOutcomeReason",
             );
-            assert_unique(
+            assert_unique_slug_family(
                 &[
                     BackendHealthReason::ActiveProbeSuccess.slug(),
                     BackendHealthReason::ActiveProbeFailure.slug(),
@@ -710,7 +738,7 @@ mod tests {
                 ],
                 "BackendHealthReason",
             );
-            assert_unique(
+            assert_unique_slug_family(
                 &[
                     RetryDecisionReason::UpstreamTimeout.slug(),
                     RetryDecisionReason::UpstreamTransportFailure.slug(),
@@ -721,7 +749,7 @@ mod tests {
                 ],
                 "RetryDecisionReason",
             );
-            assert_unique(
+            assert_unique_slug_family(
                 &[
                     HedgeDecisionReason::DelayElapsed.slug(),
                     HedgeDecisionReason::HedgingDisabled.slug(),
@@ -734,7 +762,7 @@ mod tests {
                 ],
                 "HedgeDecisionReason",
             );
-            assert_unique(
+            assert_unique_slug_family(
                 &[
                     AdmissionDecisionReason::AuthDenied.slug(),
                     AdmissionDecisionReason::AuthUnavailable.slug(),
@@ -745,7 +773,7 @@ mod tests {
                 ],
                 "AdmissionDecisionReason",
             );
-            assert_unique(
+            assert_unique_slug_family(
                 &[
                     AdmissionOverloadCause::Brownout.slug(),
                     AdmissionOverloadCause::AdaptiveAdmission.slug(),
@@ -764,7 +792,7 @@ mod tests {
         }
 
         #[test]
-        fn metrics_overload_reason_routes_through_canonical_vocabulary() {
+        fn overload_metric_reason_labels_follow_canonical_cause_vocabulary() {
             // obs Phase 2 (step 5): the metrics `reason=` label must come from the
             // canonical vocabulary. Every OverloadShedReason maps to a canonical cause
             // whose slug is the emitted label.
@@ -836,7 +864,7 @@ mod tests {
         }
 
         #[test]
-        fn request_outcome_coarse_label_matches_legacy_buckets() {
+        fn request_outcome_coarse_labels_preserve_legacy_metric_buckets() {
             assert_eq!(
                 RequestOutcomeReason::Completed.coarse_outcome_label(),
                 "success"
@@ -856,7 +884,7 @@ mod tests {
         }
 
         #[test]
-        fn canonical_slug_literals_match_stable_operational_contract() {
+        fn representative_canonical_slugs_remain_stable() {
             assert_eq!(AdmissionDecisionReason::AuthDenied.slug(), "auth_denied");
             assert_eq!(
                 RetryDecisionReason::UpstreamTransportFailure.slug(),
@@ -877,23 +905,8 @@ mod tests {
     mod cross_surface_reason_alignment {
         use super::*;
 
-        fn assert_reason_surfaces_align(reason: &'static str) {
-            let metric_labels = MetricReasonLabels {
-                outcome: None,
-                reason: Some(reason),
-                failure_class: None,
-            };
-            let control_plane_reason = reason;
-            let log_ctx = OperationalEventContext::new()
-                .with_reason(reason)
-                .to_string();
-
-            assert_eq!(metric_labels.reason, Some(control_plane_reason));
-            assert_eq!(log_ctx, format!("reason={reason}"));
-        }
-
         #[test]
-        fn event_context_renders_canonical_fields_in_order() {
+        fn operational_event_context_renders_canonical_fields_in_stable_order() {
             let ctx = OperationalEventContext::new()
                 .with_request_id(42)
                 .with_upstream("api")
@@ -1048,20 +1061,20 @@ mod tests {
                 runtime::connection::stream::BackendFailureReason,
             };
 
-            assert_reason_surfaces_align(RequestOutcomeReason::TimedOut.slug());
-            assert_reason_surfaces_align(
+            assert_reason_surface_alignment(RequestOutcomeReason::TimedOut.slug());
+            assert_reason_surface_alignment(
                 RequestOutcomeReason::from(BackendFailureReason::UpstreamTransport).slug(),
             );
-            assert_reason_surfaces_align(
+            assert_reason_surface_alignment(
                 RequestOutcomeReason::from(BackendFailureReason::UpstreamTls).slug(),
             );
-            assert_reason_surfaces_align(
+            assert_reason_surface_alignment(
                 AdmissionDecisionReason::from(AdmissionOutcomeClass::AuthDenied).slug(),
             );
-            assert_reason_surfaces_align(
+            assert_reason_surface_alignment(
                 AdmissionDecisionReason::from(AdmissionOutcomeClass::RateLimited).slug(),
             );
-            assert_reason_surfaces_align(
+            assert_reason_surface_alignment(
                 AdmissionDecisionReason::from(AdmissionOutcomeClass::OverloadShed {
                     reason: Some(OverloadShedReason::GlobalInflight),
                 })

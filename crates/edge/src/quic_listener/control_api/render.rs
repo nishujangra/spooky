@@ -375,6 +375,48 @@ impl ControlApiBackendPlacementPayload {
 mod tests {
     use super::*;
 
+    fn assert_health_reason_token(reason: HealthFailureReason, expected: &'static str) {
+        let control_plane_reason = health_failure_reason_label(reason);
+        let structured_log_token = format!("health_reason={control_plane_reason}");
+
+        assert_eq!(
+            control_plane_reason, expected,
+            "control-plane health reason token should stay canonical"
+        );
+        assert_eq!(
+            structured_log_token,
+            format!("health_reason={expected}"),
+            "structured log token should reuse the canonical health reason value"
+        );
+    }
+
+    mod observability_contracts {
+        use super::*;
+
+        #[test]
+        fn control_plane_health_reason_tokens_match_metric_reason_labels() {
+            // obs Phase 4: control-plane `health_reason` must use the same tokens as
+            // the `spooky_health_failures_total{reason=…}` metric label so operators
+            // don't translate between surfaces.
+            assert_health_reason_token(HealthFailureReason::HttpStatus5xx, "5xx");
+            assert_health_reason_token(HealthFailureReason::Timeout, "timeout");
+            assert_health_reason_token(HealthFailureReason::Transport, "transport");
+            assert_health_reason_token(HealthFailureReason::Tls, "tls");
+            assert_health_reason_token(HealthFailureReason::CircuitOpen, "circuit_open");
+        }
+
+        #[test]
+        fn unhealthy_backend_reason_tokens_stay_aligned_across_surfaces() {
+            for (reason, expected) in [
+                (HealthFailureReason::Timeout, "timeout"),
+                (HealthFailureReason::Transport, "transport"),
+                (HealthFailureReason::Tls, "tls"),
+            ] {
+                assert_health_reason_token(reason, expected);
+            }
+        }
+    }
+
     mod runtime_snapshot_rendering {
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
@@ -388,46 +430,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn health_reason_labels_match_metric_reason_tokens() {
-            // obs Phase 4: control-plane `health_reason` must use the same tokens as
-            // the `spooky_health_failures_total{reason=…}` metric label so operators
-            // don't translate between surfaces.
-            assert_eq!(
-                health_failure_reason_label(HealthFailureReason::HttpStatus5xx),
-                "5xx"
-            );
-            assert_eq!(
-                health_failure_reason_label(HealthFailureReason::Timeout),
-                "timeout"
-            );
-            assert_eq!(
-                health_failure_reason_label(HealthFailureReason::Transport),
-                "transport"
-            );
-            assert_eq!(health_failure_reason_label(HealthFailureReason::Tls), "tls");
-            assert_eq!(
-                health_failure_reason_label(HealthFailureReason::CircuitOpen),
-                "circuit_open"
-            );
-        }
-
-        #[test]
-        fn backend_unhealthy_reason_tokens_stay_aligned_across_metrics_logs_and_control_plane() {
-            for (reason, expected) in [
-                (HealthFailureReason::Timeout, "timeout"),
-                (HealthFailureReason::Transport, "transport"),
-                (HealthFailureReason::Tls, "tls"),
-            ] {
-                let control_plane_reason = health_failure_reason_label(reason);
-                let structured_log_token = format!("health_reason={control_plane_reason}");
-
-                assert_eq!(control_plane_reason, expected);
-                assert_eq!(structured_log_token, format!("health_reason={expected}"));
-            }
-        }
-
-        #[test]
-        fn backend_payload_serializes_health_reason_when_present() {
+        fn backend_payload_serialization_omits_or_includes_optional_health_reason_by_contract() {
             // The field appears only when unhealthy with a known reason, and is
             // omitted otherwise (skip_serializing_if).
             let with_reason = ControlApiBackendLifecyclePayload {
@@ -454,7 +457,7 @@ mod tests {
         }
 
         #[test]
-        fn backend_inventory_payload_preserves_optional_health_reason_and_field_meaning() {
+        fn backend_inventory_payload_preserves_runtime_snapshot_field_meanings() {
             let inventory = BackendLifecycleInventorySnapshot {
                 backends: vec![
                     CanonicalBackendLifecycleSnapshot {
