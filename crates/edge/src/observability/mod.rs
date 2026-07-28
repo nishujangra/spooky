@@ -1057,8 +1057,10 @@ mod tests {
         #[test]
         fn representative_reason_tokens_stay_aligned_across_metrics_logs_and_control_plane() {
             use crate::{
-                metrics::OverloadShedReason, runtime::connection::outcome::AdmissionOutcomeClass,
-                runtime::connection::stream::BackendFailureReason,
+                metrics::OverloadShedReason,
+                runtime::connection::{
+                    outcome::AdmissionOutcomeClass, stream::BackendFailureReason,
+                },
             };
 
             assert_reason_surface_alignment(RequestOutcomeReason::TimedOut.slug());

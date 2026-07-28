@@ -3,7 +3,10 @@ use bytes::Bytes;
 use http_body_util::Full;
 use subtle::ConstantTimeEq;
 
-use super::{state::ControlApiPaths, state::ControlApiState, *};
+use super::{
+    state::{ControlApiPaths, ControlApiState},
+    *,
+};
 
 type ControlApiGateError = Box<Response<Full<Bytes>>>;
 

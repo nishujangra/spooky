@@ -420,14 +420,14 @@ mod tests {
     mod runtime_snapshot_rendering {
         use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
-        use crate::runtime::backend::state::{
-            BackendIdentity, BackendResolutionState, CanonicalBackendLifecycleSnapshot,
-        };
-        use crate::runtime::backend::{
-            resolution::RuntimeBackendAddressKind, state::BackendPoolPlacementSnapshot,
-        };
-
         use super::*;
+        use crate::runtime::backend::{
+            resolution::RuntimeBackendAddressKind,
+            state::{
+                BackendIdentity, BackendPoolPlacementSnapshot, BackendResolutionState,
+                CanonicalBackendLifecycleSnapshot,
+            },
+        };
 
         #[test]
         fn backend_payload_serialization_omits_or_includes_optional_health_reason_by_contract() {
