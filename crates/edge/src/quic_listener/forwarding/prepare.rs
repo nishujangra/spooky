@@ -638,12 +638,11 @@ impl QUICListener {
                 })
             }
             Err(err) => {
-                let (status, body): (http::StatusCode, &[u8]) = match err {
-                    ProxyError::Transport(_) => (
-                        http::StatusCode::SERVICE_UNAVAILABLE,
-                        b"no upstream available\n",
-                    ),
+                let (status, body): (http::StatusCode, &[u8]) = match &err {
                     ProxyError::Bridge(_) => (http::StatusCode::BAD_REQUEST, b"invalid request\n"),
+                    ProxyError::Transport(_) | ProxyError::Pool(_) => {
+                        Self::bootstrap_route_resolution_error_response(&err)
+                    }
                     _ => (
                         http::StatusCode::INTERNAL_SERVER_ERROR,
                         b"internal proxy error\n",
