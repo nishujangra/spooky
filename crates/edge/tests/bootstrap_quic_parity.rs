@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     convert::Infallible,
+    net::TcpListener,
     sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -520,6 +521,125 @@ fn bootstrap_and_quic_external_auth_decisions_match() {
 }
 
 #[test]
+#[serial]
+fn bootstrap_and_quic_upstream_timeout_failures_share_observable_bucket() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = BootstrapQuicParityHarness::new();
+    let backend_calls = Arc::new(AtomicUsize::new(0));
+    let backend_observed = Arc::clone(&backend_calls);
+    let backend_addr = harness.start_h1_backend(move |_req: Request<Incoming>| {
+        let backend_observed = Arc::clone(&backend_observed);
+        async move {
+            backend_observed.fetch_add(1, Ordering::Relaxed);
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(
+                b"too late",
+            ))))
+        }
+    });
+
+    let mut config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        make_upstream(
+            "/timeout",
+            vec![make_backend("backend-a", backend_addr.to_string())],
+            None,
+            "round-robin",
+        ),
+    )]));
+    config.performance.backend_timeout_ms = 150;
+    config.performance.backend_connect_timeout_ms = 150;
+    harness.start_listener(config).expect("listener with bootstrap");
+
+    let request = ParityRequestSpec::get("localhost", "/timeout");
+    let pair = harness.run_parity_pair(request).expect("timeout parity pair");
+
+    assert_timeout_bucket(&pair.quic.response);
+    assert_timeout_bucket(&pair.bootstrap.response);
+    assert_eq!(pair.bootstrap.response.body, pair.quic.response.body);
+    assert_eq!(backend_calls.load(Ordering::Relaxed), 2);
+}
+
+#[test]
+#[serial]
+fn bootstrap_and_quic_connect_failures_share_observable_bucket() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = BootstrapQuicParityHarness::new();
+    let unused_listener = TcpListener::bind("127.0.0.1:0").expect("bind unused backend port");
+    let unused_addr = unused_listener.local_addr().expect("unused backend addr");
+    drop(unused_listener);
+
+    let mut config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        make_upstream(
+            "/connect-fail",
+            vec![make_backend("backend-a", format!("http://{unused_addr}"))],
+            None,
+            "round-robin",
+        ),
+    )]));
+    config.performance.backend_timeout_ms = 150;
+    config.performance.backend_connect_timeout_ms = 150;
+    harness.start_listener(config).expect("listener with bootstrap");
+
+    let request = ParityRequestSpec::get("localhost", "/connect-fail");
+    let pair = harness
+        .run_parity_pair(request)
+        .expect("connect failure parity pair");
+
+    assert_eq!(pair.quic.response.status, 502);
+    assert_eq!(pair.bootstrap.response.status, 502);
+    assert_eq!(pair.bootstrap.response.body, pair.quic.response.body);
+    assert!(
+        String::from_utf8_lossy(&pair.quic.response.body).contains("upstream error"),
+        "expected canonical transport failure body"
+    );
+}
+
+#[test]
+#[serial]
+fn bootstrap_and_quic_malformed_upstream_responses_share_observable_bucket() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = BootstrapQuicParityHarness::new();
+    let backend_addr = harness.start_h1_raw_response_backend(b"NOT_HTTP\r\n\r\n".to_vec());
+
+    let mut config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        make_upstream(
+            "/malformed",
+            vec![make_backend("backend-a", backend_addr.to_string())],
+            None,
+            "round-robin",
+        ),
+    )]));
+    config.performance.backend_timeout_ms = 150;
+    config.performance.backend_connect_timeout_ms = 150;
+    harness.start_listener(config).expect("listener with bootstrap");
+
+    let request = ParityRequestSpec::get("localhost", "/malformed");
+    let pair = harness
+        .run_parity_pair(request)
+        .expect("malformed upstream parity pair");
+
+    assert_eq!(pair.quic.response.status, 502);
+    assert_eq!(pair.bootstrap.response.status, 502);
+    assert_eq!(pair.bootstrap.response.body, pair.quic.response.body);
+    assert!(
+        String::from_utf8_lossy(&pair.quic.response.body).contains("upstream error"),
+        "expected canonical malformed-response body"
+    );
+}
+
+#[test]
 fn bootstrap_and_quic_response_normalization_strip_same_hop_headers() {
     if !local_listener_bind_available() {
         return;
@@ -910,6 +1030,19 @@ fn selected_header_value<'a>(
         .iter()
         .find(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
         .map(|(_, value)| value.as_str())
+}
+
+fn assert_timeout_bucket(response: &support::parity::ParityResponseSnapshot) {
+    assert!(
+        matches!(response.status, 503 | 504),
+        "expected timeout bucket status, got {}",
+        response.status
+    );
+    assert!(
+        String::from_utf8_lossy(&response.body).contains("upstream timeout"),
+        "expected canonical timeout body, got `{}`",
+        String::from_utf8_lossy(&response.body)
+    );
 }
 
 #[derive(Clone, Copy)]

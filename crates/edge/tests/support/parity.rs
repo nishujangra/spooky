@@ -96,6 +96,10 @@ impl BootstrapQuicParityHarness {
         self.inner.start_h1_static_backend(body)
     }
 
+    pub fn start_h1_raw_response_backend(&mut self, response_bytes: Vec<u8>) -> SocketAddr {
+        self.inner.start_h1_raw_response_backend(response_bytes)
+    }
+
     pub fn start_h2_backend<F, Fut>(&mut self, handler: F) -> SocketAddr
     where
         F: Fn(Request<Incoming>) -> Fut + Send + Sync + 'static,
