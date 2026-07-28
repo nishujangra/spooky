@@ -228,3 +228,157 @@ fn quic_to_h1_success_path_streams_response_body_to_completion() {
     response.assert_status(200);
     response.assert_body_text("chunk-1:chunk-2:chunk-3");
 }
+
+#[test]
+#[serial]
+fn quic_to_h2_success_path_normalizes_headers_and_keeps_get_bodyless() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = QuicRequestPathHarness::new();
+    let backend_addr = harness.start_h2_backend(|req: hyper::Request<Incoming>| async move {
+        let header_value = |name: &str| {
+            req.headers()
+                .get(name)
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("<missing>")
+                .to_string()
+        };
+        let method = req.method().to_string();
+        let path = req.uri().path().to_string();
+        let host = header_value("host");
+        let forwarded = header_value("forwarded");
+        let xff = header_value("x-forwarded-for");
+        let xfp = header_value("x-forwarded-proto");
+        let xfh = header_value("x-forwarded-host");
+        let user_agent = header_value("user-agent");
+        let request_id = header_value("x-request-id");
+        let content_length = req
+            .headers()
+            .get("content-length")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("<missing>")
+            .to_string();
+        let has_connection = req.headers().contains_key("connection");
+        let body = req
+            .into_body()
+            .collect()
+            .await
+            .expect("collect request body")
+            .to_bytes();
+        let body = format!(
+            "method={method}\npath={path}\nhost={}\nforwarded={}\nxff={}\nxfp={}\nxfh={}\nuser_agent={}\nx_request_id={}\ncontent_length={content_length}\nbody_len={}\nhas_connection={}\n",
+            host,
+            forwarded,
+            xff,
+            xfp,
+            xfh,
+            user_agent,
+            request_id,
+            body.len(),
+            has_connection,
+        );
+        Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::from(body))))
+    });
+
+    let mut upstreams = HashMap::new();
+    upstreams.insert(
+        "api".to_string(),
+        make_upstream(
+            "/headers-h2",
+            vec![make_backend(
+                "h2-headers",
+                format!("https://{backend_addr}"),
+            )],
+            Some(UpstreamTls {
+                verify_certificates: false,
+                strict_sni: false,
+                ..UpstreamTls::default()
+            }),
+            "round-robin",
+        ),
+    );
+
+    harness
+        .start_listener(harness.make_config(upstreams))
+        .expect("listener");
+
+    let response = harness
+        .run_request(H3RequestSpec {
+            method: "GET",
+            authority: "public.example.com",
+            path: "/headers-h2",
+            headers: &[
+                ("forwarded", "for=1.2.3.4;proto=http;host=\"evil.example\""),
+                ("x-forwarded-for", "1.2.3.4"),
+                ("x-forwarded-proto", "http"),
+                ("x-forwarded-host", "evil.example"),
+                ("connection", "keep-alive, x-secret"),
+                ("x-secret", "strip-me"),
+            ],
+            body: None,
+            user_agent: "spooky-success-h2",
+        })
+        .expect("h3 request");
+
+    response.assert_status(200);
+    let body = response.body_text();
+    assert_eq!(response_line(&body, "method="), "GET");
+    assert_eq!(response_line(&body, "path="), "/headers-h2");
+    assert_eq!(response_line(&body, "host="), "public.example.com");
+    assert_eq!(
+        response_line(&body, "forwarded="),
+        "for=127.0.0.1;proto=https;host=\"public.example.com\""
+    );
+    assert_eq!(response_line(&body, "xff="), "127.0.0.1");
+    assert_eq!(response_line(&body, "xfp="), "https");
+    assert_eq!(response_line(&body, "xfh="), "public.example.com");
+    assert_eq!(response_line(&body, "user_agent="), "spooky-success-h2");
+    assert_eq!(response_line(&body, "content_length="), "<missing>");
+    assert_eq!(response_line(&body, "body_len="), "0");
+    assert_eq!(response_line(&body, "has_connection="), "false");
+
+    let request_id = response_line(&body, "x_request_id=");
+    assert!(
+        !request_id.is_empty() && request_id.chars().all(|ch| ch.is_ascii_digit()),
+        "x-request-id should be a generated numeric request identifier, got `{request_id}`"
+    );
+}
+
+#[test]
+#[serial]
+fn quic_to_h2_success_path_streams_response_body_to_completion() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = QuicRequestPathHarness::new();
+    let backend_addr =
+        harness.start_h2_streaming_backend(vec![b"h2-chunk-1:", b"h2-chunk-2:", b"h2-chunk-3"]);
+
+    let mut upstreams = HashMap::new();
+    upstreams.insert(
+        "api".to_string(),
+        make_upstream(
+            "/stream-h2",
+            vec![make_backend("h2-stream", format!("https://{backend_addr}"))],
+            Some(UpstreamTls {
+                verify_certificates: false,
+                strict_sni: false,
+                ..UpstreamTls::default()
+            }),
+            "round-robin",
+        ),
+    );
+
+    harness
+        .start_listener(harness.make_config(upstreams))
+        .expect("listener");
+
+    let response = harness
+        .run_request(H3RequestSpec::get("stream.example.com", "/stream-h2"))
+        .expect("h3 request");
+    response.assert_status(200);
+    response.assert_body_text("h2-chunk-1:h2-chunk-2:h2-chunk-3");
+}

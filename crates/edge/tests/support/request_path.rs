@@ -14,7 +14,11 @@ use std::{
 
 use bytes::Bytes;
 use http_body_util::Full;
-use hyper::{Request, Response, body::Incoming, service::service_fn};
+use hyper::{
+    Request, Response,
+    body::{Body, Frame, Incoming},
+    service::service_fn,
+};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use quiche::h3::NameValue;
 use rand::RngCore;
@@ -221,6 +225,17 @@ impl QuicRequestPathHarness {
         })
     }
 
+    pub fn start_h2_streaming_backend(&mut self, chunks: Vec<&'static [u8]>) -> SocketAddr {
+        let fixture = self.rt.block_on(start_h2_streaming_backend(
+            &self.tls.cert_path,
+            &self.tls.key_path,
+            chunks,
+        ));
+        let addr = fixture.addr;
+        self.backends.push(fixture);
+        addr
+    }
+
     pub fn run_request(&self, request: H3RequestSpec<'_>) -> Result<H3Response, String> {
         let listen_addr = self
             .listen_addr
@@ -413,6 +428,60 @@ where
                 let service = service_fn(move |req: Request<Incoming>| {
                     let handler = Arc::clone(&handler);
                     async move { handler(req).await }
+                });
+
+                let _ = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
+                    .serve_connection(TokioIo::new(tls_stream), service)
+                    .await;
+            });
+        }
+    });
+
+    BackendFixture {
+        addr,
+        stop,
+        accept_task,
+    }
+}
+
+pub async fn start_h2_streaming_backend(
+    cert_path: &str,
+    key_path: &str,
+    chunks: Vec<&'static [u8]>,
+) -> BackendFixture {
+    let mut tls_config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(read_test_chain(cert_path), read_test_key(key_path))
+        .expect("server tls config");
+    tls_config.alpn_protocols = vec![b"h2".to_vec()];
+    let acceptor = TlsAcceptor::from(Arc::new(tls_config));
+
+    let listener = bind_tcp_listener();
+    let addr = listener.local_addr().expect("h2 streaming local addr");
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_flag = Arc::clone(&stop);
+
+    let accept_task = tokio::spawn(async move {
+        while !stop_flag.load(Ordering::Relaxed) {
+            let (stream, _) = match listener.accept().await {
+                Ok(value) => value,
+                Err(_) => break,
+            };
+            let acceptor = acceptor.clone();
+            let chunks = chunks.clone();
+            tokio::spawn(async move {
+                let tls_stream = match acceptor.accept(stream).await {
+                    Ok(stream) => stream,
+                    Err(_) => return,
+                };
+                let service = service_fn(move |_req: Request<Incoming>| {
+                    let body = ChunkSequenceBody::new(
+                        chunks
+                            .iter()
+                            .map(|chunk| Bytes::from_static(chunk))
+                            .collect::<Vec<_>>(),
+                    );
+                    async move { Ok::<_, hyper::Error>(Response::new(body)) }
                 });
 
                 let _ = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
@@ -686,4 +755,28 @@ fn read_test_chain(cert_path: &str) -> Vec<CertificateDer<'static>> {
 
 fn read_test_key(key_path: &str) -> PrivateKeyDer<'static> {
     PrivateKeyDer::from_pem_file(key_path).expect("parse private key")
+}
+
+struct ChunkSequenceBody {
+    chunks: std::vec::IntoIter<Bytes>,
+}
+
+impl ChunkSequenceBody {
+    fn new(chunks: Vec<Bytes>) -> Self {
+        Self {
+            chunks: chunks.into_iter(),
+        }
+    }
+}
+
+impl Body for ChunkSequenceBody {
+    type Data = Bytes;
+    type Error = Infallible;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        std::task::Poll::Ready(self.chunks.next().map(|chunk| Ok(Frame::data(chunk))))
+    }
 }
