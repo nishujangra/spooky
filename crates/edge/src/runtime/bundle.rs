@@ -380,6 +380,23 @@ mod tests {
         bundle
     }
 
+    fn runtime_bundle_pair(
+        dir: &Path,
+        startup_path: &str,
+        startup_backend_addr: &str,
+        next_generation: u64,
+        next_path: &str,
+        next_backend_addr: &str,
+    ) -> (RuntimeBundle, RuntimeBundle) {
+        let (cert, key) = write_test_cert_for_name(dir, "server", "api.example.com");
+        let startup = test_config(cert.clone(), key.clone(), startup_backend_addr);
+        let reloaded = test_config(cert, key, next_backend_addr);
+        (
+            runtime_bundle_from_config(1, startup_path, &startup),
+            runtime_bundle_from_config(next_generation, next_path, &reloaded),
+        )
+    }
+
     struct CompletionSignal(Option<oneshot::Sender<()>>);
 
     impl Drop for CompletionSignal {
@@ -419,10 +436,16 @@ mod tests {
         #[test]
         fn current_generation_helpers_share_one_canonical_active_view() {
             let dir = tempdir().expect("tempdir");
-            let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
-            let startup = test_config(cert, key, "http://127.0.0.1:7001");
-
-            let bundle = runtime_bundle_from_config(7, "runtime.yaml", &startup);
+            let (startup_bundle, _) = runtime_bundle_pair(
+                dir.path(),
+                "runtime.yaml",
+                "http://127.0.0.1:7001",
+                8,
+                "unused.yaml",
+                "http://127.0.0.1:7002",
+            );
+            let mut bundle = startup_bundle;
+            bundle.generation = 7;
             let handle = RuntimeBundleHandle::new(bundle);
 
             let current = handle.current_view();
@@ -472,12 +495,14 @@ mod tests {
         #[test]
         fn startup_owned_state_stays_stable_while_generation_owned_runtime_changes() {
             let dir = tempdir().expect("tempdir");
-            let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
-            let startup = test_config(cert.clone(), key.clone(), "http://127.0.0.1:7001");
-            let reloaded = test_config(cert, key, "http://127.0.0.1:7002");
-
-            let current_bundle = runtime_bundle_from_config(1, "spooky.yaml", &startup);
-            let next_bundle = runtime_bundle_from_config(2, "spooky.yaml", &reloaded);
+            let (current_bundle, next_bundle) = runtime_bundle_pair(
+                dir.path(),
+                "spooky.yaml",
+                "http://127.0.0.1:7001",
+                2,
+                "spooky.yaml",
+                "http://127.0.0.1:7002",
+            );
             let handle = RuntimeBundleHandle::new(current_bundle);
 
             handle.replace(next_bundle).expect("replace");
@@ -499,14 +524,16 @@ mod tests {
         }
 
         #[test]
-        fn stale_generation_views_do_not_change_after_runtime_bundle_replacement() {
+        fn stale_generation_views_keep_the_original_runtime_snapshot_after_replacement() {
             let dir = tempdir().expect("tempdir");
-            let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
-            let startup = test_config(cert.clone(), key.clone(), "http://127.0.0.1:7001");
-            let reloaded = test_config(cert, key, "http://127.0.0.1:7002");
-
-            let current_bundle = runtime_bundle_from_config(1, "startup.yaml", &startup);
-            let next_bundle = runtime_bundle_from_config(2, "reloaded.yaml", &reloaded);
+            let (current_bundle, next_bundle) = runtime_bundle_pair(
+                dir.path(),
+                "startup.yaml",
+                "http://127.0.0.1:7001",
+                2,
+                "reloaded.yaml",
+                "http://127.0.0.1:7002",
+            );
             let handle = RuntimeBundleHandle::new(current_bundle.clone());
 
             let stale = handle.current_view();
@@ -544,12 +571,14 @@ mod tests {
         #[tokio::test]
         async fn bundle_replacement_retires_only_previous_generation_tasks() {
             let dir = tempdir().expect("tempdir");
-            let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
-            let startup = test_config(cert.clone(), key.clone(), "http://127.0.0.1:7001");
-            let reloaded = test_config(cert, key, "http://127.0.0.1:7002");
-
-            let current_bundle = runtime_bundle_from_config(1, "spooky.yaml", &startup);
-            let next_bundle = runtime_bundle_from_config(2, "spooky.yaml", &reloaded);
+            let (current_bundle, next_bundle) = runtime_bundle_pair(
+                dir.path(),
+                "spooky.yaml",
+                "http://127.0.0.1:7001",
+                2,
+                "spooky.yaml",
+                "http://127.0.0.1:7002",
+            );
 
             let retired_completed = Arc::new(AtomicBool::new(false));
             let active_completed = Arc::new(AtomicBool::new(false));

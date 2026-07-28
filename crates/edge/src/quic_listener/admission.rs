@@ -1016,6 +1016,25 @@ mod tests {
     mod post_auth_admission_execution {
         use super::*;
 
+        fn execute_post_auth_for_api(
+            resilience: &RuntimeResilience,
+            upstream_pool: Option<&Arc<RwLock<UpstreamPool>>>,
+            backend_index: Option<usize>,
+            upstream_inflight: &HashMap<String, Arc<Semaphore>>,
+            global_inflight: Arc<Semaphore>,
+        ) -> PostAuthAdmissionExecution {
+            execute_forwarding_post_auth_admission(
+                resilience,
+                "api",
+                upstream_pool,
+                backend_index,
+                0,
+                upstream_inflight,
+                global_inflight,
+                Duration::ZERO,
+            )
+        }
+
         #[test]
         fn post_auth_admission_rejects_adaptive_admission_overload() {
             let resilience = test_runtime_resilience(
@@ -1032,15 +1051,12 @@ mod tests {
                 .try_acquire()
                 .expect("held permit");
 
-            let result = execute_forwarding_post_auth_admission(
+            let result = execute_post_auth_for_api(
                 &resilience,
-                "api",
                 Some(&test_upstream_pool()),
                 Some(0),
-                0,
                 &test_upstream_inflight(),
                 Arc::new(Semaphore::new(1)),
-                Duration::ZERO,
             );
 
             assert!(matches!(
@@ -1069,15 +1085,12 @@ mod tests {
                 .clone()
                 .try_acquire("api")
                 .expect("route permit");
-            let route_result = execute_forwarding_post_auth_admission(
+            let route_result = execute_post_auth_for_api(
                 &route_cap,
-                "api",
                 Some(&test_upstream_pool()),
                 Some(0),
-                0,
                 &test_upstream_inflight(),
                 Arc::new(Semaphore::new(1)),
-                Duration::ZERO,
             );
             assert!(matches!(
                 route_result,
@@ -1101,15 +1114,12 @@ mod tests {
                 .clone()
                 .try_acquire("other")
                 .expect("global route permit");
-            let global_result = execute_forwarding_post_auth_admission(
+            let global_result = execute_post_auth_for_api(
                 &global_cap,
-                "api",
                 Some(&test_upstream_pool()),
                 Some(0),
-                0,
                 &test_upstream_inflight(),
                 Arc::new(Semaphore::new(1)),
-                Duration::ZERO,
             );
             assert!(matches!(
                 global_result,
@@ -1130,15 +1140,12 @@ mod tests {
                 .clone()
                 .try_acquire_owned()
                 .expect("global permit");
-            let global_result = execute_forwarding_post_auth_admission(
+            let global_result = execute_post_auth_for_api(
                 &resilience,
-                "api",
                 Some(&test_upstream_pool()),
                 Some(0),
-                0,
                 &test_upstream_inflight(),
                 Arc::clone(&global_inflight),
-                Duration::ZERO,
             );
             assert!(matches!(
                 global_result,
@@ -1158,15 +1165,12 @@ mod tests {
                 .clone()
                 .try_acquire_owned()
                 .expect("upstream permit");
-            let upstream_result = execute_forwarding_post_auth_admission(
+            let upstream_result = execute_post_auth_for_api(
                 &resilience,
-                "api",
                 Some(&test_upstream_pool()),
                 Some(0),
-                0,
                 &upstream_inflight,
                 Arc::new(Semaphore::new(1)),
-                Duration::ZERO,
             );
             assert!(matches!(
                 upstream_result,
@@ -1183,15 +1187,12 @@ mod tests {
         fn missing_upstream_limiter_preserves_overload_reason_in_failure_mapping() {
             let resilience = test_runtime_resilience(|_| {}, 8);
 
-            let result = execute_forwarding_post_auth_admission(
+            let result = execute_post_auth_for_api(
                 &resilience,
-                "api",
                 Some(&test_upstream_pool()),
                 Some(0),
-                0,
                 &HashMap::new(),
                 Arc::new(Semaphore::new(1)),
-                Duration::ZERO,
             );
 
             assert!(matches!(
@@ -1209,7 +1210,7 @@ mod tests {
         }
 
         #[test]
-        fn post_auth_admission_success_does_not_report_wait_when_no_wait_happened() {
+        fn post_auth_admission_ready_result_reports_no_wait_when_permits_are_immediate() {
             let resilience = test_runtime_resilience(|_| {}, 8);
             let pool = test_upstream_pool();
 
@@ -1219,15 +1220,12 @@ mod tests {
             assert!(!waited);
             drop(permit);
 
-            let result = execute_forwarding_post_auth_admission(
+            let result = execute_post_auth_for_api(
                 &resilience,
-                "api",
                 Some(&pool),
                 Some(0),
-                0,
                 &test_upstream_inflight(),
                 Arc::new(Semaphore::new(1)),
-                Duration::ZERO,
             );
 
             match result {

@@ -829,6 +829,18 @@ mod tests {
         Metrics::new(1, [String::from("api"), String::from("unrouted")])
     }
 
+    fn api_route_target() -> RouteOutcomeTarget<'static> {
+        RouteOutcomeTarget { route: "api" }
+    }
+
+    fn api_backend_target() -> Option<BackendOutcomeTarget<'static>> {
+        Some(BackendOutcomeTarget {
+            upstream: "api",
+            backend_addr: Some("backend-a"),
+            backend_index: Some(0),
+        })
+    }
+
     fn test_upstream_pool() -> Arc<RwLock<UpstreamPool>> {
         let mut upstreams = HashMap::new();
         upstreams.insert(
@@ -1214,12 +1226,8 @@ mod tests {
 
             let decision = observe_status_outcome(
                 &metrics,
-                RouteOutcomeTarget { route: "api" },
-                Some(BackendOutcomeTarget {
-                    upstream: "api",
-                    backend_addr: Some("backend-a"),
-                    backend_index: Some(0),
-                }),
+                api_route_target(),
+                api_backend_target(),
                 Duration::from_millis(12),
                 StatusCode::OK,
             );
@@ -1250,12 +1258,8 @@ mod tests {
 
             let timeout = observe_proxy_error_outcome(
                 &metrics,
-                RouteOutcomeTarget { route: "api" },
-                Some(BackendOutcomeTarget {
-                    upstream: "api",
-                    backend_addr: Some("backend-a"),
-                    backend_index: Some(0),
-                }),
+                api_route_target(),
+                api_backend_target(),
                 Duration::from_millis(320),
                 Some(StatusCode::GATEWAY_TIMEOUT),
                 &ProxyError::Timeout,
@@ -1281,12 +1285,8 @@ mod tests {
 
             let success = observe_status_outcome(
                 &metrics,
-                RouteOutcomeTarget { route: "api" },
-                Some(BackendOutcomeTarget {
-                    upstream: "api",
-                    backend_addr: Some("backend-a"),
-                    backend_index: Some(0),
-                }),
+                api_route_target(),
+                api_backend_target(),
                 Duration::from_millis(12),
                 StatusCode::OK,
             );
@@ -1310,12 +1310,8 @@ mod tests {
 
             let timeout = observe_proxy_error_outcome(
                 &metrics,
-                RouteOutcomeTarget { route: "api" },
-                Some(BackendOutcomeTarget {
-                    upstream: "api",
-                    backend_addr: Some("backend-a"),
-                    backend_index: Some(0),
-                }),
+                api_route_target(),
+                api_backend_target(),
                 Duration::from_millis(50),
                 Some(StatusCode::REQUEST_TIMEOUT),
                 &ProxyError::Timeout,
@@ -1355,12 +1351,8 @@ mod tests {
 
             let overload = observe_admission_outcome(
                 &metrics,
-                RouteOutcomeTarget { route: "api" },
-                Some(BackendOutcomeTarget {
-                    upstream: "api",
-                    backend_addr: Some("backend-a"),
-                    backend_index: Some(0),
-                }),
+                api_route_target(),
+                api_backend_target(),
                 Duration::from_millis(1),
                 StatusCode::SERVICE_UNAVAILABLE,
                 AdmissionOutcomeClass::OverloadShed {
@@ -1369,24 +1361,16 @@ mod tests {
             );
             let auth = observe_admission_outcome(
                 &metrics,
-                RouteOutcomeTarget { route: "api" },
-                Some(BackendOutcomeTarget {
-                    upstream: "api",
-                    backend_addr: Some("backend-a"),
-                    backend_index: Some(0),
-                }),
+                api_route_target(),
+                api_backend_target(),
                 Duration::from_millis(2),
                 StatusCode::UNAUTHORIZED,
                 AdmissionOutcomeClass::AuthDenied,
             );
             let rate_limited = observe_admission_outcome(
                 &metrics,
-                RouteOutcomeTarget { route: "api" },
-                Some(BackendOutcomeTarget {
-                    upstream: "api",
-                    backend_addr: Some("backend-a"),
-                    backend_index: Some(0),
-                }),
+                api_route_target(),
+                api_backend_target(),
                 Duration::from_millis(3),
                 StatusCode::TOO_MANY_REQUESTS,
                 AdmissionOutcomeClass::RateLimited,
@@ -1422,8 +1406,7 @@ mod tests {
         }
 
         #[test]
-        fn typed_request_outcome_observation_records_unrouted_upstream_failure_without_local_branching()
-         {
+        fn request_outcome_observation_accepts_canonical_unrouted_failure_decision() {
             let metrics = test_metrics();
             let decision = RequestOutcomeClassification {
                 route_outcome: CanonicalRouteOutcome::UpstreamFailure,
@@ -1463,7 +1446,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn backend_accounting_and_health_hooks_remain_stable() {
+        fn backend_accounting_hooks_apply_canonical_success_and_failure_feedback() {
             let metrics = test_metrics();
             let pool = test_upstream_pool();
 
@@ -1523,17 +1506,13 @@ mod tests {
         }
 
         #[test]
-        fn forwarding_and_bootstrap_shared_recorders_emit_same_metrics_shape() {
+        fn forwarding_and_bootstrap_recorders_share_the_same_metrics_contract() {
             let metrics = test_metrics();
 
             let forwarding = observe_proxy_error_outcome(
                 &metrics,
-                RouteOutcomeTarget { route: "api" },
-                Some(BackendOutcomeTarget {
-                    upstream: "api",
-                    backend_addr: Some("backend-a"),
-                    backend_index: Some(0),
-                }),
+                api_route_target(),
+                api_backend_target(),
                 Duration::from_millis(10),
                 Some(StatusCode::BAD_GATEWAY),
                 &ProxyError::Transport("forwarding upstream error".into()),
@@ -1541,12 +1520,8 @@ mod tests {
             );
             let bootstrap = observe_proxy_error_outcome(
                 &metrics,
-                RouteOutcomeTarget { route: "api" },
-                Some(BackendOutcomeTarget {
-                    upstream: "api",
-                    backend_addr: Some("backend-a"),
-                    backend_index: Some(0),
-                }),
+                api_route_target(),
+                api_backend_target(),
                 Duration::from_millis(12),
                 Some(StatusCode::BAD_GATEWAY),
                 &ProxyError::Transport("bootstrap upstream error".into()),
@@ -1563,7 +1538,7 @@ mod tests {
         }
 
         #[test]
-        fn finalize_backend_request_cleanup_is_gated_by_typed_cleanup_flag() {
+        fn backend_request_cleanup_runs_only_when_the_caller_marks_it_required() {
             let pool = test_upstream_pool();
             {
                 let guard = pool.read().expect("read");
@@ -1604,7 +1579,7 @@ mod tests {
         }
 
         #[test]
-        fn classified_backend_failure_metrics_preserve_reason_mapping_for_tls_and_transport() {
+        fn classified_backend_failure_metrics_follow_the_shared_health_mapping_contract() {
             let metrics = test_metrics();
 
             let tls = spooky_errors::classify_upstream_proxy_error(&ProxyError::Tls(
