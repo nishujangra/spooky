@@ -163,6 +163,25 @@ fn default_control_api_state() -> ControlApiState {
     control_api_state_with_runtime_bundle(&startup, &startup)
 }
 
+fn assert_structured_resource_preflight_message(
+    rejection: &crate::runtime::policy::TransitionRejection,
+) {
+    let field = rejection
+        .field_path
+        .as_deref()
+        .expect("resource field path");
+    let detail = rejection
+        .requested_mode
+        .as_deref()
+        .expect("resource failure detail");
+    assert_eq!(
+        rejection.to_string(),
+        format!(
+            "runtime reload rejected: could not prepare {field}: {detail}; active runtime unchanged (no change applied)"
+        )
+    );
+}
+
 // Domain: watchdog service state transitions and restart environment handling.
 #[test]
 fn watchdog_restart_env_keeps_path_when_present() {
@@ -710,6 +729,29 @@ fn live_reloadable_upstream_change_is_accepted() {
 }
 
 #[test]
+fn reload_compatibility_classifies_generation_owned_changes_as_live_reloadable() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let current = test_config(cert, key);
+
+    let mut next = current.clone();
+    next.upstream
+        .get_mut("api")
+        .expect("api upstream")
+        .route
+        .path_prefix = Some("/live".to_string());
+
+    let current_bundle = runtime_bundle_from_config("current.yaml", &current);
+    let next_bundle = runtime_bundle_from_config("next.yaml", &next);
+    let active = RuntimeBundleHandle::new(current_bundle).current_view();
+
+    assert!(
+        QUICListener::evaluate_runtime_reload_compatibility(&active, &next_bundle).is_ok(),
+        "generation-owned routing changes should stay reloadable"
+    );
+}
+
+#[test]
 fn restart_required_change_rejects_before_touching_active_generation() {
     // Phase 9 (#4): a failed validation must leave the active generation unchanged.
     // A restart-required change (control_plane_threads) is rejected by the
@@ -739,6 +781,41 @@ fn restart_required_change_rejects_before_touching_active_generation() {
     );
     // The active generation is untouched by the rejected evaluation.
     assert_eq!(handle.current_generation(), generation_before);
+}
+
+#[test]
+fn reload_compatibility_classifies_startup_owned_changes_as_restart_required() {
+    use crate::runtime::policy::TransitionRejectionKind;
+
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let current = test_config(cert, key);
+
+    let mut next = current.clone();
+    let current_threads = current.performance.control_plane_threads;
+    let next_threads = current_threads.saturating_add(2);
+    next.performance.control_plane_threads = next_threads;
+
+    let current_bundle = runtime_bundle_from_config("current.yaml", &current);
+    let next_bundle = runtime_bundle_from_config("next.yaml", &next);
+    let active = RuntimeBundleHandle::new(current_bundle).current_view();
+
+    let rejections = QUICListener::evaluate_runtime_reload_compatibility(&active, &next_bundle)
+        .expect_err("startup-owned change must reject the reload");
+    assert_eq!(rejections.len(), 1);
+    let rejection = &rejections[0];
+    assert_eq!(rejection.kind, TransitionRejectionKind::RestartRequired);
+    assert!(rejection.requires_restart());
+    assert_eq!(
+        rejection.field_path.as_deref(),
+        Some("performance.control_plane_threads")
+    );
+    assert_eq!(
+        rejection.to_string(),
+        format!(
+            "runtime reload rejected: performance.control_plane_threads changed from {current_threads} to {next_threads}; restart required"
+        )
+    );
 }
 
 #[test]
@@ -993,6 +1070,41 @@ fn validate_runtime_reload_compatibility_allows_listener_addition_when_binds_are
 }
 
 #[test]
+fn validate_runtime_reload_compatibility_classifies_listener_bind_conflict_as_preflight_failure() {
+    use crate::runtime::policy::TransitionRejectionKind;
+
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let current = test_config(cert.clone(), key.clone());
+
+    let occupied = std::net::UdpSocket::bind("127.0.0.1:0").expect("bind occupied udp");
+    let occupied_port = occupied.local_addr().expect("occupied addr").port();
+
+    let mut next = current.clone();
+    let mut extra_listener = next.listen.clone();
+    extra_listener.port = occupied_port;
+    next.listeners = vec![next.listen.clone(), extra_listener];
+
+    let current_bundle = runtime_bundle_from_config("current.yaml", &current);
+    let next_bundle = runtime_bundle_from_config("next.yaml", &next);
+
+    let rejection =
+        QUICListener::validate_runtime_reload_compatibility(&current_bundle, &next_bundle)
+            .expect("listener bind conflict must reject");
+    let expected_field = format!("QUIC listener '127.0.0.1:{occupied_port}'");
+    assert_eq!(
+        rejection.kind,
+        TransitionRejectionKind::ResourcePreparationFailed
+    );
+    assert!(!rejection.requires_restart());
+    assert_eq!(
+        rejection.field_path.as_deref(),
+        Some(expected_field.as_str())
+    );
+    assert_structured_resource_preflight_message(&rejection);
+}
+
+#[test]
 fn validate_runtime_reload_compatibility_rejects_listener_removal() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
@@ -1038,6 +1150,76 @@ fn validate_runtime_reload_compatibility_rejects_listener_bind_change() {
         "expected rejection, got: {:?}",
         err
     );
+}
+
+#[test]
+fn validate_control_api_reload_compatibility_classifies_bind_conflict_as_preflight_failure() {
+    use crate::runtime::policy::TransitionRejectionKind;
+
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let current = test_config(cert.clone(), key.clone());
+
+    let occupied = std::net::TcpListener::bind("127.0.0.1:0").expect("bind occupied tcp");
+    let occupied_port = occupied.local_addr().expect("occupied addr").port();
+
+    let mut next = current.clone();
+    next.observability.control_api.enabled = true;
+    next.observability.control_api.address = "127.0.0.1".to_string();
+    next.observability.control_api.port = occupied_port;
+
+    let current_bundle = runtime_bundle_from_config("current.yaml", &current);
+    let next_bundle = runtime_bundle_from_config("next.yaml", &next);
+
+    let rejection =
+        QUICListener::validate_control_api_reload_compatibility(&current_bundle, &next_bundle)
+            .expect("control api bind conflict must reject");
+    let expected_field = format!("control API endpoint '127.0.0.1:{occupied_port}'");
+    assert_eq!(
+        rejection.kind,
+        TransitionRejectionKind::ResourcePreparationFailed
+    );
+    assert_eq!(
+        rejection.field_path.as_deref(),
+        Some(expected_field.as_str())
+    );
+    assert!(!rejection.requires_restart());
+    assert_structured_resource_preflight_message(&rejection);
+}
+
+#[test]
+fn validate_metrics_reload_compatibility_classifies_bind_conflict_as_preflight_failure() {
+    use crate::runtime::policy::TransitionRejectionKind;
+
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let current = test_config(cert.clone(), key.clone());
+
+    let occupied = std::net::TcpListener::bind("127.0.0.1:0").expect("bind occupied tcp");
+    let occupied_port = occupied.local_addr().expect("occupied addr").port();
+
+    let mut next = current.clone();
+    next.observability.metrics.enabled = true;
+    next.observability.metrics.address = "127.0.0.1".to_string();
+    next.observability.metrics.port = occupied_port;
+
+    let current_bundle = runtime_bundle_from_config("current.yaml", &current);
+    let next_bundle = runtime_bundle_from_config("next.yaml", &next);
+
+    let rejection =
+        QUICListener::validate_metrics_reload_compatibility(&current_bundle, &next_bundle)
+            .expect("metrics bind conflict must reject");
+    let expected_field = format!("metrics endpoint '127.0.0.1:{occupied_port}'");
+    assert_eq!(
+        rejection.kind,
+        TransitionRejectionKind::ResourcePreparationFailed
+    );
+    assert_eq!(
+        rejection.field_path.as_deref(),
+        Some(expected_field.as_str())
+    );
+    assert!(!rejection.requires_restart());
+    assert_structured_resource_preflight_message(&rejection);
 }
 
 #[test]
