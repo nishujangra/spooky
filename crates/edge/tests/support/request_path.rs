@@ -13,10 +13,11 @@ use std::{
 };
 
 use bytes::Bytes;
-use http_body_util::Full;
+use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::{
     Request, Response,
     body::{Body, Frame, Incoming},
+    client::conn::{http1, http2},
     service::service_fn,
 };
 use hyper_util::rt::{TokioExecutor, TokioIo};
@@ -29,6 +30,7 @@ use spooky_config::{
         Backend, ClientAuth, Config, Listen, LoadBalancing, Log, LogFormat, RouteMatch, Security,
         Tls, Upstream, UpstreamTls,
     },
+    runtime::RuntimeConfig,
     validator::validate,
 };
 use spooky_edge::{
@@ -40,9 +42,12 @@ use spooky_edge::{
 use tempfile::{TempDir, tempdir};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
 };
-use tokio_rustls::{TlsAcceptor, rustls::ServerConfig};
+use tokio_rustls::{
+    TlsAcceptor, TlsConnector,
+    rustls::{ClientConfig, RootCertStore, ServerConfig, pki_types::ServerName},
+};
 
 pub struct TestTlsMaterial {
     _dir: TempDir,
@@ -143,7 +148,7 @@ impl QuicRequestPathHarness {
             version: 1,
             listen: Listen {
                 protocol: "http3".to_string(),
-                port: reserve_unused_udp_port(),
+                port: reserve_unused_listener_port(),
                 address: "127.0.0.1".to_string(),
                 tls: Tls {
                     cert: self.tls.cert_path.clone(),
@@ -184,6 +189,38 @@ impl QuicRequestPathHarness {
         Ok(listen_addr)
     }
 
+    pub fn start_listener_with_bootstrap(&mut self, config: Config) -> Result<SocketAddr, String> {
+        validate(&config).map_err(|err| format!("config validation failed: {err}"))?;
+        let runtime_config =
+            RuntimeConfig::from_config(&config).map_err(|err| format!("runtime config: {err}"))?;
+        let listener_config = runtime_config
+            .listener_runtime_configs()
+            .into_iter()
+            .next()
+            .ok_or_else(|| "missing listener runtime config".to_string())?;
+        let shared_state = Arc::new(
+            QUICListener::build_shared_state(&runtime_config)
+                .map_err(|err| format!("shared runtime state: {err}"))?,
+        );
+        QUICListener::spawn_control_plane_tasks(&runtime_config, &shared_state, 1)
+            .map_err(|err| format!("control plane tasks: {err}"))?;
+        QUICListener::spawn_bootstrap_tls_listener(&listener_config, &shared_state, None, None)
+            .map_err(|err| format!("bootstrap listener: {err}"))?;
+        let socket = QUICListener::bind_socket(&listener_config, false)
+            .map_err(|err| format!("bind socket: {err}"))?;
+        let listener =
+            QUICListener::new_with_socket_and_shared_state(listener_config, socket, shared_state)
+                .map_err(|err| format!("listener with shared state: {err}"))?;
+        self.metrics = Some(Arc::clone(&listener.metrics));
+        let listen_addr = listener
+            .socket
+            .local_addr()
+            .map_err(|err| format!("listen addr: {err}"))?;
+        self.listener_task = Some(ListenerTaskGuard::spawn(&self.rt, listener));
+        self.listen_addr = Some(listen_addr);
+        Ok(listen_addr)
+    }
+
     pub fn start_h1_backend<F, Fut>(&mut self, handler: F) -> SocketAddr
     where
         F: Fn(Request<Incoming>) -> Fut + Send + Sync + 'static,
@@ -199,6 +236,13 @@ impl QuicRequestPathHarness {
         self.start_h1_backend(move |_req| async move {
             Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(body))))
         })
+    }
+
+    pub fn start_h1_websocket_upgrade_backend(&mut self) -> SocketAddr {
+        let fixture = self.rt.block_on(start_h1_websocket_upgrade_backend());
+        let addr = fixture.addr;
+        self.backends.push(fixture);
+        addr
     }
 
     pub fn start_h1_chunked_backend(&mut self, chunks: Vec<&'static [u8]>) -> SocketAddr {
@@ -270,6 +314,20 @@ impl QuicRequestPathHarness {
         self.metrics
             .as_ref()
             .map(|metrics| metrics.render_prometheus())
+    }
+
+    pub fn run_bootstrap_h2_request(
+        &self,
+        request: BootstrapRequestSpec<'_>,
+    ) -> Result<BootstrapResponse, String> {
+        let listen_addr = self
+            .listen_addr
+            .ok_or_else(|| "listener not started".to_string())?;
+        self.rt.block_on(run_bootstrap_h2_request(
+            listen_addr,
+            &self.tls.cert_path,
+            request,
+        ))
     }
 }
 
@@ -385,8 +443,418 @@ impl H3Response {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct BootstrapRequestSpec<'a> {
+    pub method: &'a str,
+    pub authority: &'a str,
+    pub path: &'a str,
+    pub headers: &'a [(&'a str, &'a str)],
+    pub body: Option<&'a [u8]>,
+    pub user_agent: &'a str,
+}
+
+impl<'a> BootstrapRequestSpec<'a> {
+    pub fn get(authority: &'a str, path: &'a str) -> Self {
+        Self {
+            method: "GET",
+            authority,
+            path,
+            headers: &[],
+            body: None,
+            user_agent: "spooky-request-path-test",
+        }
+    }
+}
+
+pub struct BootstrapResponse {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+impl BootstrapResponse {
+    pub fn body_text(&self) -> String {
+        String::from_utf8_lossy(&self.body).into_owned()
+    }
+
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers.iter().find_map(|(header_name, value)| {
+            header_name
+                .eq_ignore_ascii_case(name)
+                .then_some(value.as_str())
+        })
+    }
+}
+
 pub fn run_request_to(addr: SocketAddr, request: H3RequestSpec<'_>) -> Result<H3Response, String> {
     run_h3_request(addr, request)
+}
+
+pub fn run_bootstrap_request_to(
+    addr: SocketAddr,
+    cert_path: &str,
+    request: BootstrapRequestSpec<'_>,
+) -> Result<BootstrapResponse, String> {
+    tokio::runtime::Runtime::new()
+        .expect("runtime")
+        .block_on(run_bootstrap_h2_request(addr, cert_path, request))
+}
+
+pub fn run_bootstrap_h1_websocket_handshake_to(
+    addr: SocketAddr,
+    cert_path: &str,
+    authority: &str,
+    path: &str,
+) -> Result<BootstrapResponse, String> {
+    tokio::runtime::Runtime::new()
+        .expect("runtime")
+        .block_on(run_bootstrap_h1_websocket_handshake(
+            addr, cert_path, authority, path,
+        ))
+}
+
+pub fn run_two_chunk_bootstrap_post_to(
+    addr: SocketAddr,
+    cert_path: &str,
+    authority: &str,
+    path: &str,
+    chunk1: Vec<u8>,
+    chunk2: Vec<u8>,
+    delay_between_chunks: Duration,
+) -> Result<BootstrapResponse, String> {
+    tokio::runtime::Runtime::new()
+        .expect("runtime")
+        .block_on(run_two_chunk_bootstrap_h2_post_to(
+            addr,
+            cert_path,
+            authority,
+            path,
+            chunk1,
+            chunk2,
+            delay_between_chunks,
+        ))
+}
+
+async fn run_bootstrap_h2_request(
+    addr: SocketAddr,
+    cert_path: &str,
+    request: BootstrapRequestSpec<'_>,
+) -> Result<BootstrapResponse, String> {
+    let (mut sender, _conn_task) = connect_bootstrap_h2(addr, cert_path).await?;
+    sender
+        .ready()
+        .await
+        .map_err(|err| format!("sender ready: {err}"))?;
+
+    let mut builder = Request::builder()
+        .method(request.method)
+        .uri(
+            http::Uri::builder()
+                .path_and_query(request.path)
+                .build()
+                .map_err(|err| format!("uri build: {err}"))?,
+        )
+        .header("host", request.authority)
+        .header("user-agent", request.user_agent);
+    for (name, value) in request.headers {
+        builder = builder.header(*name, *value);
+    }
+
+    let body = request.body.unwrap_or_default().to_vec();
+    let req = builder
+        .body(
+            Full::new(Bytes::from(body))
+                .map_err(|never| match never {})
+                .boxed(),
+        )
+        .map_err(|err| format!("request build: {err}"))?;
+    let response = sender
+        .send_request(req)
+        .await
+        .map_err(|err| format!("send request: {err}"))?;
+    read_bootstrap_h2_response(response).await
+}
+
+async fn run_bootstrap_h1_websocket_handshake(
+    addr: SocketAddr,
+    cert_path: &str,
+    authority: &str,
+    path: &str,
+) -> Result<BootstrapResponse, String> {
+    let roots = read_test_root_store(cert_path)?;
+    let tls_config = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let connector = TlsConnector::from(Arc::new(tls_config));
+
+    let server_name = ServerName::try_from(authority)
+        .map_err(|err| format!("server name: {err}"))?
+        .to_owned();
+    let deadline = Instant::now() + Duration::from_secs(5);
+
+    loop {
+        match TcpStream::connect(addr).await {
+            Ok(stream) => {
+                let tls_stream = connector
+                    .connect(server_name.clone(), stream)
+                    .await
+                    .map_err(|err| format!("tls connect: {err}"))?;
+                let (mut sender, conn) = http1::handshake(TokioIo::new(tls_stream))
+                    .await
+                    .map_err(|err| format!("h1 handshake: {err}"))?;
+                tokio::spawn(async move {
+                    let _ = conn.with_upgrades().await;
+                });
+                sender
+                    .ready()
+                    .await
+                    .map_err(|err| format!("sender ready: {err}"))?;
+
+                let request = Request::builder()
+                    .method("GET")
+                    .uri(
+                        http::Uri::builder()
+                            .path_and_query(path)
+                            .build()
+                            .map_err(|err| format!("uri build: {err}"))?,
+                    )
+                    .header("host", authority)
+                    .header(http::header::CONNECTION, "Upgrade")
+                    .header(http::header::UPGRADE, "websocket")
+                    .header("sec-websocket-key", "dGVzdC1rZXktMTIzNDU2Nzg5MA==")
+                    .header("sec-websocket-version", "13")
+                    .body(http_body_util::Empty::<Bytes>::new())
+                    .map_err(|err| format!("request build: {err}"))?;
+
+                let response = sender
+                    .send_request(request)
+                    .await
+                    .map_err(|err| format!("send request: {err}"))?;
+
+                return Ok(BootstrapResponse {
+                    status: response.status().as_u16(),
+                    headers: response
+                        .headers()
+                        .iter()
+                        .map(|(name, value)| {
+                            (
+                                name.as_str().to_string(),
+                                value.to_str().unwrap_or_default().to_string(),
+                            )
+                        })
+                        .collect(),
+                    body: response
+                        .into_body()
+                        .collect()
+                        .await
+                        .map_err(|err| format!("collect response body: {err}"))?
+                        .to_bytes()
+                        .to_vec(),
+                });
+            }
+            Err(err) if Instant::now() < deadline => {
+                let _ = err;
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            Err(err) => return Err(format!("tcp connect: {err}")),
+        }
+    }
+}
+
+async fn run_two_chunk_bootstrap_h2_post_to(
+    addr: SocketAddr,
+    cert_path: &str,
+    authority: &str,
+    path: &str,
+    chunk1: Vec<u8>,
+    chunk2: Vec<u8>,
+    delay_between_chunks: Duration,
+) -> Result<BootstrapResponse, String> {
+    let (mut sender, _conn_task) = connect_bootstrap_h2(addr, cert_path).await?;
+    sender
+        .ready()
+        .await
+        .map_err(|err| format!("sender ready: {err}"))?;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri(
+            http::Uri::builder()
+                .path_and_query(path)
+                .build()
+                .map_err(|err| format!("uri build: {err}"))?,
+        )
+        .header("host", authority)
+        .header("user-agent", "spooky-request-path-test")
+        .header("content-length", (chunk1.len() + chunk2.len()).to_string())
+        .body(
+            TwoChunkDelayedBody::new(
+                Bytes::from(chunk1),
+                Bytes::from(chunk2),
+                delay_between_chunks,
+            )
+            .boxed(),
+        )
+        .map_err(|err| format!("request build: {err}"))?;
+    let response = sender
+        .send_request(req)
+        .await
+        .map_err(|err| format!("send request: {err}"))?;
+    read_bootstrap_h2_response(response).await
+}
+
+async fn read_bootstrap_h2_response(
+    mut response: Response<Incoming>,
+) -> Result<BootstrapResponse, String> {
+    let status = response.status().as_u16();
+    let headers = response
+        .headers()
+        .iter()
+        .map(|(name, value)| {
+            Ok::<_, String>((
+                name.as_str().to_string(),
+                value
+                    .to_str()
+                    .map_err(|err| format!("header utf8: {err}"))?
+                    .to_string(),
+            ))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut body = Vec::new();
+
+    while let Some(frame) = response.body_mut().frame().await {
+        let frame = frame.map_err(|err| format!("read frame: {err}"))?;
+        if let Ok(data) = frame.into_data() {
+            body.extend_from_slice(&data);
+        }
+    }
+
+    Ok(BootstrapResponse {
+        status,
+        headers,
+        body,
+    })
+}
+
+async fn connect_bootstrap_h2(
+    addr: SocketAddr,
+    cert_path: &str,
+) -> Result<
+    (
+        hyper::client::conn::http2::SendRequest<BoxBody<Bytes, Infallible>>,
+        tokio::task::JoinHandle<()>,
+    ),
+    String,
+> {
+    let roots = read_test_root_store(cert_path)?;
+    let mut tls_config = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    tls_config.alpn_protocols = vec![b"h2".to_vec()];
+    let connector = TlsConnector::from(Arc::new(tls_config));
+
+    let server_name = ServerName::try_from("localhost")
+        .map_err(|err| format!("server name: {err}"))?
+        .to_owned();
+    let deadline = Instant::now() + Duration::from_secs(5);
+
+    loop {
+        match TcpStream::connect(addr).await {
+            Ok(stream) => {
+                let tls_stream = connector
+                    .connect(server_name.clone(), stream)
+                    .await
+                    .map_err(|err| format!("tls connect: {err}"))?;
+                let (sender, conn) =
+                    http2::handshake(TokioExecutor::new(), TokioIo::new(tls_stream))
+                        .await
+                        .map_err(|err| format!("h2 handshake: {err}"))?;
+                let conn_task = tokio::spawn(async move {
+                    let _ = conn.await;
+                });
+                return Ok((sender, conn_task));
+            }
+            Err(err) if Instant::now() < deadline => {
+                let _ = err;
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            Err(err) => return Err(format!("tcp connect: {err}")),
+        }
+    }
+}
+
+struct TwoChunkDelayedBody {
+    first: Option<Bytes>,
+    second: Option<Bytes>,
+    delay_before_second: Duration,
+    second_delay: Option<std::pin::Pin<Box<tokio::time::Sleep>>>,
+}
+
+impl TwoChunkDelayedBody {
+    fn new(first: Bytes, second: Bytes, delay_before_second: Duration) -> Self {
+        Self {
+            first: Some(first),
+            second: Some(second),
+            delay_before_second,
+            second_delay: None,
+        }
+    }
+}
+
+impl Body for TwoChunkDelayedBody {
+    type Data = Bytes;
+    type Error = Infallible;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        if let Some(first) = self.first.take() {
+            return std::task::Poll::Ready(Some(Ok(Frame::data(first))));
+        }
+
+        if self.second.is_none() {
+            return std::task::Poll::Ready(None);
+        }
+
+        if self.delay_before_second.is_zero() {
+            return std::task::Poll::Ready(self.second.take().map(|chunk| Ok(Frame::data(chunk))));
+        }
+
+        if self.second_delay.is_none() {
+            self.second_delay = Some(Box::pin(tokio::time::sleep(self.delay_before_second)));
+        }
+
+        if let Some(delay) = self.second_delay.as_mut() {
+            match delay.as_mut().poll(cx) {
+                std::task::Poll::Ready(()) => {
+                    self.second_delay = None;
+                    return std::task::Poll::Ready(
+                        self.second.take().map(|chunk| Ok(Frame::data(chunk))),
+                    );
+                }
+                std::task::Poll::Pending => return std::task::Poll::Pending,
+            }
+        }
+
+        std::task::Poll::Ready(None)
+    }
+}
+
+fn read_test_root_store(cert_path: &str) -> Result<RootCertStore, String> {
+    let mut roots = RootCertStore::empty();
+    let certs = CertificateDer::pem_file_iter(cert_path)
+        .map_err(|err| format!("open cert file: {err}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("parse certs: {err}"))?;
+
+    for cert in certs {
+        roots
+            .add(cert)
+            .map_err(|err| format!("add root cert: {err}"))?;
+    }
+
+    Ok(roots)
 }
 
 pub fn run_two_chunk_post_to(
@@ -612,6 +1080,77 @@ where
 
                 let _ = hyper::server::conn::http1::Builder::new()
                     .serve_connection(TokioIo::new(stream), service)
+                    .await;
+            });
+        }
+    });
+
+    BackendFixture {
+        addr,
+        stop,
+        accept_task,
+    }
+}
+
+pub async fn start_h1_websocket_upgrade_backend() -> BackendFixture {
+    let listener = bind_tcp_listener();
+    let addr = listener.local_addr().expect("h1 websocket local addr");
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_flag = Arc::clone(&stop);
+
+    let accept_task = tokio::spawn(async move {
+        while !stop_flag.load(Ordering::Relaxed) {
+            let (stream, _) = match listener.accept().await {
+                Ok(value) => value,
+                Err(_) => break,
+            };
+            tokio::spawn(async move {
+                let service = service_fn(|mut req: Request<Incoming>| async move {
+                    let is_upgrade = req
+                        .headers()
+                        .get(http::header::UPGRADE)
+                        .and_then(|value| value.to_str().ok())
+                        .map(|value| value.eq_ignore_ascii_case("websocket"))
+                        .unwrap_or(false)
+                        && req
+                            .headers()
+                            .get(http::header::CONNECTION)
+                            .and_then(|value| value.to_str().ok())
+                            .map(|value| {
+                                value
+                                    .split(',')
+                                    .any(|part| part.trim().eq_ignore_ascii_case("upgrade"))
+                            })
+                            .unwrap_or(false);
+
+                    if !is_upgrade {
+                        return Ok::<_, hyper::Error>(
+                            Response::builder()
+                                .status(http::StatusCode::BAD_REQUEST)
+                                .body(Full::new(Bytes::from_static(b"missing upgrade\n")))
+                                .expect("websocket bad request"),
+                        );
+                    }
+
+                    let on_upgrade = hyper::upgrade::on(&mut req);
+                    tokio::spawn(async move {
+                        let _ = on_upgrade.await;
+                    });
+
+                    Ok::<_, hyper::Error>(
+                        Response::builder()
+                            .status(http::StatusCode::SWITCHING_PROTOCOLS)
+                            .header(http::header::CONNECTION, "upgrade")
+                            .header(http::header::UPGRADE, "websocket")
+                            .header("sec-websocket-accept", "test-accept")
+                            .body(Full::new(Bytes::new()))
+                            .expect("websocket upgrade response"),
+                    )
+                });
+
+                let _ = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(TokioIo::new(stream), service)
+                    .with_upgrades()
                     .await;
             });
         }
@@ -910,6 +1449,21 @@ pub fn reserve_unused_udp_port() -> u16 {
     let port = socket.local_addr().expect("udp local addr").port();
     drop(socket);
     port
+}
+
+fn reserve_unused_listener_port() -> u16 {
+    for _ in 0..32 {
+        let tcp = StdTcpListener::bind("127.0.0.1:0").expect("reserve listener tcp port");
+        let port = tcp.local_addr().expect("tcp local addr").port();
+        if let Ok(udp) = UdpSocket::bind(("127.0.0.1", port)) {
+            drop(udp);
+            drop(tcp);
+            return port;
+        }
+        drop(tcp);
+    }
+
+    reserve_unused_udp_port()
 }
 
 fn bind_tcp_listener() -> TcpListener {

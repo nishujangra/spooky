@@ -13,9 +13,11 @@ use spooky_config::config::ScopedRateLimitScope;
 use spooky_errors::ClassifiedUpstreamProxyError;
 
 use self::prepare::{RequestFinalizationConfig, StartedRequestEnvelope};
-pub(in crate::quic_listener) use self::resolve::BootstrapTargetResolutionInput;
 #[cfg(test)]
 pub(in crate::quic_listener) use self::resolve::TargetResolutionRequest as TestTargetResolutionRequest;
+pub(in crate::quic_listener) use self::{
+    auth::evaluate_pending_forward_external_auth, resolve::BootstrapTargetResolutionInput,
+};
 use super::*;
 use crate::runtime::connection::{
     outcome::{
