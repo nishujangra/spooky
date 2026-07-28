@@ -96,6 +96,10 @@ impl BootstrapQuicParityHarness {
         self.inner.start_h1_static_backend(body)
     }
 
+    pub fn start_h1_websocket_upgrade_backend(&mut self) -> SocketAddr {
+        self.inner.start_h1_websocket_upgrade_backend()
+    }
+
     pub fn start_h1_chunked_backend(&mut self, chunks: Vec<&'static [u8]>) -> SocketAddr {
         self.inner.start_h1_chunked_backend(chunks)
     }

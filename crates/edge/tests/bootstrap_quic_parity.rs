@@ -26,7 +26,8 @@ use support::{
     parity::{BootstrapQuicParityHarness, ParityRequestSpec, make_backend, make_upstream},
     request_path::{
         BootstrapRequestSpec, H3RequestSpec, run_bootstrap_request_to, run_request_to,
-        run_two_chunk_bootstrap_post_to, run_two_chunk_post_to,
+        run_bootstrap_h1_websocket_handshake_to, run_two_chunk_bootstrap_post_to,
+        run_two_chunk_post_to,
     },
 };
 
@@ -1122,6 +1123,82 @@ fn bootstrap_and_quic_admission_overload_shed_contracts_match() {
     assert_eq!(
         bootstrap.upstream_calls, 1,
         "bootstrap overload shedding should stop the second request before backend dispatch"
+    );
+}
+
+#[test]
+#[serial]
+fn bootstrap_websocket_upgrade_is_an_explicit_quic_parity_boundary() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = BootstrapQuicParityHarness::new();
+    let backend_addr = harness.start_h1_websocket_upgrade_backend();
+
+    let config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        make_upstream(
+            "/ws",
+            vec![make_backend("backend-a", backend_addr.to_string())],
+            None,
+            "round-robin",
+        ),
+    )]));
+    let listen_addr = harness.start_listener(config).expect("listener with bootstrap");
+
+    let bootstrap = run_bootstrap_h1_websocket_handshake_to(
+        listen_addr,
+        harness.cert_path(),
+        "localhost",
+        "/ws",
+    )
+    .expect("bootstrap websocket handshake");
+    let quic = run_request_to(
+        listen_addr,
+        H3RequestSpec {
+            method: "GET",
+            authority: "localhost",
+            path: "/ws",
+            headers: &[
+                ("connection", "Upgrade"),
+                ("upgrade", "websocket"),
+                ("sec-websocket-version", "13"),
+            ],
+            body: None,
+            user_agent: "spooky-bootstrap-quic-parity-test",
+        },
+    )
+    .expect("quic websocket request");
+
+    assert_eq!(
+        bootstrap.status, 101,
+        "bootstrap keeps HTTP/1.1 upgrade mechanics as a compatibility ingress contract"
+    );
+    assert!(bootstrap.body.is_empty());
+    assert_eq!(bootstrap.header("connection"), Some("upgrade"));
+    assert_eq!(bootstrap.header("upgrade"), Some("websocket"));
+    assert_eq!(bootstrap.header("sec-websocket-accept"), Some("test-accept"));
+
+    assert_eq!(
+        quic.status, 200,
+        "quic should not pretend to share bootstrap-only HTTP/1.1 switching-protocols mechanics"
+    );
+    assert!(quic.body.is_empty());
+    assert_eq!(quic.header("sec-websocket-accept"), Some("test-accept"));
+    assert_eq!(
+        quic.header("connection"),
+        None,
+        "HTTP/3 websocket tunneling should not expose bootstrap's upgrade header contract"
+    );
+    assert_eq!(
+        quic.header("upgrade"),
+        None,
+        "HTTP/3 websocket tunneling should not expose bootstrap's upgrade header contract"
+    );
+    assert_ne!(
+        bootstrap.status, quic.status,
+        "the parity suite should document websocket/upgrade as an intentional ingress boundary, not a shared contract"
     );
 }
 

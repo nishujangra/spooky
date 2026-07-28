@@ -17,7 +17,7 @@ use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::{
     Request, Response,
     body::{Body, Frame, Incoming},
-    client::conn::http2,
+    client::conn::{http1, http2},
     service::service_fn,
 };
 use hyper_util::rt::{TokioExecutor, TokioIo};
@@ -239,6 +239,13 @@ impl QuicRequestPathHarness {
         self.start_h1_backend(move |_req| async move {
             Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(body))))
         })
+    }
+
+    pub fn start_h1_websocket_upgrade_backend(&mut self) -> SocketAddr {
+        let fixture = self.rt.block_on(start_h1_websocket_upgrade_backend());
+        let addr = fixture.addr;
+        self.backends.push(fixture);
+        addr
     }
 
     pub fn start_h1_chunked_backend(&mut self, chunks: Vec<&'static [u8]>) -> SocketAddr {
@@ -493,6 +500,19 @@ pub fn run_bootstrap_request_to(
         .block_on(run_bootstrap_h2_request(addr, cert_path, request))
 }
 
+pub fn run_bootstrap_h1_websocket_handshake_to(
+    addr: SocketAddr,
+    cert_path: &str,
+    authority: &str,
+    path: &str,
+) -> Result<BootstrapResponse, String> {
+    tokio::runtime::Runtime::new()
+        .expect("runtime")
+        .block_on(run_bootstrap_h1_websocket_handshake(
+            addr, cert_path, authority, path,
+        ))
+}
+
 pub fn run_two_chunk_bootstrap_post_to(
     addr: SocketAddr,
     cert_path: &str,
@@ -549,6 +569,92 @@ async fn run_bootstrap_h2_request(
         .await
         .map_err(|err| format!("send request: {err}"))?;
     read_bootstrap_h2_response(response).await
+}
+
+async fn run_bootstrap_h1_websocket_handshake(
+    addr: SocketAddr,
+    cert_path: &str,
+    authority: &str,
+    path: &str,
+) -> Result<BootstrapResponse, String> {
+    let roots = read_test_root_store(cert_path)?;
+    let tls_config = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    let connector = TlsConnector::from(Arc::new(tls_config));
+
+    let server_name = ServerName::try_from(authority)
+        .map_err(|err| format!("server name: {err}"))?
+        .to_owned();
+    let deadline = Instant::now() + Duration::from_secs(5);
+
+    loop {
+        match TcpStream::connect(addr).await {
+            Ok(stream) => {
+                let tls_stream = connector
+                    .connect(server_name.clone(), stream)
+                    .await
+                    .map_err(|err| format!("tls connect: {err}"))?;
+                let (mut sender, conn) = http1::handshake(TokioIo::new(tls_stream))
+                    .await
+                    .map_err(|err| format!("h1 handshake: {err}"))?;
+                tokio::spawn(async move {
+                    let _ = conn.with_upgrades().await;
+                });
+                sender
+                    .ready()
+                    .await
+                    .map_err(|err| format!("sender ready: {err}"))?;
+
+                let request = Request::builder()
+                    .method("GET")
+                    .uri(
+                        http::Uri::builder()
+                            .path_and_query(path)
+                            .build()
+                            .map_err(|err| format!("uri build: {err}"))?,
+                    )
+                    .header("host", authority)
+                    .header(http::header::CONNECTION, "Upgrade")
+                    .header(http::header::UPGRADE, "websocket")
+                    .header("sec-websocket-key", "dGVzdC1rZXktMTIzNDU2Nzg5MA==")
+                    .header("sec-websocket-version", "13")
+                    .body(http_body_util::Empty::<Bytes>::new())
+                    .map_err(|err| format!("request build: {err}"))?;
+
+                let response = sender
+                    .send_request(request)
+                    .await
+                    .map_err(|err| format!("send request: {err}"))?;
+
+                return Ok(BootstrapResponse {
+                    status: response.status().as_u16(),
+                    headers: response
+                        .headers()
+                        .iter()
+                        .map(|(name, value)| {
+                            (
+                                name.as_str().to_string(),
+                                value.to_str().unwrap_or_default().to_string(),
+                            )
+                        })
+                        .collect(),
+                    body: response
+                        .into_body()
+                        .collect()
+                        .await
+                        .map_err(|err| format!("collect response body: {err}"))?
+                        .to_bytes()
+                        .to_vec(),
+                });
+            }
+            Err(err) if Instant::now() < deadline => {
+                let _ = err;
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            Err(err) => return Err(format!("tcp connect: {err}")),
+        }
+    }
 }
 
 async fn run_two_chunk_bootstrap_h2_post_to(
@@ -970,6 +1076,77 @@ where
 
                 let _ = hyper::server::conn::http1::Builder::new()
                     .serve_connection(TokioIo::new(stream), service)
+                    .await;
+            });
+        }
+    });
+
+    BackendFixture {
+        addr,
+        stop,
+        accept_task,
+    }
+}
+
+pub async fn start_h1_websocket_upgrade_backend() -> BackendFixture {
+    let listener = bind_tcp_listener();
+    let addr = listener.local_addr().expect("h1 websocket local addr");
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_flag = Arc::clone(&stop);
+
+    let accept_task = tokio::spawn(async move {
+        while !stop_flag.load(Ordering::Relaxed) {
+            let (stream, _) = match listener.accept().await {
+                Ok(value) => value,
+                Err(_) => break,
+            };
+            tokio::spawn(async move {
+                let service = service_fn(|mut req: Request<Incoming>| async move {
+                    let is_upgrade = req
+                        .headers()
+                        .get(http::header::UPGRADE)
+                        .and_then(|value| value.to_str().ok())
+                        .map(|value| value.eq_ignore_ascii_case("websocket"))
+                        .unwrap_or(false)
+                        && req
+                            .headers()
+                            .get(http::header::CONNECTION)
+                            .and_then(|value| value.to_str().ok())
+                            .map(|value| {
+                                value
+                                    .split(',')
+                                    .any(|part| part.trim().eq_ignore_ascii_case("upgrade"))
+                            })
+                            .unwrap_or(false);
+
+                    if !is_upgrade {
+                        return Ok::<_, hyper::Error>(
+                            Response::builder()
+                                .status(http::StatusCode::BAD_REQUEST)
+                                .body(Full::new(Bytes::from_static(b"missing upgrade\n")))
+                                .expect("websocket bad request"),
+                        );
+                    }
+
+                    let on_upgrade = hyper::upgrade::on(&mut req);
+                    tokio::spawn(async move {
+                        let _ = on_upgrade.await;
+                    });
+
+                    Ok::<_, hyper::Error>(
+                        Response::builder()
+                            .status(http::StatusCode::SWITCHING_PROTOCOLS)
+                            .header(http::header::CONNECTION, "upgrade")
+                            .header(http::header::UPGRADE, "websocket")
+                            .header("sec-websocket-accept", "test-accept")
+                            .body(Full::new(Bytes::new()))
+                            .expect("websocket upgrade response"),
+                    )
+                });
+
+                let _ = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(TokioIo::new(stream), service)
+                    .with_upgrades()
                     .await;
             });
         }
