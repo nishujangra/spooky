@@ -31,6 +31,8 @@ use support::{
     },
 };
 
+// Routing parity
+
 #[test]
 fn bootstrap_and_quic_parity_harness_collects_canonical_response_shape() {
     if !local_listener_bind_available() {
@@ -234,6 +236,8 @@ fn bootstrap_and_quic_route_resolution_share_observable_unrouted_behavior() {
     assert_eq!(pair.quic.response.body, b"no route\n");
     assert_eq!(pair.bootstrap.response.body, pair.quic.response.body);
 }
+
+// Authentication and admission parity
 
 #[test]
 fn bootstrap_and_quic_local_api_key_auth_decisions_match() {
@@ -523,6 +527,285 @@ fn bootstrap_and_quic_external_auth_decisions_match() {
         );
     }
 }
+
+#[test]
+#[serial]
+fn bootstrap_and_quic_admission_rate_limit_rejections_match() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let quic = run_scoped_rate_limit_scenario(IngressKind::Quic);
+    let bootstrap = run_scoped_rate_limit_scenario(IngressKind::Bootstrap);
+
+    assert_eq!(quic.status, 429);
+    assert_eq!(bootstrap.status, 429);
+    assert_eq!(bootstrap.status, quic.status);
+    assert_eq!(bootstrap.body, quic.body);
+    assert!(
+        quic.body.contains("request rate limited"),
+        "expected canonical rate-limit rejection body, got `{}`",
+        quic.body
+    );
+    assert_eq!(bootstrap.headers, quic.headers);
+    assert_eq!(
+        quic.headers,
+        vec![(String::from("retry-after"), String::from("1"))]
+    );
+    assert_eq!(
+        quic.upstream_calls, 1,
+        "quic rate-limit path should reject before the second upstream dispatch"
+    );
+    assert_eq!(
+        bootstrap.upstream_calls, 1,
+        "bootstrap rate-limit path should reject before the second upstream dispatch"
+    );
+}
+
+#[test]
+#[serial]
+#[ignore = "bootstrap path does not yet share post-auth admission overload semantics"]
+fn bootstrap_and_quic_admission_overload_shed_contracts_match() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let quic = run_overload_shed_scenario(IngressKind::Quic);
+    let bootstrap = run_overload_shed_scenario(IngressKind::Bootstrap);
+
+    assert_eq!(quic.status, 503);
+    assert_eq!(bootstrap.status, 503);
+    assert_eq!(bootstrap.body, quic.body);
+    assert!(
+        quic.body.contains("route queue cap exceeded"),
+        "expected canonical overload body, got `{}`",
+        quic.body
+    );
+    assert_eq!(bootstrap.headers, quic.headers);
+    assert_eq!(
+        quic.headers,
+        vec![(String::from("retry-after"), String::from("1"))]
+    );
+    assert_eq!(
+        quic.upstream_calls, 1,
+        "quic overload shedding should stop the second request before backend dispatch"
+    );
+    assert_eq!(
+        bootstrap.upstream_calls, 1,
+        "bootstrap overload shedding should stop the second request before backend dispatch"
+    );
+}
+
+// Response normalization parity
+
+#[test]
+fn bootstrap_and_quic_response_normalization_strip_same_hop_headers() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = BootstrapQuicParityHarness::new();
+    let backend_addr = harness.start_h1_backend(|_req: Request<Incoming>| async move {
+        Ok::<_, Infallible>(
+            Response::builder()
+                .status(200)
+                .header("connection", "x-hop-token")
+                .header("x-hop-token", "secret")
+                .header("content-length", "9")
+                .header("content-type", "text/plain")
+                .header("cache-control", "max-age=60")
+                .header("etag", "\"etag-1\"")
+                .body(Full::new(Bytes::from_static(b"strip hop")))
+                .expect("response"),
+        )
+    });
+
+    start_single_route_listener(
+        &mut harness,
+        "/normalize-hop",
+        backend_addr.to_string(),
+    );
+
+    let request = ParityRequestSpec {
+        method: "GET",
+        authority: "localhost",
+        path: "/normalize-hop",
+        headers: &[],
+        body: None,
+        user_agent: "spooky-bootstrap-quic-parity-test",
+        selected_response_headers: &[
+            "cache-control",
+            "connection",
+            "content-length",
+            "content-type",
+            "etag",
+            "x-hop-token",
+        ],
+        capture_metrics_delta: false,
+    };
+    let pair = harness
+        .run_parity_pair(request)
+        .expect("response normalization parity pair");
+
+    assert_eq!(pair.quic.response.status, 200);
+    assert_eq!(pair.bootstrap.response.status, 200);
+    assert_eq!(pair.quic.response.body, b"strip hop");
+    assert_eq!(pair.bootstrap.response.body, pair.quic.response.body);
+    assert_eq!(
+        selected_header_value(&pair.quic.response, "cache-control"),
+        Some("max-age=60")
+    );
+    assert_eq!(
+        selected_header_value(&pair.bootstrap.response, "cache-control"),
+        Some("max-age=60")
+    );
+    assert_eq!(
+        selected_header_value(&pair.quic.response, "etag"),
+        Some("\"etag-1\"")
+    );
+    assert_eq!(
+        selected_header_value(&pair.bootstrap.response, "etag"),
+        Some("\"etag-1\"")
+    );
+    for stripped in ["connection", "x-hop-token"] {
+        assert_eq!(
+            selected_header_value(&pair.quic.response, stripped),
+            None,
+            "quic should strip hop header `{stripped}`"
+        );
+        assert_eq!(
+            selected_header_value(&pair.bootstrap.response, stripped),
+            None,
+            "bootstrap should strip hop header `{stripped}`"
+        );
+    }
+    assert_eq!(
+        selected_header_value(&pair.quic.response, "content-type"),
+        Some("text/plain")
+    );
+    assert_eq!(
+        selected_header_value(&pair.bootstrap.response, "content-type"),
+        Some("text/plain")
+    );
+    assert_eq!(
+        selected_header_value(&pair.quic.response, "content-length"),
+        None,
+        "quic should omit downstream content-length under HTTP/3 framing"
+    );
+    assert_eq!(
+        selected_header_value(&pair.bootstrap.response, "content-length"),
+        Some("9"),
+        "bootstrap should preserve explicit content-length under HTTP compatibility ingress"
+    );
+}
+
+#[test]
+fn bootstrap_and_quic_response_normalization_head_bodyless_contract_matches() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = BootstrapQuicParityHarness::new();
+    let backend_addr = harness.start_h1_backend(|_req: Request<Incoming>| async move {
+        Ok::<_, Infallible>(
+            Response::builder()
+                .status(200)
+                .body(Full::new(Bytes::from_static(b"hidden head body")))
+                .expect("response"),
+        )
+    });
+
+    start_single_route_listener(&mut harness, "/head", backend_addr.to_string());
+
+    let request = ParityRequestSpec {
+        method: "HEAD",
+        authority: "localhost",
+        path: "/head",
+        headers: &[],
+        body: None,
+        user_agent: "spooky-bootstrap-quic-parity-test",
+        selected_response_headers: &["content-length", "content-type"],
+        capture_metrics_delta: false,
+    };
+    let pair = harness.run_parity_pair(request).expect("head parity pair");
+
+    assert_eq!(pair.quic.response.status, 200);
+    assert_eq!(pair.bootstrap.response.status, 200);
+    assert!(pair.quic.response.body.is_empty());
+    assert!(pair.bootstrap.response.body.is_empty());
+    assert_eq!(
+        selected_header_value(&pair.quic.response, "content-type"),
+        None
+    );
+    assert_eq!(
+        selected_header_value(&pair.bootstrap.response, "content-type"),
+        None
+    );
+    assert_eq!(
+        selected_header_value(&pair.quic.response, "content-length"),
+        None
+    );
+    assert_eq!(
+        selected_header_value(&pair.bootstrap.response, "content-length"),
+        Some("16")
+    );
+}
+
+#[test]
+fn bootstrap_and_quic_response_normalization_no_content_contract_matches() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = BootstrapQuicParityHarness::new();
+    let backend_addr = harness.start_h1_backend(|_req: Request<Incoming>| async move {
+        Ok::<_, Infallible>(
+            Response::builder()
+                .status(204)
+                .body(Full::new(Bytes::new()))
+                .expect("response"),
+        )
+    });
+
+    start_single_route_listener(&mut harness, "/no-content", backend_addr.to_string());
+
+    let request = ParityRequestSpec {
+        method: "GET",
+        authority: "localhost",
+        path: "/no-content",
+        headers: &[],
+        body: None,
+        user_agent: "spooky-bootstrap-quic-parity-test",
+        selected_response_headers: &["content-length", "content-type"],
+        capture_metrics_delta: false,
+    };
+    let pair = harness
+        .run_parity_pair(request)
+        .expect("no content parity pair");
+
+    assert_eq!(pair.quic.response.status, 204);
+    assert_eq!(pair.bootstrap.response.status, 204);
+    assert!(pair.quic.response.body.is_empty());
+    assert!(pair.bootstrap.response.body.is_empty());
+    assert_eq!(
+        selected_header_value(&pair.quic.response, "content-type"),
+        None
+    );
+    assert_eq!(
+        selected_header_value(&pair.bootstrap.response, "content-type"),
+        None
+    );
+    assert_eq!(
+        selected_header_value(&pair.quic.response, "content-length"),
+        None
+    );
+    assert_eq!(
+        selected_header_value(&pair.bootstrap.response, "content-length"),
+        None
+    );
+}
+
+// Failure and guardrail parity
 
 #[test]
 #[serial]
@@ -829,380 +1112,6 @@ fn bootstrap_and_quic_slow_response_body_timeout_guardrail_contract_matches() {
 }
 
 #[test]
-fn bootstrap_and_quic_response_normalization_strip_same_hop_headers() {
-    if !local_listener_bind_available() {
-        return;
-    }
-
-    let mut harness = BootstrapQuicParityHarness::new();
-    let backend_addr = harness.start_h1_backend(|_req: Request<Incoming>| async move {
-        Ok::<_, Infallible>(
-            Response::builder()
-                .status(200)
-                .header("connection", "x-hop-token")
-                .header("x-hop-token", "secret")
-                .header("content-length", "9")
-                .header("content-type", "text/plain")
-                .header("cache-control", "max-age=60")
-                .header("etag", "\"etag-1\"")
-                .body(Full::new(Bytes::from_static(b"strip hop")))
-                .expect("response"),
-        )
-    });
-
-    let config = harness.make_config(HashMap::from([(
-        "api".to_string(),
-        make_upstream(
-            "/normalize-hop",
-            vec![make_backend("backend-a", backend_addr.to_string())],
-            None,
-            "round-robin",
-        ),
-    )]));
-    harness.start_listener(config).expect("listener with bootstrap");
-
-    let request = ParityRequestSpec {
-        method: "GET",
-        authority: "localhost",
-        path: "/normalize-hop",
-        headers: &[],
-        body: None,
-        user_agent: "spooky-bootstrap-quic-parity-test",
-        selected_response_headers: &[
-            "cache-control",
-            "connection",
-            "content-length",
-            "content-type",
-            "etag",
-            "x-hop-token",
-        ],
-        capture_metrics_delta: false,
-    };
-    let pair = harness
-        .run_parity_pair(request)
-        .expect("response normalization parity pair");
-
-    assert_eq!(pair.quic.response.status, 200);
-    assert_eq!(pair.bootstrap.response.status, 200);
-    assert_eq!(pair.quic.response.body, b"strip hop");
-    assert_eq!(pair.bootstrap.response.body, pair.quic.response.body);
-    assert_eq!(
-        selected_header_value(&pair.quic.response, "cache-control"),
-        Some("max-age=60")
-    );
-    assert_eq!(
-        selected_header_value(&pair.bootstrap.response, "cache-control"),
-        Some("max-age=60")
-    );
-    assert_eq!(
-        selected_header_value(&pair.quic.response, "etag"),
-        Some("\"etag-1\"")
-    );
-    assert_eq!(
-        selected_header_value(&pair.bootstrap.response, "etag"),
-        Some("\"etag-1\"")
-    );
-    for stripped in ["connection", "x-hop-token"] {
-        assert_eq!(
-            selected_header_value(&pair.quic.response, stripped),
-            None,
-            "quic should strip hop header `{stripped}`"
-        );
-        assert_eq!(
-            selected_header_value(&pair.bootstrap.response, stripped),
-            None,
-            "bootstrap should strip hop header `{stripped}`"
-        );
-    }
-    assert_eq!(
-        selected_header_value(&pair.quic.response, "content-type"),
-        Some("text/plain")
-    );
-    assert_eq!(
-        selected_header_value(&pair.bootstrap.response, "content-type"),
-        Some("text/plain")
-    );
-    assert_eq!(
-        selected_header_value(&pair.quic.response, "content-length"),
-        None,
-        "quic should omit downstream content-length under HTTP/3 framing"
-    );
-    assert_eq!(
-        selected_header_value(&pair.bootstrap.response, "content-length"),
-        Some("9"),
-        "bootstrap should preserve explicit content-length under HTTP compatibility ingress"
-    );
-}
-
-#[test]
-fn bootstrap_and_quic_response_normalization_head_bodyless_contract_matches() {
-    if !local_listener_bind_available() {
-        return;
-    }
-
-    let mut harness = BootstrapQuicParityHarness::new();
-    let backend_addr = harness.start_h1_backend(|_req: Request<Incoming>| async move {
-        Ok::<_, Infallible>(
-            Response::builder()
-                .status(200)
-                .body(Full::new(Bytes::from_static(b"hidden head body")))
-                .expect("response"),
-        )
-    });
-
-    let config = harness.make_config(HashMap::from([(
-        "api".to_string(),
-        make_upstream(
-            "/head",
-            vec![make_backend("backend-a", backend_addr.to_string())],
-            None,
-            "round-robin",
-        ),
-    )]));
-    harness.start_listener(config).expect("listener with bootstrap");
-
-    let request = ParityRequestSpec {
-        method: "HEAD",
-        authority: "localhost",
-        path: "/head",
-        headers: &[],
-        body: None,
-        user_agent: "spooky-bootstrap-quic-parity-test",
-        selected_response_headers: &["content-length", "content-type"],
-        capture_metrics_delta: false,
-    };
-    let pair = harness.run_parity_pair(request).expect("head parity pair");
-
-    assert_eq!(pair.quic.response.status, 200);
-    assert_eq!(pair.bootstrap.response.status, 200);
-    assert!(pair.quic.response.body.is_empty());
-    assert!(pair.bootstrap.response.body.is_empty());
-    assert_eq!(
-        selected_header_value(&pair.quic.response, "content-type"),
-        None
-    );
-    assert_eq!(
-        selected_header_value(&pair.bootstrap.response, "content-type"),
-        None
-    );
-    assert_eq!(
-        selected_header_value(&pair.quic.response, "content-length"),
-        None
-    );
-    assert_eq!(
-        selected_header_value(&pair.bootstrap.response, "content-length"),
-        Some("16")
-    );
-}
-
-#[test]
-fn bootstrap_and_quic_response_normalization_no_content_contract_matches() {
-    if !local_listener_bind_available() {
-        return;
-    }
-
-    let mut harness = BootstrapQuicParityHarness::new();
-    let backend_addr = harness.start_h1_backend(|_req: Request<Incoming>| async move {
-        Ok::<_, Infallible>(
-            Response::builder()
-                .status(204)
-                .body(Full::new(Bytes::new()))
-                .expect("response"),
-        )
-    });
-
-    let config = harness.make_config(HashMap::from([(
-        "api".to_string(),
-        make_upstream(
-            "/no-content",
-            vec![make_backend("backend-a", backend_addr.to_string())],
-            None,
-            "round-robin",
-        ),
-    )]));
-    harness.start_listener(config).expect("listener with bootstrap");
-
-    let request = ParityRequestSpec {
-        method: "GET",
-        authority: "localhost",
-        path: "/no-content",
-        headers: &[],
-        body: None,
-        user_agent: "spooky-bootstrap-quic-parity-test",
-        selected_response_headers: &["content-length", "content-type"],
-        capture_metrics_delta: false,
-    };
-    let pair = harness
-        .run_parity_pair(request)
-        .expect("no content parity pair");
-
-    assert_eq!(pair.quic.response.status, 204);
-    assert_eq!(pair.bootstrap.response.status, 204);
-    assert!(pair.quic.response.body.is_empty());
-    assert!(pair.bootstrap.response.body.is_empty());
-    assert_eq!(
-        selected_header_value(&pair.quic.response, "content-type"),
-        None
-    );
-    assert_eq!(
-        selected_header_value(&pair.bootstrap.response, "content-type"),
-        None
-    );
-    assert_eq!(
-        selected_header_value(&pair.quic.response, "content-length"),
-        None
-    );
-    assert_eq!(
-        selected_header_value(&pair.bootstrap.response, "content-length"),
-        None
-    );
-}
-
-#[test]
-#[serial]
-fn bootstrap_and_quic_admission_rate_limit_rejections_match() {
-    if !local_listener_bind_available() {
-        return;
-    }
-
-    let quic = run_scoped_rate_limit_scenario(IngressKind::Quic);
-    let bootstrap = run_scoped_rate_limit_scenario(IngressKind::Bootstrap);
-
-    assert_eq!(quic.status, 429);
-    assert_eq!(bootstrap.status, 429);
-    assert_eq!(bootstrap.status, quic.status);
-    assert_eq!(bootstrap.body, quic.body);
-    assert!(
-        quic.body.contains("request rate limited"),
-        "expected canonical rate-limit rejection body, got `{}`",
-        quic.body
-    );
-    assert_eq!(bootstrap.headers, quic.headers);
-    assert_eq!(
-        quic.headers,
-        vec![(String::from("retry-after"), String::from("1"))]
-    );
-    assert_eq!(
-        quic.upstream_calls, 1,
-        "quic rate-limit path should reject before the second upstream dispatch"
-    );
-    assert_eq!(
-        bootstrap.upstream_calls, 1,
-        "bootstrap rate-limit path should reject before the second upstream dispatch"
-    );
-}
-
-#[test]
-#[serial]
-#[ignore = "bootstrap path does not yet share post-auth admission overload semantics"]
-fn bootstrap_and_quic_admission_overload_shed_contracts_match() {
-    if !local_listener_bind_available() {
-        return;
-    }
-
-    let quic = run_overload_shed_scenario(IngressKind::Quic);
-    let bootstrap = run_overload_shed_scenario(IngressKind::Bootstrap);
-
-    assert_eq!(quic.status, 503);
-    assert_eq!(bootstrap.status, 503);
-    assert_eq!(bootstrap.body, quic.body);
-    assert!(
-        quic.body.contains("route queue cap exceeded"),
-        "expected canonical overload body, got `{}`",
-        quic.body
-    );
-    assert_eq!(bootstrap.headers, quic.headers);
-    assert_eq!(
-        quic.headers,
-        vec![(String::from("retry-after"), String::from("1"))]
-    );
-    assert_eq!(
-        quic.upstream_calls, 1,
-        "quic overload shedding should stop the second request before backend dispatch"
-    );
-    assert_eq!(
-        bootstrap.upstream_calls, 1,
-        "bootstrap overload shedding should stop the second request before backend dispatch"
-    );
-}
-
-#[test]
-#[serial]
-fn bootstrap_websocket_upgrade_is_an_explicit_quic_parity_boundary() {
-    if !local_listener_bind_available() {
-        return;
-    }
-
-    let mut harness = BootstrapQuicParityHarness::new();
-    let backend_addr = harness.start_h1_websocket_upgrade_backend();
-
-    let config = harness.make_config(HashMap::from([(
-        "api".to_string(),
-        make_upstream(
-            "/ws",
-            vec![make_backend("backend-a", backend_addr.to_string())],
-            None,
-            "round-robin",
-        ),
-    )]));
-    let listen_addr = harness.start_listener(config).expect("listener with bootstrap");
-
-    let bootstrap = run_bootstrap_h1_websocket_handshake_to(
-        listen_addr,
-        harness.cert_path(),
-        "localhost",
-        "/ws",
-    )
-    .expect("bootstrap websocket handshake");
-    let quic = run_request_to(
-        listen_addr,
-        H3RequestSpec {
-            method: "GET",
-            authority: "localhost",
-            path: "/ws",
-            headers: &[
-                ("connection", "Upgrade"),
-                ("upgrade", "websocket"),
-                ("sec-websocket-version", "13"),
-            ],
-            body: None,
-            user_agent: "spooky-bootstrap-quic-parity-test",
-        },
-    )
-    .expect("quic websocket request");
-
-    assert_eq!(
-        bootstrap.status, 101,
-        "bootstrap keeps HTTP/1.1 upgrade mechanics as a compatibility ingress contract"
-    );
-    assert!(bootstrap.body.is_empty());
-    assert_eq!(bootstrap.header("connection"), Some("upgrade"));
-    assert_eq!(bootstrap.header("upgrade"), Some("websocket"));
-    assert_eq!(bootstrap.header("sec-websocket-accept"), Some("test-accept"));
-
-    assert_eq!(
-        quic.status, 200,
-        "quic should not pretend to share bootstrap-only HTTP/1.1 switching-protocols mechanics"
-    );
-    assert!(quic.body.is_empty());
-    assert_eq!(quic.header("sec-websocket-accept"), Some("test-accept"));
-    assert_eq!(
-        quic.header("connection"),
-        None,
-        "HTTP/3 websocket tunneling should not expose bootstrap's upgrade header contract"
-    );
-    assert_eq!(
-        quic.header("upgrade"),
-        None,
-        "HTTP/3 websocket tunneling should not expose bootstrap's upgrade header contract"
-    );
-    assert_ne!(
-        bootstrap.status, quic.status,
-        "the parity suite should document websocket/upgrade as an intentional ingress boundary, not a shared contract"
-    );
-}
-
-#[test]
 #[serial]
 fn bootstrap_and_quic_outcome_recording_success_bucket_matches() {
     if !local_listener_bind_available() {
@@ -1211,17 +1120,7 @@ fn bootstrap_and_quic_outcome_recording_success_bucket_matches() {
 
     let mut harness = BootstrapQuicParityHarness::new();
     let backend_addr = harness.start_h1_static_backend(b"metrics success");
-
-    let config = harness.make_config(HashMap::from([(
-        "api".to_string(),
-        make_upstream(
-            "/metrics-success",
-            vec![make_backend("backend-a", backend_addr.to_string())],
-            None,
-            "round-robin",
-        ),
-    )]));
-    harness.start_listener(config).expect("listener with bootstrap");
+    start_single_route_listener(&mut harness, "/metrics-success", backend_addr.to_string());
 
     let request = ParityRequestSpec {
         method: "GET",
@@ -1452,6 +1351,23 @@ fn auth_protected_upstream(
     let mut upstream = make_upstream(path_prefix, backends, None, "round-robin");
     upstream.auth = auth;
     upstream
+}
+
+fn start_single_route_listener(
+    harness: &mut BootstrapQuicParityHarness,
+    path_prefix: &str,
+    backend_address: String,
+) {
+    let config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        make_upstream(
+            path_prefix,
+            vec![make_backend("backend-a", backend_address)],
+            None,
+            "round-robin",
+        ),
+    )]));
+    harness.start_listener(config).expect("listener with bootstrap");
 }
 
 fn configure_http_external_auth(
@@ -1827,6 +1743,77 @@ fn run_overload_shed_scenario(ingress: IngressKind) -> RejectionObservation {
         upstream_calls: upstream_calls.load(Ordering::Relaxed),
     }
 }
+
+// Upgrade-exception parity boundaries
+
+#[test]
+#[serial]
+fn bootstrap_websocket_upgrade_is_an_explicit_quic_parity_boundary() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = BootstrapQuicParityHarness::new();
+    let backend_addr = harness.start_h1_websocket_upgrade_backend();
+    start_single_route_listener(&mut harness, "/ws", backend_addr.to_string());
+    let listen_addr = harness.listen_addr();
+
+    let bootstrap = run_bootstrap_h1_websocket_handshake_to(
+        listen_addr,
+        harness.cert_path(),
+        "localhost",
+        "/ws",
+    )
+    .expect("bootstrap websocket handshake");
+    let quic = run_request_to(
+        listen_addr,
+        H3RequestSpec {
+            method: "GET",
+            authority: "localhost",
+            path: "/ws",
+            headers: &[
+                ("connection", "Upgrade"),
+                ("upgrade", "websocket"),
+                ("sec-websocket-version", "13"),
+            ],
+            body: None,
+            user_agent: "spooky-bootstrap-quic-parity-test",
+        },
+    )
+    .expect("quic websocket request");
+
+    assert_eq!(
+        bootstrap.status, 101,
+        "bootstrap keeps HTTP/1.1 upgrade mechanics as a compatibility ingress contract"
+    );
+    assert!(bootstrap.body.is_empty());
+    assert_eq!(bootstrap.header("connection"), Some("upgrade"));
+    assert_eq!(bootstrap.header("upgrade"), Some("websocket"));
+    assert_eq!(bootstrap.header("sec-websocket-accept"), Some("test-accept"));
+
+    assert_eq!(
+        quic.status, 200,
+        "quic should not pretend to share bootstrap-only HTTP/1.1 switching-protocols mechanics"
+    );
+    assert!(quic.body.is_empty());
+    assert_eq!(quic.header("sec-websocket-accept"), Some("test-accept"));
+    assert_eq!(
+        quic.header("connection"),
+        None,
+        "HTTP/3 websocket tunneling should not expose bootstrap's upgrade header contract"
+    );
+    assert_eq!(
+        quic.header("upgrade"),
+        None,
+        "HTTP/3 websocket tunneling should not expose bootstrap's upgrade header contract"
+    );
+    assert_ne!(
+        bootstrap.status, quic.status,
+        "the parity suite should document websocket/upgrade as an intentional ingress boundary, not a shared contract"
+    );
+}
+
+// Observability parity
 
 fn run_rate_limit_outcome_recording_scenario(ingress: IngressKind) -> OutcomeRecordingObservation {
     let mut harness = BootstrapQuicParityHarness::new();
