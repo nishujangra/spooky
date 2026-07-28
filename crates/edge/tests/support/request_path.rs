@@ -33,7 +33,10 @@ use spooky_edge::{
     REQUEST_TIMEOUT_SECS, UDP_READ_TIMEOUT_MS, runtime::listener::QUICListener,
 };
 use tempfile::{TempDir, tempdir};
-use tokio::net::TcpListener;
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+};
 use tokio_rustls::{TlsAcceptor, rustls::ServerConfig};
 
 pub struct TestTlsMaterial {
@@ -188,6 +191,13 @@ impl QuicRequestPathHarness {
         self.start_h1_backend(move |_req| async move {
             Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(body))))
         })
+    }
+
+    pub fn start_h1_chunked_backend(&mut self, chunks: Vec<&'static [u8]>) -> SocketAddr {
+        let fixture = self.rt.block_on(start_h1_chunked_backend(chunks));
+        let addr = fixture.addr;
+        self.backends.push(fixture);
+        addr
     }
 
     pub fn start_h2_backend<F, Fut>(&mut self, handler: F) -> SocketAddr
@@ -408,6 +418,71 @@ where
                 let _ = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
                     .serve_connection(TokioIo::new(tls_stream), service)
                     .await;
+            });
+        }
+    });
+
+    BackendFixture {
+        addr,
+        stop,
+        accept_task,
+    }
+}
+
+pub async fn start_h1_chunked_backend(chunks: Vec<&'static [u8]>) -> BackendFixture {
+    let listener = bind_tcp_listener();
+    let addr = listener.local_addr().expect("h1 chunked local addr");
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_flag = Arc::clone(&stop);
+
+    let accept_task = tokio::spawn(async move {
+        while !stop_flag.load(Ordering::Relaxed) {
+            let (mut stream, _) = match listener.accept().await {
+                Ok(value) => value,
+                Err(_) => break,
+            };
+            let chunks = chunks.clone();
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                let mut request = Vec::new();
+                loop {
+                    match stream.read(&mut buf).await {
+                        Ok(0) => return,
+                        Ok(read) => {
+                            request.extend_from_slice(&buf[..read]);
+                            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                                break;
+                            }
+                        }
+                        Err(_) => return,
+                    }
+                }
+
+                if stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n",
+                    )
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+
+                for chunk in chunks {
+                    let prefix = format!("{:x}\r\n", chunk.len());
+                    if stream.write_all(prefix.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    if stream.write_all(chunk).await.is_err() {
+                        return;
+                    }
+                    if stream.write_all(b"\r\n").await.is_err() {
+                        return;
+                    }
+                }
+
+                let _ = stream.write_all(b"0\r\n\r\n").await;
+                let _ = stream.shutdown().await;
             });
         }
     });
