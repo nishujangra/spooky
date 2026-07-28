@@ -819,6 +819,50 @@ mod tests {
             );
             assert!(!headers.iter().any(|header| header.name() == b"x-team"));
         }
+
+        #[test]
+        fn merge_auth_request_mutations_canonicalizes_existing_and_incoming_values() {
+            let mut existing = vec![
+                PendingHeaderMutation::Upsert {
+                    name: b"x-user".to_vec(),
+                    value: b"stale".to_vec(),
+                },
+                PendingHeaderMutation::Upsert {
+                    name: b"authorization".to_vec(),
+                    value: b"Bearer blocked".to_vec(),
+                },
+            ];
+
+            merge_auth_request_mutations(
+                &mut existing,
+                vec![
+                    PendingHeaderMutation::Upsert {
+                        name: b"X-User".to_vec(),
+                        value: b"fresh".to_vec(),
+                    },
+                    PendingHeaderMutation::Remove {
+                        name: b"x-team".to_vec(),
+                    },
+                    PendingHeaderMutation::Upsert {
+                        name: b"connection".to_vec(),
+                        value: b"close".to_vec(),
+                    },
+                ],
+            );
+
+            assert_eq!(
+                existing,
+                vec![
+                    PendingHeaderMutation::Upsert {
+                        name: b"x-user".to_vec(),
+                        value: b"fresh".to_vec(),
+                    },
+                    PendingHeaderMutation::Remove {
+                        name: b"x-team".to_vec(),
+                    },
+                ]
+            );
+        }
     }
 
     mod external_auth_response_mapping {
@@ -963,6 +1007,20 @@ mod tests {
                     ..
                 })
             ));
+        }
+
+        #[test]
+        fn map_http_external_auth_response_rejects_redirect_without_location_header() {
+            let redirect = map_http_external_auth_response(
+                ExternalAuthResponseMetadata {
+                    status: http::StatusCode::FOUND,
+                    headers: &http::HeaderMap::new(),
+                    body: &[],
+                },
+                &["location".to_string()],
+            );
+
+            assert!(matches!(redirect, Err(ProxyError::Transport(_))));
         }
 
         #[test]
@@ -1128,6 +1186,15 @@ mod tests {
             }))
             .expect_err("non-loopback http introspection endpoint must fail");
             assert!(matches!(invalid, ProxyError::Transport(_)));
+
+            let loopback = validate_oidc_provider_metadata(&json!({
+                "introspection_endpoint": "http://localhost:9000/oauth2/introspect"
+            }))
+            .expect("loopback http introspection endpoint should be allowed");
+            assert_eq!(
+                loopback.introspection_endpoint,
+                "http://localhost:9000/oauth2/introspect"
+            );
         }
 
         #[test]
@@ -1199,6 +1266,33 @@ mod tests {
                     status: http::StatusCode::GATEWAY_TIMEOUT,
                     timed_out: true,
                     ..
+                }
+            ));
+        }
+
+        #[test]
+        fn evaluate_external_auth_completion_distinguishes_fail_open_timeout_from_error() {
+            let timeout = evaluate_external_auth_completion(
+                Err(ProxyError::Timeout),
+                ExternalAuthFailureDisposition::FailOpen,
+            );
+            assert!(matches!(
+                timeout,
+                ExternalAuthCompletion::FailOpen {
+                    timed_out: true,
+                    error: None,
+                }
+            ));
+
+            let error = evaluate_external_auth_completion(
+                Err(ProxyError::Transport("dial failed".into())),
+                ExternalAuthFailureDisposition::FailOpen,
+            );
+            assert!(matches!(
+                error,
+                ExternalAuthCompletion::FailOpen {
+                    timed_out: false,
+                    error: Some(ProxyError::Transport(_)),
                 }
             ));
         }
@@ -1433,6 +1527,31 @@ mod tests {
                     body: b"external auth unavailable\n",
                     error: Some(ProxyError::Transport(_)),
                 }
+            ));
+        }
+
+        #[test]
+        fn resolve_external_auth_state_transition_fail_open_never_emits_auth_rejection() {
+            let timeout = resolve_external_auth_state_transition(
+                Err(ProxyError::Timeout),
+                ExternalAuthFailureDisposition::FailOpen,
+            );
+            let error = resolve_external_auth_state_transition(
+                Err(ProxyError::Transport("dial failed".into())),
+                ExternalAuthFailureDisposition::FailOpen,
+            );
+
+            assert!(matches!(
+                timeout,
+                ExternalAuthStateTransition::Admitted {
+                    request_header_mutations,
+                } if request_header_mutations.is_empty()
+            ));
+            assert!(matches!(
+                error,
+                ExternalAuthStateTransition::Admitted {
+                    request_header_mutations,
+                } if request_header_mutations.is_empty()
             ));
         }
     }
