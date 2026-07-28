@@ -76,9 +76,47 @@ fn configure_http_external_auth(
     harness.make_config(upstreams)
 }
 
+fn single_route_upstreams(
+    path: &str,
+    backend_id: &str,
+    backend_address: String,
+    tls: Option<UpstreamTls>,
+) -> HashMap<String, spooky_config::config::Upstream> {
+    let mut upstreams = HashMap::new();
+    upstreams.insert(
+        "api".to_string(),
+        make_upstream(
+            path,
+            vec![make_backend(backend_id, backend_address)],
+            tls,
+            "round-robin",
+        ),
+    );
+    upstreams
+}
+
+fn start_single_route_listener(
+    harness: &mut QuicRequestPathHarness,
+    path: &str,
+    backend_id: &str,
+    backend_address: String,
+    tls: Option<UpstreamTls>,
+) {
+    harness
+        .start_listener(harness.make_config(single_route_upstreams(
+            path,
+            backend_id,
+            backend_address,
+            tls,
+        )))
+        .expect("listener");
+}
+
+// Success path contracts
+
 #[test]
 #[serial]
-fn request_path_harness_supports_h1_upstream_fixture_round_trip() {
+fn quic_request_path_h1_round_trip_returns_backend_response() {
     if !local_listener_bind_available() {
         return;
     }
@@ -86,20 +124,13 @@ fn request_path_harness_supports_h1_upstream_fixture_round_trip() {
     let mut harness = QuicRequestPathHarness::new();
     let backend_addr = harness.start_h1_static_backend(b"h1 harness ok");
 
-    let mut upstreams = HashMap::new();
-    upstreams.insert(
-        "api".to_string(),
-        make_upstream(
-            "/",
-            vec![make_backend("h1-1", format!("http://{backend_addr}"))],
-            None,
-            "round-robin",
-        ),
+    start_single_route_listener(
+        &mut harness,
+        "/",
+        "h1-1",
+        format!("http://{backend_addr}"),
+        None,
     );
-
-    harness
-        .start_listener(harness.make_config(upstreams))
-        .expect("listener");
 
     let response = harness
         .run_request(H3RequestSpec::get("localhost", "/"))
@@ -110,7 +141,7 @@ fn request_path_harness_supports_h1_upstream_fixture_round_trip() {
 
 #[test]
 #[serial]
-fn request_path_harness_supports_h2_upstream_fixture_round_trip() {
+fn quic_request_path_h2_round_trip_returns_backend_response() {
     if !local_listener_bind_available() {
         return;
     }
@@ -118,24 +149,17 @@ fn request_path_harness_supports_h2_upstream_fixture_round_trip() {
     let mut harness = QuicRequestPathHarness::new();
     let backend_addr = harness.start_h2_static_backend(b"h2 harness ok");
 
-    let mut upstreams = HashMap::new();
-    upstreams.insert(
-        "api".to_string(),
-        make_upstream(
-            "/",
-            vec![make_backend("h2-1", format!("https://{backend_addr}"))],
-            Some(UpstreamTls {
-                verify_certificates: false,
-                strict_sni: false,
-                ..UpstreamTls::default()
-            }),
-            "round-robin",
-        ),
+    start_single_route_listener(
+        &mut harness,
+        "/",
+        "h2-1",
+        format!("https://{backend_addr}"),
+        Some(UpstreamTls {
+            verify_certificates: false,
+            strict_sni: false,
+            ..UpstreamTls::default()
+        }),
     );
-
-    harness
-        .start_listener(harness.make_config(upstreams))
-        .expect("listener");
 
     let response = harness
         .run_request(H3RequestSpec::get("localhost", "/"))
@@ -264,20 +288,13 @@ fn quic_to_h1_success_path_streams_response_body_to_completion() {
     let mut harness = QuicRequestPathHarness::new();
     let backend_addr = harness.start_h1_chunked_backend(vec![b"chunk-1:", b"chunk-2:", b"chunk-3"]);
 
-    let mut upstreams = HashMap::new();
-    upstreams.insert(
-        "api".to_string(),
-        make_upstream(
-            "/stream",
-            vec![make_backend("h1-stream", format!("http://{backend_addr}"))],
-            None,
-            "round-robin",
-        ),
+    start_single_route_listener(
+        &mut harness,
+        "/stream",
+        "h1-stream",
+        format!("http://{backend_addr}"),
+        None,
     );
-
-    harness
-        .start_listener(harness.make_config(upstreams))
-        .expect("listener");
 
     let response = harness
         .run_request(H3RequestSpec::get("stream.example.com", "/stream"))
@@ -414,24 +431,17 @@ fn quic_to_h2_success_path_streams_response_body_to_completion() {
     let backend_addr =
         harness.start_h2_streaming_backend(vec![b"h2-chunk-1:", b"h2-chunk-2:", b"h2-chunk-3"]);
 
-    let mut upstreams = HashMap::new();
-    upstreams.insert(
-        "api".to_string(),
-        make_upstream(
-            "/stream-h2",
-            vec![make_backend("h2-stream", format!("https://{backend_addr}"))],
-            Some(UpstreamTls {
-                verify_certificates: false,
-                strict_sni: false,
-                ..UpstreamTls::default()
-            }),
-            "round-robin",
-        ),
+    start_single_route_listener(
+        &mut harness,
+        "/stream-h2",
+        "h2-stream",
+        format!("https://{backend_addr}"),
+        Some(UpstreamTls {
+            verify_certificates: false,
+            strict_sni: false,
+            ..UpstreamTls::default()
+        }),
     );
-
-    harness
-        .start_listener(harness.make_config(upstreams))
-        .expect("listener");
 
     let response = harness
         .run_request(H3RequestSpec::get("stream.example.com", "/stream-h2"))
@@ -439,6 +449,8 @@ fn quic_to_h2_success_path_streams_response_body_to_completion() {
     response.assert_status(200);
     response.assert_body_text("h2-chunk-1:h2-chunk-2:h2-chunk-3");
 }
+
+// Rejection path contracts
 
 #[test]
 #[serial]
@@ -979,6 +991,8 @@ fn quic_request_path_external_auth_timeout_fail_open_allows_backend() {
     assert_eq!(backend_calls.load(Ordering::Relaxed), 1);
 }
 
+// Upstream failure contracts
+
 #[test]
 #[serial]
 fn quic_request_path_backend_timeout_maps_to_upstream_timeout() {
@@ -1106,6 +1120,8 @@ fn quic_request_path_malformed_upstream_response_maps_to_upstream_error() {
         "expected canonical malformed upstream response failure body"
     );
 }
+
+// Body and stream guardrail contracts
 
 #[test]
 #[serial]
@@ -1285,6 +1301,8 @@ fn quic_request_path_slow_response_body_before_first_chunk_returns_timeout() {
         "expected canonical upstream timeout body for stalled response body stream"
     );
 }
+
+// Observable outcome parity contracts
 
 #[test]
 #[serial]
