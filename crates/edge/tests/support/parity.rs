@@ -5,11 +5,11 @@ use std::{collections::HashMap, convert::Infallible, net::SocketAddr};
 use bytes::Bytes;
 use http_body_util::Full;
 use hyper::{Request, Response, body::Incoming};
+use spooky_config::config::{Backend, Config, Upstream, UpstreamTls};
 
 use super::request_path::{
     BootstrapRequestSpec, BootstrapResponse, H3RequestSpec, H3Response, QuicRequestPathHarness,
 };
-use spooky_config::config::{Backend, Config, Upstream, UpstreamTls};
 
 #[derive(Clone, Copy)]
 pub struct ParityRequestSpec<'a> {
@@ -242,7 +242,10 @@ fn select_headers(
     selected
 }
 
-fn join_metrics_delta(before: Option<String>, after: Option<String>) -> Option<MetricsDeltaSnapshot> {
+fn join_metrics_delta(
+    before: Option<String>,
+    after: Option<String>,
+) -> Option<MetricsDeltaSnapshot> {
     match (before, after) {
         (Some(before), Some(after)) => Some(MetricsDeltaSnapshot { before, after }),
         _ => None,

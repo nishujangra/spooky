@@ -27,8 +27,7 @@ use super::{
     request::{
         BootstrapBuildRequestInput, BootstrapPolicyEvaluationInput, BootstrapRequestMode,
         BootstrapTerminalOutcome, build_bootstrap_upstream_request,
-        evaluate_bootstrap_external_auth,
-        evaluate_bootstrap_request_policy,
+        evaluate_bootstrap_external_auth, evaluate_bootstrap_request_policy,
     },
     response::{BootstrapWritebackInput, boxed_full, write_bootstrap_response},
     startup::{

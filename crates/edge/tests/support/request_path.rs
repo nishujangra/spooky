@@ -45,7 +45,7 @@ use tokio::{
     net::{TcpListener, TcpStream},
 };
 use tokio_rustls::{
-    TlsConnector, TlsAcceptor,
+    TlsAcceptor, TlsConnector,
     rustls::{ClientConfig, RootCertStore, ServerConfig, pki_types::ServerName},
 };
 
@@ -208,12 +208,9 @@ impl QuicRequestPathHarness {
             .map_err(|err| format!("bootstrap listener: {err}"))?;
         let socket = QUICListener::bind_socket(&listener_config, false)
             .map_err(|err| format!("bind socket: {err}"))?;
-        let listener = QUICListener::new_with_socket_and_shared_state(
-            listener_config,
-            socket,
-            shared_state,
-        )
-        .map_err(|err| format!("listener with shared state: {err}"))?;
+        let listener =
+            QUICListener::new_with_socket_and_shared_state(listener_config, socket, shared_state)
+                .map_err(|err| format!("listener with shared state: {err}"))?;
         self.metrics = Some(Arc::clone(&listener.metrics));
         let listen_addr = listener
             .socket
@@ -326,8 +323,11 @@ impl QuicRequestPathHarness {
         let listen_addr = self
             .listen_addr
             .ok_or_else(|| "listener not started".to_string())?;
-        self.rt
-            .block_on(run_bootstrap_h2_request(listen_addr, &self.tls.cert_path, request))
+        self.rt.block_on(run_bootstrap_h2_request(
+            listen_addr,
+            &self.tls.cert_path,
+            request,
+        ))
     }
 }
 
@@ -562,7 +562,11 @@ async fn run_bootstrap_h2_request(
 
     let body = request.body.unwrap_or_default().to_vec();
     let req = builder
-        .body(Full::new(Bytes::from(body)).map_err(|never| match never {}).boxed())
+        .body(
+            Full::new(Bytes::from(body))
+                .map_err(|never| match never {})
+                .boxed(),
+        )
         .map_err(|err| format!("request build: {err}"))?;
     let response = sender
         .send_request(req)

@@ -25,8 +25,8 @@ use support::{
     net::local_listener_bind_available,
     parity::{BootstrapQuicParityHarness, ParityRequestSpec, make_backend, make_upstream},
     request_path::{
-        BootstrapRequestSpec, H3RequestSpec, run_bootstrap_request_to, run_request_to,
-        run_bootstrap_h1_websocket_handshake_to, run_two_chunk_bootstrap_post_to,
+        BootstrapRequestSpec, H3RequestSpec, run_bootstrap_h1_websocket_handshake_to,
+        run_bootstrap_request_to, run_request_to, run_two_chunk_bootstrap_post_to,
         run_two_chunk_post_to,
     },
 };
@@ -62,7 +62,9 @@ fn bootstrap_and_quic_parity_harness_collects_canonical_response_shape() {
     );
 
     let config = harness.make_config(upstreams);
-    harness.start_listener(config).expect("listener with bootstrap");
+    harness
+        .start_listener(config)
+        .expect("listener with bootstrap");
 
     let mut request = ParityRequestSpec::get("localhost", "/");
     request.selected_response_headers = &["x-parity"];
@@ -74,7 +76,10 @@ fn bootstrap_and_quic_parity_harness_collects_canonical_response_shape() {
     assert_eq!(pair.bootstrap.response.status, 200);
     assert_eq!(pair.quic.response.body, pair.bootstrap.response.body);
     assert_eq!(pair.quic.response.body, b"parity ok\n");
-    assert_eq!(pair.quic.response.selected_headers, pair.bootstrap.response.selected_headers);
+    assert_eq!(
+        pair.quic.response.selected_headers,
+        pair.bootstrap.response.selected_headers
+    );
     assert_eq!(
         pair.quic.response.selected_headers,
         vec![(String::from("x-parity"), String::from("ok"))]
@@ -152,12 +157,32 @@ fn bootstrap_and_quic_route_resolution_choose_the_same_route_and_backend_result(
     ]);
 
     let config = harness.make_config(upstreams);
-    harness.start_listener(config).expect("listener with bootstrap");
+    harness
+        .start_listener(config)
+        .expect("listener with bootstrap");
 
     let cases = [
-        ("GET", "api.example.com", "/payments/charge", "payments get\n", "payments-get"),
-        ("POST", "api.example.com", "/payments/charge", "payments post\n", "payments-post"),
-        ("GET", "admin.example.com", "/admin/audit", "admin get\n", "admin-get"),
+        (
+            "GET",
+            "api.example.com",
+            "/payments/charge",
+            "payments get\n",
+            "payments-get",
+        ),
+        (
+            "POST",
+            "api.example.com",
+            "/payments/charge",
+            "payments post\n",
+            "payments-post",
+        ),
+        (
+            "GET",
+            "admin.example.com",
+            "/admin/audit",
+            "admin get\n",
+            "admin-get",
+        ),
     ];
 
     for (method, authority, path, expected_body, expected_backend) in cases {
@@ -198,8 +223,7 @@ fn bootstrap_and_quic_route_resolution_choose_the_same_route_and_backend_result(
             "quic should surface the selected backend marker for {method} {authority}{path}"
         );
         assert_eq!(
-            pair.bootstrap.response.selected_headers,
-            pair.quic.response.selected_headers,
+            pair.bootstrap.response.selected_headers, pair.quic.response.selected_headers,
             "bootstrap and quic should expose the same backend-selection result for {method} {authority}{path}"
         );
     }
@@ -226,10 +250,14 @@ fn bootstrap_and_quic_route_resolution_share_observable_unrouted_behavior() {
     )]);
 
     let config = harness.make_config(upstreams);
-    harness.start_listener(config).expect("listener with bootstrap");
+    harness
+        .start_listener(config)
+        .expect("listener with bootstrap");
 
     let request = ParityRequestSpec::get("unknown.example.com", "/missing");
-    let pair = harness.run_parity_pair(request).expect("unrouted parity pair");
+    let pair = harness
+        .run_parity_pair(request)
+        .expect("unrouted parity pair");
 
     assert_eq!(pair.quic.response.status, 502);
     assert_eq!(pair.bootstrap.response.status, 502);
@@ -264,7 +292,9 @@ fn bootstrap_and_quic_local_api_key_auth_decisions_match() {
     )]);
 
     let config = harness.make_config(upstreams);
-    harness.start_listener(config).expect("listener with bootstrap");
+    harness
+        .start_listener(config)
+        .expect("listener with bootstrap");
 
     let deny_request = ParityRequestSpec {
         method: "GET",
@@ -287,7 +317,10 @@ fn bootstrap_and_quic_local_api_key_auth_decisions_match() {
         deny_pair.bootstrap.response.selected_headers,
         deny_pair.quic.response.selected_headers
     );
-    assert_eq!(deny_pair.bootstrap.response.body, deny_pair.quic.response.body);
+    assert_eq!(
+        deny_pair.bootstrap.response.body,
+        deny_pair.quic.response.body
+    );
     assert!(
         String::from_utf8_lossy(&deny_pair.quic.response.body).contains("unauthorized"),
         "expected canonical unauthorized body for api key rejection"
@@ -297,11 +330,16 @@ fn bootstrap_and_quic_local_api_key_auth_decisions_match() {
         headers: &[("x-api-key", "edge-key")],
         ..deny_request
     };
-    let allow_pair = harness.run_parity_pair(allow_request).expect("api key allow");
+    let allow_pair = harness
+        .run_parity_pair(allow_request)
+        .expect("api key allow");
     assert_eq!(allow_pair.quic.response.status, 200);
     assert_eq!(allow_pair.bootstrap.response.status, 200);
     assert_eq!(allow_pair.quic.response.body, b"api key ok\n");
-    assert_eq!(allow_pair.bootstrap.response.body, allow_pair.quic.response.body);
+    assert_eq!(
+        allow_pair.bootstrap.response.body,
+        allow_pair.quic.response.body
+    );
 }
 
 #[test]
@@ -334,7 +372,9 @@ fn bootstrap_and_quic_local_jwt_auth_decisions_match() {
     )]);
 
     let config = harness.make_config(upstreams);
-    harness.start_listener(config).expect("listener with bootstrap");
+    harness
+        .start_listener(config)
+        .expect("listener with bootstrap");
 
     let deny_request = ParityRequestSpec {
         method: "GET",
@@ -357,7 +397,10 @@ fn bootstrap_and_quic_local_jwt_auth_decisions_match() {
         deny_pair.bootstrap.response.selected_headers,
         deny_pair.quic.response.selected_headers
     );
-    assert_eq!(deny_pair.bootstrap.response.body, deny_pair.quic.response.body);
+    assert_eq!(
+        deny_pair.bootstrap.response.body,
+        deny_pair.quic.response.body
+    );
     assert!(
         String::from_utf8_lossy(&deny_pair.quic.response.body).contains("unauthorized"),
         "expected canonical unauthorized body for jwt rejection"
@@ -382,7 +425,10 @@ fn bootstrap_and_quic_local_jwt_auth_decisions_match() {
     assert_eq!(allow_pair.quic.response.status, 200);
     assert_eq!(allow_pair.bootstrap.response.status, 200);
     assert_eq!(allow_pair.quic.response.body, b"jwt ok\n");
-    assert_eq!(allow_pair.bootstrap.response.body, allow_pair.quic.response.body);
+    assert_eq!(
+        allow_pair.bootstrap.response.body,
+        allow_pair.quic.response.body
+    );
 }
 
 #[test]
@@ -473,9 +519,14 @@ fn bootstrap_and_quic_external_auth_decisions_match() {
             format!("http://{auth_addr}/check"),
             250,
             ExternalAuthFailureMode::FailClosed,
-            case.allowlist.iter().map(|value| (*value).to_string()).collect(),
+            case.allowlist
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
         );
-        harness.start_listener(config).expect("listener with bootstrap");
+        harness
+            .start_listener(config)
+            .expect("listener with bootstrap");
 
         let request = ParityRequestSpec {
             method: "GET",
@@ -502,14 +553,12 @@ fn bootstrap_and_quic_external_auth_decisions_match() {
             case.name
         );
         assert_eq!(
-            pair.quic.response.body,
-            case.expected_body,
+            pair.quic.response.body, case.expected_body,
             "quic external auth body mismatch for case `{}`",
             case.name
         );
         assert_eq!(
-            pair.bootstrap.response.body,
-            case.expected_body,
+            pair.bootstrap.response.body, case.expected_body,
             "bootstrap external auth body mismatch for case `{}`",
             case.name
         );
@@ -520,8 +569,7 @@ fn bootstrap_and_quic_external_auth_decisions_match() {
             case.name
         );
         assert_eq!(
-            pair.bootstrap.response.selected_headers,
-            pair.quic.response.selected_headers,
+            pair.bootstrap.response.selected_headers, pair.quic.response.selected_headers,
             "bootstrap and quic external auth headers should match for case `{}`",
             case.name
         );
@@ -620,11 +668,7 @@ fn bootstrap_and_quic_response_normalization_strip_same_hop_headers() {
         )
     });
 
-    start_single_route_listener(
-        &mut harness,
-        "/normalize-hop",
-        backend_addr.to_string(),
-    );
+    start_single_route_listener(&mut harness, "/normalize-hop", backend_addr.to_string());
 
     let request = ParityRequestSpec {
         method: "GET",
@@ -822,9 +866,7 @@ fn bootstrap_and_quic_upstream_timeout_failures_share_observable_bucket() {
         async move {
             backend_observed.fetch_add(1, Ordering::Relaxed);
             tokio::time::sleep(Duration::from_millis(300)).await;
-            Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(
-                b"too late",
-            ))))
+            Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(b"too late"))))
         }
     });
 
@@ -839,10 +881,14 @@ fn bootstrap_and_quic_upstream_timeout_failures_share_observable_bucket() {
     )]));
     config.performance.backend_timeout_ms = 150;
     config.performance.backend_connect_timeout_ms = 150;
-    harness.start_listener(config).expect("listener with bootstrap");
+    harness
+        .start_listener(config)
+        .expect("listener with bootstrap");
 
     let request = ParityRequestSpec::get("localhost", "/timeout");
-    let pair = harness.run_parity_pair(request).expect("timeout parity pair");
+    let pair = harness
+        .run_parity_pair(request)
+        .expect("timeout parity pair");
 
     assert_timeout_bucket(&pair.quic.response);
     assert_timeout_bucket(&pair.bootstrap.response);
@@ -873,7 +919,9 @@ fn bootstrap_and_quic_connect_failures_share_observable_bucket() {
     )]));
     config.performance.backend_timeout_ms = 150;
     config.performance.backend_connect_timeout_ms = 150;
-    harness.start_listener(config).expect("listener with bootstrap");
+    harness
+        .start_listener(config)
+        .expect("listener with bootstrap");
 
     let request = ParityRequestSpec::get("localhost", "/connect-fail");
     let pair = harness
@@ -910,7 +958,9 @@ fn bootstrap_and_quic_malformed_upstream_responses_share_observable_bucket() {
     )]));
     config.performance.backend_timeout_ms = 150;
     config.performance.backend_connect_timeout_ms = 150;
-    harness.start_listener(config).expect("listener with bootstrap");
+    harness
+        .start_listener(config)
+        .expect("listener with bootstrap");
 
     let request = ParityRequestSpec::get("localhost", "/malformed");
     let pair = harness
@@ -946,7 +996,9 @@ fn bootstrap_and_quic_request_body_too_large_guardrail_contract_matches() {
         ),
     )]));
     config.performance.max_request_body_bytes = 1024;
-    let listen_addr = harness.start_listener(config).expect("listener with bootstrap");
+    let listen_addr = harness
+        .start_listener(config)
+        .expect("listener with bootstrap");
 
     let (quic_response, got_reset) = run_two_chunk_post_to(
         listen_addr,
@@ -1004,7 +1056,9 @@ fn bootstrap_and_quic_request_body_idle_timeout_guardrail_contract_matches() {
     config.performance.client_body_idle_timeout_ms = 120;
     config.performance.backend_body_total_timeout_ms = 10_000;
     config.performance.backend_total_request_timeout_ms = 10_000;
-    let listen_addr = harness.start_listener(config).expect("listener with bootstrap");
+    let listen_addr = harness
+        .start_listener(config)
+        .expect("listener with bootstrap");
 
     let (quic_response, got_reset) = run_two_chunk_post_to(
         listen_addr,
@@ -1030,7 +1084,9 @@ fn bootstrap_and_quic_request_body_idle_timeout_guardrail_contract_matches() {
     assert_eq!(bootstrap_response.status, 408);
     assert_eq!(bootstrap_response.body, quic_response.body);
     assert!(
-        quic_response.body_text().contains("request body idle timeout"),
+        quic_response
+            .body_text()
+            .contains("request body idle timeout"),
         "expected canonical request body idle-timeout body"
     );
     assert!(
@@ -1061,7 +1117,9 @@ fn bootstrap_and_quic_unknown_length_response_prebuffer_guardrail_contract_match
     )]));
     config.performance.max_response_body_bytes = 64 * 1024;
     config.performance.unknown_length_response_prebuffer_bytes = 8;
-    harness.start_listener(config).expect("listener with bootstrap");
+    harness
+        .start_listener(config)
+        .expect("listener with bootstrap");
 
     let pair = harness
         .run_parity_pair(ParityRequestSpec::get("localhost", "/long-stream"))
@@ -1070,7 +1128,10 @@ fn bootstrap_and_quic_unknown_length_response_prebuffer_guardrail_contract_match
     assert_eq!(pair.quic.response.status, 503);
     assert_eq!(pair.bootstrap.response.status, 503);
     assert_eq!(pair.bootstrap.response.body, pair.quic.response.body);
-    assert_eq!(pair.quic.response.body, b"upstream response body too large\n");
+    assert_eq!(
+        pair.quic.response.body,
+        b"upstream response body too large\n"
+    );
 }
 
 #[test]
@@ -1100,7 +1161,9 @@ fn bootstrap_and_quic_slow_response_body_timeout_guardrail_contract_matches() {
     config.performance.backend_connect_timeout_ms = 100;
     config.performance.backend_body_total_timeout_ms = 5_000;
     config.performance.backend_body_idle_timeout_ms = 120;
-    harness.start_listener(config).expect("listener with bootstrap");
+    harness
+        .start_listener(config)
+        .expect("listener with bootstrap");
 
     let pair = harness
         .run_parity_pair(ParityRequestSpec::get("localhost", "/slow-stream"))
@@ -1176,7 +1239,9 @@ fn bootstrap_and_quic_outcome_recording_failure_bucket_matches() {
     )]));
     config.performance.backend_timeout_ms = 150;
     config.performance.backend_connect_timeout_ms = 150;
-    harness.start_listener(config).expect("listener with bootstrap");
+    harness
+        .start_listener(config)
+        .expect("listener with bootstrap");
 
     let request = ParityRequestSpec {
         method: "GET",
@@ -1219,9 +1284,7 @@ fn bootstrap_and_quic_outcome_recording_timeout_bucket_matches() {
     let mut harness = BootstrapQuicParityHarness::new();
     let backend_addr = harness.start_h1_backend(|_req: Request<Incoming>| async move {
         tokio::time::sleep(Duration::from_millis(300)).await;
-        Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(
-            b"too late",
-        ))))
+        Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(b"too late"))))
     });
 
     let mut config = harness.make_config(HashMap::from([(
@@ -1235,7 +1298,9 @@ fn bootstrap_and_quic_outcome_recording_timeout_bucket_matches() {
     )]));
     config.performance.backend_timeout_ms = 150;
     config.performance.backend_connect_timeout_ms = 150;
-    harness.start_listener(config).expect("listener with bootstrap");
+    harness
+        .start_listener(config)
+        .expect("listener with bootstrap");
 
     let request = ParityRequestSpec {
         method: "GET",
@@ -1281,7 +1346,10 @@ fn bootstrap_and_quic_outcome_recording_rate_limited_bucket_matches() {
     assert_eq!(quic.response.status, 429);
     assert_eq!(bootstrap.response.status, 429);
     assert_eq!(bootstrap.response.body, quic.response.body);
-    assert_eq!(bootstrap.response.selected_headers, quic.response.selected_headers);
+    assert_eq!(
+        bootstrap.response.selected_headers,
+        quic.response.selected_headers
+    );
     let expected = OutcomeRecordingBuckets {
         success: true,
         failure: true,
@@ -1309,7 +1377,10 @@ fn bootstrap_and_quic_outcome_recording_overload_bucket_matches() {
     assert_eq!(quic.rejection.status, 503);
     assert_eq!(bootstrap.rejection.status, 503);
     assert_eq!(bootstrap.rejection.body, quic.rejection.body);
-    assert_eq!(bootstrap.rejection.selected_headers, quic.rejection.selected_headers);
+    assert_eq!(
+        bootstrap.rejection.selected_headers,
+        quic.rejection.selected_headers
+    );
     let expected = OutcomeRecordingBuckets {
         success: true,
         failure: true,
@@ -1367,7 +1438,9 @@ fn start_single_route_listener(
             "round-robin",
         ),
     )]));
-    harness.start_listener(config).expect("listener with bootstrap");
+    harness
+        .start_listener(config)
+        .expect("listener with bootstrap");
 }
 
 fn configure_http_external_auth(
@@ -1623,7 +1696,9 @@ fn run_scoped_rate_limit_scenario(ingress: IngressKind) -> RejectionObservation 
         idle_ttl_secs: 300,
     }];
 
-    harness.start_listener(config).expect("listener with bootstrap");
+    harness
+        .start_listener(config)
+        .expect("listener with bootstrap");
 
     let success = run_parity_ingress_request(
         ingress,
@@ -1691,7 +1766,9 @@ fn run_overload_shed_scenario(ingress: IngressKind) -> RejectionObservation {
     config.performance.global_inflight_limit = 64;
     config.resilience.route_queue.default_cap = 1;
     config.resilience.route_queue.global_cap = 64;
-    harness.start_listener(config).expect("listener with bootstrap");
+    harness
+        .start_listener(config)
+        .expect("listener with bootstrap");
     let listen_addr = harness.listen_addr();
     let cert_path = harness.cert_path().to_string();
 
@@ -1789,7 +1866,10 @@ fn bootstrap_websocket_upgrade_is_an_explicit_quic_parity_boundary() {
     assert!(bootstrap.body.is_empty());
     assert_eq!(bootstrap.header("connection"), Some("upgrade"));
     assert_eq!(bootstrap.header("upgrade"), Some("websocket"));
-    assert_eq!(bootstrap.header("sec-websocket-accept"), Some("test-accept"));
+    assert_eq!(
+        bootstrap.header("sec-websocket-accept"),
+        Some("test-accept")
+    );
 
     assert_eq!(
         quic.status, 200,
@@ -1847,7 +1927,9 @@ fn run_rate_limit_outcome_recording_scenario(ingress: IngressKind) -> OutcomeRec
         route_allowlist: vec!["api".to_string()],
         idle_ttl_secs: 300,
     }];
-    harness.start_listener(config).expect("listener with bootstrap");
+    harness
+        .start_listener(config)
+        .expect("listener with bootstrap");
 
     let success = run_parity_ingress_observation(
         ingress,
@@ -1922,7 +2004,9 @@ fn run_overload_outcome_recording_scenario(
     config.performance.global_inflight_limit = 64;
     config.resilience.route_queue.default_cap = 1;
     config.resilience.route_queue.global_cap = 64;
-    harness.start_listener(config).expect("listener with bootstrap");
+    harness
+        .start_listener(config)
+        .expect("listener with bootstrap");
 
     let before = harness
         .metrics_text()
