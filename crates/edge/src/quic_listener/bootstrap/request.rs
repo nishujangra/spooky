@@ -28,14 +28,21 @@ use super::{
             AdmissionPolicyDecision, admission_rejection_response,
             evaluate_forwarding_pre_admission_policy,
         },
-        forwarding::BootstrapTargetResolutionInput,
+        forwarding::{BootstrapTargetResolutionInput, evaluate_pending_forward_external_auth},
     },
     context::BootstrapRequestCtx,
     intake::{BootstrapRequestIntake, bootstrap_error_response},
     outcome::{observe_bootstrap_admission_outcome, observe_bootstrap_request_proxy_error},
     response::{BootstrapStreamingBody, boxed_full},
 };
-use crate::runtime::connection::outcome::AdmissionOutcomeClass;
+use crate::runtime::connection::{
+    auth::{
+        ExternalAuthDecision, ExternalAuthStateTransition, PendingHeaderMutation,
+        apply_auth_request_mutations,
+    },
+    outcome::AdmissionOutcomeClass,
+    request::PendingForward,
+};
 
 /// The bootstrap request lifecycle stages, mirroring the QUIC data path so the
 /// same reasoning applies at the currently emitted terminal boundaries.
@@ -236,6 +243,7 @@ pub(in crate::quic_listener) struct BootstrapBuildRequestInput<'a> {
     pub(in crate::quic_listener) request_ctx: BootstrapRequestCtx<'a>,
     pub(in crate::quic_listener) request_id: u64,
     pub(in crate::quic_listener) traceparent: Option<&'a str>,
+    pub(in crate::quic_listener) request_header_mutations: Vec<PendingHeaderMutation>,
 }
 
 fn bootstrap_bridge_headers(headers: &HeaderMap) -> Vec<quiche::h3::Header> {
@@ -243,6 +251,139 @@ fn bootstrap_bridge_headers(headers: &HeaderMap) -> Vec<quiche::h3::Header> {
         .iter()
         .map(|(name, value)| quiche::h3::Header::new(name.as_str().as_bytes(), value.as_bytes()))
         .collect()
+}
+
+fn bootstrap_pending_forward(
+    request: &Request<Incoming>,
+    intake: &BootstrapRequestIntake,
+    prepared_route: &BootstrapPreparedRoute,
+    request_ctx: BootstrapRequestCtx<'_>,
+    request_id: u64,
+    traceparent: Option<&str>,
+) -> Arc<PendingForward> {
+    Arc::new(PendingForward {
+        method: Arc::<str>::from(intake.method.as_str()),
+        path: Arc::<str>::from(intake.path.as_str()),
+        authority: intake.authority.as_deref().map(Arc::<str>::from),
+        headers: Arc::new(bootstrap_bridge_headers(request.headers())),
+        upstream_name: Arc::<str>::from(prepared_route.upstream_name.as_str()),
+        route_reason: Arc::<str>::from("bootstrap"),
+        route_path_len: intake.path.len(),
+        route_host_specific: intake.authority.is_some(),
+        backend_addr: Arc::<str>::from(prepared_route.backend_addr.as_str()),
+        backend_index: prepared_route.backend_index,
+        backend_lb: None,
+        client_addr: request_ctx.peer,
+        request_id,
+        trace_id: None,
+        span_id: None,
+        traceparent: traceparent.map(Arc::<str>::from),
+        host_policy: prepared_route.upstream_policy.host.0.clone(),
+        forwarded_header_policy: prepared_route.upstream_policy.forwarded_headers.0.clone(),
+        auth_header_mutations: Vec::new(),
+    })
+}
+
+fn bootstrap_external_auth_response(
+    alt_svc: &str,
+    decision: &ExternalAuthDecision,
+) -> Response<BoxBody<Bytes, Infallible>> {
+    let mut builder = Response::builder().header("alt-svc", alt_svc);
+    match decision {
+        ExternalAuthDecision::Allow {
+            request_header_mutations: _,
+        } => Response::new(boxed_full(Bytes::new())),
+        ExternalAuthDecision::Deny(response) => {
+            builder = builder.status(response.status);
+            for (name, value) in &response.headers {
+                builder = builder.header(name, value);
+            }
+            builder
+                .body(boxed_full(Bytes::copy_from_slice(&response.body)))
+                .unwrap_or_else(|_| Response::new(boxed_full(Bytes::from_static(b"error\n"))))
+        }
+        ExternalAuthDecision::Redirect(response) => {
+            builder = builder.status(response.status);
+            for (name, value) in &response.headers {
+                builder = builder.header(name, value);
+            }
+            builder = builder.header("location", &response.location);
+            builder
+                .body(boxed_full(Bytes::new()))
+                .unwrap_or_else(|_| Response::new(boxed_full(Bytes::from_static(b"error\n"))))
+        }
+        ExternalAuthDecision::Challenge(response) => {
+            builder = builder.status(response.status);
+            for (name, value) in &response.headers {
+                builder = builder.header(name, value);
+            }
+            builder = builder.header("www-authenticate", &response.www_authenticate);
+            builder
+                .body(boxed_full(Bytes::copy_from_slice(&response.body)))
+                .unwrap_or_else(|_| Response::new(boxed_full(Bytes::from_static(b"error\n"))))
+        }
+    }
+}
+
+pub(in crate::quic_listener) async fn evaluate_bootstrap_external_auth(
+    request: &Request<Incoming>,
+    intake: &BootstrapRequestIntake,
+    prepared_route: &BootstrapPreparedRoute,
+    request_ctx: BootstrapRequestCtx<'_>,
+    request_id: u64,
+    traceparent: Option<&str>,
+) -> BootstrapTerminalResult<Vec<PendingHeaderMutation>> {
+    let Some(external_auth) = prepared_route
+        .upstream_policy
+        .upstream_auth
+        .external_auth
+        .clone()
+    else {
+        return Ok(Vec::new());
+    };
+
+    let pending_forward = bootstrap_pending_forward(
+        request,
+        intake,
+        prepared_route,
+        request_ctx,
+        request_id,
+        traceparent,
+    );
+    match evaluate_pending_forward_external_auth(pending_forward, external_auth).await {
+        ExternalAuthStateTransition::Admitted {
+            request_header_mutations,
+        } => {
+            request_ctx.runtime.metrics.inc_external_auth_allowed();
+            Ok(request_header_mutations)
+        }
+        ExternalAuthStateTransition::RejectedAuthDenied { decision } => {
+            request_ctx.runtime.metrics.inc_external_auth_denied();
+            Err(BootstrapTerminalResponse::new(
+                BootstrapLifecycleStage::AdmitOrReject,
+                BootstrapTerminalOutcome::Rejected(BootstrapRejectionReason::AuthDenied),
+                bootstrap_external_auth_response(&request_ctx.runtime.alt_svc, &decision),
+            ))
+        }
+        ExternalAuthStateTransition::RejectedAuthUnavailable { status, body, .. } => {
+            request_ctx.runtime.metrics.inc_external_auth_error();
+            Err(BootstrapTerminalResponse::new(
+                BootstrapLifecycleStage::AdmitOrReject,
+                BootstrapTerminalOutcome::BackendFailed(
+                    BootstrapBackendFailureReason::DispatchFailed,
+                ),
+                bootstrap_error_response(&request_ctx.runtime.alt_svc, status, body),
+            ))
+        }
+        ExternalAuthStateTransition::TimedOutAuth { status, body } => {
+            request_ctx.runtime.metrics.inc_external_auth_timeout();
+            Err(BootstrapTerminalResponse::new(
+                BootstrapLifecycleStage::AdmitOrReject,
+                BootstrapTerminalOutcome::TimedOut(BootstrapTimeoutReason::Upstream),
+                bootstrap_error_response(&request_ctx.runtime.alt_svc, status, body),
+            ))
+        }
+    }
 }
 
 fn bootstrap_request_build_target<'a>(
@@ -577,7 +718,8 @@ pub(in crate::quic_listener) fn evaluate_bootstrap_request_policy(
 pub(in crate::quic_listener) fn build_bootstrap_upstream_request(
     input: BootstrapBuildRequestInput<'_>,
 ) -> Result<Request<BoxBody<Bytes, Infallible>>, BridgeError> {
-    let bridge_headers = bootstrap_bridge_headers(input.request.headers());
+    let mut bridge_headers = bootstrap_bridge_headers(input.request.headers());
+    apply_auth_request_mutations(&mut bridge_headers, &input.request_header_mutations);
     let request_target = bootstrap_request_build_target(
         &input.prepared_route.endpoint,
         &input.prepared_route.upstream_policy,

@@ -194,14 +194,21 @@ fn select_headers(
     headers: Vec<(String, String)>,
     selected_response_headers: &[&str],
 ) -> Vec<(String, String)> {
-    headers
+    let mut selected = headers
         .into_iter()
         .filter(|(name, _)| {
             selected_response_headers
                 .iter()
                 .any(|selected| name.eq_ignore_ascii_case(selected))
         })
-        .collect()
+        .collect::<Vec<_>>();
+    selected.sort_by(|left, right| {
+        left.0
+            .to_ascii_lowercase()
+            .cmp(&right.0.to_ascii_lowercase())
+            .then_with(|| left.1.cmp(&right.1))
+    });
+    selected
 }
 
 fn join_metrics_delta(before: Option<String>, after: Option<String>) -> Option<MetricsDeltaSnapshot> {

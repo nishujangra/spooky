@@ -27,6 +27,7 @@ use super::{
     request::{
         BootstrapBuildRequestInput, BootstrapPolicyEvaluationInput, BootstrapRequestMode,
         BootstrapTerminalOutcome, build_bootstrap_upstream_request,
+        evaluate_bootstrap_external_auth,
         evaluate_bootstrap_request_policy,
     },
     response::{BootstrapWritebackInput, boxed_full, write_bootstrap_response},
@@ -348,6 +349,21 @@ pub(in crate::quic_listener) fn spawn_bootstrap_tls_listener(
                                 request_mode,
                                 client_upgrade: None,
                             };
+                            let request_header_mutations = match evaluate_bootstrap_external_auth(
+                                &req,
+                                &intake_for_build,
+                                &prepared_route,
+                                request_ctx,
+                                request_id,
+                                traceparent.as_deref(),
+                            )
+                            .await
+                            {
+                                Ok(mutations) => mutations,
+                                Err(terminal) => {
+                                    return Ok(terminal.into_observed_response(request_id));
+                                }
+                            };
                             let upstream_req = match build_bootstrap_upstream_request(
                                 BootstrapBuildRequestInput {
                                     request: req,
@@ -356,6 +372,7 @@ pub(in crate::quic_listener) fn spawn_bootstrap_tls_listener(
                                     request_ctx,
                                     request_id,
                                     traceparent: traceparent.as_deref(),
+                                    request_header_mutations,
                                 },
                             ) {
                                 Ok(request) => request,
