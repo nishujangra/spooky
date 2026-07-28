@@ -204,6 +204,16 @@ impl QuicRequestPathHarness {
         addr
     }
 
+    pub fn start_h1_delayed_chunked_backend(
+        &mut self,
+        chunks: Vec<(Vec<u8>, Duration)>,
+    ) -> SocketAddr {
+        let fixture = self.rt.block_on(start_h1_delayed_chunked_backend(chunks));
+        let addr = fixture.addr;
+        self.backends.push(fixture);
+        addr
+    }
+
     pub fn start_h1_raw_response_backend(&mut self, response_bytes: Vec<u8>) -> SocketAddr {
         let fixture = self
             .rt
@@ -367,6 +377,203 @@ impl H3Response {
 
 pub fn run_request_to(addr: SocketAddr, request: H3RequestSpec<'_>) -> Result<H3Response, String> {
     run_h3_request(addr, request)
+}
+
+pub fn run_two_chunk_post_to(
+    addr: SocketAddr,
+    authority: &str,
+    path: &str,
+    chunk1: Vec<u8>,
+    chunk2: Vec<u8>,
+    delay_between_chunks: Duration,
+) -> Result<(H3Response, bool), String> {
+    let socket = UdpSocket::bind("0.0.0.0:0").map_err(|err| err.to_string())?;
+    let local_addr = socket.local_addr().map_err(|err| err.to_string())?;
+
+    let total_len = chunk1.len() + chunk2.len();
+    let mut config =
+        quiche::Config::new(quiche::PROTOCOL_VERSION).map_err(|err| format!("config: {err:?}"))?;
+    config.verify_peer(false);
+    config
+        .set_application_protos(quiche::h3::APPLICATION_PROTOCOL)
+        .map_err(|err| format!("alpn: {err:?}"))?;
+    config.set_max_idle_timeout(QUIC_IDLE_TIMEOUT_MS);
+    config.set_max_recv_udp_payload_size(MAX_UDP_PAYLOAD_BYTES);
+    config.set_max_send_udp_payload_size(MAX_UDP_PAYLOAD_BYTES);
+    let window = (total_len as u64 + 1) * 2;
+    config.set_initial_max_data(window * 4);
+    config.set_initial_max_stream_data_bidi_local(window);
+    config.set_initial_max_stream_data_bidi_remote(window);
+    config.set_initial_max_stream_data_uni(window);
+    config.set_initial_max_streams_bidi(QUIC_INITIAL_MAX_STREAMS_BIDI);
+    config.set_initial_max_streams_uni(QUIC_INITIAL_MAX_STREAMS_UNI);
+    config.set_disable_active_migration(true);
+
+    let mut scid_bytes = [0u8; quiche::MAX_CONN_ID_LEN];
+    rand::thread_rng().fill_bytes(&mut scid_bytes);
+    let scid = quiche::ConnectionId::from_ref(&scid_bytes);
+    let mut conn = quiche::connect(Some("localhost"), &scid, local_addr, addr, &mut config)
+        .map_err(|err| format!("connect: {err:?}"))?;
+    let h3_config = quiche::h3::Config::new().map_err(|err| format!("h3: {err:?}"))?;
+    let mut h3: Option<quiche::h3::Connection> = None;
+
+    let mut out = [0u8; MAX_UDP_PAYLOAD_BYTES];
+    let mut buf = [0u8; MAX_DATAGRAM_SIZE_BYTES];
+    let start = Instant::now();
+    let mut stream_id: Option<u64> = None;
+    let mut chunk1_written = 0usize;
+    let mut chunk2_written = 0usize;
+    let mut chunk2_ready_at: Option<Instant> = None;
+    let mut status = 0u16;
+    let mut headers = Vec::new();
+    let mut body = Vec::new();
+    let mut got_reset = false;
+
+    let (write, send_info) = conn
+        .send(&mut out)
+        .map_err(|err| format!("send: {err:?}"))?;
+    socket
+        .send_to(&out[..write], send_info.to)
+        .map_err(|err| format!("send_to: {err:?}"))?;
+
+    loop {
+        loop {
+            match conn.send(&mut out) {
+                Ok((write, send_info)) => {
+                    let _ = socket.send_to(&out[..write], send_info.to);
+                }
+                Err(quiche::Error::Done) => break,
+                Err(err) => return Err(format!("send loop: {err:?}")),
+            }
+        }
+
+        socket
+            .set_read_timeout(Some(quic_read_timeout(&conn)))
+            .map_err(|err| format!("timeout: {err:?}"))?;
+
+        match socket.recv_from(&mut buf) {
+            Ok((len, from)) => {
+                conn.recv(
+                    &mut buf[..len],
+                    quiche::RecvInfo {
+                        from,
+                        to: local_addr,
+                    },
+                )
+                .map_err(|err| format!("recv: {err:?}"))?;
+            }
+            Err(ref err)
+                if err.kind() == std::io::ErrorKind::WouldBlock
+                    || err.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                conn.on_timeout();
+            }
+            Err(err) => return Err(format!("recv: {err:?}")),
+        }
+
+        if conn.is_established() && h3.is_none() {
+            h3 = Some(
+                quiche::h3::Connection::with_transport(&mut conn, &h3_config)
+                    .map_err(|err| format!("h3 conn: {err:?}"))?,
+            );
+        }
+
+        if let Some(h3_conn) = h3.as_mut() {
+            if stream_id.is_none() && conn.is_established() {
+                let content_length = total_len.to_string();
+                let headers_list = vec![
+                    quiche::h3::Header::new(b":method", b"POST"),
+                    quiche::h3::Header::new(b":scheme", b"https"),
+                    quiche::h3::Header::new(b":authority", authority.as_bytes()),
+                    quiche::h3::Header::new(b":path", path.as_bytes()),
+                    quiche::h3::Header::new(b"user-agent", b"spooky-request-path-test"),
+                    quiche::h3::Header::new(b"content-length", content_length.as_bytes()),
+                ];
+                stream_id = Some(
+                    h3_conn
+                        .send_request(&mut conn, &headers_list, false)
+                        .map_err(|err| format!("send_request: {err:?}"))?,
+                );
+            }
+
+            if let Some(sid) = stream_id {
+                if chunk1_written < chunk1.len() {
+                    match h3_conn.send_body(&mut conn, sid, &chunk1[chunk1_written..], false) {
+                        Ok(written) => {
+                            chunk1_written += written;
+                            if chunk1_written == chunk1.len() {
+                                chunk2_ready_at = Some(Instant::now() + delay_between_chunks);
+                            }
+                        }
+                        Err(quiche::h3::Error::Done | quiche::h3::Error::StreamBlocked) => {}
+                        Err(err) => return Err(format!("send_body chunk1: {err:?}")),
+                    }
+                } else if chunk2_written < chunk2.len()
+                    && chunk2_ready_at.is_some_and(|deadline| Instant::now() >= deadline)
+                {
+                    match h3_conn.send_body(&mut conn, sid, &chunk2[chunk2_written..], true) {
+                        Ok(written) => chunk2_written += written,
+                        Err(quiche::h3::Error::Done | quiche::h3::Error::StreamBlocked) => {}
+                        Err(err) => return Err(format!("send_body chunk2: {err:?}")),
+                    }
+                }
+            }
+
+            loop {
+                match h3_conn.poll(&mut conn) {
+                    Ok((_stream_id, quiche::h3::Event::Headers { list, .. })) => {
+                        for header in &list {
+                            let name = String::from_utf8_lossy(header.name()).to_string();
+                            let value = String::from_utf8_lossy(header.value()).to_string();
+                            if name == ":status" {
+                                status = value.parse::<u16>().unwrap_or_default();
+                            }
+                            headers.push((name, value));
+                        }
+                    }
+                    Ok((stream_id, quiche::h3::Event::Data)) => loop {
+                        match h3_conn.recv_body(&mut conn, stream_id, &mut buf) {
+                            Ok(read) => body.extend_from_slice(&buf[..read]),
+                            Err(quiche::h3::Error::Done) => break,
+                            Err(err) => return Err(format!("recv_body: {err:?}")),
+                        }
+                    },
+                    Ok((_stream_id, quiche::h3::Event::Finished)) => {
+                        return Ok((
+                            H3Response {
+                                status,
+                                headers,
+                                body,
+                            },
+                            got_reset,
+                        ));
+                    }
+                    Ok((_stream_id, quiche::h3::Event::Reset(_))) => {
+                        got_reset = true;
+                        return Ok((
+                            H3Response {
+                                status,
+                                headers,
+                                body,
+                            },
+                            got_reset,
+                        ));
+                    }
+                    Ok((_stream_id, quiche::h3::Event::PriorityUpdate)) => {}
+                    Ok((_stream_id, quiche::h3::Event::GoAway)) => {}
+                    Err(quiche::h3::Error::Done) => break,
+                    Err(err) => return Err(format!("poll: {err:?}")),
+                }
+            }
+        }
+
+        if start.elapsed() > Duration::from_secs(REQUEST_TIMEOUT_SECS + 4) {
+            return Err(format!(
+                "timeout waiting for response (status={status}, body_len={}, got_reset={got_reset})",
+                body.len()
+            ));
+        }
+    }
 }
 
 pub async fn start_h1_backend<F, Fut>(handler: F) -> BackendFixture
@@ -556,6 +763,76 @@ pub async fn start_h1_chunked_backend(chunks: Vec<&'static [u8]>) -> BackendFixt
                         return;
                     }
                     if stream.write_all(chunk).await.is_err() {
+                        return;
+                    }
+                    if stream.write_all(b"\r\n").await.is_err() {
+                        return;
+                    }
+                }
+
+                let _ = stream.write_all(b"0\r\n\r\n").await;
+                let _ = stream.shutdown().await;
+            });
+        }
+    });
+
+    BackendFixture {
+        addr,
+        stop,
+        accept_task,
+    }
+}
+
+pub async fn start_h1_delayed_chunked_backend(chunks: Vec<(Vec<u8>, Duration)>) -> BackendFixture {
+    let listener = bind_tcp_listener();
+    let addr = listener
+        .local_addr()
+        .expect("h1 delayed chunked local addr");
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_flag = Arc::clone(&stop);
+
+    let accept_task = tokio::spawn(async move {
+        while !stop_flag.load(Ordering::Relaxed) {
+            let (mut stream, _) = match listener.accept().await {
+                Ok(value) => value,
+                Err(_) => break,
+            };
+            let chunks = chunks.clone();
+            tokio::spawn(async move {
+                let mut buf = [0u8; 4096];
+                let mut request = Vec::new();
+                loop {
+                    match stream.read(&mut buf).await {
+                        Ok(0) => return,
+                        Ok(read) => {
+                            request.extend_from_slice(&buf[..read]);
+                            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                                break;
+                            }
+                        }
+                        Err(_) => return,
+                    }
+                }
+
+                if stream
+                    .write_all(
+                        b"HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ntransfer-encoding: chunked\r\nconnection: close\r\n\r\n",
+                    )
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+
+                for (chunk, delay) in chunks {
+                    if !delay.is_zero() {
+                        tokio::time::sleep(delay).await;
+                    }
+                    let prefix = format!("{:x}\r\n", chunk.len());
+                    if stream.write_all(prefix.as_bytes()).await.is_err() {
+                        return;
+                    }
+                    if stream.write_all(&chunk).await.is_err() {
                         return;
                     }
                     if stream.write_all(b"\r\n").await.is_err() {
