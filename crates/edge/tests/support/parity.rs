@@ -180,6 +180,10 @@ impl BootstrapQuicParityHarness {
         &self.inner.tls.cert_path
     }
 
+    pub fn metrics_text(&self) -> Option<String> {
+        self.inner.metrics_text()
+    }
+
     fn capture_metrics(&self, enabled: bool) -> Option<String> {
         enabled.then(|| self.inner.metrics_text()).flatten()
     }

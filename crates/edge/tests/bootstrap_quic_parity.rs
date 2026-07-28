@@ -1125,6 +1125,228 @@ fn bootstrap_and_quic_admission_overload_shed_contracts_match() {
     );
 }
 
+#[test]
+#[serial]
+fn bootstrap_and_quic_outcome_recording_success_bucket_matches() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = BootstrapQuicParityHarness::new();
+    let backend_addr = harness.start_h1_static_backend(b"metrics success");
+
+    let config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        make_upstream(
+            "/metrics-success",
+            vec![make_backend("backend-a", backend_addr.to_string())],
+            None,
+            "round-robin",
+        ),
+    )]));
+    harness.start_listener(config).expect("listener with bootstrap");
+
+    let request = ParityRequestSpec {
+        method: "GET",
+        authority: "localhost",
+        path: "/metrics-success",
+        headers: &[],
+        body: None,
+        user_agent: "spooky-bootstrap-quic-parity-test",
+        selected_response_headers: &[],
+        capture_metrics_delta: true,
+    };
+    let pair = harness
+        .run_parity_pair(request)
+        .expect("success outcome parity pair");
+
+    assert_eq!(pair.quic.response.status, 200);
+    assert_eq!(pair.bootstrap.response.status, 200);
+
+    let quic = OutcomeRecordingDelta::from_snapshot(require_metrics_delta(&pair.quic), "api");
+    let bootstrap =
+        OutcomeRecordingDelta::from_snapshot(require_metrics_delta(&pair.bootstrap), "api");
+    let expected = OutcomeRecordingBuckets {
+        success: true,
+        failure: false,
+        timeout: false,
+        overload_shed: false,
+        rate_limited: false,
+    };
+    assert_eq!(quic.coarse_buckets(), expected);
+    assert_eq!(bootstrap.coarse_buckets(), expected);
+}
+
+#[test]
+#[serial]
+fn bootstrap_and_quic_outcome_recording_failure_bucket_matches() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = BootstrapQuicParityHarness::new();
+    let unused_listener = TcpListener::bind("127.0.0.1:0").expect("bind unused backend port");
+    let unused_addr = unused_listener.local_addr().expect("unused backend addr");
+    drop(unused_listener);
+
+    let mut config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        make_upstream(
+            "/metrics-failure",
+            vec![make_backend("backend-a", format!("http://{unused_addr}"))],
+            None,
+            "round-robin",
+        ),
+    )]));
+    config.performance.backend_timeout_ms = 150;
+    config.performance.backend_connect_timeout_ms = 150;
+    harness.start_listener(config).expect("listener with bootstrap");
+
+    let request = ParityRequestSpec {
+        method: "GET",
+        authority: "localhost",
+        path: "/metrics-failure",
+        headers: &[],
+        body: None,
+        user_agent: "spooky-bootstrap-quic-parity-test",
+        selected_response_headers: &[],
+        capture_metrics_delta: true,
+    };
+    let pair = harness
+        .run_parity_pair(request)
+        .expect("failure outcome parity pair");
+
+    assert_eq!(pair.quic.response.status, 502);
+    assert_eq!(pair.bootstrap.response.status, 502);
+
+    let quic = OutcomeRecordingDelta::from_snapshot(require_metrics_delta(&pair.quic), "api");
+    let bootstrap =
+        OutcomeRecordingDelta::from_snapshot(require_metrics_delta(&pair.bootstrap), "api");
+    let expected = OutcomeRecordingBuckets {
+        success: false,
+        failure: true,
+        timeout: false,
+        overload_shed: false,
+        rate_limited: false,
+    };
+    assert_eq!(quic.coarse_buckets(), expected);
+    assert_eq!(bootstrap.coarse_buckets(), expected);
+}
+
+#[test]
+#[serial]
+fn bootstrap_and_quic_outcome_recording_timeout_bucket_matches() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = BootstrapQuicParityHarness::new();
+    let backend_addr = harness.start_h1_backend(|_req: Request<Incoming>| async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(
+            b"too late",
+        ))))
+    });
+
+    let mut config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        make_upstream(
+            "/metrics-timeout",
+            vec![make_backend("backend-a", backend_addr.to_string())],
+            None,
+            "round-robin",
+        ),
+    )]));
+    config.performance.backend_timeout_ms = 150;
+    config.performance.backend_connect_timeout_ms = 150;
+    harness.start_listener(config).expect("listener with bootstrap");
+
+    let request = ParityRequestSpec {
+        method: "GET",
+        authority: "localhost",
+        path: "/metrics-timeout",
+        headers: &[],
+        body: None,
+        user_agent: "spooky-bootstrap-quic-parity-test",
+        selected_response_headers: &[],
+        capture_metrics_delta: true,
+    };
+    let pair = harness
+        .run_parity_pair(request)
+        .expect("timeout outcome parity pair");
+
+    assert_timeout_bucket(&pair.quic.response);
+    assert_timeout_bucket(&pair.bootstrap.response);
+
+    let quic = OutcomeRecordingDelta::from_snapshot(require_metrics_delta(&pair.quic), "api");
+    let bootstrap =
+        OutcomeRecordingDelta::from_snapshot(require_metrics_delta(&pair.bootstrap), "api");
+    let expected = OutcomeRecordingBuckets {
+        success: false,
+        failure: true,
+        timeout: true,
+        overload_shed: false,
+        rate_limited: false,
+    };
+    assert_eq!(quic.coarse_buckets(), expected);
+    assert_eq!(bootstrap.coarse_buckets(), expected);
+}
+
+#[test]
+#[serial]
+fn bootstrap_and_quic_outcome_recording_rate_limited_bucket_matches() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let quic = run_rate_limit_outcome_recording_scenario(IngressKind::Quic);
+    let bootstrap = run_rate_limit_outcome_recording_scenario(IngressKind::Bootstrap);
+
+    assert_eq!(quic.response.status, 429);
+    assert_eq!(bootstrap.response.status, 429);
+    assert_eq!(bootstrap.response.body, quic.response.body);
+    assert_eq!(bootstrap.response.selected_headers, quic.response.selected_headers);
+    let expected = OutcomeRecordingBuckets {
+        success: true,
+        failure: true,
+        timeout: false,
+        overload_shed: false,
+        rate_limited: true,
+    };
+    assert_eq!(quic.metrics.coarse_buckets(), expected);
+    assert_eq!(bootstrap.metrics.coarse_buckets(), expected);
+    assert_eq!(quic.upstream_calls, 1);
+    assert_eq!(bootstrap.upstream_calls, 1);
+}
+
+#[test]
+#[serial]
+#[ignore = "bootstrap path does not yet share post-auth admission overload semantics"]
+fn bootstrap_and_quic_outcome_recording_overload_bucket_matches() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let quic = run_overload_outcome_recording_scenario(IngressKind::Quic);
+    let bootstrap = run_overload_outcome_recording_scenario(IngressKind::Bootstrap);
+
+    assert_eq!(quic.rejection.status, 503);
+    assert_eq!(bootstrap.rejection.status, 503);
+    assert_eq!(bootstrap.rejection.body, quic.rejection.body);
+    assert_eq!(bootstrap.rejection.selected_headers, quic.rejection.selected_headers);
+    let expected = OutcomeRecordingBuckets {
+        success: true,
+        failure: true,
+        timeout: false,
+        overload_shed: true,
+        rate_limited: false,
+    };
+    assert_eq!(quic.metrics.coarse_buckets(), expected);
+    assert_eq!(bootstrap.metrics.coarse_buckets(), expected);
+    assert_eq!(quic.upstream_calls, 1);
+    assert_eq!(bootstrap.upstream_calls, 1);
+}
+
 fn routed_upstream(
     host: Option<&str>,
     path_prefix: &str,
@@ -1233,6 +1455,111 @@ fn assert_timeout_bucket(response: &support::parity::ParityResponseSnapshot) {
     );
 }
 
+fn require_metrics_delta(
+    observation: &support::parity::ParityObservation,
+) -> &support::parity::MetricsDeltaSnapshot {
+    observation
+        .metrics_delta
+        .as_ref()
+        .expect("parity observation should include metrics delta")
+}
+
+fn metrics_counter(metrics: &str, prefix: &str) -> u64 {
+    metrics
+        .lines()
+        .find_map(|line| line.strip_prefix(prefix))
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or_else(|| panic!("missing metrics counter `{prefix}` in metrics:\n{metrics}"))
+}
+
+fn metrics_delta(before: &str, after: &str, prefix: &str) -> u64 {
+    metrics_counter(after, prefix).saturating_sub(metrics_counter(before, prefix))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OutcomeRecordingDelta {
+    requests_success: u64,
+    requests_failure: u64,
+    route_success: u64,
+    route_failure: u64,
+    route_timeout: u64,
+    route_overload_shed: u64,
+    route_rate_limited: u64,
+}
+
+impl OutcomeRecordingDelta {
+    fn from_snapshot(snapshot: &support::parity::MetricsDeltaSnapshot, route: &str) -> Self {
+        Self::from_texts(&snapshot.before, &snapshot.after, route)
+    }
+
+    fn from_texts(before: &str, after: &str, route: &str) -> Self {
+        Self {
+            requests_success: metrics_delta(before, after, "spooky_requests_success "),
+            requests_failure: metrics_delta(before, after, "spooky_requests_failure "),
+            route_success: metrics_delta(
+                before,
+                after,
+                &format!("spooky_route_success_total{{route=\"{route}\"}} "),
+            ),
+            route_failure: metrics_delta(
+                before,
+                after,
+                &format!("spooky_route_failure_total{{route=\"{route}\"}} "),
+            ),
+            route_timeout: metrics_delta(
+                before,
+                after,
+                &format!("spooky_route_timeout_total{{route=\"{route}\"}} "),
+            ),
+            route_overload_shed: metrics_delta(
+                before,
+                after,
+                &format!("spooky_route_overload_shed_total{{route=\"{route}\"}} "),
+            ),
+            route_rate_limited: metrics_delta(
+                before,
+                after,
+                &format!("spooky_route_rate_limited_total{{route=\"{route}\"}} "),
+            ),
+        }
+    }
+
+    fn saturating_add(self, other: Self) -> Self {
+        Self {
+            requests_success: self.requests_success.saturating_add(other.requests_success),
+            requests_failure: self.requests_failure.saturating_add(other.requests_failure),
+            route_success: self.route_success.saturating_add(other.route_success),
+            route_failure: self.route_failure.saturating_add(other.route_failure),
+            route_timeout: self.route_timeout.saturating_add(other.route_timeout),
+            route_overload_shed: self
+                .route_overload_shed
+                .saturating_add(other.route_overload_shed),
+            route_rate_limited: self
+                .route_rate_limited
+                .saturating_add(other.route_rate_limited),
+        }
+    }
+
+    fn coarse_buckets(self) -> OutcomeRecordingBuckets {
+        OutcomeRecordingBuckets {
+            success: self.requests_success > 0 || self.route_success > 0,
+            failure: self.requests_failure > 0 || self.route_failure > 0,
+            timeout: self.route_timeout > 0,
+            overload_shed: self.route_overload_shed > 0,
+            rate_limited: self.route_rate_limited > 0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct OutcomeRecordingBuckets {
+    success: bool,
+    failure: bool,
+    timeout: bool,
+    overload_shed: bool,
+    rate_limited: bool,
+}
+
 #[derive(Clone, Copy)]
 struct ExternalAuthParityCase<'a> {
     name: &'a str,
@@ -1255,6 +1582,18 @@ struct RejectionObservation {
     status: u16,
     body: String,
     headers: Vec<(String, String)>,
+    upstream_calls: usize,
+}
+
+struct OutcomeRecordingObservation {
+    response: support::parity::ParityResponseSnapshot,
+    metrics: OutcomeRecordingDelta,
+    upstream_calls: usize,
+}
+
+struct OverloadOutcomeRecordingObservation {
+    rejection: support::parity::ParityResponseSnapshot,
+    metrics: OutcomeRecordingDelta,
     upstream_calls: usize,
 }
 
@@ -1412,6 +1751,173 @@ fn run_overload_shed_scenario(ingress: IngressKind) -> RejectionObservation {
     }
 }
 
+fn run_rate_limit_outcome_recording_scenario(ingress: IngressKind) -> OutcomeRecordingObservation {
+    let mut harness = BootstrapQuicParityHarness::new();
+    let upstream_calls = Arc::new(AtomicUsize::new(0));
+    let backend_observed = Arc::clone(&upstream_calls);
+    let backend_addr = harness.start_h1_backend(move |_req: Request<Incoming>| {
+        let backend_observed = Arc::clone(&backend_observed);
+        async move {
+            backend_observed.fetch_add(1, Ordering::Relaxed);
+            Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(
+                b"rate-limit ok",
+            ))))
+        }
+    });
+
+    let mut config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        make_upstream(
+            "/metrics-rate-limit",
+            vec![make_backend("backend-a", backend_addr.to_string())],
+            None,
+            "round-robin",
+        ),
+    )]));
+    config.resilience.scoped_rate_limits = vec![ScopedRateLimit {
+        name: "route-cap".to_string(),
+        scope: ScopedRateLimitScope::Route,
+        requests_per_sec: 1,
+        burst: 1,
+        key: None,
+        route_allowlist: vec!["api".to_string()],
+        idle_ttl_secs: 300,
+    }];
+    harness.start_listener(config).expect("listener with bootstrap");
+
+    let success = run_parity_ingress_observation(
+        ingress,
+        &harness,
+        ParityRequestSpec {
+            method: "GET",
+            authority: "localhost",
+            path: "/metrics-rate-limit",
+            headers: &[],
+            body: None,
+            user_agent: "spooky-bootstrap-quic-parity-test",
+            selected_response_headers: &[],
+            capture_metrics_delta: true,
+        },
+    )
+    .expect("first request should complete");
+    assert_eq!(success.response.status, 200);
+
+    let rejection = run_parity_ingress_observation(
+        ingress,
+        &harness,
+        ParityRequestSpec {
+            method: "GET",
+            authority: "localhost",
+            path: "/metrics-rate-limit",
+            headers: &[],
+            body: None,
+            user_agent: "spooky-bootstrap-quic-parity-test",
+            selected_response_headers: &["retry-after"],
+            capture_metrics_delta: true,
+        },
+    )
+    .expect("rate-limited request should complete");
+
+    let metrics = OutcomeRecordingDelta::from_snapshot(require_metrics_delta(&success), "api")
+        .saturating_add(OutcomeRecordingDelta::from_snapshot(
+            require_metrics_delta(&rejection),
+            "api",
+        ));
+
+    OutcomeRecordingObservation {
+        response: rejection.response,
+        metrics,
+        upstream_calls: upstream_calls.load(Ordering::Relaxed),
+    }
+}
+
+fn run_overload_outcome_recording_scenario(
+    ingress: IngressKind,
+) -> OverloadOutcomeRecordingObservation {
+    let mut harness = BootstrapQuicParityHarness::new();
+    let upstream_calls = Arc::new(AtomicUsize::new(0));
+    let backend_observed = Arc::clone(&upstream_calls);
+    let backend_addr = harness.start_h1_backend(move |_req: Request<Incoming>| {
+        let backend_observed = Arc::clone(&backend_observed);
+        async move {
+            backend_observed.fetch_add(1, Ordering::Relaxed);
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(b"slow ok"))))
+        }
+    });
+
+    let mut config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        make_upstream(
+            "/metrics-overload",
+            vec![make_backend("backend-a", backend_addr.to_string())],
+            None,
+            "round-robin",
+        ),
+    )]));
+    config.performance.global_inflight_limit = 64;
+    config.resilience.route_queue.default_cap = 1;
+    config.resilience.route_queue.global_cap = 64;
+    harness.start_listener(config).expect("listener with bootstrap");
+
+    let before = harness
+        .metrics_text()
+        .expect("metrics snapshot before overload scenario");
+    let listen_addr = harness.listen_addr();
+    let cert_path = harness.cert_path().to_string();
+
+    let first_request = thread::spawn({
+        let cert_path = cert_path.clone();
+        move || {
+            execute_ingress_request(
+                ingress,
+                listen_addr,
+                &cert_path,
+                ParityRequestSpec::get("localhost", "/metrics-overload"),
+            )
+        }
+    });
+
+    for _ in 0..50 {
+        if upstream_calls.load(Ordering::Relaxed) > 0 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    let rejection = execute_ingress_request(
+        ingress,
+        listen_addr,
+        &cert_path,
+        ParityRequestSpec {
+            method: "GET",
+            authority: "localhost",
+            path: "/metrics-overload",
+            headers: &[],
+            body: None,
+            user_agent: "spooky-bootstrap-quic-parity-test",
+            selected_response_headers: &["retry-after"],
+            capture_metrics_delta: false,
+        },
+    )
+    .expect("second request should complete");
+    let first_response = first_request
+        .join()
+        .expect("first request thread")
+        .expect("first request should complete");
+    assert_eq!(first_response.status, 200);
+
+    let after = harness
+        .metrics_text()
+        .expect("metrics snapshot after overload scenario");
+
+    OverloadOutcomeRecordingObservation {
+        rejection,
+        metrics: OutcomeRecordingDelta::from_texts(&before, &after, "api"),
+        upstream_calls: upstream_calls.load(Ordering::Relaxed),
+    }
+}
+
 fn run_parity_ingress_request(
     ingress: IngressKind,
     harness: &BootstrapQuicParityHarness,
@@ -1422,6 +1928,17 @@ fn run_parity_ingress_request(
         IngressKind::Bootstrap => harness.run_bootstrap(request)?,
     };
     Ok(observation.response)
+}
+
+fn run_parity_ingress_observation(
+    ingress: IngressKind,
+    harness: &BootstrapQuicParityHarness,
+    request: ParityRequestSpec<'_>,
+) -> Result<support::parity::ParityObservation, String> {
+    match ingress {
+        IngressKind::Quic => harness.run_quic(request),
+        IngressKind::Bootstrap => harness.run_bootstrap(request),
+    }
 }
 
 fn execute_ingress_request(
