@@ -376,6 +376,15 @@ mod tests {
     use super::*;
 
     mod runtime_snapshot_rendering {
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+        use crate::runtime::backend::state::{
+            BackendIdentity, BackendResolutionState, CanonicalBackendLifecycleSnapshot,
+        };
+        use crate::runtime::backend::{
+            resolution::RuntimeBackendAddressKind, state::BackendPoolPlacementSnapshot,
+        };
+
         use super::*;
 
         #[test]
@@ -427,6 +436,84 @@ mod tests {
             };
             let json = serde_json::to_string(&without).expect("serialize");
             assert!(!json.contains("health_reason"));
+        }
+
+        #[test]
+        fn backend_inventory_payload_preserves_optional_health_reason_and_field_meaning() {
+            let inventory = BackendLifecycleInventorySnapshot {
+                backends: vec![
+                    CanonicalBackendLifecycleSnapshot {
+                        identity: BackendIdentity::new("backend-a"),
+                        resolution: BackendResolutionState {
+                            authority_host: "backend-a.internal".into(),
+                            authority_port: 8443,
+                            address_kind: RuntimeBackendAddressKind::Hostname,
+                            resolved_addrs: vec![SocketAddr::new(
+                                IpAddr::V4(Ipv4Addr::new(10, 0, 0, 10)),
+                                8443,
+                            )],
+                            last_refresh_success_at: None,
+                            refresh_generation: 4,
+                        },
+                        health: BackendHealthState::Unhealthy {
+                            reason: Some(HealthFailureReason::Timeout),
+                        },
+                        membership: BackendMembershipState::Suppressed,
+                        placements: Vec::new(),
+                    },
+                    CanonicalBackendLifecycleSnapshot {
+                        identity: BackendIdentity::new("backend-b"),
+                        resolution: BackendResolutionState {
+                            authority_host: "backend-b.internal".into(),
+                            authority_port: 9443,
+                            address_kind: RuntimeBackendAddressKind::IpLiteral,
+                            resolved_addrs: vec![SocketAddr::new(
+                                IpAddr::V4(Ipv4Addr::new(10, 0, 0, 11)),
+                                9443,
+                            )],
+                            last_refresh_success_at: None,
+                            refresh_generation: 2,
+                        },
+                        health: BackendHealthState::Healthy,
+                        membership: BackendMembershipState::Active,
+                        placements: vec![BackendPoolPlacementSnapshot {
+                            upstream_name: "api".into(),
+                            backend_index: 0,
+                            healthy: true,
+                            active_requests: 1,
+                            ewma_latency_ms: Some(12.5),
+                            membership_epoch: 9,
+                        }],
+                    },
+                ],
+            };
+
+            let payload = ControlApiBackendInventoryPayload::from_inventory(inventory, 1, 1);
+            let json = serde_json::to_value(payload).expect("serialize backend inventory");
+            let lifecycle = json["lifecycle"].as_array().expect("lifecycle array");
+
+            assert_eq!(lifecycle[0]["backend"], "backend-a");
+            assert_eq!(lifecycle[0]["health"], "unhealthy");
+            assert_eq!(lifecycle[0]["health_reason"], "timeout");
+            assert_eq!(lifecycle[0]["membership"], "suppressed");
+            assert_eq!(lifecycle[0]["authority_host"], "backend-a.internal");
+            assert_eq!(lifecycle[0]["authority_port"], 8443);
+            assert_eq!(lifecycle[0]["resolution_generation"], 4);
+
+            assert_eq!(lifecycle[1]["backend"], "backend-b");
+            assert_eq!(lifecycle[1]["health"], "healthy");
+            assert!(
+                lifecycle[1].get("health_reason").is_none(),
+                "healthy payloads must omit optional health_reason"
+            );
+            assert_eq!(lifecycle[1]["membership"], "active");
+            assert_eq!(
+                lifecycle[1]["placements"]
+                    .as_array()
+                    .expect("placements")
+                    .len(),
+                1
+            );
         }
     }
 }

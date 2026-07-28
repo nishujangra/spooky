@@ -150,6 +150,10 @@ async fn full_body_bytes(response: Response<http_body_util::Full<Bytes>>) -> Byt
         .to_bytes()
 }
 
+async fn json_body(response: Response<http_body_util::Full<Bytes>>) -> serde_json::Value {
+    serde_json::from_slice(&full_body_bytes(response).await).expect("json response body")
+}
+
 fn default_control_api_state() -> ControlApiState {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
@@ -502,6 +506,116 @@ fn control_api_backend_inventory_and_summary_share_one_canonical_snapshot_contra
     assert!(backend.placements[0].healthy);
     assert_eq!(summary.total_backends, 1);
     assert_eq!(summary.healthy_backends, 1);
+}
+
+#[tokio::test]
+async fn control_api_runtime_snapshot_renders_live_generation_listener_and_backend_contract() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let mut startup = test_config(cert.clone(), key.clone());
+    startup.observability.control_api.enabled = true;
+
+    let startup_bundle = runtime_bundle_from_config("startup.yaml", &startup);
+    let (state, runtime_handle) = runtime_bundle_control_api_state(startup_bundle);
+
+    let mut reloaded = startup.clone();
+    reloaded.listeners = vec![
+        Listen {
+            protocol: "http3".to_string(),
+            port: 9890,
+            address: "127.0.0.1".to_string(),
+            tls: Tls {
+                cert: cert.clone(),
+                key: key.clone(),
+                certificates: vec![],
+                client_auth: ClientAuth {
+                    enabled: true,
+                    ca_file: Some(cert.clone()),
+                    require_client_cert: true,
+                },
+            },
+        },
+        startup.listen.clone(),
+    ];
+    reloaded.observability.metrics.path = "/metrics-live".to_string();
+
+    let mut reloaded_bundle = runtime_bundle_from_config("reloaded.yaml", &reloaded);
+    reloaded_bundle.generation = 1;
+    runtime_handle
+        .replace(reloaded_bundle)
+        .expect("replace runtime bundle");
+
+    let live = runtime_handle.current_view();
+    live.shared_services()
+        .metrics
+        .requests_total
+        .store(11, std::sync::atomic::Ordering::Relaxed);
+    live.shared_services()
+        .metrics
+        .requests_success
+        .store(7, std::sync::atomic::Ordering::Relaxed);
+    live.shared_services()
+        .metrics
+        .requests_failure
+        .store(4, std::sync::atomic::Ordering::Relaxed);
+    live.shared_services()
+        .metrics
+        .active_connections
+        .store(3, std::sync::atomic::Ordering::Relaxed);
+
+    let payload = json_body(QUICListener::render_control_api_runtime_snapshot(&state)).await;
+
+    assert_eq!(payload["runtime"]["generation"], 1);
+    assert_eq!(payload["runtime"]["config_path"], "reloaded.yaml");
+    assert_eq!(payload["metrics"]["requests_total"], 11);
+    assert_eq!(payload["metrics"]["requests_success"], 7);
+    assert_eq!(payload["metrics"]["requests_failure"], 4);
+    assert_eq!(payload["metrics"]["active_connections"], 3);
+
+    let listeners = payload["tls"]["listeners"]
+        .as_object()
+        .expect("listeners object");
+    assert!(
+        listeners.contains_key("127.0.0.1:9890"),
+        "runtime snapshot should render listener inventory from the active generation"
+    );
+    assert!(
+        listeners.contains_key("127.0.0.1:9889"),
+        "runtime snapshot should keep the secondary listener visible"
+    );
+    assert_eq!(
+        listeners["127.0.0.1:9890"]["client_auth_enabled"],
+        serde_json::Value::Bool(true)
+    );
+    assert_eq!(
+        listeners["127.0.0.1:9890"]["require_client_cert"],
+        serde_json::Value::Bool(true)
+    );
+
+    assert_eq!(payload["backends"]["healthy"], 1);
+    assert_eq!(payload["backends"]["total"], 1);
+    let lifecycle = payload["backends"]["lifecycle"]
+        .as_array()
+        .expect("backend lifecycle array");
+    assert_eq!(lifecycle.len(), 1);
+    let backend = &lifecycle[0];
+    assert_eq!(backend["backend"], "http://127.0.0.1:7001");
+    assert_eq!(backend["health"], "healthy");
+    assert_eq!(backend["membership"], "active");
+    assert_eq!(backend["authority_host"], "127.0.0.1");
+    assert_eq!(backend["authority_port"], 7001);
+    assert_eq!(backend["resolution_generation"], 0);
+    assert!(
+        backend.get("health_reason").is_none(),
+        "healthy rendered backends must omit optional health_reason"
+    );
+    assert_eq!(
+        backend["placements"]
+            .as_array()
+            .expect("placement array")
+            .len(),
+        1
+    );
 }
 
 // Domain: watchdog/runtime ownership alignment across reload boundaries.
