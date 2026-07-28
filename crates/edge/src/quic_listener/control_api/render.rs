@@ -412,6 +412,21 @@ mod tests {
         }
 
         #[test]
+        fn backend_unhealthy_reason_tokens_stay_aligned_across_metrics_logs_and_control_plane() {
+            for (reason, expected) in [
+                (HealthFailureReason::Timeout, "timeout"),
+                (HealthFailureReason::Transport, "transport"),
+                (HealthFailureReason::Tls, "tls"),
+            ] {
+                let control_plane_reason = health_failure_reason_label(reason);
+                let structured_log_token = format!("health_reason={control_plane_reason}");
+
+                assert_eq!(control_plane_reason, expected);
+                assert_eq!(structured_log_token, format!("health_reason={expected}"));
+            }
+        }
+
+        #[test]
         fn backend_payload_serializes_health_reason_when_present() {
             // The field appears only when unhealthy with a known reason, and is
             // omitted otherwise (skip_serializing_if).

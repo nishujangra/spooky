@@ -877,6 +877,21 @@ mod tests {
     mod cross_surface_reason_alignment {
         use super::*;
 
+        fn assert_reason_surfaces_align(reason: &'static str) {
+            let metric_labels = MetricReasonLabels {
+                outcome: None,
+                reason: Some(reason),
+                failure_class: None,
+            };
+            let control_plane_reason = reason;
+            let log_ctx = OperationalEventContext::new()
+                .with_reason(reason)
+                .to_string();
+
+            assert_eq!(metric_labels.reason, Some(control_plane_reason));
+            assert_eq!(log_ctx, format!("reason={reason}"));
+        }
+
         #[test]
         fn event_context_renders_canonical_fields_in_order() {
             let ctx = OperationalEventContext::new()
@@ -1024,6 +1039,39 @@ mod tests {
             );
             assert_eq!(AdmissionDecisionReason::RateLimited.slug(), "rate_limited");
             assert_eq!(AdmissionDecisionReason::Overloaded.slug(), "overloaded");
+        }
+
+        #[test]
+        fn representative_reason_tokens_stay_aligned_across_metrics_logs_and_control_plane() {
+            use crate::{
+                metrics::OverloadShedReason, runtime::connection::outcome::AdmissionOutcomeClass,
+                runtime::connection::stream::BackendFailureReason,
+            };
+
+            assert_reason_surfaces_align(RequestOutcomeReason::TimedOut.slug());
+            assert_reason_surfaces_align(
+                RequestOutcomeReason::from(BackendFailureReason::UpstreamTransport).slug(),
+            );
+            assert_reason_surfaces_align(
+                RequestOutcomeReason::from(BackendFailureReason::UpstreamTls).slug(),
+            );
+            assert_reason_surfaces_align(
+                AdmissionDecisionReason::from(AdmissionOutcomeClass::AuthDenied).slug(),
+            );
+            assert_reason_surfaces_align(
+                AdmissionDecisionReason::from(AdmissionOutcomeClass::RateLimited).slug(),
+            );
+            assert_reason_surfaces_align(
+                AdmissionDecisionReason::from(AdmissionOutcomeClass::OverloadShed {
+                    reason: Some(OverloadShedReason::GlobalInflight),
+                })
+                .slug(),
+            );
+
+            assert_eq!(
+                OverloadShedReason::GlobalInflight.reason_label(),
+                AdmissionOverloadCause::GlobalInflight.slug()
+            );
         }
 
         #[test]
