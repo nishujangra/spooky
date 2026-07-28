@@ -520,6 +520,236 @@ fn bootstrap_and_quic_external_auth_decisions_match() {
 }
 
 #[test]
+fn bootstrap_and_quic_response_normalization_strip_same_hop_headers() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = BootstrapQuicParityHarness::new();
+    let backend_addr = harness.start_h1_backend(|_req: Request<Incoming>| async move {
+        Ok::<_, Infallible>(
+            Response::builder()
+                .status(200)
+                .header("connection", "x-hop-token")
+                .header("x-hop-token", "secret")
+                .header("content-length", "9")
+                .header("content-type", "text/plain")
+                .header("cache-control", "max-age=60")
+                .header("etag", "\"etag-1\"")
+                .body(Full::new(Bytes::from_static(b"strip hop")))
+                .expect("response"),
+        )
+    });
+
+    let config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        make_upstream(
+            "/normalize-hop",
+            vec![make_backend("backend-a", backend_addr.to_string())],
+            None,
+            "round-robin",
+        ),
+    )]));
+    harness.start_listener(config).expect("listener with bootstrap");
+
+    let request = ParityRequestSpec {
+        method: "GET",
+        authority: "localhost",
+        path: "/normalize-hop",
+        headers: &[],
+        body: None,
+        user_agent: "spooky-bootstrap-quic-parity-test",
+        selected_response_headers: &[
+            "cache-control",
+            "connection",
+            "content-length",
+            "content-type",
+            "etag",
+            "x-hop-token",
+        ],
+        capture_metrics_delta: false,
+    };
+    let pair = harness
+        .run_parity_pair(request)
+        .expect("response normalization parity pair");
+
+    assert_eq!(pair.quic.response.status, 200);
+    assert_eq!(pair.bootstrap.response.status, 200);
+    assert_eq!(pair.quic.response.body, b"strip hop");
+    assert_eq!(pair.bootstrap.response.body, pair.quic.response.body);
+    assert_eq!(
+        selected_header_value(&pair.quic.response, "cache-control"),
+        Some("max-age=60")
+    );
+    assert_eq!(
+        selected_header_value(&pair.bootstrap.response, "cache-control"),
+        Some("max-age=60")
+    );
+    assert_eq!(
+        selected_header_value(&pair.quic.response, "etag"),
+        Some("\"etag-1\"")
+    );
+    assert_eq!(
+        selected_header_value(&pair.bootstrap.response, "etag"),
+        Some("\"etag-1\"")
+    );
+    for stripped in ["connection", "x-hop-token"] {
+        assert_eq!(
+            selected_header_value(&pair.quic.response, stripped),
+            None,
+            "quic should strip hop header `{stripped}`"
+        );
+        assert_eq!(
+            selected_header_value(&pair.bootstrap.response, stripped),
+            None,
+            "bootstrap should strip hop header `{stripped}`"
+        );
+    }
+    assert_eq!(
+        selected_header_value(&pair.quic.response, "content-type"),
+        Some("text/plain")
+    );
+    assert_eq!(
+        selected_header_value(&pair.bootstrap.response, "content-type"),
+        Some("text/plain")
+    );
+    assert_eq!(
+        selected_header_value(&pair.quic.response, "content-length"),
+        None,
+        "quic should omit downstream content-length under HTTP/3 framing"
+    );
+    assert_eq!(
+        selected_header_value(&pair.bootstrap.response, "content-length"),
+        Some("9"),
+        "bootstrap should preserve explicit content-length under HTTP compatibility ingress"
+    );
+}
+
+#[test]
+fn bootstrap_and_quic_response_normalization_head_bodyless_contract_matches() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = BootstrapQuicParityHarness::new();
+    let backend_addr = harness.start_h1_backend(|_req: Request<Incoming>| async move {
+        Ok::<_, Infallible>(
+            Response::builder()
+                .status(200)
+                .body(Full::new(Bytes::from_static(b"hidden head body")))
+                .expect("response"),
+        )
+    });
+
+    let config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        make_upstream(
+            "/head",
+            vec![make_backend("backend-a", backend_addr.to_string())],
+            None,
+            "round-robin",
+        ),
+    )]));
+    harness.start_listener(config).expect("listener with bootstrap");
+
+    let request = ParityRequestSpec {
+        method: "HEAD",
+        authority: "localhost",
+        path: "/head",
+        headers: &[],
+        body: None,
+        user_agent: "spooky-bootstrap-quic-parity-test",
+        selected_response_headers: &["content-length", "content-type"],
+        capture_metrics_delta: false,
+    };
+    let pair = harness.run_parity_pair(request).expect("head parity pair");
+
+    assert_eq!(pair.quic.response.status, 200);
+    assert_eq!(pair.bootstrap.response.status, 200);
+    assert!(pair.quic.response.body.is_empty());
+    assert!(pair.bootstrap.response.body.is_empty());
+    assert_eq!(
+        selected_header_value(&pair.quic.response, "content-type"),
+        None
+    );
+    assert_eq!(
+        selected_header_value(&pair.bootstrap.response, "content-type"),
+        None
+    );
+    assert_eq!(
+        selected_header_value(&pair.quic.response, "content-length"),
+        None
+    );
+    assert_eq!(
+        selected_header_value(&pair.bootstrap.response, "content-length"),
+        Some("16")
+    );
+}
+
+#[test]
+fn bootstrap_and_quic_response_normalization_no_content_contract_matches() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = BootstrapQuicParityHarness::new();
+    let backend_addr = harness.start_h1_backend(|_req: Request<Incoming>| async move {
+        Ok::<_, Infallible>(
+            Response::builder()
+                .status(204)
+                .body(Full::new(Bytes::new()))
+                .expect("response"),
+        )
+    });
+
+    let config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        make_upstream(
+            "/no-content",
+            vec![make_backend("backend-a", backend_addr.to_string())],
+            None,
+            "round-robin",
+        ),
+    )]));
+    harness.start_listener(config).expect("listener with bootstrap");
+
+    let request = ParityRequestSpec {
+        method: "GET",
+        authority: "localhost",
+        path: "/no-content",
+        headers: &[],
+        body: None,
+        user_agent: "spooky-bootstrap-quic-parity-test",
+        selected_response_headers: &["content-length", "content-type"],
+        capture_metrics_delta: false,
+    };
+    let pair = harness
+        .run_parity_pair(request)
+        .expect("no content parity pair");
+
+    assert_eq!(pair.quic.response.status, 204);
+    assert_eq!(pair.bootstrap.response.status, 204);
+    assert!(pair.quic.response.body.is_empty());
+    assert!(pair.bootstrap.response.body.is_empty());
+    assert_eq!(
+        selected_header_value(&pair.quic.response, "content-type"),
+        None
+    );
+    assert_eq!(
+        selected_header_value(&pair.bootstrap.response, "content-type"),
+        None
+    );
+    assert_eq!(
+        selected_header_value(&pair.quic.response, "content-length"),
+        None
+    );
+    assert_eq!(
+        selected_header_value(&pair.bootstrap.response, "content-length"),
+        None
+    );
+}
+
+#[test]
 #[serial]
 fn bootstrap_and_quic_admission_rate_limit_rejections_match() {
     if !local_listener_bind_available() {
@@ -669,6 +899,17 @@ fn expected_selected_headers(headers: &[(&str, &str)]) -> Vec<(String, String)> 
         .iter()
         .map(|(name, value)| (name.to_string(), value.to_string()))
         .collect()
+}
+
+fn selected_header_value<'a>(
+    response: &'a support::parity::ParityResponseSnapshot,
+    name: &str,
+) -> Option<&'a str> {
+    response
+        .selected_headers
+        .iter()
+        .find(|(header_name, _)| header_name.eq_ignore_ascii_case(name))
+        .map(|(_, value)| value.as_str())
 }
 
 #[derive(Clone, Copy)]
