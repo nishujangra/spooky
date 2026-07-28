@@ -1,5 +1,7 @@
 use std::{collections::HashMap, ffi::OsString, path::Path, sync::Arc};
 
+use ::http::{Method, Request, header};
+use bytes::Bytes;
 use http_body_util::BodyExt;
 use log::LevelFilter;
 use spooky_config::{
@@ -131,6 +133,32 @@ fn runtime_bundle_control_api_state(
     (state, runtime_handle)
 }
 
+fn control_api_request(method: Method, path: &str, authorization: Option<&str>) -> Request<()> {
+    let mut builder = Request::builder().method(method).uri(path);
+    if let Some(value) = authorization {
+        builder = builder.header(header::AUTHORIZATION, value);
+    }
+    builder.body(()).expect("control api request")
+}
+
+async fn full_body_bytes(response: Response<http_body_util::Full<Bytes>>) -> Bytes {
+    response
+        .into_body()
+        .collect()
+        .await
+        .expect("collect response body")
+        .to_bytes()
+}
+
+fn default_control_api_state() -> ControlApiState {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let mut startup = test_config(cert.clone(), key.clone());
+    startup.observability.control_api.enabled = true;
+    startup.observability.control_api.auth_token = Some("secret-token".to_string());
+    control_api_state_with_runtime_bundle(&startup, &startup)
+}
+
 // Domain: watchdog service state transitions and restart environment handling.
 #[test]
 fn watchdog_restart_env_keeps_path_when_present() {
@@ -192,6 +220,155 @@ fn bearer_authorization_rejects_malformed_headers() {
     assert_eq!(
         QUICListener::bearer_token_from_authorization_header("Bearer   "),
         None
+    );
+}
+
+#[test]
+fn control_api_route_gating_accepts_only_canonical_method_and_path_pairs() {
+    let state = default_control_api_state();
+    let paths = state.current_paths();
+
+    let cases = [
+        (
+            Method::GET,
+            paths.health_path.clone(),
+            Some(super::auth::ControlApiRoute::Health),
+        ),
+        (
+            Method::GET,
+            paths.ready_path.clone(),
+            Some(super::auth::ControlApiRoute::Ready),
+        ),
+        (
+            Method::GET,
+            paths.runtime_path.clone(),
+            Some(super::auth::ControlApiRoute::Runtime),
+        ),
+        (
+            Method::POST,
+            paths.reload_certs_path.clone(),
+            Some(super::auth::ControlApiRoute::ReloadCerts),
+        ),
+        (
+            Method::POST,
+            paths.reload_path.clone(),
+            Some(super::auth::ControlApiRoute::ReloadRuntime),
+        ),
+        (
+            Method::POST,
+            paths.restart_path.clone(),
+            Some(super::auth::ControlApiRoute::Restart),
+        ),
+        (Method::POST, paths.runtime_path.clone(), None),
+        (Method::GET, paths.reload_path.clone(), None),
+        (Method::GET, "/missing".to_string(), None),
+    ];
+
+    for (method, path, expected) in cases {
+        let req = control_api_request(method, &path, None);
+        assert_eq!(
+            QUICListener::control_api_request_route_for(&req, &state.current_paths()),
+            expected,
+            "unexpected route decision for {} {}",
+            req.method(),
+            req.uri().path()
+        );
+    }
+}
+
+#[test]
+fn control_api_route_gating_leaves_health_and_ready_ungated_by_auth() {
+    let state = default_control_api_state();
+    let paths = state.current_paths();
+
+    for path in [&paths.health_path, &paths.ready_path] {
+        let req = control_api_request(Method::GET, path, None);
+        let route = QUICListener::gate_control_api_request_for(&req, &state)
+            .expect("health and ready routes should bypass auth");
+        assert!(matches!(
+            route,
+            super::auth::ControlApiRoute::Health | super::auth::ControlApiRoute::Ready
+        ));
+    }
+}
+
+#[test]
+fn control_api_authorization_uses_token_matching_independent_of_request_body_type() {
+    let state = default_control_api_state();
+    let runtime_path = state.current_paths().runtime_path;
+    let authorized = control_api_request(Method::GET, &runtime_path, Some("Bearer secret-token"));
+    let malformed = control_api_request(Method::GET, &runtime_path, Some("Bearer"));
+    let missing = control_api_request(Method::GET, &runtime_path, None);
+
+    assert!(QUICListener::control_api_is_authorized_for(
+        &authorized,
+        &state.current_control_api()
+    ));
+    assert!(!QUICListener::control_api_is_authorized_for(
+        &malformed,
+        &state.current_control_api()
+    ));
+    assert!(!QUICListener::control_api_is_authorized_for(
+        &missing,
+        &state.current_control_api()
+    ));
+}
+
+#[tokio::test]
+async fn control_api_gate_returns_canonical_unauthorized_payloads_per_route() {
+    let state = default_control_api_state();
+    let paths = state.current_paths();
+
+    let cases = [
+        (
+            Method::GET,
+            paths.runtime_path.clone(),
+            serde_json::json!({ "error": "unauthorized" }),
+        ),
+        (
+            Method::POST,
+            paths.reload_certs_path.clone(),
+            serde_json::json!({ "reloaded": false, "error": "unauthorized" }),
+        ),
+        (
+            Method::POST,
+            paths.reload_path.clone(),
+            serde_json::json!({ "reloaded": false, "error": "unauthorized" }),
+        ),
+        (
+            Method::POST,
+            paths.restart_path.clone(),
+            serde_json::json!({ "accepted": false, "error": "unauthorized" }),
+        ),
+    ];
+
+    for (method, path, expected_body) in cases {
+        let req = control_api_request(method, &path, None);
+        let response = QUICListener::gate_control_api_request_for(&req, &state)
+            .expect_err("protected route should reject missing auth");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body = full_body_bytes(*response).await;
+        let payload: serde_json::Value =
+            serde_json::from_slice(&body).expect("unauthorized payload");
+        assert_eq!(payload, expected_body);
+    }
+}
+
+#[tokio::test]
+async fn control_api_gate_returns_not_found_for_invalid_routes_without_transport_coupling() {
+    let state = default_control_api_state();
+    let req = control_api_request(
+        Method::DELETE,
+        &state.current_paths().runtime_path,
+        Some("Bearer secret-token"),
+    );
+
+    let response = QUICListener::gate_control_api_request_for(&req, &state)
+        .expect_err("invalid route should map to not found");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        full_body_bytes(*response).await,
+        Bytes::from_static(b"not found\n")
     );
 }
 
