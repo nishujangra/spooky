@@ -829,6 +829,18 @@ mod tests {
         Metrics::new(1, [String::from("api"), String::from("unrouted")])
     }
 
+    fn api_route_target() -> RouteOutcomeTarget<'static> {
+        RouteOutcomeTarget { route: "api" }
+    }
+
+    fn api_backend_target() -> Option<BackendOutcomeTarget<'static>> {
+        Some(BackendOutcomeTarget {
+            upstream: "api",
+            backend_addr: Some("backend-a"),
+            backend_index: Some(0),
+        })
+    }
+
     fn test_upstream_pool() -> Arc<RwLock<UpstreamPool>> {
         let mut upstreams = HashMap::new();
         upstreams.insert(
@@ -975,465 +987,636 @@ mod tests {
         }
     }
 
-    #[test]
-    fn backend_failure_kinds_are_traceable_from_terminal_state() {
-        use crate::runtime::connection::stream::{BackendFailedState, TerminalState};
+    mod outcome_classification {
+        use super::*;
 
-        let cases = [
-            (
-                BackendFailureReason::UpstreamTimeout,
-                BackendFailureClass::Timeout,
-            ),
-            (BackendFailureReason::UpstreamTls, BackendFailureClass::Tls),
-            (
-                BackendFailureReason::UpstreamBridge,
-                BackendFailureClass::Bridge,
-            ),
-            (
-                BackendFailureReason::UpstreamProtocol,
-                BackendFailureClass::Protocol,
-            ),
-            (
-                BackendFailureReason::UpstreamTransport,
-                BackendFailureClass::Transport,
-            ),
-            (
-                BackendFailureReason::DispatchSpawnFailed,
-                BackendFailureClass::Transport,
-            ),
-        ];
-        for (reason, expected_kind) in cases {
-            let state = TerminalState::BackendFailed(BackendFailedState {
-                reason,
-                snapshot: terminal_snapshot_for_test(),
-            });
-            let decision = classify_terminal_outcome(&state);
-            assert_eq!(
-                decision.backend_failure_kind,
-                Some(expected_kind),
-                "reason {reason:?} should map to {expected_kind:?}"
-            );
-            // Timeout maps to the timeout route outcome; every other kind to a
-            // generic upstream failure — but the fine-grained kind is preserved.
-            if matches!(reason, BackendFailureReason::UpstreamTimeout) {
-                assert_eq!(decision.route_outcome, CanonicalRouteOutcome::Timeout);
-            } else {
+        #[test]
+        fn backend_failure_kinds_are_traceable_from_terminal_state() {
+            use crate::runtime::connection::stream::{BackendFailedState, TerminalState};
+
+            let cases = [
+                (
+                    BackendFailureReason::UpstreamTimeout,
+                    BackendFailureClass::Timeout,
+                ),
+                (BackendFailureReason::UpstreamTls, BackendFailureClass::Tls),
+                (
+                    BackendFailureReason::UpstreamBridge,
+                    BackendFailureClass::Bridge,
+                ),
+                (
+                    BackendFailureReason::UpstreamProtocol,
+                    BackendFailureClass::Protocol,
+                ),
+                (
+                    BackendFailureReason::UpstreamTransport,
+                    BackendFailureClass::Transport,
+                ),
+                (
+                    BackendFailureReason::DispatchSpawnFailed,
+                    BackendFailureClass::Transport,
+                ),
+            ];
+            for (reason, expected_kind) in cases {
+                let state = TerminalState::BackendFailed(BackendFailedState {
+                    reason,
+                    snapshot: terminal_snapshot_for_test(),
+                });
+                let decision = classify_terminal_outcome(&state);
                 assert_eq!(
-                    decision.route_outcome,
-                    CanonicalRouteOutcome::UpstreamFailure
+                    decision.backend_failure_kind,
+                    Some(expected_kind),
+                    "reason {reason:?} should map to {expected_kind:?}"
                 );
+                // Timeout maps to the timeout route outcome; every other kind to a
+                // generic upstream failure — but the fine-grained kind is preserved.
+                if matches!(reason, BackendFailureReason::UpstreamTimeout) {
+                    assert_eq!(decision.route_outcome, CanonicalRouteOutcome::Timeout);
+                } else {
+                    assert_eq!(
+                        decision.route_outcome,
+                        CanonicalRouteOutcome::UpstreamFailure
+                    );
+                }
             }
         }
-    }
 
-    #[test]
-    fn rejection_kinds_distinguish_validation_from_auth_and_overload() {
-        use crate::runtime::connection::stream::{RejectedState, TerminalState};
+        #[test]
+        fn rejection_kinds_distinguish_validation_from_auth_and_overload() {
+            use crate::runtime::connection::stream::{RejectedState, TerminalState};
 
-        let validation = classify_terminal_outcome(&TerminalState::Rejected(RejectedState {
-            reason: RejectionReason::ValidationFailed,
-            snapshot: terminal_snapshot_for_test(),
-        }));
-        assert_eq!(
-            validation.rejection_kind,
-            Some(RejectionClass::ValidationPolicy)
-        );
+            let validation = classify_terminal_outcome(&TerminalState::Rejected(RejectedState {
+                reason: RejectionReason::ValidationFailed,
+                snapshot: terminal_snapshot_for_test(),
+            }));
+            assert_eq!(
+                validation.rejection_kind,
+                Some(RejectionClass::ValidationPolicy)
+            );
 
-        let auth = classify_terminal_outcome(&TerminalState::Rejected(RejectedState {
-            reason: RejectionReason::AuthDenied,
-            snapshot: terminal_snapshot_for_test(),
-        }));
-        assert_eq!(auth.rejection_kind, Some(RejectionClass::AuthDenied));
-
-        let overload = classify_terminal_outcome(&TerminalState::Rejected(RejectedState {
-            reason: RejectionReason::Overloaded,
-            snapshot: terminal_snapshot_for_test(),
-        }));
-        assert_eq!(overload.rejection_kind, Some(RejectionClass::OverloadShed));
-    }
-
-    #[test]
-    fn classifies_success_status_as_success() {
-        let decision = classify_status_outcome(StatusCode::OK);
-        assert_eq!(decision.route_outcome, CanonicalRouteOutcome::Success);
-        assert_eq!(decision.backend_outcome, CanonicalBackendOutcome::Success);
-        assert_eq!(decision.health_effect, HealthEffectHint::Success);
-    }
-
-    #[test]
-    fn classifies_timeout_proxy_error_as_timeout() {
-        let decision = classify_proxy_error_outcome(&ProxyError::Timeout, None);
-        assert_eq!(decision.route_outcome, CanonicalRouteOutcome::Timeout);
-        assert_eq!(decision.backend_outcome, CanonicalBackendOutcome::Timeout);
-        assert_eq!(
-            decision.health_effect,
-            HealthEffectHint::Failure {
-                reason: HealthFailureReason::Timeout,
-            }
-        );
-    }
-
-    #[test]
-    fn classifies_overload_admission_outcome() {
-        let decision = classify_admission_outcome(AdmissionOutcomeClass::OverloadShed {
-            reason: Some(OverloadShedReason::GlobalInflight),
-        });
-        assert_eq!(decision.route_outcome, CanonicalRouteOutcome::OverloadShed);
-        assert_eq!(
-            decision.backend_outcome,
-            CanonicalBackendOutcome::OverloadShed
-        );
-        assert_eq!(
-            decision.overload_reason,
-            Some(OverloadShedReason::GlobalInflight)
-        );
-    }
-
-    #[test]
-    fn observe_status_outcome_records_success_metrics() {
-        let metrics = test_metrics();
-
-        let decision = observe_status_outcome(
-            &metrics,
-            RouteOutcomeTarget { route: "api" },
-            Some(BackendOutcomeTarget {
-                upstream: "api",
-                backend_addr: Some("backend-a"),
-                backend_index: Some(0),
-            }),
-            Duration::from_millis(12),
-            StatusCode::OK,
-        );
-
-        assert_eq!(decision.route_outcome, CanonicalRouteOutcome::Success);
-        assert_eq!(
-            metrics
-                .requests_success
-                .load(std::sync::atomic::Ordering::Relaxed),
-            1
-        );
-        assert_eq!(
-            metrics
-                .requests_failure
-                .load(std::sync::atomic::Ordering::Relaxed),
-            0
-        );
-        assert_eq!(upstream_request_count(&metrics, "api", "2xx", "success"), 1);
-        assert_eq!(
-            backend_request_count(&metrics, "api", "backend-a", "2xx", "success"),
-            1
-        );
-    }
-
-    #[test]
-    fn timeout_outcome_records_5xx_labels_and_matching_latency_bucket() {
-        let metrics = test_metrics();
-
-        let timeout = observe_proxy_error_outcome(
-            &metrics,
-            RouteOutcomeTarget { route: "api" },
-            Some(BackendOutcomeTarget {
-                upstream: "api",
-                backend_addr: Some("backend-a"),
-                backend_index: Some(0),
-            }),
-            Duration::from_millis(320),
-            Some(StatusCode::GATEWAY_TIMEOUT),
-            &ProxyError::Timeout,
-            None,
-        );
-
-        assert_eq!(timeout.route_outcome, CanonicalRouteOutcome::Timeout);
-        assert_eq!(upstream_request_count(&metrics, "api", "5xx", "timeout"), 1);
-        assert_eq!(
-            backend_request_count(&metrics, "api", "backend-a", "5xx", "timeout"),
-            1
-        );
-
-        let latency = upstream_latency_stats(&metrics, "api", "timeout");
-        assert_eq!(latency.count, 1);
-        assert_eq!(latency.latency_ms_sum, 320);
-        assert_eq!(latency.latency_buckets[7], 1);
-    }
-
-    #[test]
-    fn success_outcome_records_2xx_labels_and_matching_latency_bucket() {
-        let metrics = test_metrics();
-
-        let success = observe_status_outcome(
-            &metrics,
-            RouteOutcomeTarget { route: "api" },
-            Some(BackendOutcomeTarget {
-                upstream: "api",
-                backend_addr: Some("backend-a"),
-                backend_index: Some(0),
-            }),
-            Duration::from_millis(12),
-            StatusCode::OK,
-        );
-
-        assert_eq!(success.route_outcome, CanonicalRouteOutcome::Success);
-        assert_eq!(upstream_request_count(&metrics, "api", "2xx", "success"), 1);
-        assert_eq!(
-            backend_request_count(&metrics, "api", "backend-a", "2xx", "success"),
-            1
-        );
-
-        let latency = upstream_latency_stats(&metrics, "api", "success");
-        assert_eq!(latency.count, 1);
-        assert_eq!(latency.latency_ms_sum, 12);
-        assert_eq!(latency.latency_buckets[3], 1);
-    }
-
-    #[test]
-    fn observe_proxy_error_outcome_records_timeout_and_unrouted_failure() {
-        let metrics = test_metrics();
-
-        let timeout = observe_proxy_error_outcome(
-            &metrics,
-            RouteOutcomeTarget { route: "api" },
-            Some(BackendOutcomeTarget {
-                upstream: "api",
-                backend_addr: Some("backend-a"),
-                backend_index: Some(0),
-            }),
-            Duration::from_millis(50),
-            Some(StatusCode::REQUEST_TIMEOUT),
-            &ProxyError::Timeout,
-            None,
-        );
-        let unrouted = observe_proxy_error_outcome(
-            &metrics,
-            RouteOutcomeTarget::UNROUTED,
-            None,
-            Duration::from_millis(5),
-            Some(StatusCode::BAD_GATEWAY),
-            &ProxyError::Transport("no route".into()),
-            None,
-        );
-
-        assert_eq!(timeout.route_outcome, CanonicalRouteOutcome::Timeout);
-        assert_eq!(
-            unrouted.route_outcome,
-            CanonicalRouteOutcome::UpstreamFailure
-        );
-        assert_eq!(
-            metrics
-                .requests_failure
-                .load(std::sync::atomic::Ordering::Relaxed),
-            2
-        );
-        assert_eq!(upstream_request_count(&metrics, "api", "4xx", "timeout"), 1);
-        assert_eq!(
-            upstream_request_count(&metrics, "unrouted", "5xx", "failure"),
-            1
-        );
-    }
-
-    #[test]
-    fn observe_admission_outcome_records_overload_auth_and_rate_limit() {
-        let metrics = test_metrics();
-
-        let overload = observe_admission_outcome(
-            &metrics,
-            RouteOutcomeTarget { route: "api" },
-            Some(BackendOutcomeTarget {
-                upstream: "api",
-                backend_addr: Some("backend-a"),
-                backend_index: Some(0),
-            }),
-            Duration::from_millis(1),
-            StatusCode::SERVICE_UNAVAILABLE,
-            AdmissionOutcomeClass::OverloadShed {
-                reason: Some(OverloadShedReason::GlobalInflight),
-            },
-        );
-        let auth = observe_admission_outcome(
-            &metrics,
-            RouteOutcomeTarget { route: "api" },
-            Some(BackendOutcomeTarget {
-                upstream: "api",
-                backend_addr: Some("backend-a"),
-                backend_index: Some(0),
-            }),
-            Duration::from_millis(2),
-            StatusCode::UNAUTHORIZED,
-            AdmissionOutcomeClass::AuthDenied,
-        );
-        let rate_limited = observe_admission_outcome(
-            &metrics,
-            RouteOutcomeTarget { route: "api" },
-            Some(BackendOutcomeTarget {
-                upstream: "api",
-                backend_addr: Some("backend-a"),
-                backend_index: Some(0),
-            }),
-            Duration::from_millis(3),
-            StatusCode::TOO_MANY_REQUESTS,
-            AdmissionOutcomeClass::RateLimited,
-        );
-
-        assert_eq!(overload.route_outcome, CanonicalRouteOutcome::OverloadShed);
-        assert_eq!(auth.route_outcome, CanonicalRouteOutcome::AuthDenied);
-        assert_eq!(
-            rate_limited.route_outcome,
-            CanonicalRouteOutcome::RateLimited
-        );
-        assert_eq!(
-            metrics
-                .overload_shed
-                .load(std::sync::atomic::Ordering::Relaxed),
-            1
-        );
-        assert_eq!(
-            metrics
-                .overload_shed_global_inflight
-                .load(std::sync::atomic::Ordering::Relaxed),
-            1
-        );
-        assert_eq!(
-            upstream_request_count(&metrics, "api", "5xx", "overload_shed"),
-            1
-        );
-        assert_eq!(upstream_request_count(&metrics, "api", "4xx", "failure"), 1);
-        assert_eq!(
-            upstream_request_count(&metrics, "api", "4xx", "rate_limited"),
-            1
-        );
-    }
-
-    #[test]
-    fn outcome_reason_mapping_stays_canonical_for_admission_and_backend_failures() {
-        let auth = classify_terminal_outcome(&TerminalState::Rejected(
-            crate::runtime::connection::stream::RejectedState {
+            let auth = classify_terminal_outcome(&TerminalState::Rejected(RejectedState {
                 reason: RejectionReason::AuthDenied,
                 snapshot: terminal_snapshot_for_test(),
-            },
-        ));
-        let overload = classify_terminal_outcome(&TerminalState::Rejected(
-            crate::runtime::connection::stream::RejectedState {
+            }));
+            assert_eq!(auth.rejection_kind, Some(RejectionClass::AuthDenied));
+
+            let overload = classify_terminal_outcome(&TerminalState::Rejected(RejectedState {
                 reason: RejectionReason::Overloaded,
                 snapshot: terminal_snapshot_for_test(),
-            },
-        ));
-        let backend = classify_terminal_outcome(&TerminalState::BackendFailed(
-            crate::runtime::connection::stream::BackendFailedState {
-                reason: BackendFailureReason::UpstreamProtocol,
-                snapshot: terminal_snapshot_for_test(),
-            },
-        ));
-
-        assert_eq!(auth.rejection_kind, Some(RejectionClass::AuthDenied));
-        assert_eq!(overload.rejection_kind, Some(RejectionClass::OverloadShed));
-        assert_eq!(
-            backend.backend_failure_kind,
-            Some(BackendFailureClass::Protocol)
-        );
-        assert_eq!(auth.route_outcome, CanonicalRouteOutcome::AuthDenied);
-        assert_eq!(overload.route_outcome, CanonicalRouteOutcome::OverloadShed);
-        assert_eq!(
-            backend.route_outcome,
-            CanonicalRouteOutcome::UpstreamFailure
-        );
-    }
-
-    #[test]
-    fn backend_accounting_and_health_hooks_remain_stable() {
-        let metrics = test_metrics();
-        let pool = test_upstream_pool();
-
-        {
-            let guard = pool.read().expect("read");
-            assert!(guard.begin_request_if_healthy(0));
-        }
-        finish_backend_request_accounting(BackendRequestFinishInput {
-            upstream_pool: Some(&pool),
-            backend_index: Some(0),
-            elapsed: Duration::from_millis(20),
-            status: Some(StatusCode::OK.as_u16()),
-        });
-        {
-            let guard = pool.read().expect("read");
-            let state = guard.backend_runtime_state(0).expect("backend state");
-            assert_eq!(state.active_requests, 0);
-            assert!(state.ewma_latency_ms.is_some());
+            }));
+            assert_eq!(overload.rejection_kind, Some(RejectionClass::OverloadShed));
         }
 
-        let unhealthy = observe_backend_response_status(BackendHealthObservationInput {
-            backend_addr: "backend-a",
-            backend_index: 0,
-            upstream_pool: Some(&pool),
-            status: StatusCode::INTERNAL_SERVER_ERROR,
-        });
-        assert!(matches!(unhealthy, Some(HealthTransition::BecameUnhealthy)));
+        #[test]
+        fn classifies_success_status_as_success() {
+            let decision = classify_status_outcome(StatusCode::OK);
+            assert_eq!(decision.route_outcome, CanonicalRouteOutcome::Success);
+            assert_eq!(decision.backend_outcome, CanonicalBackendOutcome::Success);
+            assert_eq!(decision.health_effect, HealthEffectHint::Success);
+        }
 
-        let healthy = observe_backend_response_status(BackendHealthObservationInput {
-            backend_addr: "backend-a",
-            backend_index: 0,
-            upstream_pool: Some(&pool),
-            status: StatusCode::OK,
-        });
-        assert!(matches!(healthy, Some(HealthTransition::BecameHealthy)));
+        #[test]
+        fn classifies_timeout_proxy_error_as_timeout() {
+            let decision = classify_proxy_error_outcome(&ProxyError::Timeout, None);
+            assert_eq!(decision.route_outcome, CanonicalRouteOutcome::Timeout);
+            assert_eq!(decision.backend_outcome, CanonicalBackendOutcome::Timeout);
+            assert_eq!(
+                decision.health_effect,
+                HealthEffectHint::Failure {
+                    reason: HealthFailureReason::Timeout,
+                }
+            );
+        }
 
-        let classified = spooky_errors::classify_upstream_proxy_error(&ProxyError::Timeout)
-            .expect("classified timeout");
-        let transition = observe_classified_backend_failure(ClassifiedBackendFailureInput {
-            metrics_phase: "bootstrap",
-            backend_addr: "backend-a",
-            backend_index: 0,
-            upstream_pool: Some(&pool),
-            metrics: &metrics,
-            classified: &classified,
-        });
-        assert!(matches!(
-            transition,
-            Some(HealthTransition::BecameUnhealthy)
-        ));
-        assert_eq!(
-            metrics
-                .health_failure_timeout
-                .load(std::sync::atomic::Ordering::Relaxed),
-            1
-        );
+        #[test]
+        fn classifies_overload_admission_outcome() {
+            let decision = classify_admission_outcome(AdmissionOutcomeClass::OverloadShed {
+                reason: Some(OverloadShedReason::GlobalInflight),
+            });
+            assert_eq!(decision.route_outcome, CanonicalRouteOutcome::OverloadShed);
+            assert_eq!(
+                decision.backend_outcome,
+                CanonicalBackendOutcome::OverloadShed
+            );
+            assert_eq!(
+                decision.overload_reason,
+                Some(OverloadShedReason::GlobalInflight)
+            );
+        }
+
+        #[test]
+        fn admission_outcome_classification_covers_auth_rate_limit_and_failed_paths() {
+            let auth = classify_admission_outcome(AdmissionOutcomeClass::AuthDenied);
+            assert_eq!(auth.route_outcome, CanonicalRouteOutcome::AuthDenied);
+            assert_eq!(auth.backend_outcome, CanonicalBackendOutcome::AuthDenied);
+            assert_eq!(auth.rejection_kind, Some(RejectionClass::AuthDenied));
+
+            let rate_limited = classify_admission_outcome(AdmissionOutcomeClass::RateLimited);
+            assert_eq!(
+                rate_limited.route_outcome,
+                CanonicalRouteOutcome::RateLimited
+            );
+            assert_eq!(
+                rate_limited.backend_outcome,
+                CanonicalBackendOutcome::RateLimited
+            );
+            assert_eq!(
+                rate_limited.rejection_kind,
+                Some(RejectionClass::RateLimited)
+            );
+
+            let failed_timeout =
+                classify_admission_outcome(AdmissionOutcomeClass::Failed { timed_out: true });
+            assert_eq!(failed_timeout.route_outcome, CanonicalRouteOutcome::Timeout);
+            assert_eq!(
+                failed_timeout.backend_outcome,
+                CanonicalBackendOutcome::Timeout
+            );
+            assert_eq!(failed_timeout.rejection_kind, None);
+
+            let failed_upstream =
+                classify_admission_outcome(AdmissionOutcomeClass::Failed { timed_out: false });
+            assert_eq!(
+                failed_upstream.route_outcome,
+                CanonicalRouteOutcome::UpstreamFailure
+            );
+            assert_eq!(
+                failed_upstream.backend_outcome,
+                CanonicalBackendOutcome::UpstreamFailure
+            );
+            assert_eq!(failed_upstream.rejection_kind, None);
+        }
+
+        #[test]
+        fn proxy_error_classification_distinguishes_timeout_overload_and_upstream_failures() {
+            let timeout = classify_proxy_error_outcome(&ProxyError::Timeout, None);
+            assert_eq!(timeout.route_outcome, CanonicalRouteOutcome::Timeout);
+            assert_eq!(timeout.backend_outcome, CanonicalBackendOutcome::Timeout);
+
+            let overload = classify_proxy_error_outcome(
+                &ProxyError::Pool(PoolError::BackendOverloaded("busy".to_string())),
+                Some(OverloadShedReason::BackendInflight),
+            );
+            assert_eq!(overload.route_outcome, CanonicalRouteOutcome::OverloadShed);
+            assert_eq!(
+                overload.backend_outcome,
+                CanonicalBackendOutcome::OverloadShed
+            );
+            assert_eq!(
+                overload.overload_reason,
+                Some(OverloadShedReason::BackendInflight)
+            );
+
+            let unrouted = classify_proxy_error_outcome(
+                &ProxyError::Pool(PoolError::UnknownBackend("missing".to_string())),
+                None,
+            );
+            assert_eq!(
+                unrouted.route_outcome,
+                CanonicalRouteOutcome::UpstreamFailure
+            );
+            assert_eq!(
+                unrouted.backend_outcome,
+                CanonicalBackendOutcome::UpstreamFailure
+            );
+        }
+
+        #[test]
+        fn outcome_reason_mapping_stays_canonical_for_admission_and_backend_failures() {
+            let auth = classify_terminal_outcome(&TerminalState::Rejected(
+                crate::runtime::connection::stream::RejectedState {
+                    reason: RejectionReason::AuthDenied,
+                    snapshot: terminal_snapshot_for_test(),
+                },
+            ));
+            let overload = classify_terminal_outcome(&TerminalState::Rejected(
+                crate::runtime::connection::stream::RejectedState {
+                    reason: RejectionReason::Overloaded,
+                    snapshot: terminal_snapshot_for_test(),
+                },
+            ));
+            let backend = classify_terminal_outcome(&TerminalState::BackendFailed(
+                crate::runtime::connection::stream::BackendFailedState {
+                    reason: BackendFailureReason::UpstreamProtocol,
+                    snapshot: terminal_snapshot_for_test(),
+                },
+            ));
+
+            assert_eq!(auth.rejection_kind, Some(RejectionClass::AuthDenied));
+            assert_eq!(overload.rejection_kind, Some(RejectionClass::OverloadShed));
+            assert_eq!(
+                backend.backend_failure_kind,
+                Some(BackendFailureClass::Protocol)
+            );
+            assert_eq!(auth.route_outcome, CanonicalRouteOutcome::AuthDenied);
+            assert_eq!(overload.route_outcome, CanonicalRouteOutcome::OverloadShed);
+            assert_eq!(
+                backend.route_outcome,
+                CanonicalRouteOutcome::UpstreamFailure
+            );
+        }
     }
 
-    #[test]
-    fn forwarding_and_bootstrap_shared_recorders_emit_same_metrics_shape() {
-        let metrics = test_metrics();
+    mod metrics_recording {
+        use super::*;
 
-        let forwarding = observe_proxy_error_outcome(
-            &metrics,
-            RouteOutcomeTarget { route: "api" },
-            Some(BackendOutcomeTarget {
-                upstream: "api",
-                backend_addr: Some("backend-a"),
-                backend_index: Some(0),
-            }),
-            Duration::from_millis(10),
-            Some(StatusCode::BAD_GATEWAY),
-            &ProxyError::Transport("forwarding upstream error".into()),
-            None,
-        );
-        let bootstrap = observe_proxy_error_outcome(
-            &metrics,
-            RouteOutcomeTarget { route: "api" },
-            Some(BackendOutcomeTarget {
-                upstream: "api",
-                backend_addr: Some("backend-a"),
-                backend_index: Some(0),
-            }),
-            Duration::from_millis(12),
-            Some(StatusCode::BAD_GATEWAY),
-            &ProxyError::Transport("bootstrap upstream error".into()),
-            None,
-        );
+        #[test]
+        fn observe_status_outcome_records_success_metrics() {
+            let metrics = test_metrics();
 
-        assert_eq!(forwarding.route_outcome, bootstrap.route_outcome);
-        assert_eq!(forwarding.backend_outcome, bootstrap.backend_outcome);
-        assert_eq!(upstream_request_count(&metrics, "api", "5xx", "failure"), 2);
-        assert_eq!(
-            backend_request_count(&metrics, "api", "backend-a", "5xx", "failure"),
-            2
-        );
+            let decision = observe_status_outcome(
+                &metrics,
+                api_route_target(),
+                api_backend_target(),
+                Duration::from_millis(12),
+                StatusCode::OK,
+            );
+
+            assert_eq!(decision.route_outcome, CanonicalRouteOutcome::Success);
+            assert_eq!(
+                metrics
+                    .requests_success
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                1
+            );
+            assert_eq!(
+                metrics
+                    .requests_failure
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                0
+            );
+            assert_eq!(upstream_request_count(&metrics, "api", "2xx", "success"), 1);
+            assert_eq!(
+                backend_request_count(&metrics, "api", "backend-a", "2xx", "success"),
+                1
+            );
+        }
+
+        #[test]
+        fn timeout_outcome_records_5xx_labels_and_matching_latency_bucket() {
+            let metrics = test_metrics();
+
+            let timeout = observe_proxy_error_outcome(
+                &metrics,
+                api_route_target(),
+                api_backend_target(),
+                Duration::from_millis(320),
+                Some(StatusCode::GATEWAY_TIMEOUT),
+                &ProxyError::Timeout,
+                None,
+            );
+
+            assert_eq!(timeout.route_outcome, CanonicalRouteOutcome::Timeout);
+            assert_eq!(upstream_request_count(&metrics, "api", "5xx", "timeout"), 1);
+            assert_eq!(
+                backend_request_count(&metrics, "api", "backend-a", "5xx", "timeout"),
+                1
+            );
+
+            let latency = upstream_latency_stats(&metrics, "api", "timeout");
+            assert_eq!(latency.count, 1);
+            assert_eq!(latency.latency_ms_sum, 320);
+            assert_eq!(latency.latency_buckets[7], 1);
+        }
+
+        #[test]
+        fn success_outcome_records_2xx_labels_and_matching_latency_bucket() {
+            let metrics = test_metrics();
+
+            let success = observe_status_outcome(
+                &metrics,
+                api_route_target(),
+                api_backend_target(),
+                Duration::from_millis(12),
+                StatusCode::OK,
+            );
+
+            assert_eq!(success.route_outcome, CanonicalRouteOutcome::Success);
+            assert_eq!(upstream_request_count(&metrics, "api", "2xx", "success"), 1);
+            assert_eq!(
+                backend_request_count(&metrics, "api", "backend-a", "2xx", "success"),
+                1
+            );
+
+            let latency = upstream_latency_stats(&metrics, "api", "success");
+            assert_eq!(latency.count, 1);
+            assert_eq!(latency.latency_ms_sum, 12);
+            assert_eq!(latency.latency_buckets[3], 1);
+        }
+
+        #[test]
+        fn observe_proxy_error_outcome_records_timeout_and_unrouted_failure() {
+            let metrics = test_metrics();
+
+            let timeout = observe_proxy_error_outcome(
+                &metrics,
+                api_route_target(),
+                api_backend_target(),
+                Duration::from_millis(50),
+                Some(StatusCode::REQUEST_TIMEOUT),
+                &ProxyError::Timeout,
+                None,
+            );
+            let unrouted = observe_proxy_error_outcome(
+                &metrics,
+                RouteOutcomeTarget::UNROUTED,
+                None,
+                Duration::from_millis(5),
+                Some(StatusCode::BAD_GATEWAY),
+                &ProxyError::Transport("no route".into()),
+                None,
+            );
+
+            assert_eq!(timeout.route_outcome, CanonicalRouteOutcome::Timeout);
+            assert_eq!(
+                unrouted.route_outcome,
+                CanonicalRouteOutcome::UpstreamFailure
+            );
+            assert_eq!(
+                metrics
+                    .requests_failure
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                2
+            );
+            assert_eq!(upstream_request_count(&metrics, "api", "4xx", "timeout"), 1);
+            assert_eq!(
+                upstream_request_count(&metrics, "unrouted", "5xx", "failure"),
+                1
+            );
+        }
+
+        #[test]
+        fn observe_admission_outcome_records_overload_auth_and_rate_limit() {
+            let metrics = test_metrics();
+
+            let overload = observe_admission_outcome(
+                &metrics,
+                api_route_target(),
+                api_backend_target(),
+                Duration::from_millis(1),
+                StatusCode::SERVICE_UNAVAILABLE,
+                AdmissionOutcomeClass::OverloadShed {
+                    reason: Some(OverloadShedReason::GlobalInflight),
+                },
+            );
+            let auth = observe_admission_outcome(
+                &metrics,
+                api_route_target(),
+                api_backend_target(),
+                Duration::from_millis(2),
+                StatusCode::UNAUTHORIZED,
+                AdmissionOutcomeClass::AuthDenied,
+            );
+            let rate_limited = observe_admission_outcome(
+                &metrics,
+                api_route_target(),
+                api_backend_target(),
+                Duration::from_millis(3),
+                StatusCode::TOO_MANY_REQUESTS,
+                AdmissionOutcomeClass::RateLimited,
+            );
+
+            assert_eq!(overload.route_outcome, CanonicalRouteOutcome::OverloadShed);
+            assert_eq!(auth.route_outcome, CanonicalRouteOutcome::AuthDenied);
+            assert_eq!(
+                rate_limited.route_outcome,
+                CanonicalRouteOutcome::RateLimited
+            );
+            assert_eq!(
+                metrics
+                    .overload_shed
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                1
+            );
+            assert_eq!(
+                metrics
+                    .overload_shed_global_inflight
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                1
+            );
+            assert_eq!(
+                upstream_request_count(&metrics, "api", "5xx", "overload_shed"),
+                1
+            );
+            assert_eq!(upstream_request_count(&metrics, "api", "4xx", "failure"), 1);
+            assert_eq!(
+                upstream_request_count(&metrics, "api", "4xx", "rate_limited"),
+                1
+            );
+        }
+
+        #[test]
+        fn request_outcome_observation_accepts_canonical_unrouted_failure_decision() {
+            let metrics = test_metrics();
+            let decision = RequestOutcomeClassification {
+                route_outcome: CanonicalRouteOutcome::UpstreamFailure,
+                backend_outcome: CanonicalBackendOutcome::UpstreamFailure,
+                overload_reason: None,
+                rejection_kind: None,
+                backend_failure_kind: Some(BackendFailureClass::Transport),
+                health_effect: HealthEffectHint::Failure {
+                    reason: HealthFailureReason::Transport,
+                },
+            };
+
+            let observed = observe_request_outcome(
+                &metrics,
+                RouteOutcomeTarget::UNROUTED,
+                None,
+                Duration::from_millis(7),
+                Some(StatusCode::BAD_GATEWAY),
+                decision,
+            );
+
+            assert_eq!(observed, decision);
+            assert_eq!(
+                metrics
+                    .requests_failure
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                1
+            );
+            assert_eq!(
+                upstream_request_count(&metrics, "unrouted", "5xx", "failure"),
+                1
+            );
+        }
+    }
+
+    mod backend_accounting_hooks {
+        use super::*;
+
+        #[test]
+        fn backend_accounting_hooks_apply_canonical_success_and_failure_feedback() {
+            let metrics = test_metrics();
+            let pool = test_upstream_pool();
+
+            {
+                let guard = pool.read().expect("read");
+                assert!(guard.begin_request_if_healthy(0));
+            }
+            finish_backend_request_accounting(BackendRequestFinishInput {
+                upstream_pool: Some(&pool),
+                backend_index: Some(0),
+                elapsed: Duration::from_millis(20),
+                status: Some(StatusCode::OK.as_u16()),
+            });
+            {
+                let guard = pool.read().expect("read");
+                let state = guard.backend_runtime_state(0).expect("backend state");
+                assert_eq!(state.active_requests, 0);
+                assert!(state.ewma_latency_ms.is_some());
+            }
+
+            let unhealthy = observe_backend_response_status(BackendHealthObservationInput {
+                backend_addr: "backend-a",
+                backend_index: 0,
+                upstream_pool: Some(&pool),
+                status: StatusCode::INTERNAL_SERVER_ERROR,
+            });
+            assert!(matches!(unhealthy, Some(HealthTransition::BecameUnhealthy)));
+
+            let healthy = observe_backend_response_status(BackendHealthObservationInput {
+                backend_addr: "backend-a",
+                backend_index: 0,
+                upstream_pool: Some(&pool),
+                status: StatusCode::OK,
+            });
+            assert!(matches!(healthy, Some(HealthTransition::BecameHealthy)));
+
+            let classified = spooky_errors::classify_upstream_proxy_error(&ProxyError::Timeout)
+                .expect("classified timeout");
+            let transition = observe_classified_backend_failure(ClassifiedBackendFailureInput {
+                metrics_phase: "bootstrap",
+                backend_addr: "backend-a",
+                backend_index: 0,
+                upstream_pool: Some(&pool),
+                metrics: &metrics,
+                classified: &classified,
+            });
+            assert!(matches!(
+                transition,
+                Some(HealthTransition::BecameUnhealthy)
+            ));
+            assert_eq!(
+                metrics
+                    .health_failure_timeout
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                1
+            );
+        }
+
+        #[test]
+        fn forwarding_and_bootstrap_recorders_share_the_same_metrics_contract() {
+            let metrics = test_metrics();
+
+            let forwarding = observe_proxy_error_outcome(
+                &metrics,
+                api_route_target(),
+                api_backend_target(),
+                Duration::from_millis(10),
+                Some(StatusCode::BAD_GATEWAY),
+                &ProxyError::Transport("forwarding upstream error".into()),
+                None,
+            );
+            let bootstrap = observe_proxy_error_outcome(
+                &metrics,
+                api_route_target(),
+                api_backend_target(),
+                Duration::from_millis(12),
+                Some(StatusCode::BAD_GATEWAY),
+                &ProxyError::Transport("bootstrap upstream error".into()),
+                None,
+            );
+
+            assert_eq!(forwarding.route_outcome, bootstrap.route_outcome);
+            assert_eq!(forwarding.backend_outcome, bootstrap.backend_outcome);
+            assert_eq!(upstream_request_count(&metrics, "api", "5xx", "failure"), 2);
+            assert_eq!(
+                backend_request_count(&metrics, "api", "backend-a", "5xx", "failure"),
+                2
+            );
+        }
+
+        #[test]
+        fn backend_request_cleanup_runs_only_when_the_caller_marks_it_required() {
+            let pool = test_upstream_pool();
+            {
+                let guard = pool.read().expect("read");
+                assert!(guard.begin_request_if_healthy(0));
+            }
+
+            let finalized = finalize_backend_request_cleanup(
+                BackendRequestFinishInput {
+                    upstream_pool: Some(&pool),
+                    backend_index: Some(0),
+                    elapsed: Duration::from_millis(15),
+                    status: Some(StatusCode::OK.as_u16()),
+                },
+                false,
+            );
+            assert!(!finalized);
+            {
+                let guard = pool.read().expect("read");
+                let state = guard.backend_runtime_state(0).expect("backend state");
+                assert_eq!(state.active_requests, 1);
+            }
+
+            let finalized = finalize_backend_request_cleanup(
+                BackendRequestFinishInput {
+                    upstream_pool: Some(&pool),
+                    backend_index: Some(0),
+                    elapsed: Duration::from_millis(15),
+                    status: Some(StatusCode::OK.as_u16()),
+                },
+                true,
+            );
+            assert!(finalized);
+            {
+                let guard = pool.read().expect("read");
+                let state = guard.backend_runtime_state(0).expect("backend state");
+                assert_eq!(state.active_requests, 0);
+            }
+        }
+
+        #[test]
+        fn classified_backend_failure_metrics_follow_the_shared_health_mapping_contract() {
+            let metrics = test_metrics();
+
+            let tls = spooky_errors::classify_upstream_proxy_error(&ProxyError::Tls(
+                "unknown issuer".to_string(),
+            ))
+            .expect("classified tls");
+            let tls_reason = record_classified_backend_failure_metrics(
+                "forwarding",
+                "backend-a",
+                &metrics,
+                &tls,
+            );
+            assert_eq!(tls_reason, None);
+            assert_eq!(
+                metrics
+                    .health_failure_tls
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                0
+            );
+
+            let transport = spooky_errors::classify_upstream_proxy_error(&ProxyError::Transport(
+                "connection reset by peer".to_string(),
+            ))
+            .expect("classified transport");
+            let transport_reason = record_classified_backend_failure_metrics(
+                "forwarding",
+                "backend-a",
+                &metrics,
+                &transport,
+            );
+            assert_eq!(transport_reason, Some(HealthFailureReason::Transport));
+            assert_eq!(
+                metrics
+                    .health_failure_transport
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                1
+            );
+        }
     }
 }

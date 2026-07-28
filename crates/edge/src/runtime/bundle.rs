@@ -259,7 +259,16 @@ impl RuntimeBundleHandle {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, path::Path};
+    use std::{
+        collections::HashMap,
+        future,
+        path::Path,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
+    };
 
     use rcgen::{Certificate, CertificateParams, SanType};
     use spooky_config::{
@@ -271,9 +280,10 @@ mod tests {
         runtime::RuntimeConfig,
     };
     use tempfile::tempdir;
+    use tokio::sync::oneshot;
 
     use super::*;
-    use crate::runtime::listener::QUICListener;
+    use crate::runtime::{listener::QUICListener, tasks::RuntimeTaskRegistration};
 
     fn write_test_cert_for_name(dir: &Path, cert_name: &str, dns_name: &str) -> (String, String) {
         let mut params = CertificateParams::new(vec![dns_name.to_string()]);
@@ -370,46 +380,228 @@ mod tests {
         bundle
     }
 
-    #[test]
-    fn stale_generation_views_do_not_change_after_runtime_bundle_replacement() {
-        let dir = tempdir().expect("tempdir");
-        let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
-        let startup = test_config(cert.clone(), key.clone(), "http://127.0.0.1:7001");
-        let reloaded = test_config(cert, key, "http://127.0.0.1:7002");
+    fn runtime_bundle_pair(
+        dir: &Path,
+        startup_path: &str,
+        startup_backend_addr: &str,
+        next_generation: u64,
+        next_path: &str,
+        next_backend_addr: &str,
+    ) -> (RuntimeBundle, RuntimeBundle) {
+        let (cert, key) = write_test_cert_for_name(dir, "server", "api.example.com");
+        let startup = test_config(cert.clone(), key.clone(), startup_backend_addr);
+        let reloaded = test_config(cert, key, next_backend_addr);
+        (
+            runtime_bundle_from_config(1, startup_path, &startup),
+            runtime_bundle_from_config(next_generation, next_path, &reloaded),
+        )
+    }
 
-        let current_bundle = runtime_bundle_from_config(1, "startup.yaml", &startup);
-        let next_bundle = runtime_bundle_from_config(2, "reloaded.yaml", &reloaded);
-        let handle = RuntimeBundleHandle::new(current_bundle.clone());
+    struct CompletionSignal(Option<oneshot::Sender<()>>);
 
-        let stale = handle.current_view();
-        let installed = handle.replace(next_bundle).expect("replace");
+    impl Drop for CompletionSignal {
+        fn drop(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
 
-        assert_eq!(installed, 2);
-        assert_eq!(handle.current_generation(), 2);
-        assert_eq!(stale.generation(), 1);
-        assert_eq!(stale.startup().config_path, "startup.yaml");
-        assert_eq!(
-            stale
-                .runtime_config()
-                .upstreams
-                .get("api")
-                .expect("stale upstream")
-                .backends[0]
-                .backend
-                .address,
-            "http://127.0.0.1:7001"
-        );
-        assert_eq!(
-            handle
-                .current()
-                .runtime_config
-                .upstreams
-                .get("api")
-                .expect("current upstream")
-                .backends[0]
-                .backend
-                .address,
-            "http://127.0.0.1:7002"
-        );
+    fn spawn_generation_task(
+        bundle: &RuntimeBundle,
+        completed: Arc<AtomicBool>,
+    ) -> tokio::task::AbortHandle {
+        let (completion_tx, completion_rx) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _completion = CompletionSignal(Some(completion_tx));
+            future::pending::<()>().await;
+        });
+        let abort = task.abort_handle();
+        let join = task;
+        tokio::spawn(async move {
+            let _ = join.await;
+            completed.store(true, Ordering::Release);
+        });
+        bundle
+            .shared_state
+            .generation_state()
+            .generation_tasks
+            .register(RuntimeTaskRegistration::new(abort.clone(), completion_rx));
+        abort
+    }
+
+    mod runtime_generation_view_ownership {
+        use super::*;
+
+        #[test]
+        fn current_generation_helpers_share_one_canonical_active_view() {
+            let dir = tempdir().expect("tempdir");
+            let (startup_bundle, _) = runtime_bundle_pair(
+                dir.path(),
+                "runtime.yaml",
+                "http://127.0.0.1:7001",
+                8,
+                "unused.yaml",
+                "http://127.0.0.1:7002",
+            );
+            let mut bundle = startup_bundle;
+            bundle.generation = 7;
+            let handle = RuntimeBundleHandle::new(bundle);
+
+            let current = handle.current_view();
+            let via_generation = handle.with_current_generation(|active| {
+                (
+                    active.generation(),
+                    active.startup().config_path.clone(),
+                    active
+                        .runtime_config()
+                        .upstreams
+                        .get("api")
+                        .expect("upstream")
+                        .backends[0]
+                        .backend
+                        .address
+                        .clone(),
+                )
+            });
+            let via_view = handle.with_current_view(|view| {
+                (
+                    view.generation,
+                    view.startup.config_path.clone(),
+                    view.runtime_config
+                        .upstreams
+                        .get("api")
+                        .expect("upstream")
+                        .backends[0]
+                        .backend
+                        .address
+                        .clone(),
+                )
+            });
+
+            assert_eq!(handle.current_generation(), 7);
+            assert_eq!(current.generation(), 7);
+            assert_eq!(
+                via_generation,
+                (
+                    7,
+                    "runtime.yaml".to_string(),
+                    "http://127.0.0.1:7001".to_string()
+                )
+            );
+            assert_eq!(via_generation, via_view);
+        }
+
+        #[test]
+        fn startup_owned_state_stays_stable_while_generation_owned_runtime_changes() {
+            let dir = tempdir().expect("tempdir");
+            let (current_bundle, next_bundle) = runtime_bundle_pair(
+                dir.path(),
+                "spooky.yaml",
+                "http://127.0.0.1:7001",
+                2,
+                "spooky.yaml",
+                "http://127.0.0.1:7002",
+            );
+            let handle = RuntimeBundleHandle::new(current_bundle);
+
+            handle.replace(next_bundle).expect("replace");
+
+            let active = handle.current_view();
+            assert_eq!(active.generation(), 2);
+            assert_eq!(active.startup().config_path, "spooky.yaml");
+            assert_eq!(
+                active
+                    .runtime_config()
+                    .upstreams
+                    .get("api")
+                    .expect("active upstream")
+                    .backends[0]
+                    .backend
+                    .address,
+                "http://127.0.0.1:7002"
+            );
+        }
+
+        #[test]
+        fn stale_generation_views_keep_the_original_runtime_snapshot_after_replacement() {
+            let dir = tempdir().expect("tempdir");
+            let (current_bundle, next_bundle) = runtime_bundle_pair(
+                dir.path(),
+                "startup.yaml",
+                "http://127.0.0.1:7001",
+                2,
+                "reloaded.yaml",
+                "http://127.0.0.1:7002",
+            );
+            let handle = RuntimeBundleHandle::new(current_bundle.clone());
+
+            let stale = handle.current_view();
+            let installed = handle.replace(next_bundle).expect("replace");
+
+            assert_eq!(installed, 2);
+            assert_eq!(handle.current_generation(), 2);
+            assert_eq!(stale.generation(), 1);
+            assert_eq!(stale.startup().config_path, "startup.yaml");
+            assert_eq!(
+                stale
+                    .runtime_config()
+                    .upstreams
+                    .get("api")
+                    .expect("stale upstream")
+                    .backends[0]
+                    .backend
+                    .address,
+                "http://127.0.0.1:7001"
+            );
+            assert_eq!(
+                handle
+                    .current()
+                    .runtime_config
+                    .upstreams
+                    .get("api")
+                    .expect("current upstream")
+                    .backends[0]
+                    .backend
+                    .address,
+                "http://127.0.0.1:7002"
+            );
+        }
+
+        #[tokio::test]
+        async fn bundle_replacement_retires_only_previous_generation_tasks() {
+            let dir = tempdir().expect("tempdir");
+            let (current_bundle, next_bundle) = runtime_bundle_pair(
+                dir.path(),
+                "spooky.yaml",
+                "http://127.0.0.1:7001",
+                2,
+                "spooky.yaml",
+                "http://127.0.0.1:7002",
+            );
+
+            let retired_completed = Arc::new(AtomicBool::new(false));
+            let active_completed = Arc::new(AtomicBool::new(false));
+            let _retired_task =
+                spawn_generation_task(&current_bundle, Arc::clone(&retired_completed));
+            let active_task = spawn_generation_task(&next_bundle, Arc::clone(&active_completed));
+
+            let handle = RuntimeBundleHandle::new(current_bundle);
+            handle.replace(next_bundle).expect("replace");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+
+            assert!(
+                retired_completed.load(Ordering::Acquire),
+                "previous generation tasks should retire when the bundle is replaced"
+            );
+            assert!(
+                !active_completed.load(Ordering::Acquire),
+                "new generation tasks should remain active after replacement"
+            );
+
+            active_task.abort();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            assert!(active_completed.load(Ordering::Acquire));
+        }
     }
 }

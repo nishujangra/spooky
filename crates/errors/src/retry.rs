@@ -243,8 +243,24 @@ pub fn is_retryable(err: &ProxyError) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use bytes::Bytes;
+    use http_body_util::Empty;
+    use hyper::Uri;
+    use hyper_util::{client::legacy::Client, rt::TokioExecutor};
+
     use super::*;
     use crate::{BridgeError, PoolError, ProxyError};
+
+    async fn connect_send_error() -> hyper_util::client::legacy::Error {
+        let client: Client<hyper_util::client::legacy::connect::HttpConnector, Empty<Bytes>> =
+            Client::builder(TokioExecutor::new()).build_http();
+        let uri: Uri = "http://127.0.0.1:1/".parse().expect("valid local uri");
+
+        client
+            .get(uri)
+            .await
+            .expect_err("connect to unused port should fail")
+    }
 
     fn retry_facts() -> RetryPolicyFacts {
         RetryPolicyFacts {
@@ -398,6 +414,40 @@ mod tests {
     }
 
     #[test]
+    fn retry_denial_reasons_remain_distinct_across_attempt_budget_and_alternate_gates() {
+        let mut attempt_limited = retry_facts();
+        attempt_limited.attempt_count = attempt_limited.max_attempts;
+        assert_eq!(
+            evaluate_retry_policy(attempt_limited),
+            RetryPolicyDecision::DoNotRetry {
+                denial: Some(RetryPolicyDenialReason::AttemptLimitReached),
+            }
+        );
+
+        let mut budget_denied = retry_facts();
+        budget_denied.budget_available = false;
+        assert_eq!(
+            evaluate_retry_policy(budget_denied),
+            RetryPolicyDecision::DoNotRetry {
+                denial: Some(RetryPolicyDenialReason::BudgetDenied),
+            }
+        );
+
+        let mut no_alternate = retry_facts();
+        no_alternate.alternate_backend_available = false;
+        no_alternate.alternate_backend_failure =
+            Some(AlternateBackendFailureReason::NoHealthyBackends);
+        assert_eq!(
+            evaluate_retry_policy(no_alternate),
+            RetryPolicyDecision::DoNotRetry {
+                denial: Some(RetryPolicyDenialReason::AlternateBackendUnavailable(
+                    AlternateBackendFailureReason::NoHealthyBackends,
+                )),
+            }
+        );
+    }
+
+    #[test]
     fn retryable_transport_allows_retry() {
         let mut facts = retry_facts();
         facts.retryability = UpstreamRetryability::Retryable(UpstreamRetryReason::Transport);
@@ -437,6 +487,40 @@ mod tests {
             RetryAttemptTelemetryReason::from(UpstreamRetryReason::Pool),
             RetryAttemptTelemetryReason::Pool
         );
+    }
+
+    #[test]
+    fn retry_attempt_telemetry_reasons_remain_stable_for_all_retryable_classes() {
+        let cases = [
+            (
+                classify_retryability(&ProxyError::Timeout),
+                Some(RetryAttemptTelemetryReason::Timeout),
+            ),
+            (
+                classify_retryability(&ProxyError::Transport("connection reset".into())),
+                Some(RetryAttemptTelemetryReason::Transport),
+            ),
+            (
+                classify_retryability(&ProxyError::Pool(PoolError::UnknownBackend(
+                    "missing".to_string(),
+                ))),
+                Some(RetryAttemptTelemetryReason::Pool),
+            ),
+            (
+                classify_retryability(&ProxyError::Protocol("bad frame".into())),
+                None,
+            ),
+        ];
+
+        for (retryability, expected) in cases {
+            let mapped = match retryability {
+                UpstreamRetryability::Retryable(reason) => {
+                    Some(RetryAttemptTelemetryReason::from(reason))
+                }
+                UpstreamRetryability::Terminal(_) => None,
+            };
+            assert_eq!(mapped, expected);
+        }
     }
 
     #[test]
@@ -527,6 +611,33 @@ mod tests {
             classify_retryability(&ProxyError::Tls("unknown issuer".to_string())),
             UpstreamRetryability::Terminal(UpstreamTerminalErrorKind::Tls)
         );
+    }
+
+    #[tokio::test]
+    async fn classify_retryability_keeps_pool_send_terminal_and_internal_pool_paths_retryable() {
+        assert_eq!(
+            classify_retryability(&ProxyError::Pool(PoolError::InflightLimiterClosed)),
+            UpstreamRetryability::Retryable(UpstreamRetryReason::Pool)
+        );
+        assert_eq!(
+            classify_retryability(&ProxyError::Pool(PoolError::BackendOverloaded(
+                "busy".to_string()
+            ))),
+            UpstreamRetryability::Retryable(UpstreamRetryReason::Pool)
+        );
+
+        assert_eq!(
+            classify_retryability(&ProxyError::Pool(PoolError::Send(
+                connect_send_error().await
+            ))),
+            UpstreamRetryability::Terminal(UpstreamTerminalErrorKind::PoolSend)
+        );
+        assert!(is_retryable(&ProxyError::Pool(PoolError::UnknownBackend(
+            "missing".to_string()
+        ))));
+        assert!(!is_retryable(&ProxyError::Pool(PoolError::Send(
+            connect_send_error().await
+        ))));
     }
 
     fn hedge_facts() -> HedgePolicyFacts {
@@ -670,6 +781,41 @@ mod tests {
             HedgePolicyDecision::DoNotHedge {
                 denial: HedgePolicyDenialReason::BudgetDenied,
             }
+        );
+    }
+
+    #[test]
+    fn hedge_policy_suppression_precedence_prefers_primary_completion_over_budget_denial() {
+        let facts = HedgePolicyFacts {
+            budget_available: false,
+            primary_state: HedgePrimaryState::Completed,
+            ..hedge_facts()
+        };
+
+        assert_eq!(
+            evaluate_hedge_policy(facts),
+            HedgePolicyDecision::DoNotHedge {
+                denial: HedgePolicyDenialReason::PrimaryRequestCompleted,
+            }
+        );
+    }
+
+    #[test]
+    fn hedge_policy_trigger_and_outcome_telemetry_reasons_remain_stable() {
+        let trigger = evaluate_hedge_policy(hedge_facts());
+        assert_eq!(
+            trigger,
+            HedgePolicyDecision::Hedge {
+                reason: HedgeTriggerTelemetryReason::DelayElapsed,
+            }
+        );
+        assert_eq!(
+            HedgeOutcomeTelemetryReason::PrimaryWonAfterTrigger,
+            HedgeOutcomeTelemetryReason::PrimaryWonAfterTrigger
+        );
+        assert_eq!(
+            HedgeOutcomeTelemetryReason::HedgeWon,
+            HedgeOutcomeTelemetryReason::HedgeWon
         );
     }
 

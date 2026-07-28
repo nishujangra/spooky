@@ -206,6 +206,21 @@ mod tests {
     }
 
     #[test]
+    fn readonly_lb_pick_respects_lb_key_input_when_returning_typed_selection_mode() {
+        let pool = pool_for("round-robin", &["http://a", "http://b", "http://c"]);
+
+        let decision = choose_alternate_backend(&pool, &[1, 2], Some("tenant-a"));
+
+        assert_eq!(
+            decision,
+            AlternateBackendDecision::Select(AlternateBackendChoice {
+                index: 0,
+                mode: AlternateBackendSelectionMode::LoadBalancerReadonly,
+            })
+        );
+    }
+
+    #[test]
     fn non_readonly_strategies_use_healthy_fallback_for_alternates() {
         let pool = pool_for("consistent-hash", &["http://a", "http://b", "http://c"]);
 
@@ -231,6 +246,27 @@ mod tests {
             decision,
             AlternateBackendDecision::DoNotSelect {
                 denial: AlternateBackendFailureReason::NoHealthyBackends,
+            }
+        );
+    }
+
+    #[test]
+    fn alternate_selection_denials_remain_distinct_between_no_healthy_and_only_excluded() {
+        let mut no_healthy = pool_for("round-robin", &["http://a", "http://b"]);
+        let _ = no_healthy.mark_backend_failure_from_active_check(0);
+        let _ = no_healthy.mark_backend_failure_from_active_check(1);
+        assert_eq!(
+            choose_alternate_backend(&no_healthy, &[], None),
+            AlternateBackendDecision::DoNotSelect {
+                denial: AlternateBackendFailureReason::NoHealthyBackends,
+            }
+        );
+
+        let only_excluded = pool_for("round-robin", &["http://a", "http://b"]);
+        assert_eq!(
+            choose_alternate_backend(&only_excluded, &[0, 1], None),
+            AlternateBackendDecision::DoNotSelect {
+                denial: AlternateBackendFailureReason::OnlyExcludedBackendsHealthy,
             }
         );
     }
