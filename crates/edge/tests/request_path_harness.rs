@@ -13,7 +13,8 @@ use http_body_util::{BodyExt, Full};
 use hyper::{Response, body::Incoming};
 use serial_test::serial;
 use spooky_config::config::{
-    ApiKeyAuth, RouteAuth, ScopedRateLimit, ScopedRateLimitScope, UpstreamTls,
+    ApiKeyAuth, ExternalAuth, ExternalAuthFailureMode, ExternalAuthRequestHeader, RouteAuth,
+    ScopedRateLimit, ScopedRateLimitScope, UpstreamTls,
 };
 
 mod support;
@@ -29,6 +30,36 @@ fn response_line(body: &str, prefix: &str) -> String {
     body.lines()
         .find_map(|line| line.strip_prefix(prefix).map(str::to_string))
         .unwrap_or_else(|| panic!("missing response line with prefix `{prefix}` in body: {body}"))
+}
+
+fn configure_http_external_auth(
+    harness: &QuicRequestPathHarness,
+    backend_address: String,
+    auth_endpoint: String,
+    timeout_ms: u64,
+    failure_mode: ExternalAuthFailureMode,
+    response_header_allowlist: Vec<String>,
+) -> spooky_config::config::Config {
+    let mut upstream = make_upstream(
+        "/auth",
+        vec![make_backend("auth-backend", backend_address)],
+        None,
+        "round-robin",
+    );
+    upstream.auth.external_auth = Some(ExternalAuth::Http {
+        endpoint: auth_endpoint,
+        request_headers: vec![ExternalAuthRequestHeader {
+            name: "x-auth-static".to_string(),
+            value: "1".to_string(),
+        }],
+        response_header_allowlist,
+        timeout_ms,
+        failure_mode,
+    });
+
+    let mut upstreams = HashMap::new();
+    upstreams.insert("api".to_string(), upstream);
+    harness.make_config(upstreams)
 }
 
 #[test]
@@ -604,4 +635,332 @@ fn quic_request_path_upstream_overload_sheds_before_second_upstream_dispatch() {
         1,
         "upstream overload rejection must happen before the second request reaches the backend"
     );
+}
+
+#[test]
+#[serial]
+fn quic_request_path_external_auth_allow_injects_headers_before_forwarding() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = QuicRequestPathHarness::new();
+    let backend_calls = Arc::new(AtomicUsize::new(0));
+    let backend_observed = Arc::clone(&backend_calls);
+    let backend_addr = harness.start_h1_backend(move |req: hyper::Request<Incoming>| {
+        let backend_observed = Arc::clone(&backend_observed);
+        async move {
+            backend_observed.fetch_add(1, Ordering::Relaxed);
+            let user = req
+                .headers()
+                .get("x-user-id")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("missing")
+                .to_string();
+            Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::from(format!(
+                "backend user={user}"
+            )))))
+        }
+    });
+
+    let auth_calls = Arc::new(AtomicUsize::new(0));
+    let auth_observed = Arc::clone(&auth_calls);
+    let auth_addr = harness.start_h1_backend(move |req: hyper::Request<Incoming>| {
+        let auth_observed = Arc::clone(&auth_observed);
+        async move {
+            auth_observed.fetch_add(1, Ordering::Relaxed);
+            assert_eq!(req.uri().path(), "/check");
+            assert_eq!(req.method(), hyper::Method::GET);
+            assert_eq!(
+                req.headers()
+                    .get("x-spooky-original-method")
+                    .and_then(|value| value.to_str().ok()),
+                Some("GET")
+            );
+            assert_eq!(
+                req.headers()
+                    .get("x-auth-static")
+                    .and_then(|value| value.to_str().ok()),
+                Some("1")
+            );
+            Ok::<_, std::convert::Infallible>(
+                Response::builder()
+                    .status(hyper::StatusCode::NO_CONTENT)
+                    .header("x-user-id", "alice")
+                    .body(Full::new(Bytes::new()))
+                    .expect("auth allow response"),
+            )
+        }
+    });
+
+    let config = configure_http_external_auth(
+        &harness,
+        format!("http://{backend_addr}"),
+        format!("http://{auth_addr}/check"),
+        250,
+        ExternalAuthFailureMode::FailClosed,
+        vec!["x-user-id".to_string()],
+    );
+
+    harness.start_listener(config).expect("listener");
+
+    let response = harness
+        .run_request(H3RequestSpec::get("localhost", "/auth"))
+        .expect("allow request should complete");
+    response.assert_status(200);
+    response.assert_body_text("backend user=alice");
+    assert_eq!(auth_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(backend_calls.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+#[serial]
+fn quic_request_path_external_auth_deny_returns_canonical_denial_without_forwarding() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = QuicRequestPathHarness::new();
+    let backend_calls = Arc::new(AtomicUsize::new(0));
+    let backend_observed = Arc::clone(&backend_calls);
+    let backend_addr = harness.start_h1_backend(move |_req: hyper::Request<Incoming>| {
+        let backend_observed = Arc::clone(&backend_observed);
+        async move {
+            backend_observed.fetch_add(1, Ordering::Relaxed);
+            Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::from_static(
+                b"unexpected backend call",
+            ))))
+        }
+    });
+
+    let auth_addr = harness.start_h1_backend(|_req: hyper::Request<Incoming>| async move {
+        Ok::<_, std::convert::Infallible>(
+            Response::builder()
+                .status(hyper::StatusCode::FORBIDDEN)
+                .header("x-auth-reason", "policy")
+                .body(Full::new(Bytes::from_static(b"denied by auth")))
+                .expect("auth deny response"),
+        )
+    });
+
+    let config = configure_http_external_auth(
+        &harness,
+        format!("http://{backend_addr}"),
+        format!("http://{auth_addr}/check"),
+        250,
+        ExternalAuthFailureMode::FailClosed,
+        vec!["x-auth-reason".to_string()],
+    );
+
+    harness.start_listener(config).expect("listener");
+
+    let response = harness
+        .run_request(H3RequestSpec::get("localhost", "/auth"))
+        .expect("deny request should complete");
+    response.assert_status(403);
+    assert_eq!(response.header("x-auth-reason"), Some("policy"));
+    assert!(
+        response.body_text().contains("denied by auth"),
+        "expected canonical auth denial body"
+    );
+    assert_eq!(backend_calls.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+#[serial]
+fn quic_request_path_external_auth_challenge_preserves_www_authenticate() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = QuicRequestPathHarness::new();
+    let backend_calls = Arc::new(AtomicUsize::new(0));
+    let backend_observed = Arc::clone(&backend_calls);
+    let backend_addr = harness.start_h1_backend(move |_req: hyper::Request<Incoming>| {
+        let backend_observed = Arc::clone(&backend_observed);
+        async move {
+            backend_observed.fetch_add(1, Ordering::Relaxed);
+            Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::from_static(
+                b"unexpected backend call",
+            ))))
+        }
+    });
+
+    let auth_addr = harness.start_h1_backend(|_req: hyper::Request<Incoming>| async move {
+        Ok::<_, std::convert::Infallible>(
+            Response::builder()
+                .status(hyper::StatusCode::UNAUTHORIZED)
+                .header("www-authenticate", "Bearer realm=\"spooky\"")
+                .header("x-auth-reason", "expired")
+                .body(Full::new(Bytes::from_static(b"token expired")))
+                .expect("auth challenge response"),
+        )
+    });
+
+    let config = configure_http_external_auth(
+        &harness,
+        format!("http://{backend_addr}"),
+        format!("http://{auth_addr}/check"),
+        250,
+        ExternalAuthFailureMode::FailClosed,
+        vec!["x-auth-reason".to_string()],
+    );
+
+    harness.start_listener(config).expect("listener");
+
+    let response = harness
+        .run_request(H3RequestSpec::get("localhost", "/auth"))
+        .expect("challenge request should complete");
+    response.assert_status(401);
+    assert_eq!(
+        response.header("www-authenticate"),
+        Some("Bearer realm=\"spooky\"")
+    );
+    assert_eq!(response.header("x-auth-reason"), Some("expired"));
+    assert!(response.body_text().contains("token expired"));
+    assert_eq!(backend_calls.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+#[serial]
+fn quic_request_path_external_auth_redirect_preserves_location() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = QuicRequestPathHarness::new();
+    let backend_calls = Arc::new(AtomicUsize::new(0));
+    let backend_observed = Arc::clone(&backend_calls);
+    let backend_addr = harness.start_h1_backend(move |_req: hyper::Request<Incoming>| {
+        let backend_observed = Arc::clone(&backend_observed);
+        async move {
+            backend_observed.fetch_add(1, Ordering::Relaxed);
+            Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::from_static(
+                b"unexpected backend call",
+            ))))
+        }
+    });
+
+    let auth_addr = harness.start_h1_backend(|_req: hyper::Request<Incoming>| async move {
+        Ok::<_, std::convert::Infallible>(
+            Response::builder()
+                .status(hyper::StatusCode::FOUND)
+                .header("location", "https://login.example.com/")
+                .body(Full::new(Bytes::new()))
+                .expect("auth redirect response"),
+        )
+    });
+
+    let config = configure_http_external_auth(
+        &harness,
+        format!("http://{backend_addr}"),
+        format!("http://{auth_addr}/check"),
+        250,
+        ExternalAuthFailureMode::FailClosed,
+        vec![],
+    );
+
+    harness.start_listener(config).expect("listener");
+
+    let response = harness
+        .run_request(H3RequestSpec::get("localhost", "/auth"))
+        .expect("redirect request should complete");
+    response.assert_status(302);
+    assert_eq!(
+        response.header("location"),
+        Some("https://login.example.com/")
+    );
+    assert!(response.body.is_empty(), "redirect body should be empty");
+    assert_eq!(backend_calls.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+#[serial]
+fn quic_request_path_external_auth_timeout_fail_closed_returns_gateway_timeout() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = QuicRequestPathHarness::new();
+    let backend_calls = Arc::new(AtomicUsize::new(0));
+    let backend_observed = Arc::clone(&backend_calls);
+    let backend_addr = harness.start_h1_backend(move |_req: hyper::Request<Incoming>| {
+        let backend_observed = Arc::clone(&backend_observed);
+        async move {
+            backend_observed.fetch_add(1, Ordering::Relaxed);
+            Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::from_static(
+                b"unexpected backend call",
+            ))))
+        }
+    });
+
+    let auth_addr = harness.start_h1_backend(|_req: hyper::Request<Incoming>| async move {
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::new())))
+    });
+
+    let config = configure_http_external_auth(
+        &harness,
+        format!("http://{backend_addr}"),
+        format!("http://{auth_addr}/check"),
+        15,
+        ExternalAuthFailureMode::FailClosed,
+        vec![],
+    );
+
+    harness.start_listener(config).expect("listener");
+
+    let response = harness
+        .run_request(H3RequestSpec::get("localhost", "/auth"))
+        .expect("timeout fail-closed request should complete");
+    response.assert_status(504);
+    assert!(
+        response.body_text().contains("external auth timeout"),
+        "expected canonical external auth timeout body"
+    );
+    assert_eq!(backend_calls.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+#[serial]
+fn quic_request_path_external_auth_timeout_fail_open_allows_backend() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = QuicRequestPathHarness::new();
+    let backend_calls = Arc::new(AtomicUsize::new(0));
+    let backend_observed = Arc::clone(&backend_calls);
+    let backend_addr = harness.start_h1_backend(move |_req: hyper::Request<Incoming>| {
+        let backend_observed = Arc::clone(&backend_observed);
+        async move {
+            backend_observed.fetch_add(1, Ordering::Relaxed);
+            Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::from_static(
+                b"backend after fail-open",
+            ))))
+        }
+    });
+
+    let auth_addr = harness.start_h1_backend(|_req: hyper::Request<Incoming>| async move {
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::new())))
+    });
+
+    let config = configure_http_external_auth(
+        &harness,
+        format!("http://{backend_addr}"),
+        format!("http://{auth_addr}/check"),
+        15,
+        ExternalAuthFailureMode::FailOpen,
+        vec![],
+    );
+
+    harness.start_listener(config).expect("listener");
+
+    let response = harness
+        .run_request(H3RequestSpec::get("localhost", "/auth"))
+        .expect("timeout fail-open request should complete");
+    response.assert_status(200);
+    response.assert_body_text("backend after fail-open");
+    assert_eq!(backend_calls.load(Ordering::Relaxed), 1);
 }
