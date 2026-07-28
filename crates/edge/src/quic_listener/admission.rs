@@ -596,9 +596,10 @@ mod tests {
     use spooky_config::{
         config::{
             Backend, Config, ForwardedHeaderPolicy, HealthCheck, Listen, LoadBalancing, Resilience,
-            RouteAuth, RouteMatch, Tls, Upstream, UpstreamHostPolicy,
+            RouteAuth, RouteMatch, ScopedRateLimit, ScopedRateLimitScope, Tls, Upstream,
+            UpstreamHostPolicy,
         },
-        runtime::{RuntimeApiKeyAuth, RuntimeAuthPolicy, RuntimeConfig},
+        runtime::{RuntimeApiKeyAuth, RuntimeAuthPolicy, RuntimeConfig, RuntimeJwtAuth},
     };
     use tokio::sync::Semaphore;
 
@@ -621,6 +622,44 @@ mod tests {
             forwarded_headers: Default::default(),
             protocol: Default::default(),
         }
+    }
+
+    fn test_policy_with_jwt(
+        secret: &str,
+        required_scopes: Vec<&str>,
+        required_roles: Vec<&str>,
+    ) -> RuntimeUpstreamPolicy {
+        RuntimeUpstreamPolicy {
+            upstream_auth: RuntimeAuthPolicy {
+                api_key: None,
+                jwt: Some(RuntimeJwtAuth {
+                    secret: secret.to_string(),
+                    issuer: Some("issuer-1".to_string()),
+                    audience: Some("aud-1".to_string()),
+                    clock_skew: Duration::from_secs(30),
+                }),
+                external_auth: None,
+                required_scopes: required_scopes.into_iter().map(str::to_string).collect(),
+                required_roles: required_roles.into_iter().map(str::to_string).collect(),
+            },
+            host: Default::default(),
+            forwarded_headers: Default::default(),
+            protocol: Default::default(),
+        }
+    }
+
+    fn test_hs256_jwt(secret: &str, claims: serde_json::Value, alg: &str) -> String {
+        let header = URL_SAFE_NO_PAD.encode(
+            serde_json::to_vec(&serde_json::json!({ "alg": alg, "typ": "JWT" }))
+                .expect("serialize header"),
+        );
+        let payload =
+            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).expect("serialize claims"));
+        let signing_input = format!("{header}.{payload}");
+        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("mac");
+        mac.update(signing_input.as_bytes());
+        let signature = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+        format!("{signing_input}.{signature}")
     }
 
     fn test_runtime_resilience(
@@ -774,6 +813,203 @@ mod tests {
             assert_eq!(overload.body, b"brownout active, non-core route shed\n");
             assert_eq!(overload.www_authenticate, None);
             assert_eq!(overload.retry_after_seconds, Some(7));
+        }
+    }
+
+    mod local_auth_policy_contracts {
+        use super::*;
+
+        #[test]
+        fn local_auth_policy_returns_api_key_challenge_when_key_is_missing() {
+            let decision = evaluate_local_auth_policy(&test_policy_with_api_key(), None);
+
+            assert_eq!(
+                decision,
+                AdmissionPolicyDecision::Unauthorized(UnauthorizedDecision {
+                    challenge: AuthChallengeKind::ApiKey,
+                    status: StatusCode::UNAUTHORIZED,
+                    body: b"unauthorized\n",
+                })
+            );
+        }
+
+        #[test]
+        fn local_auth_policy_admits_when_api_key_matches() {
+            let headers = HashMap::from([("x-api-key".to_string(), "secret".to_string())]);
+            let lookup = |name: &str| headers.get(&name.to_ascii_lowercase()).cloned();
+
+            let decision = evaluate_local_auth_policy(&test_policy_with_api_key(), Some(&lookup));
+
+            assert_eq!(decision, AdmissionPolicyDecision::AdmitReady);
+        }
+
+        #[test]
+        fn local_auth_policy_returns_bearer_challenge_for_missing_or_invalid_jwt() {
+            let policy = test_policy_with_jwt("jwt-secret", vec!["payments:read"], vec!["admin"]);
+
+            let missing = evaluate_local_auth_policy(&policy, None);
+            assert_eq!(
+                missing,
+                AdmissionPolicyDecision::Unauthorized(UnauthorizedDecision {
+                    challenge: AuthChallengeKind::Bearer,
+                    status: StatusCode::UNAUTHORIZED,
+                    body: b"unauthorized\n",
+                })
+            );
+
+            let invalid_headers = HashMap::from([(
+                "authorization".to_string(),
+                "Bearer invalid.jwt.token".to_string(),
+            )]);
+            let invalid_lookup =
+                |name: &str| invalid_headers.get(&name.to_ascii_lowercase()).cloned();
+
+            let invalid = evaluate_local_auth_policy(&policy, Some(&invalid_lookup));
+            assert_eq!(
+                invalid,
+                AdmissionPolicyDecision::Unauthorized(UnauthorizedDecision {
+                    challenge: AuthChallengeKind::Bearer,
+                    status: StatusCode::UNAUTHORIZED,
+                    body: b"unauthorized\n",
+                })
+            );
+        }
+
+        #[test]
+        fn local_auth_policy_admits_valid_jwt_when_claims_satisfy_rbac() {
+            let token = test_hs256_jwt(
+                "jwt-secret",
+                serde_json::json!({
+                    "iss": "issuer-1",
+                    "aud": "aud-1",
+                    "exp": 4_000_000_000u64,
+                    "scope": "payments:read transfers:write",
+                    "roles": ["admin", "ops"],
+                }),
+                "HS256",
+            );
+            let headers = HashMap::from([("authorization".to_string(), format!("Bearer {token}"))]);
+            let lookup = |name: &str| headers.get(&name.to_ascii_lowercase()).cloned();
+
+            let decision = evaluate_local_auth_policy(
+                &test_policy_with_jwt("jwt-secret", vec!["payments:read"], vec!["admin"]),
+                Some(&lookup),
+            );
+
+            assert_eq!(decision, AdmissionPolicyDecision::AdmitReady);
+        }
+    }
+
+    mod scoped_rate_limit_policy_contracts {
+        use super::*;
+
+        fn test_scoped_rate_limits() -> ScopedRateLimiters {
+            ScopedRateLimiters::new(&[ScopedRateLimit {
+                name: "tenant-cap".to_string(),
+                scope: ScopedRateLimitScope::Tenant,
+                requests_per_sec: 1,
+                burst: 1,
+                key: Some("header:x-tenant-id".to_string()),
+                route_allowlist: vec!["payments".to_string()],
+                idle_ttl_secs: 60,
+            }])
+        }
+
+        #[test]
+        fn scoped_rate_limit_policy_admits_when_rule_does_not_reject() {
+            let rate_limits = test_scoped_rate_limits();
+
+            let allowed = evaluate_scoped_rate_limit_policy(&rate_limits, "payments", |_| {
+                Some("tenant-a".to_string())
+            });
+            let no_key = evaluate_scoped_rate_limit_policy(&rate_limits, "payments", |_| None);
+            let wrong_route = evaluate_scoped_rate_limit_policy(&rate_limits, "admin", |_| {
+                Some("tenant-a".to_string())
+            });
+
+            assert_eq!(allowed, AdmissionPolicyDecision::AdmitReady);
+            assert_eq!(no_key, AdmissionPolicyDecision::AdmitReady);
+            assert_eq!(wrong_route, AdmissionPolicyDecision::AdmitReady);
+        }
+
+        #[test]
+        fn scoped_rate_limit_policy_returns_typed_rejection_for_exhausted_bucket() {
+            let rate_limits = test_scoped_rate_limits();
+
+            let first = evaluate_scoped_rate_limit_policy(&rate_limits, "payments", |_| {
+                Some("tenant-a".to_string())
+            });
+            let second = evaluate_scoped_rate_limit_policy(&rate_limits, "payments", |_| {
+                Some("tenant-a".to_string())
+            });
+
+            assert_eq!(first, AdmissionPolicyDecision::AdmitReady);
+            assert_eq!(
+                second,
+                AdmissionPolicyDecision::RateLimited(RateLimitedDecision {
+                    rule_name: "tenant-cap".to_string(),
+                    route: "payments".to_string(),
+                    status: StatusCode::TOO_MANY_REQUESTS,
+                    body: b"request rate limited\n",
+                    retry_after_seconds: 1,
+                })
+            );
+        }
+    }
+
+    mod brownout_and_overload_policy_contracts {
+        use super::*;
+
+        #[test]
+        fn brownout_policy_sheds_non_core_routes_and_preserves_core_routes() {
+            let brownout = BrownoutController::new(true, 50, 25, vec![String::from("core")]);
+
+            let core = evaluate_brownout_policy(&brownout, 90, "core", 9);
+            let non_core = evaluate_brownout_policy(&brownout, 90, "payments", 9);
+
+            assert_eq!(core, AdmissionPolicyDecision::AdmitReady);
+            assert_eq!(
+                non_core,
+                AdmissionPolicyDecision::Overloaded(OverloadDecision {
+                    reason: OverloadDecisionReason::Brownout,
+                    status: StatusCode::SERVICE_UNAVAILABLE,
+                    body: b"brownout active, non-core route shed\n",
+                    retry_after_seconds: 9,
+                })
+            );
+        }
+
+        #[test]
+        fn overload_mapping_preserves_route_queue_reasons_and_shared_response_shape() {
+            let route_cap =
+                overload_decision_for_route_queue_rejection(RouteQueueRejection::RouteCap, 0);
+            let global_cap =
+                overload_decision_for_route_queue_rejection(RouteQueueRejection::GlobalCap, 3);
+
+            assert_eq!(
+                route_cap,
+                AdmissionPolicyDecision::Overloaded(OverloadDecision {
+                    reason: OverloadDecisionReason::RouteCap,
+                    status: StatusCode::SERVICE_UNAVAILABLE,
+                    body: b"route queue cap exceeded\n",
+                    retry_after_seconds: 1,
+                })
+            );
+            assert_eq!(
+                global_cap,
+                AdmissionPolicyDecision::Overloaded(OverloadDecision {
+                    reason: OverloadDecisionReason::RouteGlobalCap,
+                    status: StatusCode::SERVICE_UNAVAILABLE,
+                    body: b"global queue cap exceeded\n",
+                    retry_after_seconds: 3,
+                })
+            );
+
+            let mapped = admission_rejection_response(&global_cap).expect("rejection mapping");
+            assert_eq!(mapped.status, StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(mapped.body, b"global queue cap exceeded\n");
+            assert_eq!(mapped.www_authenticate, None);
+            assert_eq!(mapped.retry_after_seconds, Some(3));
         }
     }
 
