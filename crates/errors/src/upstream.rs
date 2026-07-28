@@ -259,6 +259,22 @@ mod tests {
         }
 
         #[test]
+        fn classify_upstream_error_detail_is_case_insensitive_for_timeout_and_tls_signals() {
+            assert_eq!(
+                classify_upstream_error_detail("Request TIMED OUT while reading body", false),
+                UpstreamErrorClassification::timeout()
+            );
+            assert_eq!(
+                classify_upstream_error_detail("RUSTLS alert HANDSHAKE failure", true),
+                UpstreamErrorClassification::tls(UpstreamTlsReason::Handshake)
+            );
+            assert_eq!(
+                classify_upstream_error_detail("UNKNOWN ISSUER from backend cert", true),
+                UpstreamErrorClassification::tls(UpstreamTlsReason::UnknownIssuer)
+            );
+        }
+
+        #[test]
         fn upstream_error_details_classify_matches_shared_detail_classifier() {
             let details = UpstreamErrorDetails::new(
                 "certificate not valid for dns name api.example.com".to_string(),
@@ -280,6 +296,15 @@ mod tests {
             let formatted = format_error_chain(&ErrorChainOuter(ErrorChainInner));
 
             assert_eq!(formatted, "outer error: inner error");
+        }
+
+        #[test]
+        fn upstream_error_details_from_error_chain_preserves_stable_joined_detail() {
+            let details =
+                UpstreamErrorDetails::from_error_chain(&ErrorChainOuter(ErrorChainInner), true);
+
+            assert_eq!(details.detail, "outer error: inner error");
+            assert!(details.is_connect);
         }
     }
 
@@ -350,6 +375,32 @@ mod tests {
                     failure_reason: HealthFailureReason::Tls,
                     metrics_reason: "handshake",
                 }
+            );
+        }
+
+        #[test]
+        fn protocol_and_internal_classifications_share_transport_health_mapping_contract() {
+            assert_eq!(
+                UpstreamErrorClassification::protocol().health_failure_mapping(),
+                UpstreamHealthFailureMapping {
+                    failure_reason: HealthFailureReason::Transport,
+                    metrics_reason: "transport",
+                }
+            );
+            assert_eq!(
+                UpstreamErrorClassification::internal().health_failure_mapping(),
+                UpstreamHealthFailureMapping {
+                    failure_reason: HealthFailureReason::Transport,
+                    metrics_reason: "transport",
+                }
+            );
+            assert_eq!(
+                UpstreamErrorClassification::protocol().category,
+                UpstreamErrorCategory::Protocol
+            );
+            assert_eq!(
+                UpstreamErrorClassification::internal().category,
+                UpstreamErrorCategory::Internal
             );
         }
     }
