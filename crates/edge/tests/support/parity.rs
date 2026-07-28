@@ -96,6 +96,17 @@ impl BootstrapQuicParityHarness {
         self.inner.start_h1_static_backend(body)
     }
 
+    pub fn start_h1_chunked_backend(&mut self, chunks: Vec<&'static [u8]>) -> SocketAddr {
+        self.inner.start_h1_chunked_backend(chunks)
+    }
+
+    pub fn start_h1_delayed_chunked_backend(
+        &mut self,
+        chunks: Vec<(Vec<u8>, std::time::Duration)>,
+    ) -> SocketAddr {
+        self.inner.start_h1_delayed_chunked_backend(chunks)
+    }
+
     pub fn start_h1_raw_response_backend(&mut self, response_bytes: Vec<u8>) -> SocketAddr {
         self.inner.start_h1_raw_response_backend(response_bytes)
     }

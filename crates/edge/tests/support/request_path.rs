@@ -13,7 +13,7 @@ use std::{
 };
 
 use bytes::Bytes;
-use http_body_util::{BodyExt, Full};
+use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::{
     Request, Response,
     body::{Body, Frame, Incoming},
@@ -493,6 +493,28 @@ pub fn run_bootstrap_request_to(
         .block_on(run_bootstrap_h2_request(addr, cert_path, request))
 }
 
+pub fn run_two_chunk_bootstrap_post_to(
+    addr: SocketAddr,
+    cert_path: &str,
+    authority: &str,
+    path: &str,
+    chunk1: Vec<u8>,
+    chunk2: Vec<u8>,
+    delay_between_chunks: Duration,
+) -> Result<BootstrapResponse, String> {
+    tokio::runtime::Runtime::new()
+        .expect("runtime")
+        .block_on(run_two_chunk_bootstrap_h2_post_to(
+            addr,
+            cert_path,
+            authority,
+            path,
+            chunk1,
+            chunk2,
+            delay_between_chunks,
+        ))
+}
+
 async fn run_bootstrap_h2_request(
     addr: SocketAddr,
     cert_path: &str,
@@ -520,12 +542,60 @@ async fn run_bootstrap_h2_request(
 
     let body = request.body.unwrap_or_default().to_vec();
     let req = builder
-        .body(Full::new(Bytes::from(body)))
+        .body(Full::new(Bytes::from(body)).map_err(|never| match never {}).boxed())
         .map_err(|err| format!("request build: {err}"))?;
-    let mut response = sender
+    let response = sender
         .send_request(req)
         .await
         .map_err(|err| format!("send request: {err}"))?;
+    read_bootstrap_h2_response(response).await
+}
+
+async fn run_two_chunk_bootstrap_h2_post_to(
+    addr: SocketAddr,
+    cert_path: &str,
+    authority: &str,
+    path: &str,
+    chunk1: Vec<u8>,
+    chunk2: Vec<u8>,
+    delay_between_chunks: Duration,
+) -> Result<BootstrapResponse, String> {
+    let (mut sender, _conn_task) = connect_bootstrap_h2(addr, cert_path).await?;
+    sender
+        .ready()
+        .await
+        .map_err(|err| format!("sender ready: {err}"))?;
+
+    let req = Request::builder()
+        .method("POST")
+        .uri(
+            http::Uri::builder()
+                .path_and_query(path)
+                .build()
+                .map_err(|err| format!("uri build: {err}"))?,
+        )
+        .header("host", authority)
+        .header("user-agent", "spooky-request-path-test")
+        .header("content-length", (chunk1.len() + chunk2.len()).to_string())
+        .body(
+            TwoChunkDelayedBody::new(
+                Bytes::from(chunk1),
+                Bytes::from(chunk2),
+                delay_between_chunks,
+            )
+            .boxed(),
+        )
+        .map_err(|err| format!("request build: {err}"))?;
+    let response = sender
+        .send_request(req)
+        .await
+        .map_err(|err| format!("send request: {err}"))?;
+    read_bootstrap_h2_response(response).await
+}
+
+async fn read_bootstrap_h2_response(
+    mut response: Response<Incoming>,
+) -> Result<BootstrapResponse, String> {
     let status = response.status().as_u16();
     let headers = response
         .headers()
@@ -561,7 +631,7 @@ async fn connect_bootstrap_h2(
     cert_path: &str,
 ) -> Result<
     (
-        hyper::client::conn::http2::SendRequest<Full<Bytes>>,
+        hyper::client::conn::http2::SendRequest<BoxBody<Bytes, Infallible>>,
         tokio::task::JoinHandle<()>,
     ),
     String,
@@ -600,6 +670,64 @@ async fn connect_bootstrap_h2(
             }
             Err(err) => return Err(format!("tcp connect: {err}")),
         }
+    }
+}
+
+struct TwoChunkDelayedBody {
+    first: Option<Bytes>,
+    second: Option<Bytes>,
+    delay_before_second: Duration,
+    second_delay: Option<std::pin::Pin<Box<tokio::time::Sleep>>>,
+}
+
+impl TwoChunkDelayedBody {
+    fn new(first: Bytes, second: Bytes, delay_before_second: Duration) -> Self {
+        Self {
+            first: Some(first),
+            second: Some(second),
+            delay_before_second,
+            second_delay: None,
+        }
+    }
+}
+
+impl Body for TwoChunkDelayedBody {
+    type Data = Bytes;
+    type Error = Infallible;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+        if let Some(first) = self.first.take() {
+            return std::task::Poll::Ready(Some(Ok(Frame::data(first))));
+        }
+
+        if self.second.is_none() {
+            return std::task::Poll::Ready(None);
+        }
+
+        if self.delay_before_second.is_zero() {
+            return std::task::Poll::Ready(self.second.take().map(|chunk| Ok(Frame::data(chunk))));
+        }
+
+        if self.second_delay.is_none() {
+            self.second_delay = Some(Box::pin(tokio::time::sleep(self.delay_before_second)));
+        }
+
+        if let Some(delay) = self.second_delay.as_mut() {
+            match delay.as_mut().poll(cx) {
+                std::task::Poll::Ready(()) => {
+                    self.second_delay = None;
+                    return std::task::Poll::Ready(
+                        self.second.take().map(|chunk| Ok(Frame::data(chunk))),
+                    );
+                }
+                std::task::Poll::Pending => return std::task::Poll::Pending,
+            }
+        }
+
+        std::task::Poll::Ready(None)
     }
 }
 

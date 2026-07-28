@@ -24,7 +24,10 @@ mod support;
 use support::{
     net::local_listener_bind_available,
     parity::{BootstrapQuicParityHarness, ParityRequestSpec, make_backend, make_upstream},
-    request_path::{BootstrapRequestSpec, H3RequestSpec, run_bootstrap_request_to, run_request_to},
+    request_path::{
+        BootstrapRequestSpec, H3RequestSpec, run_bootstrap_request_to, run_request_to,
+        run_two_chunk_bootstrap_post_to, run_two_chunk_post_to,
+    },
 };
 
 #[test]
@@ -637,6 +640,191 @@ fn bootstrap_and_quic_malformed_upstream_responses_share_observable_bucket() {
         String::from_utf8_lossy(&pair.quic.response.body).contains("upstream error"),
         "expected canonical malformed-response body"
     );
+}
+
+#[test]
+#[serial]
+fn bootstrap_and_quic_request_body_too_large_guardrail_contract_matches() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = BootstrapQuicParityHarness::new();
+    let backend_addr = harness.start_h1_static_backend(b"backend upload");
+
+    let mut config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        make_upstream(
+            "/upload",
+            vec![make_backend("backend-a", backend_addr.to_string())],
+            None,
+            "round-robin",
+        ),
+    )]));
+    config.performance.max_request_body_bytes = 1024;
+    let listen_addr = harness.start_listener(config).expect("listener with bootstrap");
+
+    let (quic_response, got_reset) = run_two_chunk_post_to(
+        listen_addr,
+        "localhost",
+        "/upload",
+        vec![0u8; 600],
+        vec![0u8; 600],
+        Duration::ZERO,
+    )
+    .expect("quic oversized request should complete");
+    let bootstrap_response = run_two_chunk_bootstrap_post_to(
+        listen_addr,
+        harness.cert_path(),
+        "localhost",
+        "/upload",
+        vec![0u8; 600],
+        vec![0u8; 600],
+        Duration::ZERO,
+    )
+    .expect("bootstrap oversized request should complete");
+
+    assert_eq!(quic_response.status, 413);
+    assert_eq!(bootstrap_response.status, 413);
+    assert_eq!(bootstrap_response.body, quic_response.body);
+    assert!(
+        quic_response.body_text().contains("request body too large"),
+        "expected canonical request body cap rejection body"
+    );
+    assert!(
+        !got_reset,
+        "quic oversized request should terminate with an HTTP response"
+    );
+}
+
+#[test]
+#[serial]
+#[ignore = "bootstrap path does not yet share request-body idle-timeout guardrail semantics"]
+fn bootstrap_and_quic_request_body_idle_timeout_guardrail_contract_matches() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = BootstrapQuicParityHarness::new();
+    let backend_addr = harness.start_h1_static_backend(b"unexpected backend call");
+
+    let mut config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        make_upstream(
+            "/upload-idle",
+            vec![make_backend("backend-a", backend_addr.to_string())],
+            None,
+            "round-robin",
+        ),
+    )]));
+    config.performance.client_body_idle_timeout_ms = 120;
+    config.performance.backend_body_total_timeout_ms = 10_000;
+    config.performance.backend_total_request_timeout_ms = 10_000;
+    let listen_addr = harness.start_listener(config).expect("listener with bootstrap");
+
+    let (quic_response, got_reset) = run_two_chunk_post_to(
+        listen_addr,
+        "localhost",
+        "/upload-idle",
+        vec![0u8; 512],
+        vec![0u8; 512],
+        Duration::from_millis(250),
+    )
+    .expect("quic idle-timeout request should complete");
+    let bootstrap_response = run_two_chunk_bootstrap_post_to(
+        listen_addr,
+        harness.cert_path(),
+        "localhost",
+        "/upload-idle",
+        vec![0u8; 512],
+        vec![0u8; 512],
+        Duration::from_millis(250),
+    )
+    .expect("bootstrap idle-timeout request should complete");
+
+    assert_eq!(quic_response.status, 408);
+    assert_eq!(bootstrap_response.status, 408);
+    assert_eq!(bootstrap_response.body, quic_response.body);
+    assert!(
+        quic_response.body_text().contains("request body idle timeout"),
+        "expected canonical request body idle-timeout body"
+    );
+    assert!(
+        !got_reset,
+        "quic request body idle timeout should return an HTTP response"
+    );
+}
+
+#[test]
+#[serial]
+#[ignore = "bootstrap path does not yet share unknown-length response prebuffer guardrail semantics"]
+fn bootstrap_and_quic_unknown_length_response_prebuffer_guardrail_contract_matches() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = BootstrapQuicParityHarness::new();
+    let backend_addr = harness.start_h1_chunked_backend(vec![b"chunk-1", b"chunk-2"]);
+
+    let mut config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        make_upstream(
+            "/long-stream",
+            vec![make_backend("backend-a", backend_addr.to_string())],
+            None,
+            "round-robin",
+        ),
+    )]));
+    config.performance.max_response_body_bytes = 64 * 1024;
+    config.performance.unknown_length_response_prebuffer_bytes = 8;
+    harness.start_listener(config).expect("listener with bootstrap");
+
+    let pair = harness
+        .run_parity_pair(ParityRequestSpec::get("localhost", "/long-stream"))
+        .expect("unknown-length response cap parity pair");
+
+    assert_eq!(pair.quic.response.status, 503);
+    assert_eq!(pair.bootstrap.response.status, 503);
+    assert_eq!(pair.bootstrap.response.body, pair.quic.response.body);
+    assert_eq!(pair.quic.response.body, b"upstream response body too large\n");
+}
+
+#[test]
+#[serial]
+#[ignore = "bootstrap path does not yet share slow response-body timeout guardrail semantics"]
+fn bootstrap_and_quic_slow_response_body_timeout_guardrail_contract_matches() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = BootstrapQuicParityHarness::new();
+    let backend_addr = harness.start_h1_delayed_chunked_backend(vec![
+        (b"chunk-1".to_vec(), Duration::from_millis(250)),
+        (b"chunk-2".to_vec(), Duration::ZERO),
+    ]);
+
+    let mut config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        make_upstream(
+            "/slow-stream",
+            vec![make_backend("backend-a", backend_addr.to_string())],
+            None,
+            "round-robin",
+        ),
+    )]));
+    config.performance.backend_timeout_ms = 100;
+    config.performance.backend_connect_timeout_ms = 100;
+    config.performance.backend_body_total_timeout_ms = 5_000;
+    config.performance.backend_body_idle_timeout_ms = 120;
+    harness.start_listener(config).expect("listener with bootstrap");
+
+    let pair = harness
+        .run_parity_pair(ParityRequestSpec::get("localhost", "/slow-stream"))
+        .expect("slow response-body timeout parity pair");
+
+    assert_timeout_bucket(&pair.quic.response);
+    assert_timeout_bucket(&pair.bootstrap.response);
+    assert_eq!(pair.bootstrap.response.body, pair.quic.response.body);
 }
 
 #[test]
