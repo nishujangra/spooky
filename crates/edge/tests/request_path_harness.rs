@@ -1,16 +1,28 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc, Barrier,
+        atomic::{AtomicUsize, Ordering},
+    },
+    thread,
+    time::Duration,
+};
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::{Response, body::Incoming};
 use serial_test::serial;
-use spooky_config::config::UpstreamTls;
+use spooky_config::config::{
+    ApiKeyAuth, RouteAuth, ScopedRateLimit, ScopedRateLimitScope, UpstreamTls,
+};
 
 mod support;
 
 use support::{
     net::local_listener_bind_available,
-    request_path::{H3RequestSpec, QuicRequestPathHarness, make_backend, make_upstream},
+    request_path::{
+        H3RequestSpec, QuicRequestPathHarness, make_backend, make_upstream, run_request_to,
+    },
 };
 
 fn response_line(body: &str, prefix: &str) -> String {
@@ -381,4 +393,215 @@ fn quic_to_h2_success_path_streams_response_body_to_completion() {
         .expect("h3 request");
     response.assert_status(200);
     response.assert_body_text("h2-chunk-1:h2-chunk-2:h2-chunk-3");
+}
+
+#[test]
+#[serial]
+fn quic_request_path_auth_deny_rejects_before_upstream_dispatch() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = QuicRequestPathHarness::new();
+    let upstream_calls = Arc::new(AtomicUsize::new(0));
+    let backend_observed = Arc::clone(&upstream_calls);
+    let backend_addr = harness.start_h1_backend(move |_req: hyper::Request<Incoming>| {
+        let backend_observed = Arc::clone(&backend_observed);
+        async move {
+            backend_observed.fetch_add(1, Ordering::Relaxed);
+            Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::from_static(
+                b"unexpected upstream call",
+            ))))
+        }
+    });
+
+    let mut upstream = make_upstream(
+        "/protected",
+        vec![make_backend(
+            "h1-protected",
+            format!("http://{backend_addr}"),
+        )],
+        None,
+        "round-robin",
+    );
+    upstream.auth = RouteAuth {
+        api_key: Some(ApiKeyAuth {
+            header_name: "x-api-key".to_string(),
+            keys: vec!["edge-key".to_string()],
+        }),
+        ..RouteAuth::default()
+    };
+
+    let mut upstreams = HashMap::new();
+    upstreams.insert("api".to_string(), upstream);
+
+    harness
+        .start_listener(harness.make_config(upstreams))
+        .expect("listener");
+
+    let response = harness
+        .run_request(H3RequestSpec::get("localhost", "/protected"))
+        .expect("unauthorized request should complete");
+
+    response.assert_status(401);
+    assert_eq!(response.header("www-authenticate"), Some("ApiKey"));
+    assert!(
+        response.body_text().contains("unauthorized"),
+        "expected canonical unauthorized response body"
+    );
+    assert_eq!(
+        upstream_calls.load(Ordering::Relaxed),
+        0,
+        "pre-dispatch auth rejection must not contact upstream"
+    );
+}
+
+#[test]
+#[serial]
+fn quic_request_path_rate_limit_deny_rejects_before_second_upstream_dispatch() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = QuicRequestPathHarness::new();
+    let upstream_calls = Arc::new(AtomicUsize::new(0));
+    let backend_observed = Arc::clone(&upstream_calls);
+    let backend_addr = harness.start_h1_backend(move |_req: hyper::Request<Incoming>| {
+        let backend_observed = Arc::clone(&backend_observed);
+        async move {
+            backend_observed.fetch_add(1, Ordering::Relaxed);
+            Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::from_static(
+                b"rate-limit ok",
+            ))))
+        }
+    });
+
+    let mut upstreams = HashMap::new();
+    upstreams.insert(
+        "api".to_string(),
+        make_upstream(
+            "/limited",
+            vec![make_backend("h1-limited", format!("http://{backend_addr}"))],
+            None,
+            "round-robin",
+        ),
+    );
+
+    let mut config = harness.make_config(upstreams);
+    config.resilience.scoped_rate_limits = vec![ScopedRateLimit {
+        name: "route-cap".to_string(),
+        scope: ScopedRateLimitScope::Route,
+        requests_per_sec: 1,
+        burst: 1,
+        key: None,
+        route_allowlist: vec!["api".to_string()],
+        idle_ttl_secs: 300,
+    }];
+
+    harness.start_listener(config).expect("listener");
+
+    let first = harness
+        .run_request(H3RequestSpec::get("localhost", "/limited"))
+        .expect("first request should complete");
+    first.assert_status(200);
+    first.assert_body_text("rate-limit ok");
+
+    let second = harness
+        .run_request(H3RequestSpec::get("localhost", "/limited"))
+        .expect("second request should complete");
+    second.assert_status(429);
+    assert!(
+        second.body_text().contains("request rate limited"),
+        "expected canonical rate-limit rejection body"
+    );
+    assert_eq!(
+        upstream_calls.load(Ordering::Relaxed),
+        1,
+        "rate-limit rejection must stop before contacting upstream on the second request"
+    );
+}
+
+#[test]
+#[serial]
+fn quic_request_path_upstream_overload_sheds_before_second_upstream_dispatch() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = QuicRequestPathHarness::new();
+    let upstream_calls = Arc::new(AtomicUsize::new(0));
+    let backend_observed = Arc::clone(&upstream_calls);
+    let backend_addr = harness.start_h1_backend(move |_req: hyper::Request<Incoming>| {
+        let backend_observed = Arc::clone(&backend_observed);
+        async move {
+            backend_observed.fetch_add(1, Ordering::Relaxed);
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::from_static(
+                b"slow ok",
+            ))))
+        }
+    });
+
+    let mut upstreams = HashMap::new();
+    upstreams.insert(
+        "api".to_string(),
+        make_upstream(
+            "/slow",
+            vec![make_backend("h1-slow", format!("http://{backend_addr}"))],
+            None,
+            "round-robin",
+        ),
+    );
+
+    let mut config = harness.make_config(upstreams);
+    config.performance.global_inflight_limit = 64;
+    config.performance.per_upstream_inflight_limit = 1;
+    let listen_addr = harness.start_listener(config).expect("listener");
+    let barrier = Arc::new(Barrier::new(2));
+
+    let responses = thread::scope(|scope| {
+        let first_barrier = Arc::clone(&barrier);
+        let first = scope.spawn(move || {
+            first_barrier.wait();
+            run_request_to(listen_addr, H3RequestSpec::get("localhost", "/slow"))
+        });
+
+        let second_barrier = Arc::clone(&barrier);
+        let second = scope.spawn(move || {
+            second_barrier.wait();
+            run_request_to(listen_addr, H3RequestSpec::get("localhost", "/slow"))
+        });
+
+        [
+            first.join().expect("first request thread"),
+            second.join().expect("second request thread"),
+        ]
+    });
+
+    let mut status_200 = 0usize;
+    let mut status_503 = 0usize;
+    let mut shed_body = String::new();
+    for response in responses {
+        let response = response.expect("concurrent request should complete");
+        match response.status {
+            200 => status_200 += 1,
+            503 => {
+                status_503 += 1;
+                shed_body = response.body_text();
+            }
+            other => panic!("unexpected status in overload test: {other}"),
+        }
+    }
+
+    assert_eq!(status_200, 1, "expected one successful request");
+    assert_eq!(status_503, 1, "expected one shed request");
+    assert!(
+        shed_body.contains("upstream overloaded"),
+        "expected canonical overload response body, got `{shed_body}`"
+    );
+    assert_eq!(
+        upstream_calls.load(Ordering::Relaxed),
+        1,
+        "upstream overload rejection must happen before the second request reaches the backend"
+    );
 }

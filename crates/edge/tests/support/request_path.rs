@@ -356,6 +356,10 @@ impl H3Response {
     }
 }
 
+pub fn run_request_to(addr: SocketAddr, request: H3RequestSpec<'_>) -> Result<H3Response, String> {
+    run_h3_request(addr, request)
+}
+
 pub async fn start_h1_backend<F, Fut>(handler: F) -> BackendFixture
 where
     F: Fn(Request<Incoming>) -> Fut + Send + Sync + 'static,
