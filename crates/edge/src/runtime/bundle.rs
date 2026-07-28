@@ -259,7 +259,16 @@ impl RuntimeBundleHandle {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::HashMap, path::Path};
+    use std::{
+        collections::HashMap,
+        future,
+        path::Path,
+        sync::{
+            Arc,
+            atomic::{AtomicBool, Ordering},
+        },
+        time::Duration,
+    };
 
     use rcgen::{Certificate, CertificateParams, SanType};
     use spooky_config::{
@@ -271,9 +280,10 @@ mod tests {
         runtime::RuntimeConfig,
     };
     use tempfile::tempdir;
+    use tokio::sync::oneshot;
 
     use super::*;
-    use crate::runtime::listener::QUICListener;
+    use crate::runtime::{listener::QUICListener, tasks::RuntimeTaskRegistration};
 
     fn write_test_cert_for_name(dir: &Path, cert_name: &str, dns_name: &str) -> (String, String) {
         let mut params = CertificateParams::new(vec![dns_name.to_string()]);
@@ -370,8 +380,123 @@ mod tests {
         bundle
     }
 
+    struct CompletionSignal(Option<oneshot::Sender<()>>);
+
+    impl Drop for CompletionSignal {
+        fn drop(&mut self) {
+            if let Some(sender) = self.0.take() {
+                let _ = sender.send(());
+            }
+        }
+    }
+
+    fn spawn_generation_task(
+        bundle: &RuntimeBundle,
+        completed: Arc<AtomicBool>,
+    ) -> tokio::task::AbortHandle {
+        let (completion_tx, completion_rx) = oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _completion = CompletionSignal(Some(completion_tx));
+            future::pending::<()>().await;
+        });
+        let abort = task.abort_handle();
+        let join = task;
+        tokio::spawn(async move {
+            let _ = join.await;
+            completed.store(true, Ordering::Release);
+        });
+        bundle
+            .shared_state
+            .generation_state()
+            .generation_tasks
+            .register(RuntimeTaskRegistration::new(abort.clone(), completion_rx));
+        abort
+    }
+
     mod runtime_generation_view_ownership {
         use super::*;
+
+        #[test]
+        fn current_generation_helpers_share_one_canonical_active_view() {
+            let dir = tempdir().expect("tempdir");
+            let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+            let startup = test_config(cert, key, "http://127.0.0.1:7001");
+
+            let bundle = runtime_bundle_from_config(7, "runtime.yaml", &startup);
+            let handle = RuntimeBundleHandle::new(bundle);
+
+            let current = handle.current_view();
+            let via_generation = handle.with_current_generation(|active| {
+                (
+                    active.generation(),
+                    active.startup().config_path.clone(),
+                    active
+                        .runtime_config()
+                        .upstreams
+                        .get("api")
+                        .expect("upstream")
+                        .backends[0]
+                        .backend
+                        .address
+                        .clone(),
+                )
+            });
+            let via_view = handle.with_current_view(|view| {
+                (
+                    view.generation,
+                    view.startup.config_path.clone(),
+                    view.runtime_config
+                        .upstreams
+                        .get("api")
+                        .expect("upstream")
+                        .backends[0]
+                        .backend
+                        .address
+                        .clone(),
+                )
+            });
+
+            assert_eq!(handle.current_generation(), 7);
+            assert_eq!(current.generation(), 7);
+            assert_eq!(
+                via_generation,
+                (
+                    7,
+                    "runtime.yaml".to_string(),
+                    "http://127.0.0.1:7001".to_string()
+                )
+            );
+            assert_eq!(via_generation, via_view);
+        }
+
+        #[test]
+        fn startup_owned_state_stays_stable_while_generation_owned_runtime_changes() {
+            let dir = tempdir().expect("tempdir");
+            let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+            let startup = test_config(cert.clone(), key.clone(), "http://127.0.0.1:7001");
+            let reloaded = test_config(cert, key, "http://127.0.0.1:7002");
+
+            let current_bundle = runtime_bundle_from_config(1, "spooky.yaml", &startup);
+            let next_bundle = runtime_bundle_from_config(2, "spooky.yaml", &reloaded);
+            let handle = RuntimeBundleHandle::new(current_bundle);
+
+            handle.replace(next_bundle).expect("replace");
+
+            let active = handle.current_view();
+            assert_eq!(active.generation(), 2);
+            assert_eq!(active.startup().config_path, "spooky.yaml");
+            assert_eq!(
+                active
+                    .runtime_config()
+                    .upstreams
+                    .get("api")
+                    .expect("active upstream")
+                    .backends[0]
+                    .backend
+                    .address,
+                "http://127.0.0.1:7002"
+            );
+        }
 
         #[test]
         fn stale_generation_views_do_not_change_after_runtime_bundle_replacement() {
@@ -414,6 +539,40 @@ mod tests {
                     .address,
                 "http://127.0.0.1:7002"
             );
+        }
+
+        #[tokio::test]
+        async fn bundle_replacement_retires_only_previous_generation_tasks() {
+            let dir = tempdir().expect("tempdir");
+            let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+            let startup = test_config(cert.clone(), key.clone(), "http://127.0.0.1:7001");
+            let reloaded = test_config(cert, key, "http://127.0.0.1:7002");
+
+            let current_bundle = runtime_bundle_from_config(1, "spooky.yaml", &startup);
+            let next_bundle = runtime_bundle_from_config(2, "spooky.yaml", &reloaded);
+
+            let retired_completed = Arc::new(AtomicBool::new(false));
+            let active_completed = Arc::new(AtomicBool::new(false));
+            let _retired_task =
+                spawn_generation_task(&current_bundle, Arc::clone(&retired_completed));
+            let active_task = spawn_generation_task(&next_bundle, Arc::clone(&active_completed));
+
+            let handle = RuntimeBundleHandle::new(current_bundle);
+            handle.replace(next_bundle).expect("replace");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+
+            assert!(
+                retired_completed.load(Ordering::Acquire),
+                "previous generation tasks should retire when the bundle is replaced"
+            );
+            assert!(
+                !active_completed.load(Ordering::Acquire),
+                "new generation tasks should remain active after replacement"
+            );
+
+            active_task.abort();
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            assert!(active_completed.load(Ordering::Acquire));
         }
     }
 }
