@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    net::TcpListener,
     sync::{
         Arc, Barrier,
         atomic::{AtomicUsize, Ordering},
@@ -963,4 +964,132 @@ fn quic_request_path_external_auth_timeout_fail_open_allows_backend() {
     response.assert_status(200);
     response.assert_body_text("backend after fail-open");
     assert_eq!(backend_calls.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+#[serial]
+fn quic_request_path_backend_timeout_maps_to_upstream_timeout() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = QuicRequestPathHarness::new();
+    let backend_calls = Arc::new(AtomicUsize::new(0));
+    let backend_observed = Arc::clone(&backend_calls);
+    let backend_addr = harness.start_h1_backend(move |_req: hyper::Request<Incoming>| {
+        let backend_observed = Arc::clone(&backend_observed);
+        async move {
+            backend_observed.fetch_add(1, Ordering::Relaxed);
+            tokio::time::sleep(Duration::from_millis(300)).await;
+            Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::from_static(
+                b"too late",
+            ))))
+        }
+    });
+
+    let mut upstreams = HashMap::new();
+    upstreams.insert(
+        "api".to_string(),
+        make_upstream(
+            "/timeout",
+            vec![make_backend("h1-timeout", format!("http://{backend_addr}"))],
+            None,
+            "round-robin",
+        ),
+    );
+
+    let mut config = harness.make_config(upstreams);
+    config.performance.backend_timeout_ms = 150;
+    config.performance.backend_connect_timeout_ms = 150;
+    harness.start_listener(config).expect("listener");
+
+    let response = harness
+        .run_request(H3RequestSpec::get("localhost", "/timeout"))
+        .expect("timeout request should complete");
+    response.assert_status(503);
+    assert!(
+        response.body_text().contains("upstream timeout"),
+        "expected canonical upstream timeout body"
+    );
+    assert_eq!(backend_calls.load(Ordering::Relaxed), 1);
+}
+
+#[test]
+#[serial]
+fn quic_request_path_connect_failure_maps_to_upstream_error() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = QuicRequestPathHarness::new();
+    let unused_listener = TcpListener::bind("127.0.0.1:0").expect("bind unused backend port");
+    let unused_addr = unused_listener.local_addr().expect("unused backend addr");
+    drop(unused_listener);
+
+    let mut upstreams = HashMap::new();
+    upstreams.insert(
+        "api".to_string(),
+        make_upstream(
+            "/connect-fail",
+            vec![make_backend(
+                "h1-connect-fail",
+                format!("http://{unused_addr}"),
+            )],
+            None,
+            "round-robin",
+        ),
+    );
+
+    let mut config = harness.make_config(upstreams);
+    config.performance.backend_timeout_ms = 150;
+    config.performance.backend_connect_timeout_ms = 150;
+    harness.start_listener(config).expect("listener");
+
+    let response = harness
+        .run_request(H3RequestSpec::get("localhost", "/connect-fail"))
+        .expect("connect failure request should complete");
+    response.assert_status(502);
+    assert!(
+        response.body_text().contains("upstream error"),
+        "expected canonical upstream transport failure body"
+    );
+}
+
+#[test]
+#[serial]
+fn quic_request_path_malformed_upstream_response_maps_to_upstream_error() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = QuicRequestPathHarness::new();
+    let backend_addr = harness.start_h1_raw_response_backend(b"NOT_HTTP\r\n\r\n".to_vec());
+
+    let mut upstreams = HashMap::new();
+    upstreams.insert(
+        "api".to_string(),
+        make_upstream(
+            "/malformed",
+            vec![make_backend(
+                "h1-malformed",
+                format!("http://{backend_addr}"),
+            )],
+            None,
+            "round-robin",
+        ),
+    );
+
+    let mut config = harness.make_config(upstreams);
+    config.performance.backend_timeout_ms = 150;
+    config.performance.backend_connect_timeout_ms = 150;
+    harness.start_listener(config).expect("listener");
+
+    let response = harness
+        .run_request(H3RequestSpec::get("localhost", "/malformed"))
+        .expect("malformed upstream response request should complete");
+    response.assert_status(502);
+    assert!(
+        response.body_text().contains("upstream error"),
+        "expected canonical malformed upstream response failure body"
+    );
 }
