@@ -46,6 +46,7 @@ use crate::{
             StreamAdmissionState, StreamPhase, TerminalReason, TimeoutReason, TunnelMode,
         },
     },
+    watchdog::config::WatchdogRuntimeConfig,
 };
 type RoutingMaps = (
     HashMap<Arc<[u8]>, Arc<[u8]>>,
@@ -549,6 +550,69 @@ fn metrics_endpoint_state_prefers_reloaded_runtime_settings() {
     assert_eq!(state.endpoint.path, "/metrics-live");
     assert_eq!(state.endpoint.max_connections, 29);
     assert_eq!(state.endpoint.connection_timeout_ms, 3456);
+}
+
+#[test]
+fn watchdog_service_state_prefers_reloaded_runtime_view_settings() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let startup = tls_test_config(cert.clone(), key.clone(), Vec::new());
+    let startup_runtime = RuntimeConfig::from_config(&startup).expect("startup runtime");
+    let startup_shared =
+        Arc::new(super::QUICListener::build_shared_state(&startup_runtime).expect("shared"));
+
+    let mut reloaded = startup.clone();
+    reloaded.resilience.watchdog.enabled = true;
+    reloaded.resilience.watchdog.check_interval_ms = 321;
+    reloaded.resilience.watchdog.poll_stall_timeout_ms = 654;
+    reloaded.resilience.watchdog.timeout_error_rate_percent = 42;
+    reloaded.resilience.watchdog.unhealthy_consecutive_windows = 3;
+
+    let reloaded_runtime = RuntimeConfig::from_config(&reloaded).expect("reloaded runtime");
+    let reloaded_bundle = super::QUICListener::build_runtime_bundle(
+        "reloaded.yaml".to_string(),
+        reloaded.log.clone(),
+        &reloaded_runtime,
+    )
+    .expect("reloaded bundle");
+    let runtime_handle = Arc::new(super::RuntimeBundleHandle::new(reloaded_bundle));
+    let runtime_ctx = super::runtime_state::ControlPlaneRuntimeCtx::from_runtime_sources(
+        &startup_runtime,
+        startup_shared.as_ref(),
+        Some(Arc::clone(&runtime_handle)),
+    );
+    let runtime_view = runtime_ctx.current_view();
+    let task_registry = runtime_view.generation_tasks();
+    let expected_config =
+        WatchdogRuntimeConfig::from(&reloaded_runtime.policies.admission.watchdog);
+    let expected_metrics = runtime_view.metrics();
+    let expected_resilience = runtime_view.resilience();
+    let expected_watchdog = runtime_view.watchdog();
+
+    let spawn_state = super::QUICListener::watchdog_spawn_state(
+        super::runtime_state::WatchdogServiceCtx::new(runtime_view, task_registry),
+    );
+
+    assert_eq!(spawn_state.service.config.check_interval_ms, 321);
+    assert_eq!(spawn_state.service.config.poll_stall_timeout_ms, 654);
+    assert_eq!(spawn_state.service.config.timeout_error_rate_percent, 42);
+    assert_eq!(spawn_state.service.config.unhealthy_consecutive_windows, 3);
+    assert_eq!(
+        spawn_state.service.config.restart_cooldown_ms,
+        expected_config.restart_cooldown_ms
+    );
+    assert!(
+        Arc::ptr_eq(&spawn_state.service.metrics, &expected_metrics),
+        "watchdog service should use the metrics handle from the active runtime view"
+    );
+    assert!(
+        Arc::ptr_eq(&spawn_state.service.resilience, &expected_resilience),
+        "watchdog service should use the resilience handle from the active runtime view"
+    );
+    assert!(
+        Arc::ptr_eq(&spawn_state.service.watchdog, &expected_watchdog),
+        "watchdog service should use the watchdog handle from the active runtime view"
+    );
 }
 
 #[test]
