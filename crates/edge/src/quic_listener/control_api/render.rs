@@ -375,54 +375,163 @@ impl ControlApiBackendPlacementPayload {
 mod tests {
     use super::*;
 
-    #[test]
-    fn health_reason_labels_match_metric_reason_tokens() {
-        // obs Phase 4: control-plane `health_reason` must use the same tokens as
-        // the `spooky_health_failures_total{reason=…}` metric label so operators
-        // don't translate between surfaces.
+    fn assert_health_reason_token(reason: HealthFailureReason, expected: &'static str) {
+        let control_plane_reason = health_failure_reason_label(reason);
+        let structured_log_token = format!("health_reason={control_plane_reason}");
+
         assert_eq!(
-            health_failure_reason_label(HealthFailureReason::HttpStatus5xx),
-            "5xx"
+            control_plane_reason, expected,
+            "control-plane health reason token should stay canonical"
         );
         assert_eq!(
-            health_failure_reason_label(HealthFailureReason::Timeout),
-            "timeout"
-        );
-        assert_eq!(
-            health_failure_reason_label(HealthFailureReason::Transport),
-            "transport"
-        );
-        assert_eq!(health_failure_reason_label(HealthFailureReason::Tls), "tls");
-        assert_eq!(
-            health_failure_reason_label(HealthFailureReason::CircuitOpen),
-            "circuit_open"
+            structured_log_token,
+            format!("health_reason={expected}"),
+            "structured log token should reuse the canonical health reason value"
         );
     }
 
-    #[test]
-    fn backend_payload_serializes_health_reason_when_present() {
-        // The field appears only when unhealthy with a known reason, and is
-        // omitted otherwise (skip_serializing_if).
-        let with_reason = ControlApiBackendLifecyclePayload {
-            backend: "b".to_string(),
-            health: "unhealthy",
-            health_reason: Some("timeout"),
-            membership: "active",
-            authority_host: "h".to_string(),
-            authority_port: 443,
-            resolved_addrs: vec![],
-            resolution_generation: 0,
-            last_refresh_success_at_unix_seconds: None,
-            placements: vec![],
-        };
-        let json = serde_json::to_string(&with_reason).expect("serialize");
-        assert!(json.contains("\"health_reason\":\"timeout\""));
+    mod observability_contracts {
+        use super::*;
 
-        let without = ControlApiBackendLifecyclePayload {
-            health_reason: None,
-            ..with_reason
+        #[test]
+        fn control_plane_health_reason_tokens_match_metric_reason_labels() {
+            // obs Phase 4: control-plane `health_reason` must use the same tokens as
+            // the `spooky_health_failures_total{reason=…}` metric label so operators
+            // don't translate between surfaces.
+            assert_health_reason_token(HealthFailureReason::HttpStatus5xx, "5xx");
+            assert_health_reason_token(HealthFailureReason::Timeout, "timeout");
+            assert_health_reason_token(HealthFailureReason::Transport, "transport");
+            assert_health_reason_token(HealthFailureReason::Tls, "tls");
+            assert_health_reason_token(HealthFailureReason::CircuitOpen, "circuit_open");
+        }
+
+        #[test]
+        fn unhealthy_backend_reason_tokens_stay_aligned_across_surfaces() {
+            for (reason, expected) in [
+                (HealthFailureReason::Timeout, "timeout"),
+                (HealthFailureReason::Transport, "transport"),
+                (HealthFailureReason::Tls, "tls"),
+            ] {
+                assert_health_reason_token(reason, expected);
+            }
+        }
+    }
+
+    mod runtime_snapshot_rendering {
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
+        use super::*;
+        use crate::runtime::backend::{
+            resolution::RuntimeBackendAddressKind,
+            state::{
+                BackendIdentity, BackendPoolPlacementSnapshot, BackendResolutionState,
+                CanonicalBackendLifecycleSnapshot,
+            },
         };
-        let json = serde_json::to_string(&without).expect("serialize");
-        assert!(!json.contains("health_reason"));
+
+        #[test]
+        fn backend_payload_serialization_omits_or_includes_optional_health_reason_by_contract() {
+            // The field appears only when unhealthy with a known reason, and is
+            // omitted otherwise (skip_serializing_if).
+            let with_reason = ControlApiBackendLifecyclePayload {
+                backend: "b".to_string(),
+                health: "unhealthy",
+                health_reason: Some("timeout"),
+                membership: "active",
+                authority_host: "h".to_string(),
+                authority_port: 443,
+                resolved_addrs: vec![],
+                resolution_generation: 0,
+                last_refresh_success_at_unix_seconds: None,
+                placements: vec![],
+            };
+            let json = serde_json::to_string(&with_reason).expect("serialize");
+            assert!(json.contains("\"health_reason\":\"timeout\""));
+
+            let without = ControlApiBackendLifecyclePayload {
+                health_reason: None,
+                ..with_reason
+            };
+            let json = serde_json::to_string(&without).expect("serialize");
+            assert!(!json.contains("health_reason"));
+        }
+
+        #[test]
+        fn backend_inventory_payload_preserves_runtime_snapshot_field_meanings() {
+            let inventory = BackendLifecycleInventorySnapshot {
+                backends: vec![
+                    CanonicalBackendLifecycleSnapshot {
+                        identity: BackendIdentity::new("backend-a"),
+                        resolution: BackendResolutionState {
+                            authority_host: "backend-a.internal".into(),
+                            authority_port: 8443,
+                            address_kind: RuntimeBackendAddressKind::Hostname,
+                            resolved_addrs: vec![SocketAddr::new(
+                                IpAddr::V4(Ipv4Addr::new(10, 0, 0, 10)),
+                                8443,
+                            )],
+                            last_refresh_success_at: None,
+                            refresh_generation: 4,
+                        },
+                        health: BackendHealthState::Unhealthy {
+                            reason: Some(HealthFailureReason::Timeout),
+                        },
+                        membership: BackendMembershipState::Suppressed,
+                        placements: Vec::new(),
+                    },
+                    CanonicalBackendLifecycleSnapshot {
+                        identity: BackendIdentity::new("backend-b"),
+                        resolution: BackendResolutionState {
+                            authority_host: "backend-b.internal".into(),
+                            authority_port: 9443,
+                            address_kind: RuntimeBackendAddressKind::IpLiteral,
+                            resolved_addrs: vec![SocketAddr::new(
+                                IpAddr::V4(Ipv4Addr::new(10, 0, 0, 11)),
+                                9443,
+                            )],
+                            last_refresh_success_at: None,
+                            refresh_generation: 2,
+                        },
+                        health: BackendHealthState::Healthy,
+                        membership: BackendMembershipState::Active,
+                        placements: vec![BackendPoolPlacementSnapshot {
+                            upstream_name: "api".into(),
+                            backend_index: 0,
+                            healthy: true,
+                            active_requests: 1,
+                            ewma_latency_ms: Some(12.5),
+                            membership_epoch: 9,
+                        }],
+                    },
+                ],
+            };
+
+            let payload = ControlApiBackendInventoryPayload::from_inventory(inventory, 1, 1);
+            let json = serde_json::to_value(payload).expect("serialize backend inventory");
+            let lifecycle = json["lifecycle"].as_array().expect("lifecycle array");
+
+            assert_eq!(lifecycle[0]["backend"], "backend-a");
+            assert_eq!(lifecycle[0]["health"], "unhealthy");
+            assert_eq!(lifecycle[0]["health_reason"], "timeout");
+            assert_eq!(lifecycle[0]["membership"], "suppressed");
+            assert_eq!(lifecycle[0]["authority_host"], "backend-a.internal");
+            assert_eq!(lifecycle[0]["authority_port"], 8443);
+            assert_eq!(lifecycle[0]["resolution_generation"], 4);
+
+            assert_eq!(lifecycle[1]["backend"], "backend-b");
+            assert_eq!(lifecycle[1]["health"], "healthy");
+            assert!(
+                lifecycle[1].get("health_reason").is_none(),
+                "healthy payloads must omit optional health_reason"
+            );
+            assert_eq!(lifecycle[1]["membership"], "active");
+            assert_eq!(
+                lifecycle[1]["placements"]
+                    .as_array()
+                    .expect("placements")
+                    .len(),
+                1
+            );
+        }
     }
 }

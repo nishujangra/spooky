@@ -166,3 +166,89 @@ fn lock_or_recover<'a, T>(mutex: &'a Mutex<T>, field: &str) -> MutexGuard<'a, T>
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_watchdog_config() -> WatchdogRuntimeConfig {
+        WatchdogRuntimeConfig {
+            enabled: true,
+            check_interval_ms: 10,
+            poll_stall_timeout_ms: 1_000,
+            timeout_error_rate_percent: 50,
+            min_requests_per_window: 1,
+            overload_inflight_percent: 90,
+            unhealthy_consecutive_windows: 2,
+            drain_grace_ms: 100,
+            restart_cooldown_ms: 60_000,
+            restart_command: vec!["true".to_string()],
+            restart_hook: None,
+        }
+    }
+
+    #[test]
+    fn restart_cycle_transitions_idle_to_pending_then_completes() {
+        let watchdog = WatchdogCoordinator::from_runtime_config(&test_watchdog_config());
+        watchdog.set_expected_workers(2);
+
+        assert!(!watchdog.restart_requested());
+        assert!(!watchdog.is_degraded());
+        assert!(!watchdog.workers_drained());
+
+        watchdog.set_degraded(true);
+        assert!(watchdog.request_restart("timeout_spike"));
+        assert!(watchdog.restart_requested());
+        assert_eq!(watchdog.restart_reason(), "timeout_spike");
+        assert!(watchdog.restart_requested_at_ms() > 0);
+        assert!(watchdog.restart_requested_elapsed_ms().is_some());
+        assert!(!watchdog.workers_drained());
+
+        watchdog.mark_worker_drained();
+        assert!(!watchdog.workers_drained());
+        watchdog.mark_worker_drained();
+        assert!(watchdog.workers_drained());
+
+        watchdog.complete_restart_cycle();
+
+        assert!(!watchdog.restart_requested());
+        assert_eq!(watchdog.restart_requested_at_ms(), 0);
+        assert!(watchdog.restart_requested_elapsed_ms().is_none());
+        assert!(!watchdog.is_degraded());
+        assert!(!watchdog.workers_drained());
+    }
+
+    #[test]
+    fn restart_request_is_idempotent_and_cooldown_blocks_immediate_followup() {
+        let watchdog = WatchdogCoordinator::from_runtime_config(&test_watchdog_config());
+
+        assert!(watchdog.request_restart("poll_stall"));
+        assert!(
+            !watchdog.request_restart("timeout_spike"),
+            "a pending restart request must not be replaced in place"
+        );
+        assert_eq!(watchdog.restart_reason(), "poll_stall");
+
+        watchdog.complete_restart_cycle();
+
+        assert!(
+            !watchdog.request_restart("timeout_spike"),
+            "cooldown should reject an immediate follow-up restart request"
+        );
+        assert!(!watchdog.restart_requested());
+    }
+
+    #[test]
+    fn mark_worker_drained_is_ignored_without_pending_restart() {
+        let watchdog = WatchdogCoordinator::from_runtime_config(&test_watchdog_config());
+        watchdog.set_expected_workers(2);
+
+        watchdog.mark_worker_drained();
+        watchdog.mark_worker_drained();
+
+        assert!(
+            !watchdog.workers_drained(),
+            "worker drain accounting should only advance while a restart is pending"
+        );
+    }
+}

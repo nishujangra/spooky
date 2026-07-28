@@ -185,3 +185,152 @@ pub(crate) async fn run_watchdog_service(state: WatchdogServiceState) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{
+        sync::{Arc, atomic::Ordering},
+        time::Duration,
+    };
+
+    use spooky_config::config::Resilience as ResilienceConfig;
+
+    use super::*;
+    use crate::{
+        Metrics, resilience::runtime::RuntimeResilience, watchdog::coordinator::WatchdogCoordinator,
+    };
+
+    fn test_watchdog_config() -> crate::watchdog::config::WatchdogRuntimeConfig {
+        crate::watchdog::config::WatchdogRuntimeConfig {
+            enabled: true,
+            check_interval_ms: 5,
+            poll_stall_timeout_ms: 60_000,
+            timeout_error_rate_percent: 50,
+            min_requests_per_window: 1,
+            overload_inflight_percent: 100,
+            unhealthy_consecutive_windows: 2,
+            drain_grace_ms: 60_000,
+            restart_cooldown_ms: 1,
+            restart_command: vec!["true".to_string()],
+            restart_hook: None,
+        }
+    }
+
+    fn test_service_state(
+        config: crate::watchdog::config::WatchdogRuntimeConfig,
+    ) -> (
+        WatchdogServiceState,
+        Arc<Metrics>,
+        Arc<RuntimeResilience>,
+        Arc<WatchdogCoordinator>,
+    ) {
+        let metrics = Arc::new(Metrics::default());
+        let resilience = Arc::new(RuntimeResilience::from_config(
+            &ResilienceConfig::default(),
+            1,
+        ));
+        let watchdog = Arc::new(WatchdogCoordinator::from_runtime_config(&config));
+        (
+            WatchdogServiceState {
+                config,
+                metrics: Arc::clone(&metrics),
+                resilience: Arc::clone(&resilience),
+                watchdog: Arc::clone(&watchdog),
+            },
+            metrics,
+            resilience,
+            watchdog,
+        )
+    }
+
+    async fn wait_until(timeout: Duration, mut predicate: impl FnMut() -> bool, context: &str) {
+        let start = tokio::time::Instant::now();
+        while start.elapsed() < timeout {
+            if predicate() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        panic!("timed out waiting for {context}");
+    }
+
+    #[tokio::test]
+    async fn watchdog_service_requests_restart_after_consecutive_timeout_windows() {
+        let (state, metrics, _resilience, watchdog) = test_service_state(test_watchdog_config());
+
+        let task = tokio::spawn(run_watchdog_service(state));
+        tokio::task::yield_now().await;
+
+        metrics.requests_total.store(10, Ordering::Relaxed);
+        metrics.backend_timeouts.store(6, Ordering::Relaxed);
+        wait_until(
+            Duration::from_millis(100),
+            || watchdog.is_degraded(),
+            "first degraded watchdog window",
+        )
+        .await;
+        assert!(!watchdog.restart_requested());
+
+        metrics.requests_total.store(20, Ordering::Relaxed);
+        metrics.backend_timeouts.store(12, Ordering::Relaxed);
+        wait_until(
+            Duration::from_millis(100),
+            || watchdog.restart_requested(),
+            "watchdog restart request",
+        )
+        .await;
+
+        assert_eq!(watchdog.restart_reason(), "timeout_spike");
+        assert_eq!(metrics.watchdog_degraded_windows.load(Ordering::Relaxed), 2);
+        assert_eq!(metrics.watchdog_restart_requests.load(Ordering::Relaxed), 1);
+
+        task.abort();
+        let _ = task.await;
+    }
+
+    #[tokio::test]
+    async fn watchdog_service_resets_degraded_window_progression_after_recovery() {
+        let (state, metrics, _resilience, watchdog) = test_service_state(test_watchdog_config());
+
+        let task = tokio::spawn(run_watchdog_service(state));
+        tokio::task::yield_now().await;
+
+        metrics.requests_total.store(10, Ordering::Relaxed);
+        metrics.backend_timeouts.store(6, Ordering::Relaxed);
+        wait_until(
+            Duration::from_millis(100),
+            || watchdog.is_degraded(),
+            "initial degraded watchdog window",
+        )
+        .await;
+        assert_eq!(metrics.watchdog_degraded_windows.load(Ordering::Relaxed), 1);
+
+        metrics.requests_total.store(10, Ordering::Relaxed);
+        metrics.backend_timeouts.store(6, Ordering::Relaxed);
+        wait_until(
+            Duration::from_millis(100),
+            || !watchdog.is_degraded(),
+            "watchdog recovery window",
+        )
+        .await;
+        assert!(!watchdog.restart_requested());
+
+        metrics.requests_total.store(20, Ordering::Relaxed);
+        metrics.backend_timeouts.store(12, Ordering::Relaxed);
+        wait_until(
+            Duration::from_millis(100),
+            || watchdog.is_degraded(),
+            "post-recovery degraded watchdog window",
+        )
+        .await;
+
+        assert!(
+            !watchdog.restart_requested(),
+            "a recovered healthy window should reset degraded progression before the next failure window"
+        );
+        assert_eq!(metrics.watchdog_degraded_windows.load(Ordering::Relaxed), 2);
+
+        task.abort();
+        let _ = task.await;
+    }
+}

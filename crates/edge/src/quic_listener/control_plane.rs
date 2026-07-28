@@ -112,22 +112,7 @@ impl QUICListener {
     }
 
     fn spawn_watchdog_service(service_ctx: WatchdogServiceCtx) {
-        let spawn_state = WatchdogSpawnState {
-            service: WatchdogServiceState {
-                config: WatchdogRuntimeConfig::from(
-                    &service_ctx
-                        .runtime
-                        .runtime_config()
-                        .policies
-                        .admission
-                        .watchdog,
-                ),
-                metrics: service_ctx.runtime.metrics(),
-                resilience: service_ctx.runtime.resilience(),
-                watchdog: service_ctx.runtime.watchdog(),
-            },
-            task_registry: Arc::clone(&service_ctx.task_registry),
-        };
+        let spawn_state = Self::watchdog_spawn_state(service_ctx);
         if !spawn_state.service.is_enabled() {
             return;
         }
@@ -147,5 +132,24 @@ impl QUICListener {
             run_watchdog_service(spawn_state.service),
         );
         spawn_state.task_registry.register(registration);
+    }
+
+    pub(super) fn watchdog_spawn_state(service_ctx: WatchdogServiceCtx) -> WatchdogSpawnState {
+        WatchdogSpawnState {
+            service: WatchdogServiceState {
+                config: WatchdogRuntimeConfig::from(
+                    &service_ctx
+                        .runtime
+                        .runtime_config()
+                        .policies
+                        .admission
+                        .watchdog,
+                ),
+                metrics: service_ctx.runtime.metrics(),
+                resilience: service_ctx.runtime.resilience(),
+                watchdog: service_ctx.runtime.watchdog(),
+            },
+            task_registry: Arc::clone(&service_ctx.task_registry),
+        }
     }
 }

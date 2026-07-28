@@ -1,5 +1,7 @@
 use std::{collections::HashMap, ffi::OsString, path::Path, sync::Arc};
 
+use ::http::{Method, Request, header};
+use bytes::Bytes;
 use http_body_util::BodyExt;
 use log::LevelFilter;
 use spooky_config::{
@@ -131,6 +133,56 @@ fn runtime_bundle_control_api_state(
     (state, runtime_handle)
 }
 
+fn control_api_request(method: Method, path: &str, authorization: Option<&str>) -> Request<()> {
+    let mut builder = Request::builder().method(method).uri(path);
+    if let Some(value) = authorization {
+        builder = builder.header(header::AUTHORIZATION, value);
+    }
+    builder.body(()).expect("control api request")
+}
+
+async fn full_body_bytes(response: Response<http_body_util::Full<Bytes>>) -> Bytes {
+    response
+        .into_body()
+        .collect()
+        .await
+        .expect("collect response body")
+        .to_bytes()
+}
+
+async fn json_body(response: Response<http_body_util::Full<Bytes>>) -> serde_json::Value {
+    serde_json::from_slice(&full_body_bytes(response).await).expect("json response body")
+}
+
+fn default_control_api_state() -> ControlApiState {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let mut startup = test_config(cert.clone(), key.clone());
+    startup.observability.control_api.enabled = true;
+    startup.observability.control_api.auth_token = Some("secret-token".to_string());
+    control_api_state_with_runtime_bundle(&startup, &startup)
+}
+
+fn assert_structured_resource_preflight_message(
+    rejection: &crate::runtime::policy::TransitionRejection,
+) {
+    let field = rejection
+        .field_path
+        .as_deref()
+        .expect("resource field path");
+    let detail = rejection
+        .requested_mode
+        .as_deref()
+        .expect("resource failure detail");
+    assert_eq!(
+        rejection.to_string(),
+        format!(
+            "runtime reload rejected: could not prepare {field}: {detail}; active runtime unchanged (no change applied)"
+        )
+    );
+}
+
+// Domain: watchdog service state transitions and restart environment handling.
 #[test]
 fn watchdog_restart_env_keeps_path_when_present() {
     let env = crate::watchdog::service::watchdog_restart_env(
@@ -161,6 +213,7 @@ fn watchdog_restart_env_omits_path_when_missing() {
     );
 }
 
+// Domain: control API auth and route gating contracts.
 #[test]
 fn bearer_authorization_scheme_is_case_insensitive() {
     assert_eq!(
@@ -193,6 +246,156 @@ fn bearer_authorization_rejects_malformed_headers() {
     );
 }
 
+#[test]
+fn control_api_route_gating_accepts_only_canonical_method_and_path_pairs() {
+    let state = default_control_api_state();
+    let paths = state.current_paths();
+
+    let cases = [
+        (
+            Method::GET,
+            paths.health_path.clone(),
+            Some(super::auth::ControlApiRoute::Health),
+        ),
+        (
+            Method::GET,
+            paths.ready_path.clone(),
+            Some(super::auth::ControlApiRoute::Ready),
+        ),
+        (
+            Method::GET,
+            paths.runtime_path.clone(),
+            Some(super::auth::ControlApiRoute::Runtime),
+        ),
+        (
+            Method::POST,
+            paths.reload_certs_path.clone(),
+            Some(super::auth::ControlApiRoute::ReloadCerts),
+        ),
+        (
+            Method::POST,
+            paths.reload_path.clone(),
+            Some(super::auth::ControlApiRoute::ReloadRuntime),
+        ),
+        (
+            Method::POST,
+            paths.restart_path.clone(),
+            Some(super::auth::ControlApiRoute::Restart),
+        ),
+        (Method::POST, paths.runtime_path.clone(), None),
+        (Method::GET, paths.reload_path.clone(), None),
+        (Method::GET, "/missing".to_string(), None),
+    ];
+
+    for (method, path, expected) in cases {
+        let req = control_api_request(method, &path, None);
+        assert_eq!(
+            QUICListener::control_api_request_route_for(&req, &state.current_paths()),
+            expected,
+            "unexpected route decision for {} {}",
+            req.method(),
+            req.uri().path()
+        );
+    }
+}
+
+#[test]
+fn control_api_route_gating_leaves_health_and_ready_ungated_by_auth() {
+    let state = default_control_api_state();
+    let paths = state.current_paths();
+
+    for path in [&paths.health_path, &paths.ready_path] {
+        let req = control_api_request(Method::GET, path, None);
+        let route = QUICListener::gate_control_api_request_for(&req, &state)
+            .expect("health and ready routes should bypass auth");
+        assert!(matches!(
+            route,
+            super::auth::ControlApiRoute::Health | super::auth::ControlApiRoute::Ready
+        ));
+    }
+}
+
+#[test]
+fn control_api_authorization_uses_token_matching_independent_of_request_body_type() {
+    let state = default_control_api_state();
+    let runtime_path = state.current_paths().runtime_path;
+    let authorized = control_api_request(Method::GET, &runtime_path, Some("Bearer secret-token"));
+    let malformed = control_api_request(Method::GET, &runtime_path, Some("Bearer"));
+    let missing = control_api_request(Method::GET, &runtime_path, None);
+
+    assert!(QUICListener::control_api_is_authorized_for(
+        &authorized,
+        &state.current_control_api()
+    ));
+    assert!(!QUICListener::control_api_is_authorized_for(
+        &malformed,
+        &state.current_control_api()
+    ));
+    assert!(!QUICListener::control_api_is_authorized_for(
+        &missing,
+        &state.current_control_api()
+    ));
+}
+
+#[tokio::test]
+async fn control_api_gate_returns_canonical_unauthorized_payloads_per_route() {
+    let state = default_control_api_state();
+    let paths = state.current_paths();
+
+    let cases = [
+        (
+            Method::GET,
+            paths.runtime_path.clone(),
+            serde_json::json!({ "error": "unauthorized" }),
+        ),
+        (
+            Method::POST,
+            paths.reload_certs_path.clone(),
+            serde_json::json!({ "reloaded": false, "error": "unauthorized" }),
+        ),
+        (
+            Method::POST,
+            paths.reload_path.clone(),
+            serde_json::json!({ "reloaded": false, "error": "unauthorized" }),
+        ),
+        (
+            Method::POST,
+            paths.restart_path.clone(),
+            serde_json::json!({ "accepted": false, "error": "unauthorized" }),
+        ),
+    ];
+
+    for (method, path, expected_body) in cases {
+        let req = control_api_request(method, &path, None);
+        let response = QUICListener::gate_control_api_request_for(&req, &state)
+            .expect_err("protected route should reject missing auth");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        let body = full_body_bytes(*response).await;
+        let payload: serde_json::Value =
+            serde_json::from_slice(&body).expect("unauthorized payload");
+        assert_eq!(payload, expected_body);
+    }
+}
+
+#[tokio::test]
+async fn control_api_gate_returns_not_found_for_invalid_routes_without_transport_coupling() {
+    let state = default_control_api_state();
+    let req = control_api_request(
+        Method::DELETE,
+        &state.current_paths().runtime_path,
+        Some("Bearer secret-token"),
+    );
+
+    let response = QUICListener::gate_control_api_request_for(&req, &state)
+        .expect_err("invalid route should map to not found");
+    assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        full_body_bytes(*response).await,
+        Bytes::from_static(b"not found\n")
+    );
+}
+
+// Domain: runtime snapshot rendering and live runtime-view selection.
 #[test]
 fn control_api_state_prefers_reloaded_paths_and_auth_token() {
     let dir = tempdir().expect("tempdir");
@@ -324,6 +527,117 @@ fn control_api_backend_inventory_and_summary_share_one_canonical_snapshot_contra
     assert_eq!(summary.healthy_backends, 1);
 }
 
+#[tokio::test]
+async fn control_api_runtime_snapshot_renders_live_generation_listener_and_backend_contract() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let mut startup = test_config(cert.clone(), key.clone());
+    startup.observability.control_api.enabled = true;
+
+    let startup_bundle = runtime_bundle_from_config("startup.yaml", &startup);
+    let (state, runtime_handle) = runtime_bundle_control_api_state(startup_bundle);
+
+    let mut reloaded = startup.clone();
+    reloaded.listeners = vec![
+        Listen {
+            protocol: "http3".to_string(),
+            port: 9890,
+            address: "127.0.0.1".to_string(),
+            tls: Tls {
+                cert: cert.clone(),
+                key: key.clone(),
+                certificates: vec![],
+                client_auth: ClientAuth {
+                    enabled: true,
+                    ca_file: Some(cert.clone()),
+                    require_client_cert: true,
+                },
+            },
+        },
+        startup.listen.clone(),
+    ];
+    reloaded.observability.metrics.path = "/metrics-live".to_string();
+
+    let mut reloaded_bundle = runtime_bundle_from_config("reloaded.yaml", &reloaded);
+    reloaded_bundle.generation = 1;
+    runtime_handle
+        .replace(reloaded_bundle)
+        .expect("replace runtime bundle");
+
+    let live = runtime_handle.current_view();
+    live.shared_services()
+        .metrics
+        .requests_total
+        .store(11, std::sync::atomic::Ordering::Relaxed);
+    live.shared_services()
+        .metrics
+        .requests_success
+        .store(7, std::sync::atomic::Ordering::Relaxed);
+    live.shared_services()
+        .metrics
+        .requests_failure
+        .store(4, std::sync::atomic::Ordering::Relaxed);
+    live.shared_services()
+        .metrics
+        .active_connections
+        .store(3, std::sync::atomic::Ordering::Relaxed);
+
+    let payload = json_body(QUICListener::render_control_api_runtime_snapshot(&state)).await;
+
+    assert_eq!(payload["runtime"]["generation"], 1);
+    assert_eq!(payload["runtime"]["config_path"], "reloaded.yaml");
+    assert_eq!(payload["metrics"]["requests_total"], 11);
+    assert_eq!(payload["metrics"]["requests_success"], 7);
+    assert_eq!(payload["metrics"]["requests_failure"], 4);
+    assert_eq!(payload["metrics"]["active_connections"], 3);
+
+    let listeners = payload["tls"]["listeners"]
+        .as_object()
+        .expect("listeners object");
+    assert!(
+        listeners.contains_key("127.0.0.1:9890"),
+        "runtime snapshot should render listener inventory from the active generation"
+    );
+    assert!(
+        listeners.contains_key("127.0.0.1:9889"),
+        "runtime snapshot should keep the secondary listener visible"
+    );
+    assert_eq!(
+        listeners["127.0.0.1:9890"]["client_auth_enabled"],
+        serde_json::Value::Bool(true)
+    );
+    assert_eq!(
+        listeners["127.0.0.1:9890"]["require_client_cert"],
+        serde_json::Value::Bool(true)
+    );
+
+    assert_eq!(payload["backends"]["healthy"], 1);
+    assert_eq!(payload["backends"]["total"], 1);
+    let lifecycle = payload["backends"]["lifecycle"]
+        .as_array()
+        .expect("backend lifecycle array");
+    assert_eq!(lifecycle.len(), 1);
+    let backend = &lifecycle[0];
+    assert_eq!(backend["backend"], "http://127.0.0.1:7001");
+    assert_eq!(backend["health"], "healthy");
+    assert_eq!(backend["membership"], "active");
+    assert_eq!(backend["authority_host"], "127.0.0.1");
+    assert_eq!(backend["authority_port"], 7001);
+    assert_eq!(backend["resolution_generation"], 0);
+    assert!(
+        backend.get("health_reason").is_none(),
+        "healthy rendered backends must omit optional health_reason"
+    );
+    assert_eq!(
+        backend["placements"]
+            .as_array()
+            .expect("placement array")
+            .len(),
+        1
+    );
+}
+
+// Domain: watchdog/runtime ownership alignment across reload boundaries.
 #[test]
 fn reload_preserves_process_scoped_watchdog_and_dns_resolver() {
     // Regression: process-shared services must be carried across a reload, not
@@ -382,6 +696,7 @@ fn reload_preserves_process_scoped_watchdog_and_dns_resolver() {
     );
 }
 
+// Domain: reload compatibility classification and lifecycle gatekeeping.
 #[test]
 fn live_reloadable_upstream_change_is_accepted() {
     // Phase 9 (#1): a generation-owned change (upstream/route table) must pass
@@ -410,6 +725,29 @@ fn live_reloadable_upstream_change_is_accepted() {
     assert!(
         result.is_ok(),
         "generation-owned upstream change must be live-reloadable, got: {result:?}"
+    );
+}
+
+#[test]
+fn reload_compatibility_classifies_generation_owned_changes_as_live_reloadable() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let current = test_config(cert, key);
+
+    let mut next = current.clone();
+    next.upstream
+        .get_mut("api")
+        .expect("api upstream")
+        .route
+        .path_prefix = Some("/live".to_string());
+
+    let current_bundle = runtime_bundle_from_config("current.yaml", &current);
+    let next_bundle = runtime_bundle_from_config("next.yaml", &next);
+    let active = RuntimeBundleHandle::new(current_bundle).current_view();
+
+    assert!(
+        QUICListener::evaluate_runtime_reload_compatibility(&active, &next_bundle).is_ok(),
+        "generation-owned routing changes should stay reloadable"
     );
 }
 
@@ -443,6 +781,41 @@ fn restart_required_change_rejects_before_touching_active_generation() {
     );
     // The active generation is untouched by the rejected evaluation.
     assert_eq!(handle.current_generation(), generation_before);
+}
+
+#[test]
+fn reload_compatibility_classifies_startup_owned_changes_as_restart_required() {
+    use crate::runtime::policy::TransitionRejectionKind;
+
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let current = test_config(cert, key);
+
+    let mut next = current.clone();
+    let current_threads = current.performance.control_plane_threads;
+    let next_threads = current_threads.saturating_add(2);
+    next.performance.control_plane_threads = next_threads;
+
+    let current_bundle = runtime_bundle_from_config("current.yaml", &current);
+    let next_bundle = runtime_bundle_from_config("next.yaml", &next);
+    let active = RuntimeBundleHandle::new(current_bundle).current_view();
+
+    let rejections = QUICListener::evaluate_runtime_reload_compatibility(&active, &next_bundle)
+        .expect_err("startup-owned change must reject the reload");
+    assert_eq!(rejections.len(), 1);
+    let rejection = &rejections[0];
+    assert_eq!(rejection.kind, TransitionRejectionKind::RestartRequired);
+    assert!(rejection.requires_restart());
+    assert_eq!(
+        rejection.field_path.as_deref(),
+        Some("performance.control_plane_threads")
+    );
+    assert_eq!(
+        rejection.to_string(),
+        format!(
+            "runtime reload rejected: performance.control_plane_threads changed from {current_threads} to {next_threads}; restart required"
+        )
+    );
 }
 
 #[test]
@@ -697,6 +1070,41 @@ fn validate_runtime_reload_compatibility_allows_listener_addition_when_binds_are
 }
 
 #[test]
+fn validate_runtime_reload_compatibility_classifies_listener_bind_conflict_as_preflight_failure() {
+    use crate::runtime::policy::TransitionRejectionKind;
+
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let current = test_config(cert.clone(), key.clone());
+
+    let occupied = std::net::UdpSocket::bind("127.0.0.1:0").expect("bind occupied udp");
+    let occupied_port = occupied.local_addr().expect("occupied addr").port();
+
+    let mut next = current.clone();
+    let mut extra_listener = next.listen.clone();
+    extra_listener.port = occupied_port;
+    next.listeners = vec![next.listen.clone(), extra_listener];
+
+    let current_bundle = runtime_bundle_from_config("current.yaml", &current);
+    let next_bundle = runtime_bundle_from_config("next.yaml", &next);
+
+    let rejection =
+        QUICListener::validate_runtime_reload_compatibility(&current_bundle, &next_bundle)
+            .expect("listener bind conflict must reject");
+    let expected_field = format!("QUIC listener '127.0.0.1:{occupied_port}'");
+    assert_eq!(
+        rejection.kind,
+        TransitionRejectionKind::ResourcePreparationFailed
+    );
+    assert!(!rejection.requires_restart());
+    assert_eq!(
+        rejection.field_path.as_deref(),
+        Some(expected_field.as_str())
+    );
+    assert_structured_resource_preflight_message(&rejection);
+}
+
+#[test]
 fn validate_runtime_reload_compatibility_rejects_listener_removal() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
@@ -745,6 +1153,76 @@ fn validate_runtime_reload_compatibility_rejects_listener_bind_change() {
 }
 
 #[test]
+fn validate_control_api_reload_compatibility_classifies_bind_conflict_as_preflight_failure() {
+    use crate::runtime::policy::TransitionRejectionKind;
+
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let current = test_config(cert.clone(), key.clone());
+
+    let occupied = std::net::TcpListener::bind("127.0.0.1:0").expect("bind occupied tcp");
+    let occupied_port = occupied.local_addr().expect("occupied addr").port();
+
+    let mut next = current.clone();
+    next.observability.control_api.enabled = true;
+    next.observability.control_api.address = "127.0.0.1".to_string();
+    next.observability.control_api.port = occupied_port;
+
+    let current_bundle = runtime_bundle_from_config("current.yaml", &current);
+    let next_bundle = runtime_bundle_from_config("next.yaml", &next);
+
+    let rejection =
+        QUICListener::validate_control_api_reload_compatibility(&current_bundle, &next_bundle)
+            .expect("control api bind conflict must reject");
+    let expected_field = format!("control API endpoint '127.0.0.1:{occupied_port}'");
+    assert_eq!(
+        rejection.kind,
+        TransitionRejectionKind::ResourcePreparationFailed
+    );
+    assert_eq!(
+        rejection.field_path.as_deref(),
+        Some(expected_field.as_str())
+    );
+    assert!(!rejection.requires_restart());
+    assert_structured_resource_preflight_message(&rejection);
+}
+
+#[test]
+fn validate_metrics_reload_compatibility_classifies_bind_conflict_as_preflight_failure() {
+    use crate::runtime::policy::TransitionRejectionKind;
+
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let current = test_config(cert.clone(), key.clone());
+
+    let occupied = std::net::TcpListener::bind("127.0.0.1:0").expect("bind occupied tcp");
+    let occupied_port = occupied.local_addr().expect("occupied addr").port();
+
+    let mut next = current.clone();
+    next.observability.metrics.enabled = true;
+    next.observability.metrics.address = "127.0.0.1".to_string();
+    next.observability.metrics.port = occupied_port;
+
+    let current_bundle = runtime_bundle_from_config("current.yaml", &current);
+    let next_bundle = runtime_bundle_from_config("next.yaml", &next);
+
+    let rejection =
+        QUICListener::validate_metrics_reload_compatibility(&current_bundle, &next_bundle)
+            .expect("metrics bind conflict must reject");
+    let expected_field = format!("metrics endpoint '127.0.0.1:{occupied_port}'");
+    assert_eq!(
+        rejection.kind,
+        TransitionRejectionKind::ResourcePreparationFailed
+    );
+    assert_eq!(
+        rejection.field_path.as_deref(),
+        Some(expected_field.as_str())
+    );
+    assert!(!rejection.requires_restart());
+    assert_structured_resource_preflight_message(&rejection);
+}
+
+#[test]
 fn validate_startup_owned_reload_compatibility_rejects_control_plane_thread_change() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
@@ -779,6 +1257,7 @@ fn apply_live_log_level_reload_updates_global_filter() {
     assert_eq!(log::max_level(), LevelFilter::Debug);
 }
 
+// Domain: control-plane certificate reload and atomic service update behavior.
 #[tokio::test]
 async fn runtime_bundle_cert_reload_ignores_unrelated_config_drift_and_bundle_swap() {
     let dir = tempdir().expect("tempdir");
