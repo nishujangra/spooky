@@ -370,46 +370,50 @@ mod tests {
         bundle
     }
 
-    #[test]
-    fn stale_generation_views_do_not_change_after_runtime_bundle_replacement() {
-        let dir = tempdir().expect("tempdir");
-        let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
-        let startup = test_config(cert.clone(), key.clone(), "http://127.0.0.1:7001");
-        let reloaded = test_config(cert, key, "http://127.0.0.1:7002");
+    mod runtime_generation_view_ownership {
+        use super::*;
 
-        let current_bundle = runtime_bundle_from_config(1, "startup.yaml", &startup);
-        let next_bundle = runtime_bundle_from_config(2, "reloaded.yaml", &reloaded);
-        let handle = RuntimeBundleHandle::new(current_bundle.clone());
+        #[test]
+        fn stale_generation_views_do_not_change_after_runtime_bundle_replacement() {
+            let dir = tempdir().expect("tempdir");
+            let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+            let startup = test_config(cert.clone(), key.clone(), "http://127.0.0.1:7001");
+            let reloaded = test_config(cert, key, "http://127.0.0.1:7002");
 
-        let stale = handle.current_view();
-        let installed = handle.replace(next_bundle).expect("replace");
+            let current_bundle = runtime_bundle_from_config(1, "startup.yaml", &startup);
+            let next_bundle = runtime_bundle_from_config(2, "reloaded.yaml", &reloaded);
+            let handle = RuntimeBundleHandle::new(current_bundle.clone());
 
-        assert_eq!(installed, 2);
-        assert_eq!(handle.current_generation(), 2);
-        assert_eq!(stale.generation(), 1);
-        assert_eq!(stale.startup().config_path, "startup.yaml");
-        assert_eq!(
-            stale
-                .runtime_config()
-                .upstreams
-                .get("api")
-                .expect("stale upstream")
-                .backends[0]
-                .backend
-                .address,
-            "http://127.0.0.1:7001"
-        );
-        assert_eq!(
-            handle
-                .current()
-                .runtime_config
-                .upstreams
-                .get("api")
-                .expect("current upstream")
-                .backends[0]
-                .backend
-                .address,
-            "http://127.0.0.1:7002"
-        );
+            let stale = handle.current_view();
+            let installed = handle.replace(next_bundle).expect("replace");
+
+            assert_eq!(installed, 2);
+            assert_eq!(handle.current_generation(), 2);
+            assert_eq!(stale.generation(), 1);
+            assert_eq!(stale.startup().config_path, "startup.yaml");
+            assert_eq!(
+                stale
+                    .runtime_config()
+                    .upstreams
+                    .get("api")
+                    .expect("stale upstream")
+                    .backends[0]
+                    .backend
+                    .address,
+                "http://127.0.0.1:7001"
+            );
+            assert_eq!(
+                handle
+                    .current()
+                    .runtime_config
+                    .upstreams
+                    .get("api")
+                    .expect("current upstream")
+                    .backends[0]
+                    .backend
+                    .address,
+                "http://127.0.0.1:7002"
+            );
+        }
     }
 }

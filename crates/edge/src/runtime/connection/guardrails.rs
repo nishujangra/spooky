@@ -346,529 +346,549 @@ pub(crate) fn response_chunk_ranges(
 mod tests {
     use super::*;
 
-    #[test]
-    fn request_body_idle_timeout_rejects() {
-        let decision = evaluate_request_body_timeouts(
-            RequestBodyGuardrailConfig {
-                idle_timeout: Duration::from_secs(5),
-                total_timeout: Duration::from_secs(30),
-                max_body_bytes: usize::MAX,
-                max_buffered_bytes: usize::MAX,
-            },
-            RequestBodyGuardrailInput {
-                elapsed: Duration::from_secs(4),
-                idle_for: Duration::from_secs(5),
-                bytes_received: 0,
-                buffered_bytes: 0,
-                next_chunk_bytes: 0,
-                declared_content_length: None,
-                exempt_from_body_size_cap: false,
-            },
-        );
+    mod request_body_ingress {
+        use super::*;
 
-        assert_eq!(
-            decision,
-            RequestBodyGuardrailDecision::Timeout {
-                kind: BodyTimeoutKind::Idle,
-            }
-        );
-    }
+        #[test]
+        fn request_body_idle_timeout_rejects() {
+            let decision = evaluate_request_body_timeouts(
+                RequestBodyGuardrailConfig {
+                    idle_timeout: Duration::from_secs(5),
+                    total_timeout: Duration::from_secs(30),
+                    max_body_bytes: usize::MAX,
+                    max_buffered_bytes: usize::MAX,
+                },
+                RequestBodyGuardrailInput {
+                    elapsed: Duration::from_secs(4),
+                    idle_for: Duration::from_secs(5),
+                    bytes_received: 0,
+                    buffered_bytes: 0,
+                    next_chunk_bytes: 0,
+                    declared_content_length: None,
+                    exempt_from_body_size_cap: false,
+                },
+            );
 
-    #[test]
-    fn request_body_total_timeout_rejects() {
-        let decision = evaluate_request_body_timeouts(
-            RequestBodyGuardrailConfig {
-                idle_timeout: Duration::from_secs(5),
-                total_timeout: Duration::from_secs(30),
-                max_body_bytes: usize::MAX,
-                max_buffered_bytes: usize::MAX,
-            },
-            RequestBodyGuardrailInput {
-                elapsed: Duration::from_secs(30),
-                idle_for: Duration::from_secs(1),
-                bytes_received: 0,
-                buffered_bytes: 0,
-                next_chunk_bytes: 0,
-                declared_content_length: None,
-                exempt_from_body_size_cap: false,
-            },
-        );
+            assert_eq!(
+                decision,
+                RequestBodyGuardrailDecision::Timeout {
+                    kind: BodyTimeoutKind::Idle,
+                }
+            );
+        }
 
-        assert_eq!(
-            decision,
-            RequestBodyGuardrailDecision::Timeout {
-                kind: BodyTimeoutKind::Total,
-            }
-        );
-    }
+        #[test]
+        fn request_body_total_timeout_rejects() {
+            let decision = evaluate_request_body_timeouts(
+                RequestBodyGuardrailConfig {
+                    idle_timeout: Duration::from_secs(5),
+                    total_timeout: Duration::from_secs(30),
+                    max_body_bytes: usize::MAX,
+                    max_buffered_bytes: usize::MAX,
+                },
+                RequestBodyGuardrailInput {
+                    elapsed: Duration::from_secs(30),
+                    idle_for: Duration::from_secs(1),
+                    bytes_received: 0,
+                    buffered_bytes: 0,
+                    next_chunk_bytes: 0,
+                    declared_content_length: None,
+                    exempt_from_body_size_cap: false,
+                },
+            );
 
-    #[test]
-    fn request_body_size_cap_respects_connect_exemption() {
-        let config = RequestBodyGuardrailConfig {
-            idle_timeout: Duration::from_secs(5),
-            total_timeout: Duration::from_secs(30),
-            max_body_bytes: 16,
-            max_buffered_bytes: usize::MAX,
-        };
-        let input = RequestBodyGuardrailInput {
-            elapsed: Duration::ZERO,
-            idle_for: Duration::ZERO,
-            bytes_received: 12,
-            buffered_bytes: 0,
-            next_chunk_bytes: 8,
-            declared_content_length: None,
-            exempt_from_body_size_cap: true,
-        };
+            assert_eq!(
+                decision,
+                RequestBodyGuardrailDecision::Timeout {
+                    kind: BodyTimeoutKind::Total,
+                }
+            );
+        }
 
-        assert_eq!(
-            evaluate_request_body_ingress(config, input),
-            RequestBodyGuardrailDecision::Continue
-        );
-    }
-
-    #[test]
-    fn request_body_unknown_length_prebuffer_cap_rejects() {
-        let decision = evaluate_request_body_ingress(
-            RequestBodyGuardrailConfig {
-                idle_timeout: Duration::from_secs(5),
-                total_timeout: Duration::from_secs(30),
-                max_body_bytes: usize::MAX,
-                max_buffered_bytes: 10,
-            },
-            RequestBodyGuardrailInput {
-                elapsed: Duration::ZERO,
-                idle_for: Duration::ZERO,
-                bytes_received: 0,
-                buffered_bytes: 6,
-                next_chunk_bytes: 5,
-                declared_content_length: None,
-                exempt_from_body_size_cap: false,
-            },
-        );
-
-        assert_eq!(
-            decision,
-            RequestBodyGuardrailDecision::Reject {
-                kind: BodyLimitKind::UnknownLengthPrebuffer,
-            }
-        );
-    }
-
-    #[test]
-    fn request_body_declared_length_cap_rejects() {
-        let decision = evaluate_request_body_ingress(
-            RequestBodyGuardrailConfig {
+        #[test]
+        fn request_body_size_cap_respects_connect_exemption() {
+            let config = RequestBodyGuardrailConfig {
                 idle_timeout: Duration::from_secs(5),
                 total_timeout: Duration::from_secs(30),
                 max_body_bytes: 16,
                 max_buffered_bytes: usize::MAX,
-            },
-            RequestBodyGuardrailInput {
-                elapsed: Duration::ZERO,
-                idle_for: Duration::ZERO,
-                bytes_received: 0,
-                buffered_bytes: 0,
-                next_chunk_bytes: 0,
-                declared_content_length: Some(17),
-                exempt_from_body_size_cap: false,
-            },
-        );
-
-        assert_eq!(
-            decision,
-            RequestBodyGuardrailDecision::Reject {
-                kind: BodyLimitKind::BodySize,
-            }
-        );
-    }
-
-    #[test]
-    fn request_body_running_total_cap_rejects() {
-        let decision = evaluate_request_body_ingress(
-            RequestBodyGuardrailConfig {
-                idle_timeout: Duration::from_secs(5),
-                total_timeout: Duration::from_secs(30),
-                max_body_bytes: 16,
-                max_buffered_bytes: usize::MAX,
-            },
-            RequestBodyGuardrailInput {
+            };
+            let input = RequestBodyGuardrailInput {
                 elapsed: Duration::ZERO,
                 idle_for: Duration::ZERO,
                 bytes_received: 12,
                 buffered_bytes: 0,
-                next_chunk_bytes: 5,
+                next_chunk_bytes: 8,
                 declared_content_length: None,
-                exempt_from_body_size_cap: false,
-            },
-        );
+                exempt_from_body_size_cap: true,
+            };
 
-        assert_eq!(
-            decision,
-            RequestBodyGuardrailDecision::Reject {
-                kind: BodyLimitKind::BodySize,
-            }
-        );
-    }
+            assert_eq!(
+                evaluate_request_body_ingress(config, input),
+                RequestBodyGuardrailDecision::Continue
+            );
+        }
 
-    #[test]
-    fn checked_request_body_ingress_returns_next_accounting_state() {
-        let next_state = checked_request_body_ingress(
-            RequestBodyGuardrailConfig {
-                idle_timeout: Duration::from_secs(5),
-                total_timeout: Duration::from_secs(30),
-                max_body_bytes: 64,
-                max_buffered_bytes: 32,
-            },
-            RequestBodyGuardrailInput {
-                elapsed: Duration::ZERO,
-                idle_for: Duration::ZERO,
-                bytes_received: 7,
-                buffered_bytes: 3,
-                next_chunk_bytes: 5,
-                declared_content_length: None,
-                exempt_from_body_size_cap: false,
-            },
-        )
-        .expect("request ingress should pass");
-
-        assert_eq!(
-            next_state,
-            RequestBodyIngressState {
-                bytes_received: 12,
-                buffered_bytes: 8,
-            }
-        );
-    }
-
-    #[test]
-    fn response_body_prefers_prebuffer_for_unknown_length_before_headers() {
-        let decision = evaluate_response_body_guardrails(
-            ResponseBodyGuardrailConfig {
-                idle_timeout: Duration::from_secs(5),
-                total_timeout: Duration::from_secs(30),
-                max_body_bytes: 64,
-                unknown_length_prebuffer_bytes: 16,
-                chunk_bytes: 8,
-            },
-            ResponseBodyGuardrailInput {
-                elapsed: Duration::from_secs(1),
-                idle_for: Duration::from_secs(1),
-                bytes_received: 0,
-                prebuffered_bytes: 0,
-                next_chunk_bytes: 0,
-                declared_content_length: None,
-                headers_emitted: false,
-                progressive_emission_allowed: true,
-                body_forwarding_enabled: true,
-                exempt_from_body_size_cap: false,
-            },
-        );
-
-        assert_eq!(
-            decision,
-            ResponseBodyGuardrailDecision::Continue {
-                streaming: ResponseStreamingPolicy {
-                    emission: ProgressiveEmissionPolicy::PrebufferUntilValidated,
-                    chunk_emission: ResponseChunkEmissionPolicy::FixedSize { max_chunk_bytes: 8 },
-                    wait_timeout: Duration::from_secs(4),
+        #[test]
+        fn request_body_unknown_length_prebuffer_cap_rejects() {
+            let decision = evaluate_request_body_ingress(
+                RequestBodyGuardrailConfig {
+                    idle_timeout: Duration::from_secs(5),
+                    total_timeout: Duration::from_secs(30),
+                    max_body_bytes: usize::MAX,
+                    max_buffered_bytes: 10,
                 },
-            }
-        );
-    }
-
-    #[test]
-    fn response_body_declared_length_cap_rejects() {
-        let decision = evaluate_response_body_guardrails(
-            ResponseBodyGuardrailConfig {
-                idle_timeout: Duration::from_secs(5),
-                total_timeout: Duration::from_secs(30),
-                max_body_bytes: 16,
-                unknown_length_prebuffer_bytes: 8,
-                chunk_bytes: 8,
-            },
-            ResponseBodyGuardrailInput {
-                elapsed: Duration::ZERO,
-                idle_for: Duration::ZERO,
-                bytes_received: 0,
-                prebuffered_bytes: 0,
-                next_chunk_bytes: 0,
-                declared_content_length: Some(17),
-                headers_emitted: false,
-                progressive_emission_allowed: true,
-                body_forwarding_enabled: true,
-                exempt_from_body_size_cap: false,
-            },
-        );
-
-        assert_eq!(
-            decision,
-            ResponseBodyGuardrailDecision::Reject {
-                kind: BodyLimitKind::BodySize,
-            }
-        );
-    }
-
-    #[test]
-    fn response_body_unknown_length_prebuffer_cap_rejects() {
-        let decision = evaluate_response_body_guardrails(
-            ResponseBodyGuardrailConfig {
-                idle_timeout: Duration::from_secs(5),
-                total_timeout: Duration::from_secs(30),
-                max_body_bytes: 64,
-                unknown_length_prebuffer_bytes: 10,
-                chunk_bytes: 4,
-            },
-            ResponseBodyGuardrailInput {
-                elapsed: Duration::from_secs(1),
-                idle_for: Duration::from_secs(1),
-                bytes_received: 6,
-                prebuffered_bytes: 6,
-                next_chunk_bytes: 5,
-                declared_content_length: None,
-                headers_emitted: false,
-                progressive_emission_allowed: true,
-                body_forwarding_enabled: true,
-                exempt_from_body_size_cap: false,
-            },
-        );
-
-        assert_eq!(
-            decision,
-            ResponseBodyGuardrailDecision::Reject {
-                kind: BodyLimitKind::UnknownLengthPrebuffer,
-            }
-        );
-    }
-
-    #[test]
-    fn response_body_total_timeout_rejects() {
-        let decision = evaluate_response_body_guardrails(
-            ResponseBodyGuardrailConfig {
-                idle_timeout: Duration::from_secs(5),
-                total_timeout: Duration::from_secs(30),
-                max_body_bytes: 64,
-                unknown_length_prebuffer_bytes: 16,
-                chunk_bytes: 8,
-            },
-            ResponseBodyGuardrailInput {
-                elapsed: Duration::from_secs(30),
-                idle_for: Duration::from_secs(1),
-                bytes_received: 0,
-                prebuffered_bytes: 0,
-                next_chunk_bytes: 0,
-                declared_content_length: None,
-                headers_emitted: false,
-                progressive_emission_allowed: true,
-                body_forwarding_enabled: true,
-                exempt_from_body_size_cap: false,
-            },
-        );
-
-        assert_eq!(
-            decision,
-            ResponseBodyGuardrailDecision::Timeout {
-                kind: BodyTimeoutKind::Total,
-            }
-        );
-    }
-
-    #[test]
-    fn response_body_total_timeout_is_ignored_after_progress() {
-        let decision = evaluate_response_body_guardrails(
-            ResponseBodyGuardrailConfig {
-                idle_timeout: Duration::from_secs(5),
-                total_timeout: Duration::from_secs(30),
-                max_body_bytes: 64,
-                unknown_length_prebuffer_bytes: 16,
-                chunk_bytes: 8,
-            },
-            ResponseBodyGuardrailInput {
-                elapsed: Duration::from_secs(30),
-                idle_for: Duration::from_secs(1),
-                bytes_received: 1,
-                prebuffered_bytes: 0,
-                next_chunk_bytes: 0,
-                declared_content_length: None,
-                headers_emitted: false,
-                progressive_emission_allowed: true,
-                body_forwarding_enabled: true,
-                exempt_from_body_size_cap: false,
-            },
-        );
-
-        assert_eq!(
-            decision,
-            ResponseBodyGuardrailDecision::Continue {
-                streaming: ResponseStreamingPolicy {
-                    emission: ProgressiveEmissionPolicy::PrebufferUntilValidated,
-                    chunk_emission: ResponseChunkEmissionPolicy::FixedSize { max_chunk_bytes: 8 },
-                    wait_timeout: Duration::from_secs(4),
+                RequestBodyGuardrailInput {
+                    elapsed: Duration::ZERO,
+                    idle_for: Duration::ZERO,
+                    bytes_received: 0,
+                    buffered_bytes: 6,
+                    next_chunk_bytes: 5,
+                    declared_content_length: None,
+                    exempt_from_body_size_cap: false,
                 },
-            }
-        );
-    }
+            );
 
-    #[test]
-    fn response_body_idle_timeout_rejects() {
-        let decision = evaluate_response_body_guardrails(
-            ResponseBodyGuardrailConfig {
-                idle_timeout: Duration::from_secs(5),
-                total_timeout: Duration::from_secs(30),
-                max_body_bytes: 64,
-                unknown_length_prebuffer_bytes: 16,
-                chunk_bytes: 8,
-            },
-            ResponseBodyGuardrailInput {
-                elapsed: Duration::from_secs(4),
-                idle_for: Duration::from_secs(5),
-                bytes_received: 0,
-                prebuffered_bytes: 0,
-                next_chunk_bytes: 0,
-                declared_content_length: None,
-                headers_emitted: false,
-                progressive_emission_allowed: true,
-                body_forwarding_enabled: true,
-                exempt_from_body_size_cap: false,
-            },
-        );
+            assert_eq!(
+                decision,
+                RequestBodyGuardrailDecision::Reject {
+                    kind: BodyLimitKind::UnknownLengthPrebuffer,
+                }
+            );
+        }
 
-        assert_eq!(
-            decision,
-            ResponseBodyGuardrailDecision::Timeout {
-                kind: BodyTimeoutKind::Idle,
-            }
-        );
-    }
-
-    #[test]
-    fn response_body_known_length_streams_progressively() {
-        let decision = evaluate_response_body_guardrails(
-            ResponseBodyGuardrailConfig {
-                idle_timeout: Duration::from_secs(5),
-                total_timeout: Duration::from_secs(30),
-                max_body_bytes: 64,
-                unknown_length_prebuffer_bytes: 16,
-                chunk_bytes: 8,
-            },
-            ResponseBodyGuardrailInput {
-                elapsed: Duration::from_secs(1),
-                idle_for: Duration::from_secs(1),
-                bytes_received: 0,
-                prebuffered_bytes: 0,
-                next_chunk_bytes: 0,
-                declared_content_length: Some(12),
-                headers_emitted: false,
-                progressive_emission_allowed: true,
-                body_forwarding_enabled: true,
-                exempt_from_body_size_cap: false,
-            },
-        );
-
-        assert_eq!(
-            decision,
-            ResponseBodyGuardrailDecision::Continue {
-                streaming: ResponseStreamingPolicy {
-                    emission: ProgressiveEmissionPolicy::StreamProgressively,
-                    chunk_emission: ResponseChunkEmissionPolicy::FixedSize { max_chunk_bytes: 8 },
-                    wait_timeout: Duration::from_secs(4),
+        #[test]
+        fn request_body_declared_length_cap_rejects() {
+            let decision = evaluate_request_body_ingress(
+                RequestBodyGuardrailConfig {
+                    idle_timeout: Duration::from_secs(5),
+                    total_timeout: Duration::from_secs(30),
+                    max_body_bytes: 16,
+                    max_buffered_bytes: usize::MAX,
                 },
-            }
-        );
-    }
-
-    #[test]
-    fn response_body_suppresses_emission_when_body_is_disabled() {
-        let decision = evaluate_response_body_guardrails(
-            ResponseBodyGuardrailConfig {
-                idle_timeout: Duration::from_secs(5),
-                total_timeout: Duration::from_secs(30),
-                max_body_bytes: 64,
-                unknown_length_prebuffer_bytes: 16,
-                chunk_bytes: 8,
-            },
-            ResponseBodyGuardrailInput {
-                elapsed: Duration::from_secs(1),
-                idle_for: Duration::from_secs(1),
-                bytes_received: 0,
-                prebuffered_bytes: 0,
-                next_chunk_bytes: 0,
-                declared_content_length: None,
-                headers_emitted: false,
-                progressive_emission_allowed: true,
-                body_forwarding_enabled: false,
-                exempt_from_body_size_cap: false,
-            },
-        );
-
-        assert_eq!(
-            decision,
-            ResponseBodyGuardrailDecision::Continue {
-                streaming: ResponseStreamingPolicy {
-                    emission: ProgressiveEmissionPolicy::SuppressBody,
-                    chunk_emission: ResponseChunkEmissionPolicy::Passthrough,
-                    wait_timeout: Duration::from_secs(4),
+                RequestBodyGuardrailInput {
+                    elapsed: Duration::ZERO,
+                    idle_for: Duration::ZERO,
+                    bytes_received: 0,
+                    buffered_bytes: 0,
+                    next_chunk_bytes: 0,
+                    declared_content_length: Some(17),
+                    exempt_from_body_size_cap: false,
                 },
-            }
-        );
-    }
+            );
 
-    #[test]
-    fn checked_response_body_guardrails_returns_next_streaming_state() {
-        let evaluated = checked_response_body_guardrails(
-            ResponseBodyGuardrailConfig {
-                idle_timeout: Duration::from_secs(5),
-                total_timeout: Duration::from_secs(30),
-                max_body_bytes: 64,
-                unknown_length_prebuffer_bytes: 16,
-                chunk_bytes: 4,
-            },
-            ResponseBodyGuardrailInput {
-                elapsed: Duration::from_secs(1),
-                idle_for: Duration::from_secs(1),
-                bytes_received: 5,
-                prebuffered_bytes: 5,
-                next_chunk_bytes: 3,
-                declared_content_length: None,
-                headers_emitted: false,
-                progressive_emission_allowed: true,
-                body_forwarding_enabled: true,
-                exempt_from_body_size_cap: false,
-            },
-        )
-        .expect("response egress should pass");
+            assert_eq!(
+                decision,
+                RequestBodyGuardrailDecision::Reject {
+                    kind: BodyLimitKind::BodySize,
+                }
+            );
+        }
 
-        assert_eq!(
-            evaluated,
-            EvaluatedResponseBodyGuardrail {
-                streaming: ResponseStreamingPolicy {
-                    emission: ProgressiveEmissionPolicy::PrebufferUntilValidated,
-                    chunk_emission: ResponseChunkEmissionPolicy::FixedSize { max_chunk_bytes: 4 },
-                    wait_timeout: Duration::from_secs(4),
+        #[test]
+        fn request_body_running_total_cap_rejects() {
+            let decision = evaluate_request_body_ingress(
+                RequestBodyGuardrailConfig {
+                    idle_timeout: Duration::from_secs(5),
+                    total_timeout: Duration::from_secs(30),
+                    max_body_bytes: 16,
+                    max_buffered_bytes: usize::MAX,
                 },
-                next_state: ResponseBodyEgressState {
-                    bytes_received: 8,
-                    prebuffered_bytes: 8,
+                RequestBodyGuardrailInput {
+                    elapsed: Duration::ZERO,
+                    idle_for: Duration::ZERO,
+                    bytes_received: 12,
+                    buffered_bytes: 0,
+                    next_chunk_bytes: 5,
+                    declared_content_length: None,
+                    exempt_from_body_size_cap: false,
                 },
-            }
-        );
+            );
+
+            assert_eq!(
+                decision,
+                RequestBodyGuardrailDecision::Reject {
+                    kind: BodyLimitKind::BodySize,
+                }
+            );
+        }
+
+        #[test]
+        fn checked_request_body_ingress_returns_next_accounting_state() {
+            let next_state = checked_request_body_ingress(
+                RequestBodyGuardrailConfig {
+                    idle_timeout: Duration::from_secs(5),
+                    total_timeout: Duration::from_secs(30),
+                    max_body_bytes: 64,
+                    max_buffered_bytes: 32,
+                },
+                RequestBodyGuardrailInput {
+                    elapsed: Duration::ZERO,
+                    idle_for: Duration::ZERO,
+                    bytes_received: 7,
+                    buffered_bytes: 3,
+                    next_chunk_bytes: 5,
+                    declared_content_length: None,
+                    exempt_from_body_size_cap: false,
+                },
+            )
+            .expect("request ingress should pass");
+
+            assert_eq!(
+                next_state,
+                RequestBodyIngressState {
+                    bytes_received: 12,
+                    buffered_bytes: 8,
+                }
+            );
+        }
     }
 
-    #[test]
-    fn response_chunk_ranges_follow_fixed_size_policy() {
-        assert_eq!(
-            response_chunk_ranges(
-                10,
-                ResponseChunkEmissionPolicy::FixedSize { max_chunk_bytes: 4 }
-            ),
-            vec![(0, 4), (4, 8), (8, 10)]
-        );
+    mod response_body_egress {
+        use super::*;
+
+        #[test]
+        fn response_body_prefers_prebuffer_for_unknown_length_before_headers() {
+            let decision = evaluate_response_body_guardrails(
+                ResponseBodyGuardrailConfig {
+                    idle_timeout: Duration::from_secs(5),
+                    total_timeout: Duration::from_secs(30),
+                    max_body_bytes: 64,
+                    unknown_length_prebuffer_bytes: 16,
+                    chunk_bytes: 8,
+                },
+                ResponseBodyGuardrailInput {
+                    elapsed: Duration::from_secs(1),
+                    idle_for: Duration::from_secs(1),
+                    bytes_received: 0,
+                    prebuffered_bytes: 0,
+                    next_chunk_bytes: 0,
+                    declared_content_length: None,
+                    headers_emitted: false,
+                    progressive_emission_allowed: true,
+                    body_forwarding_enabled: true,
+                    exempt_from_body_size_cap: false,
+                },
+            );
+
+            assert_eq!(
+                decision,
+                ResponseBodyGuardrailDecision::Continue {
+                    streaming: ResponseStreamingPolicy {
+                        emission: ProgressiveEmissionPolicy::PrebufferUntilValidated,
+                        chunk_emission: ResponseChunkEmissionPolicy::FixedSize {
+                            max_chunk_bytes: 8
+                        },
+                        wait_timeout: Duration::from_secs(4),
+                    },
+                }
+            );
+        }
+
+        #[test]
+        fn response_body_declared_length_cap_rejects() {
+            let decision = evaluate_response_body_guardrails(
+                ResponseBodyGuardrailConfig {
+                    idle_timeout: Duration::from_secs(5),
+                    total_timeout: Duration::from_secs(30),
+                    max_body_bytes: 16,
+                    unknown_length_prebuffer_bytes: 8,
+                    chunk_bytes: 8,
+                },
+                ResponseBodyGuardrailInput {
+                    elapsed: Duration::ZERO,
+                    idle_for: Duration::ZERO,
+                    bytes_received: 0,
+                    prebuffered_bytes: 0,
+                    next_chunk_bytes: 0,
+                    declared_content_length: Some(17),
+                    headers_emitted: false,
+                    progressive_emission_allowed: true,
+                    body_forwarding_enabled: true,
+                    exempt_from_body_size_cap: false,
+                },
+            );
+
+            assert_eq!(
+                decision,
+                ResponseBodyGuardrailDecision::Reject {
+                    kind: BodyLimitKind::BodySize,
+                }
+            );
+        }
+
+        #[test]
+        fn response_body_unknown_length_prebuffer_cap_rejects() {
+            let decision = evaluate_response_body_guardrails(
+                ResponseBodyGuardrailConfig {
+                    idle_timeout: Duration::from_secs(5),
+                    total_timeout: Duration::from_secs(30),
+                    max_body_bytes: 64,
+                    unknown_length_prebuffer_bytes: 10,
+                    chunk_bytes: 4,
+                },
+                ResponseBodyGuardrailInput {
+                    elapsed: Duration::from_secs(1),
+                    idle_for: Duration::from_secs(1),
+                    bytes_received: 6,
+                    prebuffered_bytes: 6,
+                    next_chunk_bytes: 5,
+                    declared_content_length: None,
+                    headers_emitted: false,
+                    progressive_emission_allowed: true,
+                    body_forwarding_enabled: true,
+                    exempt_from_body_size_cap: false,
+                },
+            );
+
+            assert_eq!(
+                decision,
+                ResponseBodyGuardrailDecision::Reject {
+                    kind: BodyLimitKind::UnknownLengthPrebuffer,
+                }
+            );
+        }
+
+        #[test]
+        fn response_body_total_timeout_rejects() {
+            let decision = evaluate_response_body_guardrails(
+                ResponseBodyGuardrailConfig {
+                    idle_timeout: Duration::from_secs(5),
+                    total_timeout: Duration::from_secs(30),
+                    max_body_bytes: 64,
+                    unknown_length_prebuffer_bytes: 16,
+                    chunk_bytes: 8,
+                },
+                ResponseBodyGuardrailInput {
+                    elapsed: Duration::from_secs(30),
+                    idle_for: Duration::from_secs(1),
+                    bytes_received: 0,
+                    prebuffered_bytes: 0,
+                    next_chunk_bytes: 0,
+                    declared_content_length: None,
+                    headers_emitted: false,
+                    progressive_emission_allowed: true,
+                    body_forwarding_enabled: true,
+                    exempt_from_body_size_cap: false,
+                },
+            );
+
+            assert_eq!(
+                decision,
+                ResponseBodyGuardrailDecision::Timeout {
+                    kind: BodyTimeoutKind::Total,
+                }
+            );
+        }
+
+        #[test]
+        fn response_body_total_timeout_is_ignored_after_progress() {
+            let decision = evaluate_response_body_guardrails(
+                ResponseBodyGuardrailConfig {
+                    idle_timeout: Duration::from_secs(5),
+                    total_timeout: Duration::from_secs(30),
+                    max_body_bytes: 64,
+                    unknown_length_prebuffer_bytes: 16,
+                    chunk_bytes: 8,
+                },
+                ResponseBodyGuardrailInput {
+                    elapsed: Duration::from_secs(30),
+                    idle_for: Duration::from_secs(1),
+                    bytes_received: 1,
+                    prebuffered_bytes: 0,
+                    next_chunk_bytes: 0,
+                    declared_content_length: None,
+                    headers_emitted: false,
+                    progressive_emission_allowed: true,
+                    body_forwarding_enabled: true,
+                    exempt_from_body_size_cap: false,
+                },
+            );
+
+            assert_eq!(
+                decision,
+                ResponseBodyGuardrailDecision::Continue {
+                    streaming: ResponseStreamingPolicy {
+                        emission: ProgressiveEmissionPolicy::PrebufferUntilValidated,
+                        chunk_emission: ResponseChunkEmissionPolicy::FixedSize {
+                            max_chunk_bytes: 8
+                        },
+                        wait_timeout: Duration::from_secs(4),
+                    },
+                }
+            );
+        }
+
+        #[test]
+        fn response_body_idle_timeout_rejects() {
+            let decision = evaluate_response_body_guardrails(
+                ResponseBodyGuardrailConfig {
+                    idle_timeout: Duration::from_secs(5),
+                    total_timeout: Duration::from_secs(30),
+                    max_body_bytes: 64,
+                    unknown_length_prebuffer_bytes: 16,
+                    chunk_bytes: 8,
+                },
+                ResponseBodyGuardrailInput {
+                    elapsed: Duration::from_secs(4),
+                    idle_for: Duration::from_secs(5),
+                    bytes_received: 0,
+                    prebuffered_bytes: 0,
+                    next_chunk_bytes: 0,
+                    declared_content_length: None,
+                    headers_emitted: false,
+                    progressive_emission_allowed: true,
+                    body_forwarding_enabled: true,
+                    exempt_from_body_size_cap: false,
+                },
+            );
+
+            assert_eq!(
+                decision,
+                ResponseBodyGuardrailDecision::Timeout {
+                    kind: BodyTimeoutKind::Idle,
+                }
+            );
+        }
+
+        #[test]
+        fn response_body_known_length_streams_progressively() {
+            let decision = evaluate_response_body_guardrails(
+                ResponseBodyGuardrailConfig {
+                    idle_timeout: Duration::from_secs(5),
+                    total_timeout: Duration::from_secs(30),
+                    max_body_bytes: 64,
+                    unknown_length_prebuffer_bytes: 16,
+                    chunk_bytes: 8,
+                },
+                ResponseBodyGuardrailInput {
+                    elapsed: Duration::from_secs(1),
+                    idle_for: Duration::from_secs(1),
+                    bytes_received: 0,
+                    prebuffered_bytes: 0,
+                    next_chunk_bytes: 0,
+                    declared_content_length: Some(12),
+                    headers_emitted: false,
+                    progressive_emission_allowed: true,
+                    body_forwarding_enabled: true,
+                    exempt_from_body_size_cap: false,
+                },
+            );
+
+            assert_eq!(
+                decision,
+                ResponseBodyGuardrailDecision::Continue {
+                    streaming: ResponseStreamingPolicy {
+                        emission: ProgressiveEmissionPolicy::StreamProgressively,
+                        chunk_emission: ResponseChunkEmissionPolicy::FixedSize {
+                            max_chunk_bytes: 8
+                        },
+                        wait_timeout: Duration::from_secs(4),
+                    },
+                }
+            );
+        }
+
+        #[test]
+        fn response_body_suppresses_emission_when_body_is_disabled() {
+            let decision = evaluate_response_body_guardrails(
+                ResponseBodyGuardrailConfig {
+                    idle_timeout: Duration::from_secs(5),
+                    total_timeout: Duration::from_secs(30),
+                    max_body_bytes: 64,
+                    unknown_length_prebuffer_bytes: 16,
+                    chunk_bytes: 8,
+                },
+                ResponseBodyGuardrailInput {
+                    elapsed: Duration::from_secs(1),
+                    idle_for: Duration::from_secs(1),
+                    bytes_received: 0,
+                    prebuffered_bytes: 0,
+                    next_chunk_bytes: 0,
+                    declared_content_length: None,
+                    headers_emitted: false,
+                    progressive_emission_allowed: true,
+                    body_forwarding_enabled: false,
+                    exempt_from_body_size_cap: false,
+                },
+            );
+
+            assert_eq!(
+                decision,
+                ResponseBodyGuardrailDecision::Continue {
+                    streaming: ResponseStreamingPolicy {
+                        emission: ProgressiveEmissionPolicy::SuppressBody,
+                        chunk_emission: ResponseChunkEmissionPolicy::Passthrough,
+                        wait_timeout: Duration::from_secs(4),
+                    },
+                }
+            );
+        }
+
+        #[test]
+        fn checked_response_body_guardrails_returns_next_streaming_state() {
+            let evaluated = checked_response_body_guardrails(
+                ResponseBodyGuardrailConfig {
+                    idle_timeout: Duration::from_secs(5),
+                    total_timeout: Duration::from_secs(30),
+                    max_body_bytes: 64,
+                    unknown_length_prebuffer_bytes: 16,
+                    chunk_bytes: 4,
+                },
+                ResponseBodyGuardrailInput {
+                    elapsed: Duration::from_secs(1),
+                    idle_for: Duration::from_secs(1),
+                    bytes_received: 5,
+                    prebuffered_bytes: 5,
+                    next_chunk_bytes: 3,
+                    declared_content_length: None,
+                    headers_emitted: false,
+                    progressive_emission_allowed: true,
+                    body_forwarding_enabled: true,
+                    exempt_from_body_size_cap: false,
+                },
+            )
+            .expect("response egress should pass");
+
+            assert_eq!(
+                evaluated,
+                EvaluatedResponseBodyGuardrail {
+                    streaming: ResponseStreamingPolicy {
+                        emission: ProgressiveEmissionPolicy::PrebufferUntilValidated,
+                        chunk_emission: ResponseChunkEmissionPolicy::FixedSize {
+                            max_chunk_bytes: 4
+                        },
+                        wait_timeout: Duration::from_secs(4),
+                    },
+                    next_state: ResponseBodyEgressState {
+                        bytes_received: 8,
+                        prebuffered_bytes: 8,
+                    },
+                }
+            );
+        }
     }
 
-    #[test]
-    fn response_chunk_ranges_passthrough_policy_keeps_single_chunk() {
-        assert_eq!(
-            response_chunk_ranges(10, ResponseChunkEmissionPolicy::Passthrough),
-            vec![(0, 10)]
-        );
+    mod response_chunking {
+        use super::*;
+
+        #[test]
+        fn response_chunk_ranges_follow_fixed_size_policy() {
+            assert_eq!(
+                response_chunk_ranges(
+                    10,
+                    ResponseChunkEmissionPolicy::FixedSize { max_chunk_bytes: 4 }
+                ),
+                vec![(0, 4), (4, 8), (8, 10)]
+            );
+        }
+
+        #[test]
+        fn response_chunk_ranges_passthrough_policy_keeps_single_chunk() {
+            assert_eq!(
+                response_chunk_ranges(10, ResponseChunkEmissionPolicy::Passthrough),
+                vec![(0, 10)]
+            );
+        }
     }
 }

@@ -699,301 +699,310 @@ mod tests {
         HashMap::from([(String::from("api"), Arc::new(Semaphore::new(1)))])
     }
 
-    #[test]
-    fn overload_reasons_map_to_stable_metrics_labels_and_response_bodies() {
-        let cases = [
-            (
-                OverloadDecisionReason::Brownout,
-                "brownout",
-                b"brownout active, non-core route shed\n".as_slice(),
-            ),
-            (
-                OverloadDecisionReason::AdaptiveAdmission,
-                "adaptive_admission",
-                b"adaptive admission overload\n".as_slice(),
-            ),
-            (
-                OverloadDecisionReason::RouteCap,
-                "route_cap",
-                b"route queue cap exceeded\n".as_slice(),
-            ),
-            (
-                OverloadDecisionReason::RouteGlobalCap,
-                "route_global_cap",
-                b"global queue cap exceeded\n".as_slice(),
-            ),
-            (
-                OverloadDecisionReason::GlobalInflight,
-                "global_inflight",
-                b"overloaded, retry later\n".as_slice(),
-            ),
-            (
-                OverloadDecisionReason::UpstreamInflight,
-                "upstream_inflight",
-                b"upstream overloaded, retry later\n".as_slice(),
-            ),
-        ];
+    mod admission_rejection_contracts {
+        use super::*;
 
-        for (reason, label, body) in cases {
-            assert_eq!(reason.metrics_reason().reason_label(), label);
-            assert_eq!(reason.response_body(), body);
+        #[test]
+        fn overload_reasons_map_to_stable_metrics_labels_and_response_bodies() {
+            let cases = [
+                (
+                    OverloadDecisionReason::Brownout,
+                    "brownout",
+                    b"brownout active, non-core route shed\n".as_slice(),
+                ),
+                (
+                    OverloadDecisionReason::AdaptiveAdmission,
+                    "adaptive_admission",
+                    b"adaptive admission overload\n".as_slice(),
+                ),
+                (
+                    OverloadDecisionReason::RouteCap,
+                    "route_cap",
+                    b"route queue cap exceeded\n".as_slice(),
+                ),
+                (
+                    OverloadDecisionReason::RouteGlobalCap,
+                    "route_global_cap",
+                    b"global queue cap exceeded\n".as_slice(),
+                ),
+                (
+                    OverloadDecisionReason::GlobalInflight,
+                    "global_inflight",
+                    b"overloaded, retry later\n".as_slice(),
+                ),
+                (
+                    OverloadDecisionReason::UpstreamInflight,
+                    "upstream_inflight",
+                    b"upstream overloaded, retry later\n".as_slice(),
+                ),
+            ];
+
+            for (reason, label, body) in cases {
+                assert_eq!(reason.metrics_reason().reason_label(), label);
+                assert_eq!(reason.response_body(), body);
+            }
+        }
+
+        #[test]
+        fn unauthorized_and_overload_rejections_have_distinct_outward_mapping() {
+            let policy = test_policy_with_api_key();
+            let unauthorized =
+                admission_rejection_response(&evaluate_forwarding_pre_admission_policy(
+                    &policy,
+                    None,
+                    &BrownoutController::new(false, 100, 50, Vec::new()),
+                    0,
+                    "api",
+                    7,
+                    &ScopedRateLimiters::new(&[]),
+                    |_| None,
+                ))
+                .expect("unauthorized response");
+            assert_eq!(unauthorized.status, StatusCode::UNAUTHORIZED);
+            assert_eq!(unauthorized.body, b"unauthorized\n");
+            assert_eq!(unauthorized.www_authenticate, Some("ApiKey"));
+            assert_eq!(unauthorized.retry_after_seconds, None);
+
+            let overload = admission_rejection_response(&evaluate_brownout_policy(
+                &BrownoutController::new(true, 50, 25, vec![String::from("core")]),
+                90,
+                "api",
+                7,
+            ))
+            .expect("overload response");
+            assert_eq!(overload.status, StatusCode::SERVICE_UNAVAILABLE);
+            assert_eq!(overload.body, b"brownout active, non-core route shed\n");
+            assert_eq!(overload.www_authenticate, None);
+            assert_eq!(overload.retry_after_seconds, Some(7));
         }
     }
 
-    #[test]
-    fn unauthorized_and_overload_rejections_have_distinct_outward_mapping() {
-        let policy = test_policy_with_api_key();
-        let unauthorized = admission_rejection_response(&evaluate_forwarding_pre_admission_policy(
-            &policy,
-            None,
-            &BrownoutController::new(false, 100, 50, Vec::new()),
-            0,
-            "api",
-            7,
-            &ScopedRateLimiters::new(&[]),
-            |_| None,
-        ))
-        .expect("unauthorized response");
-        assert_eq!(unauthorized.status, StatusCode::UNAUTHORIZED);
-        assert_eq!(unauthorized.body, b"unauthorized\n");
-        assert_eq!(unauthorized.www_authenticate, Some("ApiKey"));
-        assert_eq!(unauthorized.retry_after_seconds, None);
+    mod post_auth_admission_execution {
+        use super::*;
 
-        let overload = admission_rejection_response(&evaluate_brownout_policy(
-            &BrownoutController::new(true, 50, 25, vec![String::from("core")]),
-            90,
-            "api",
-            7,
-        ))
-        .expect("overload response");
-        assert_eq!(overload.status, StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(overload.body, b"brownout active, non-core route shed\n");
-        assert_eq!(overload.www_authenticate, None);
-        assert_eq!(overload.retry_after_seconds, Some(7));
-    }
+        #[test]
+        fn post_auth_admission_rejects_adaptive_admission_overload() {
+            let resilience = test_runtime_resilience(
+                |config| {
+                    config.adaptive_admission.enabled = true;
+                    config.adaptive_admission.min_limit = 1;
+                    config.adaptive_admission.max_limit = Some(1);
+                },
+                8,
+            );
+            let _held = resilience
+                .adaptive_admission
+                .clone()
+                .try_acquire()
+                .expect("held permit");
 
-    #[test]
-    fn post_auth_admission_rejects_adaptive_admission_overload() {
-        let resilience = test_runtime_resilience(
-            |config| {
-                config.adaptive_admission.enabled = true;
-                config.adaptive_admission.min_limit = 1;
-                config.adaptive_admission.max_limit = Some(1);
-            },
-            8,
-        );
-        let _held = resilience
-            .adaptive_admission
-            .clone()
-            .try_acquire()
-            .expect("held permit");
+            let result = execute_forwarding_post_auth_admission(
+                &resilience,
+                "api",
+                Some(&test_upstream_pool()),
+                Some(0),
+                0,
+                &test_upstream_inflight(),
+                Arc::new(Semaphore::new(1)),
+                Duration::ZERO,
+            );
 
-        let result = execute_forwarding_post_auth_admission(
-            &resilience,
-            "api",
-            Some(&test_upstream_pool()),
-            Some(0),
-            0,
-            &test_upstream_inflight(),
-            Arc::new(Semaphore::new(1)),
-            Duration::ZERO,
-        );
+            assert!(matches!(
+                result,
+                PostAuthAdmissionExecution::Rejected(PostAuthAdmissionRejection::Overloaded(
+                    OverloadDecision {
+                        reason: OverloadDecisionReason::AdaptiveAdmission,
+                        ..
+                    }
+                ))
+            ));
+        }
 
-        assert!(matches!(
-            result,
-            PostAuthAdmissionExecution::Rejected(PostAuthAdmissionRejection::Overloaded(
-                OverloadDecision {
-                    reason: OverloadDecisionReason::AdaptiveAdmission,
-                    ..
+        #[test]
+        fn post_auth_admission_rejects_route_cap_and_global_cap_with_distinct_reasons() {
+            let route_cap = test_runtime_resilience(
+                |config| {
+                    config.route_queue.default_cap = 2;
+                    config.route_queue.global_cap = 4;
+                    config.route_queue.caps.insert(String::from("api"), 1);
+                },
+                8,
+            );
+            let _route_held = route_cap
+                .route_queue
+                .clone()
+                .try_acquire("api")
+                .expect("route permit");
+            let route_result = execute_forwarding_post_auth_admission(
+                &route_cap,
+                "api",
+                Some(&test_upstream_pool()),
+                Some(0),
+                0,
+                &test_upstream_inflight(),
+                Arc::new(Semaphore::new(1)),
+                Duration::ZERO,
+            );
+            assert!(matches!(
+                route_result,
+                PostAuthAdmissionExecution::Rejected(PostAuthAdmissionRejection::Overloaded(
+                    OverloadDecision {
+                        reason: OverloadDecisionReason::RouteCap,
+                        ..
+                    }
+                ))
+            ));
+
+            let global_cap = test_runtime_resilience(
+                |config| {
+                    config.route_queue.default_cap = 4;
+                    config.route_queue.global_cap = 1;
+                },
+                8,
+            );
+            let _global_route_held = global_cap
+                .route_queue
+                .clone()
+                .try_acquire("other")
+                .expect("global route permit");
+            let global_result = execute_forwarding_post_auth_admission(
+                &global_cap,
+                "api",
+                Some(&test_upstream_pool()),
+                Some(0),
+                0,
+                &test_upstream_inflight(),
+                Arc::new(Semaphore::new(1)),
+                Duration::ZERO,
+            );
+            assert!(matches!(
+                global_result,
+                PostAuthAdmissionExecution::Rejected(PostAuthAdmissionRejection::Overloaded(
+                    OverloadDecision {
+                        reason: OverloadDecisionReason::RouteGlobalCap,
+                        ..
+                    }
+                ))
+            ));
+        }
+
+        #[test]
+        fn post_auth_admission_rejects_global_and_upstream_inflight_with_distinct_reasons() {
+            let resilience = test_runtime_resilience(|_| {}, 8);
+            let global_inflight = Arc::new(Semaphore::new(1));
+            let _global_held = global_inflight
+                .clone()
+                .try_acquire_owned()
+                .expect("global permit");
+            let global_result = execute_forwarding_post_auth_admission(
+                &resilience,
+                "api",
+                Some(&test_upstream_pool()),
+                Some(0),
+                0,
+                &test_upstream_inflight(),
+                Arc::clone(&global_inflight),
+                Duration::ZERO,
+            );
+            assert!(matches!(
+                global_result,
+                PostAuthAdmissionExecution::Rejected(PostAuthAdmissionRejection::Overloaded(
+                    OverloadDecision {
+                        reason: OverloadDecisionReason::GlobalInflight,
+                        ..
+                    }
+                ))
+            ));
+
+            let resilience = test_runtime_resilience(|_| {}, 8);
+            let upstream_inflight = test_upstream_inflight();
+            let _upstream_held = upstream_inflight
+                .get("api")
+                .expect("api semaphore")
+                .clone()
+                .try_acquire_owned()
+                .expect("upstream permit");
+            let upstream_result = execute_forwarding_post_auth_admission(
+                &resilience,
+                "api",
+                Some(&test_upstream_pool()),
+                Some(0),
+                0,
+                &upstream_inflight,
+                Arc::new(Semaphore::new(1)),
+                Duration::ZERO,
+            );
+            assert!(matches!(
+                upstream_result,
+                PostAuthAdmissionExecution::Rejected(PostAuthAdmissionRejection::Overloaded(
+                    OverloadDecision {
+                        reason: OverloadDecisionReason::UpstreamInflight,
+                        ..
+                    }
+                ))
+            ));
+        }
+
+        #[test]
+        fn missing_upstream_limiter_preserves_overload_reason_in_failure_mapping() {
+            let resilience = test_runtime_resilience(|_| {}, 8);
+
+            let result = execute_forwarding_post_auth_admission(
+                &resilience,
+                "api",
+                Some(&test_upstream_pool()),
+                Some(0),
+                0,
+                &HashMap::new(),
+                Arc::new(Semaphore::new(1)),
+                Duration::ZERO,
+            );
+
+            assert!(matches!(
+                result,
+                PostAuthAdmissionExecution::Rejected(PostAuthAdmissionRejection::Failed(
+                    PostAuthAdmissionFailure {
+                        status: StatusCode::SERVICE_UNAVAILABLE,
+                        overload_reason: Some(OverloadDecisionReason::UpstreamInflight),
+                        route_outcome: Some(RouteOutcome::OverloadShed),
+                        observe_adaptive_overload: true,
+                        ..
+                    }
+                ))
+            ));
+        }
+
+        #[test]
+        fn post_auth_admission_success_does_not_report_wait_when_no_wait_happened() {
+            let resilience = test_runtime_resilience(|_| {}, 8);
+            let pool = test_upstream_pool();
+
+            let (permit, waited) =
+                try_acquire_owned_with_micro_wait(Arc::new(Semaphore::new(1)), Duration::ZERO)
+                    .expect("permit");
+            assert!(!waited);
+            drop(permit);
+
+            let result = execute_forwarding_post_auth_admission(
+                &resilience,
+                "api",
+                Some(&pool),
+                Some(0),
+                0,
+                &test_upstream_inflight(),
+                Arc::new(Semaphore::new(1)),
+                Duration::ZERO,
+            );
+
+            match result {
+                PostAuthAdmissionExecution::Ready(ready) => {
+                    assert_eq!(ready.backend_index, 0);
+                    assert!(!ready.waited_for_global_permit);
+                    assert!(!ready.waited_for_upstream_permit);
                 }
-            ))
-        ));
-    }
-
-    #[test]
-    fn post_auth_admission_rejects_route_cap_and_global_cap_with_distinct_reasons() {
-        let route_cap = test_runtime_resilience(
-            |config| {
-                config.route_queue.default_cap = 2;
-                config.route_queue.global_cap = 4;
-                config.route_queue.caps.insert(String::from("api"), 1);
-            },
-            8,
-        );
-        let _route_held = route_cap
-            .route_queue
-            .clone()
-            .try_acquire("api")
-            .expect("route permit");
-        let route_result = execute_forwarding_post_auth_admission(
-            &route_cap,
-            "api",
-            Some(&test_upstream_pool()),
-            Some(0),
-            0,
-            &test_upstream_inflight(),
-            Arc::new(Semaphore::new(1)),
-            Duration::ZERO,
-        );
-        assert!(matches!(
-            route_result,
-            PostAuthAdmissionExecution::Rejected(PostAuthAdmissionRejection::Overloaded(
-                OverloadDecision {
-                    reason: OverloadDecisionReason::RouteCap,
-                    ..
+                PostAuthAdmissionExecution::Rejected(_) => {
+                    panic!("expected successful admission without waits")
                 }
-            ))
-        ));
-
-        let global_cap = test_runtime_resilience(
-            |config| {
-                config.route_queue.default_cap = 4;
-                config.route_queue.global_cap = 1;
-            },
-            8,
-        );
-        let _global_route_held = global_cap
-            .route_queue
-            .clone()
-            .try_acquire("other")
-            .expect("global route permit");
-        let global_result = execute_forwarding_post_auth_admission(
-            &global_cap,
-            "api",
-            Some(&test_upstream_pool()),
-            Some(0),
-            0,
-            &test_upstream_inflight(),
-            Arc::new(Semaphore::new(1)),
-            Duration::ZERO,
-        );
-        assert!(matches!(
-            global_result,
-            PostAuthAdmissionExecution::Rejected(PostAuthAdmissionRejection::Overloaded(
-                OverloadDecision {
-                    reason: OverloadDecisionReason::RouteGlobalCap,
-                    ..
-                }
-            ))
-        ));
-    }
-
-    #[test]
-    fn post_auth_admission_rejects_global_and_upstream_inflight_with_distinct_reasons() {
-        let resilience = test_runtime_resilience(|_| {}, 8);
-        let global_inflight = Arc::new(Semaphore::new(1));
-        let _global_held = global_inflight
-            .clone()
-            .try_acquire_owned()
-            .expect("global permit");
-        let global_result = execute_forwarding_post_auth_admission(
-            &resilience,
-            "api",
-            Some(&test_upstream_pool()),
-            Some(0),
-            0,
-            &test_upstream_inflight(),
-            Arc::clone(&global_inflight),
-            Duration::ZERO,
-        );
-        assert!(matches!(
-            global_result,
-            PostAuthAdmissionExecution::Rejected(PostAuthAdmissionRejection::Overloaded(
-                OverloadDecision {
-                    reason: OverloadDecisionReason::GlobalInflight,
-                    ..
-                }
-            ))
-        ));
-
-        let resilience = test_runtime_resilience(|_| {}, 8);
-        let upstream_inflight = test_upstream_inflight();
-        let _upstream_held = upstream_inflight
-            .get("api")
-            .expect("api semaphore")
-            .clone()
-            .try_acquire_owned()
-            .expect("upstream permit");
-        let upstream_result = execute_forwarding_post_auth_admission(
-            &resilience,
-            "api",
-            Some(&test_upstream_pool()),
-            Some(0),
-            0,
-            &upstream_inflight,
-            Arc::new(Semaphore::new(1)),
-            Duration::ZERO,
-        );
-        assert!(matches!(
-            upstream_result,
-            PostAuthAdmissionExecution::Rejected(PostAuthAdmissionRejection::Overloaded(
-                OverloadDecision {
-                    reason: OverloadDecisionReason::UpstreamInflight,
-                    ..
-                }
-            ))
-        ));
-    }
-
-    #[test]
-    fn missing_upstream_limiter_preserves_overload_reason_in_failure_mapping() {
-        let resilience = test_runtime_resilience(|_| {}, 8);
-
-        let result = execute_forwarding_post_auth_admission(
-            &resilience,
-            "api",
-            Some(&test_upstream_pool()),
-            Some(0),
-            0,
-            &HashMap::new(),
-            Arc::new(Semaphore::new(1)),
-            Duration::ZERO,
-        );
-
-        assert!(matches!(
-            result,
-            PostAuthAdmissionExecution::Rejected(PostAuthAdmissionRejection::Failed(
-                PostAuthAdmissionFailure {
-                    status: StatusCode::SERVICE_UNAVAILABLE,
-                    overload_reason: Some(OverloadDecisionReason::UpstreamInflight),
-                    route_outcome: Some(RouteOutcome::OverloadShed),
-                    observe_adaptive_overload: true,
-                    ..
-                }
-            ))
-        ));
-    }
-
-    #[test]
-    fn post_auth_admission_success_does_not_report_wait_when_no_wait_happened() {
-        let resilience = test_runtime_resilience(|_| {}, 8);
-        let pool = test_upstream_pool();
-
-        let (permit, waited) =
-            try_acquire_owned_with_micro_wait(Arc::new(Semaphore::new(1)), Duration::ZERO)
-                .expect("permit");
-        assert!(!waited);
-        drop(permit);
-
-        let result = execute_forwarding_post_auth_admission(
-            &resilience,
-            "api",
-            Some(&pool),
-            Some(0),
-            0,
-            &test_upstream_inflight(),
-            Arc::new(Semaphore::new(1)),
-            Duration::ZERO,
-        );
-
-        match result {
-            PostAuthAdmissionExecution::Ready(ready) => {
-                assert_eq!(ready.backend_index, 0);
-                assert!(!ready.waited_for_global_permit);
-                assert!(!ready.waited_for_upstream_permit);
-            }
-            PostAuthAdmissionExecution::Rejected(_) => {
-                panic!("expected successful admission without waits")
             }
         }
     }

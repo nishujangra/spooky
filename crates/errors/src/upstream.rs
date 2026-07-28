@@ -212,133 +212,145 @@ mod tests {
 
     impl StdError for ErrorChainInner {}
 
-    #[test]
-    fn classify_upstream_error_detail_covers_canonical_tls_and_transport_cases() {
-        assert_eq!(
-            classify_upstream_error_detail("request timed out", false),
-            UpstreamErrorClassification::timeout()
-        );
-        assert_eq!(
-            classify_upstream_error_detail("tls handshake failed: UnknownIssuer", true),
-            UpstreamErrorClassification::tls(UpstreamTlsReason::UnknownIssuer)
-        );
-        assert_eq!(
-            classify_upstream_error_detail("certificate expired while verifying backend", true),
-            UpstreamErrorClassification::tls(UpstreamTlsReason::ExpiredCertificate)
-        );
-        assert_eq!(
-            classify_upstream_error_detail(
-                "certificate not valid for dns name api.example.com",
+    mod classification_contracts {
+        use super::*;
+
+        #[test]
+        fn classify_upstream_error_detail_covers_canonical_tls_and_transport_cases() {
+            assert_eq!(
+                classify_upstream_error_detail("request timed out", false),
+                UpstreamErrorClassification::timeout()
+            );
+            assert_eq!(
+                classify_upstream_error_detail("tls handshake failed: UnknownIssuer", true),
+                UpstreamErrorClassification::tls(UpstreamTlsReason::UnknownIssuer)
+            );
+            assert_eq!(
+                classify_upstream_error_detail("certificate expired while verifying backend", true),
+                UpstreamErrorClassification::tls(UpstreamTlsReason::ExpiredCertificate)
+            );
+            assert_eq!(
+                classify_upstream_error_detail(
+                    "certificate not valid for dns name api.example.com",
+                    true,
+                ),
+                UpstreamErrorClassification::tls(UpstreamTlsReason::HostnameMismatch)
+            );
+            assert_eq!(
+                classify_upstream_error_detail("ALPN negotiation failed", true),
+                UpstreamErrorClassification::tls(UpstreamTlsReason::Alpn)
+            );
+            assert_eq!(
+                classify_upstream_error_detail("connection reset by peer", false),
+                UpstreamErrorClassification::transport()
+            );
+            assert_eq!(
+                classify_upstream_error_detail("x509 certificate validity error", true),
+                UpstreamErrorClassification::tls(UpstreamTlsReason::ExpiredCertificate)
+            );
+            assert_eq!(
+                classify_upstream_error_detail("subjectAltName mismatch for backend", true),
+                UpstreamErrorClassification::tls(UpstreamTlsReason::HostnameMismatch)
+            );
+            assert_eq!(
+                classify_upstream_error_detail("rustls alert handshake failure", true),
+                UpstreamErrorClassification::tls(UpstreamTlsReason::Handshake)
+            );
+        }
+
+        #[test]
+        fn upstream_error_details_classify_matches_shared_detail_classifier() {
+            let details = UpstreamErrorDetails::new(
+                "certificate not valid for dns name api.example.com".to_string(),
                 true,
-            ),
-            UpstreamErrorClassification::tls(UpstreamTlsReason::HostnameMismatch)
-        );
-        assert_eq!(
-            classify_upstream_error_detail("ALPN negotiation failed", true),
-            UpstreamErrorClassification::tls(UpstreamTlsReason::Alpn)
-        );
-        assert_eq!(
-            classify_upstream_error_detail("connection reset by peer", false),
-            UpstreamErrorClassification::transport()
-        );
-        assert_eq!(
-            classify_upstream_error_detail("x509 certificate validity error", true),
-            UpstreamErrorClassification::tls(UpstreamTlsReason::ExpiredCertificate)
-        );
-        assert_eq!(
-            classify_upstream_error_detail("subjectAltName mismatch for backend", true),
-            UpstreamErrorClassification::tls(UpstreamTlsReason::HostnameMismatch)
-        );
-        assert_eq!(
-            classify_upstream_error_detail("rustls alert handshake failure", true),
-            UpstreamErrorClassification::tls(UpstreamTlsReason::Handshake)
-        );
+            );
+
+            assert_eq!(
+                details.classify(),
+                classify_upstream_error_detail(&details.detail, details.is_connect)
+            );
+        }
     }
 
-    #[test]
-    fn upstream_error_details_classify_matches_shared_detail_classifier() {
-        let details = UpstreamErrorDetails::new(
-            "certificate not valid for dns name api.example.com".to_string(),
-            true,
-        );
+    mod formatting_contracts {
+        use super::*;
 
-        assert_eq!(
-            details.classify(),
-            classify_upstream_error_detail(&details.detail, details.is_connect)
-        );
+        #[test]
+        fn format_error_chain_flattens_all_sources() {
+            let formatted = format_error_chain(&ErrorChainOuter(ErrorChainInner));
+
+            assert_eq!(formatted, "outer error: inner error");
+        }
     }
 
-    #[test]
-    fn format_error_chain_flattens_all_sources() {
-        let formatted = format_error_chain(&ErrorChainOuter(ErrorChainInner));
+    mod health_mapping_contracts {
+        use super::*;
 
-        assert_eq!(formatted, "outer error: inner error");
-    }
-
-    #[test]
-    fn health_failure_mapping_preserves_tls_and_transport_reasoning() {
-        assert_eq!(
-            UpstreamErrorClassification::timeout().health_failure_mapping(),
-            UpstreamHealthFailureMapping {
-                failure_reason: HealthFailureReason::Timeout,
-                metrics_reason: "timeout",
-            }
-        );
-        assert_eq!(
-            UpstreamErrorClassification::tls(UpstreamTlsReason::UnknownIssuer)
+        #[test]
+        fn health_failure_mapping_preserves_tls_and_transport_reasoning() {
+            assert_eq!(
+                UpstreamErrorClassification::timeout().health_failure_mapping(),
+                UpstreamHealthFailureMapping {
+                    failure_reason: HealthFailureReason::Timeout,
+                    metrics_reason: "timeout",
+                }
+            );
+            assert_eq!(
+                UpstreamErrorClassification::tls(UpstreamTlsReason::UnknownIssuer)
+                    .health_failure_mapping(),
+                UpstreamHealthFailureMapping {
+                    failure_reason: HealthFailureReason::Tls,
+                    metrics_reason: "unknown_issuer",
+                }
+            );
+            assert_eq!(
+                UpstreamErrorClassification::tls(UpstreamTlsReason::ExpiredCertificate)
+                    .health_failure_mapping(),
+                UpstreamHealthFailureMapping {
+                    failure_reason: HealthFailureReason::Tls,
+                    metrics_reason: "expired_certificate",
+                }
+            );
+            assert_eq!(
+                UpstreamErrorClassification::tls(UpstreamTlsReason::HostnameMismatch)
+                    .health_failure_mapping(),
+                UpstreamHealthFailureMapping {
+                    failure_reason: HealthFailureReason::Tls,
+                    metrics_reason: "hostname_mismatch",
+                }
+            );
+            assert_eq!(
+                UpstreamErrorClassification::tls(UpstreamTlsReason::Alpn).health_failure_mapping(),
+                UpstreamHealthFailureMapping {
+                    failure_reason: HealthFailureReason::Tls,
+                    metrics_reason: "alpn",
+                }
+            );
+            assert_eq!(
+                UpstreamErrorClassification::transport().health_failure_mapping(),
+                UpstreamHealthFailureMapping {
+                    failure_reason: HealthFailureReason::Transport,
+                    metrics_reason: "transport",
+                }
+            );
+            assert_eq!(
+                UpstreamErrorClassification::protocol().health_failure_mapping(),
+                UpstreamHealthFailureMapping {
+                    failure_reason: HealthFailureReason::Transport,
+                    metrics_reason: "transport",
+                }
+            );
+            assert_eq!(
+                UpstreamErrorClassification {
+                    category: UpstreamErrorCategory::Tls,
+                    tls_reason: None,
+                }
                 .health_failure_mapping(),
-            UpstreamHealthFailureMapping {
-                failure_reason: HealthFailureReason::Tls,
-                metrics_reason: "unknown_issuer",
-            }
-        );
-        assert_eq!(
-            UpstreamErrorClassification::tls(UpstreamTlsReason::ExpiredCertificate)
-                .health_failure_mapping(),
-            UpstreamHealthFailureMapping {
-                failure_reason: HealthFailureReason::Tls,
-                metrics_reason: "expired_certificate",
-            }
-        );
-        assert_eq!(
-            UpstreamErrorClassification::tls(UpstreamTlsReason::HostnameMismatch)
-                .health_failure_mapping(),
-            UpstreamHealthFailureMapping {
-                failure_reason: HealthFailureReason::Tls,
-                metrics_reason: "hostname_mismatch",
-            }
-        );
-        assert_eq!(
-            UpstreamErrorClassification::tls(UpstreamTlsReason::Alpn).health_failure_mapping(),
-            UpstreamHealthFailureMapping {
-                failure_reason: HealthFailureReason::Tls,
-                metrics_reason: "alpn",
-            }
-        );
-        assert_eq!(
-            UpstreamErrorClassification::transport().health_failure_mapping(),
-            UpstreamHealthFailureMapping {
-                failure_reason: HealthFailureReason::Transport,
-                metrics_reason: "transport",
-            }
-        );
-        assert_eq!(
-            UpstreamErrorClassification::protocol().health_failure_mapping(),
-            UpstreamHealthFailureMapping {
-                failure_reason: HealthFailureReason::Transport,
-                metrics_reason: "transport",
-            }
-        );
-        assert_eq!(
-            UpstreamErrorClassification {
-                category: UpstreamErrorCategory::Tls,
-                tls_reason: None,
-            }
-            .health_failure_mapping(),
-            UpstreamHealthFailureMapping {
-                failure_reason: HealthFailureReason::Tls,
-                metrics_reason: "handshake",
-            }
-        );
+                UpstreamHealthFailureMapping {
+                    failure_reason: HealthFailureReason::Tls,
+                    metrics_reason: "handshake",
+                }
+            );
+        }
     }
 }
