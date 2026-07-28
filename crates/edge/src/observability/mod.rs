@@ -700,6 +700,53 @@ mod tests {
             );
             assert_unique(
                 &[
+                    BackendHealthReason::ActiveProbeSuccess.slug(),
+                    BackendHealthReason::ActiveProbeFailure.slug(),
+                    BackendHealthReason::PassiveSuccess.slug(),
+                    BackendHealthReason::PassiveFailure.slug(),
+                    BackendHealthReason::DnsRefreshFailed.slug(),
+                    BackendHealthReason::EmptyResolutionRetained.slug(),
+                    BackendHealthReason::PoolPoisoned.slug(),
+                ],
+                "BackendHealthReason",
+            );
+            assert_unique(
+                &[
+                    RetryDecisionReason::UpstreamTimeout.slug(),
+                    RetryDecisionReason::UpstreamTransportFailure.slug(),
+                    RetryDecisionReason::UpstreamProtocolFailure.slug(),
+                    RetryDecisionReason::RetryBudgetDenied.slug(),
+                    RetryDecisionReason::RetryPolicyDisabled.slug(),
+                    RetryDecisionReason::IdempotencyDenied.slug(),
+                ],
+                "RetryDecisionReason",
+            );
+            assert_unique(
+                &[
+                    HedgeDecisionReason::DelayElapsed.slug(),
+                    HedgeDecisionReason::HedgingDisabled.slug(),
+                    HedgeDecisionReason::PrimaryCompleted.slug(),
+                    HedgeDecisionReason::RequestBodyNotReplayable.slug(),
+                    HedgeDecisionReason::TunnelRequest.slug(),
+                    HedgeDecisionReason::MethodNotAllowed.slug(),
+                    HedgeDecisionReason::AlternateBackendUnavailable.slug(),
+                    HedgeDecisionReason::HedgeBudgetDenied.slug(),
+                ],
+                "HedgeDecisionReason",
+            );
+            assert_unique(
+                &[
+                    AdmissionDecisionReason::AuthDenied.slug(),
+                    AdmissionDecisionReason::AuthUnavailable.slug(),
+                    AdmissionDecisionReason::RateLimited.slug(),
+                    AdmissionDecisionReason::Overloaded.slug(),
+                    AdmissionDecisionReason::ValidationRejected.slug(),
+                    AdmissionDecisionReason::PolicyRejected.slug(),
+                ],
+                "AdmissionDecisionReason",
+            );
+            assert_unique(
+                &[
                     AdmissionOverloadCause::Brownout.slug(),
                     AdmissionOverloadCause::AdaptiveAdmission.slug(),
                     AdmissionOverloadCause::RouteCap.slug(),
@@ -806,6 +853,24 @@ mod tests {
                 RequestOutcomeReason::AuthDenied.coarse_outcome_label(),
                 "failure"
             );
+        }
+
+        #[test]
+        fn canonical_slug_literals_match_stable_operational_contract() {
+            assert_eq!(AdmissionDecisionReason::AuthDenied.slug(), "auth_denied");
+            assert_eq!(
+                RetryDecisionReason::UpstreamTransportFailure.slug(),
+                "upstream_transport_failure"
+            );
+            assert_eq!(
+                HedgeDecisionReason::AlternateBackendUnavailable.slug(),
+                "alternate_backend_unavailable"
+            );
+            assert_eq!(
+                BackendHealthReason::DnsRefreshFailed.slug(),
+                "dns_refresh_failed"
+            );
+            assert_eq!(RequestOutcomeReason::TimedOut.slug(), "timed_out");
         }
     }
 
