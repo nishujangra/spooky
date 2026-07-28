@@ -13,10 +13,11 @@ use std::{
 };
 
 use bytes::Bytes;
-use http_body_util::Full;
+use http_body_util::{BodyExt, Full};
 use hyper::{
     Request, Response,
     body::{Body, Frame, Incoming},
+    client::conn::http2,
     service::service_fn,
 };
 use hyper_util::rt::{TokioExecutor, TokioIo};
@@ -29,6 +30,7 @@ use spooky_config::{
         Backend, ClientAuth, Config, Listen, LoadBalancing, Log, LogFormat, RouteMatch, Security,
         Tls, Upstream, UpstreamTls,
     },
+    runtime::RuntimeConfig,
     validator::validate,
 };
 use spooky_edge::{
@@ -40,9 +42,12 @@ use spooky_edge::{
 use tempfile::{TempDir, tempdir};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    net::TcpListener,
+    net::{TcpListener, TcpStream},
 };
-use tokio_rustls::{TlsAcceptor, rustls::ServerConfig};
+use tokio_rustls::{
+    TlsConnector, TlsAcceptor,
+    rustls::{ClientConfig, RootCertStore, ServerConfig, pki_types::ServerName},
+};
 
 pub struct TestTlsMaterial {
     _dir: TempDir,
@@ -143,7 +148,7 @@ impl QuicRequestPathHarness {
             version: 1,
             listen: Listen {
                 protocol: "http3".to_string(),
-                port: reserve_unused_udp_port(),
+                port: reserve_unused_listener_port(),
                 address: "127.0.0.1".to_string(),
                 tls: Tls {
                     cert: self.tls.cert_path.clone(),
@@ -174,6 +179,41 @@ impl QuicRequestPathHarness {
     pub fn start_listener(&mut self, config: Config) -> Result<SocketAddr, String> {
         validate(&config).map_err(|err| format!("config validation failed: {err}"))?;
         let listener = QUICListener::new(config).map_err(|err| format!("listener: {err}"))?;
+        self.metrics = Some(Arc::clone(&listener.metrics));
+        let listen_addr = listener
+            .socket
+            .local_addr()
+            .map_err(|err| format!("listen addr: {err}"))?;
+        self.listener_task = Some(ListenerTaskGuard::spawn(&self.rt, listener));
+        self.listen_addr = Some(listen_addr);
+        Ok(listen_addr)
+    }
+
+    pub fn start_listener_with_bootstrap(&mut self, config: Config) -> Result<SocketAddr, String> {
+        validate(&config).map_err(|err| format!("config validation failed: {err}"))?;
+        let runtime_config =
+            RuntimeConfig::from_config(&config).map_err(|err| format!("runtime config: {err}"))?;
+        let listener_config = runtime_config
+            .listener_runtime_configs()
+            .into_iter()
+            .next()
+            .ok_or_else(|| "missing listener runtime config".to_string())?;
+        let shared_state = Arc::new(
+            QUICListener::build_shared_state(&runtime_config)
+                .map_err(|err| format!("shared runtime state: {err}"))?,
+        );
+        QUICListener::spawn_control_plane_tasks(&runtime_config, &shared_state, 1)
+            .map_err(|err| format!("control plane tasks: {err}"))?;
+        QUICListener::spawn_bootstrap_tls_listener(&listener_config, &shared_state, None, None)
+            .map_err(|err| format!("bootstrap listener: {err}"))?;
+        let socket = QUICListener::bind_socket(&listener_config, false)
+            .map_err(|err| format!("bind socket: {err}"))?;
+        let listener = QUICListener::new_with_socket_and_shared_state(
+            listener_config,
+            socket,
+            shared_state,
+        )
+        .map_err(|err| format!("listener with shared state: {err}"))?;
         self.metrics = Some(Arc::clone(&listener.metrics));
         let listen_addr = listener
             .socket
@@ -270,6 +310,17 @@ impl QuicRequestPathHarness {
         self.metrics
             .as_ref()
             .map(|metrics| metrics.render_prometheus())
+    }
+
+    pub fn run_bootstrap_h2_request(
+        &self,
+        request: BootstrapRequestSpec<'_>,
+    ) -> Result<BootstrapResponse, String> {
+        let listen_addr = self
+            .listen_addr
+            .ok_or_else(|| "listener not started".to_string())?;
+        self.rt
+            .block_on(run_bootstrap_h2_request(listen_addr, &self.tls.cert_path, request))
     }
 }
 
@@ -385,8 +436,163 @@ impl H3Response {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct BootstrapRequestSpec<'a> {
+    pub method: &'a str,
+    pub authority: &'a str,
+    pub path: &'a str,
+    pub headers: &'a [(&'a str, &'a str)],
+    pub body: Option<&'a [u8]>,
+    pub user_agent: &'a str,
+}
+
+impl<'a> BootstrapRequestSpec<'a> {
+    pub fn get(authority: &'a str, path: &'a str) -> Self {
+        Self {
+            method: "GET",
+            authority,
+            path,
+            headers: &[],
+            body: None,
+            user_agent: "spooky-request-path-test",
+        }
+    }
+}
+
+pub struct BootstrapResponse {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
 pub fn run_request_to(addr: SocketAddr, request: H3RequestSpec<'_>) -> Result<H3Response, String> {
     run_h3_request(addr, request)
+}
+
+async fn run_bootstrap_h2_request(
+    addr: SocketAddr,
+    cert_path: &str,
+    request: BootstrapRequestSpec<'_>,
+) -> Result<BootstrapResponse, String> {
+    let (mut sender, _conn_task) = connect_bootstrap_h2(addr, cert_path).await?;
+    sender
+        .ready()
+        .await
+        .map_err(|err| format!("sender ready: {err}"))?;
+
+    let mut builder = Request::builder()
+        .method(request.method)
+        .uri(
+            http::Uri::builder()
+                .path_and_query(request.path)
+                .build()
+                .map_err(|err| format!("uri build: {err}"))?,
+        )
+        .header("host", request.authority)
+        .header("user-agent", request.user_agent);
+    for (name, value) in request.headers {
+        builder = builder.header(*name, *value);
+    }
+
+    let body = request.body.unwrap_or_default().to_vec();
+    let req = builder
+        .body(Full::new(Bytes::from(body)))
+        .map_err(|err| format!("request build: {err}"))?;
+    let mut response = sender
+        .send_request(req)
+        .await
+        .map_err(|err| format!("send request: {err}"))?;
+    let status = response.status().as_u16();
+    let headers = response
+        .headers()
+        .iter()
+        .map(|(name, value)| {
+            Ok::<_, String>((
+                name.as_str().to_string(),
+                value
+                    .to_str()
+                    .map_err(|err| format!("header utf8: {err}"))?
+                    .to_string(),
+            ))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut body = Vec::new();
+
+    while let Some(frame) = response.body_mut().frame().await {
+        let frame = frame.map_err(|err| format!("read frame: {err}"))?;
+        if let Ok(data) = frame.into_data() {
+            body.extend_from_slice(&data);
+        }
+    }
+
+    Ok(BootstrapResponse {
+        status,
+        headers,
+        body,
+    })
+}
+
+async fn connect_bootstrap_h2(
+    addr: SocketAddr,
+    cert_path: &str,
+) -> Result<
+    (
+        hyper::client::conn::http2::SendRequest<Full<Bytes>>,
+        tokio::task::JoinHandle<()>,
+    ),
+    String,
+> {
+    let roots = read_test_root_store(cert_path)?;
+    let mut tls_config = ClientConfig::builder()
+        .with_root_certificates(roots)
+        .with_no_client_auth();
+    tls_config.alpn_protocols = vec![b"h2".to_vec()];
+    let connector = TlsConnector::from(Arc::new(tls_config));
+
+    let server_name = ServerName::try_from("localhost")
+        .map_err(|err| format!("server name: {err}"))?
+        .to_owned();
+    let deadline = Instant::now() + Duration::from_secs(5);
+
+    loop {
+        match TcpStream::connect(addr).await {
+            Ok(stream) => {
+                let tls_stream = connector
+                    .connect(server_name.clone(), stream)
+                    .await
+                    .map_err(|err| format!("tls connect: {err}"))?;
+                let (sender, conn) =
+                    http2::handshake(TokioExecutor::new(), TokioIo::new(tls_stream))
+                        .await
+                        .map_err(|err| format!("h2 handshake: {err}"))?;
+                let conn_task = tokio::spawn(async move {
+                    let _ = conn.await;
+                });
+                return Ok((sender, conn_task));
+            }
+            Err(err) if Instant::now() < deadline => {
+                let _ = err;
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            Err(err) => return Err(format!("tcp connect: {err}")),
+        }
+    }
+}
+
+fn read_test_root_store(cert_path: &str) -> Result<RootCertStore, String> {
+    let mut roots = RootCertStore::empty();
+    let certs = CertificateDer::pem_file_iter(cert_path)
+        .map_err(|err| format!("open cert file: {err}"))?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| format!("parse certs: {err}"))?;
+
+    for cert in certs {
+        roots
+            .add(cert)
+            .map_err(|err| format!("add root cert: {err}"))?;
+    }
+
+    Ok(roots)
 }
 
 pub fn run_two_chunk_post_to(
@@ -910,6 +1116,21 @@ pub fn reserve_unused_udp_port() -> u16 {
     let port = socket.local_addr().expect("udp local addr").port();
     drop(socket);
     port
+}
+
+fn reserve_unused_listener_port() -> u16 {
+    for _ in 0..32 {
+        let tcp = StdTcpListener::bind("127.0.0.1:0").expect("reserve listener tcp port");
+        let port = tcp.local_addr().expect("tcp local addr").port();
+        if let Ok(udp) = UdpSocket::bind(("127.0.0.1", port)) {
+            drop(udp);
+            drop(tcp);
+            return port;
+        }
+        drop(tcp);
+    }
+
+    reserve_unused_udp_port()
 }
 
 fn bind_tcp_listener() -> TcpListener {
