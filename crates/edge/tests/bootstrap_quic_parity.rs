@@ -1,11 +1,21 @@
-use std::{collections::HashMap, convert::Infallible};
+use std::{
+    collections::HashMap,
+    convert::Infallible,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    thread,
+    time::Duration,
+};
 
 use bytes::Bytes;
 use http_body_util::Full;
 use hyper::{Request, Response, body::Incoming};
+use serial_test::serial;
 use spooky_config::config::{
     ApiKeyAuth, ExternalAuth, ExternalAuthFailureMode, ExternalAuthRequestHeader, JwtAuth,
-    LoadBalancing, RouteAuth, RouteMatch, Upstream,
+    LoadBalancing, RouteAuth, RouteMatch, ScopedRateLimit, ScopedRateLimitScope, Upstream,
 };
 
 mod support;
@@ -13,6 +23,7 @@ mod support;
 use support::{
     net::local_listener_bind_available,
     parity::{BootstrapQuicParityHarness, ParityRequestSpec, make_backend, make_upstream},
+    request_path::{BootstrapRequestSpec, H3RequestSpec, run_bootstrap_request_to, run_request_to},
 };
 
 #[test]
@@ -508,6 +519,74 @@ fn bootstrap_and_quic_external_auth_decisions_match() {
     }
 }
 
+#[test]
+#[serial]
+fn bootstrap_and_quic_admission_rate_limit_rejections_match() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let quic = run_scoped_rate_limit_scenario(IngressKind::Quic);
+    let bootstrap = run_scoped_rate_limit_scenario(IngressKind::Bootstrap);
+
+    assert_eq!(quic.status, 429);
+    assert_eq!(bootstrap.status, 429);
+    assert_eq!(bootstrap.status, quic.status);
+    assert_eq!(bootstrap.body, quic.body);
+    assert!(
+        quic.body.contains("request rate limited"),
+        "expected canonical rate-limit rejection body, got `{}`",
+        quic.body
+    );
+    assert_eq!(bootstrap.headers, quic.headers);
+    assert_eq!(
+        quic.headers,
+        vec![(String::from("retry-after"), String::from("1"))]
+    );
+    assert_eq!(
+        quic.upstream_calls, 1,
+        "quic rate-limit path should reject before the second upstream dispatch"
+    );
+    assert_eq!(
+        bootstrap.upstream_calls, 1,
+        "bootstrap rate-limit path should reject before the second upstream dispatch"
+    );
+}
+
+#[test]
+#[serial]
+#[ignore = "bootstrap path does not yet share post-auth admission overload semantics"]
+fn bootstrap_and_quic_admission_overload_shed_contracts_match() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let quic = run_overload_shed_scenario(IngressKind::Quic);
+    let bootstrap = run_overload_shed_scenario(IngressKind::Bootstrap);
+
+    assert_eq!(quic.status, 503);
+    assert_eq!(bootstrap.status, 503);
+    assert_eq!(bootstrap.body, quic.body);
+    assert!(
+        quic.body.contains("route queue cap exceeded"),
+        "expected canonical overload body, got `{}`",
+        quic.body
+    );
+    assert_eq!(bootstrap.headers, quic.headers);
+    assert_eq!(
+        quic.headers,
+        vec![(String::from("retry-after"), String::from("1"))]
+    );
+    assert_eq!(
+        quic.upstream_calls, 1,
+        "quic overload shedding should stop the second request before backend dispatch"
+    );
+    assert_eq!(
+        bootstrap.upstream_calls, 1,
+        "bootstrap overload shedding should stop the second request before backend dispatch"
+    );
+}
+
 fn routed_upstream(
     host: Option<&str>,
     path_prefix: &str,
@@ -602,4 +681,260 @@ struct ExternalAuthParityCase<'a> {
     expected_status: u16,
     expected_body: &'a [u8],
     expected_headers: &'a [(&'a str, &'a str)],
+}
+
+#[derive(Clone, Copy)]
+enum IngressKind {
+    Quic,
+    Bootstrap,
+}
+
+struct RejectionObservation {
+    status: u16,
+    body: String,
+    headers: Vec<(String, String)>,
+    upstream_calls: usize,
+}
+
+fn run_scoped_rate_limit_scenario(ingress: IngressKind) -> RejectionObservation {
+    let mut harness = BootstrapQuicParityHarness::new();
+    let upstream_calls = Arc::new(AtomicUsize::new(0));
+    let backend_observed = Arc::clone(&upstream_calls);
+    let backend_addr = harness.start_h1_backend(move |_req: Request<Incoming>| {
+        let backend_observed = Arc::clone(&backend_observed);
+        async move {
+            backend_observed.fetch_add(1, Ordering::Relaxed);
+            Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(
+                b"rate-limit ok",
+            ))))
+        }
+    });
+
+    let mut config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        make_upstream(
+            "/limited",
+            vec![make_backend("backend-a", backend_addr.to_string())],
+            None,
+            "round-robin",
+        ),
+    )]));
+    config.resilience.scoped_rate_limits = vec![ScopedRateLimit {
+        name: "route-cap".to_string(),
+        scope: ScopedRateLimitScope::Route,
+        requests_per_sec: 1,
+        burst: 1,
+        key: None,
+        route_allowlist: vec!["api".to_string()],
+        idle_ttl_secs: 300,
+    }];
+
+    harness.start_listener(config).expect("listener with bootstrap");
+
+    let success = run_parity_ingress_request(
+        ingress,
+        &harness,
+        ParityRequestSpec {
+            method: "GET",
+            authority: "localhost",
+            path: "/limited",
+            headers: &[],
+            body: None,
+            user_agent: "spooky-bootstrap-quic-parity-test",
+            selected_response_headers: &[],
+            capture_metrics_delta: false,
+        },
+    )
+    .expect("first request should complete");
+    assert_eq!(success.status, 200);
+
+    let rejection = run_parity_ingress_request(
+        ingress,
+        &harness,
+        ParityRequestSpec {
+            method: "GET",
+            authority: "localhost",
+            path: "/limited",
+            headers: &[],
+            body: None,
+            user_agent: "spooky-bootstrap-quic-parity-test",
+            selected_response_headers: &["retry-after", "www-authenticate"],
+            capture_metrics_delta: false,
+        },
+    )
+    .expect("second request should complete");
+
+    RejectionObservation {
+        status: rejection.status,
+        body: String::from_utf8_lossy(&rejection.body).into_owned(),
+        headers: rejection.selected_headers,
+        upstream_calls: upstream_calls.load(Ordering::Relaxed),
+    }
+}
+
+fn run_overload_shed_scenario(ingress: IngressKind) -> RejectionObservation {
+    let mut harness = BootstrapQuicParityHarness::new();
+    let upstream_calls = Arc::new(AtomicUsize::new(0));
+    let backend_observed = Arc::clone(&upstream_calls);
+    let backend_addr = harness.start_h1_backend(move |_req: Request<Incoming>| {
+        let backend_observed = Arc::clone(&backend_observed);
+        async move {
+            backend_observed.fetch_add(1, Ordering::Relaxed);
+            tokio::time::sleep(Duration::from_millis(250)).await;
+            Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(b"slow ok"))))
+        }
+    });
+
+    let mut config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        make_upstream(
+            "/slow",
+            vec![make_backend("backend-a", backend_addr.to_string())],
+            None,
+            "round-robin",
+        ),
+    )]));
+    config.performance.global_inflight_limit = 64;
+    config.resilience.route_queue.default_cap = 1;
+    config.resilience.route_queue.global_cap = 64;
+    harness.start_listener(config).expect("listener with bootstrap");
+    let listen_addr = harness.listen_addr();
+    let cert_path = harness.cert_path().to_string();
+
+    let first_request = thread::spawn({
+        let cert_path = cert_path.clone();
+        move || {
+            execute_ingress_request(
+                ingress,
+                listen_addr,
+                &cert_path,
+                ParityRequestSpec::get("localhost", "/slow"),
+            )
+        }
+    });
+
+    for _ in 0..50 {
+        if upstream_calls.load(Ordering::Relaxed) > 0 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+
+    let rejection = execute_ingress_request(
+        ingress,
+        listen_addr,
+        &cert_path,
+        ParityRequestSpec {
+            method: "GET",
+            authority: "localhost",
+            path: "/slow",
+            headers: &[],
+            body: None,
+            user_agent: "spooky-bootstrap-quic-parity-test",
+            selected_response_headers: &["retry-after", "www-authenticate"],
+            capture_metrics_delta: false,
+        },
+    )
+    .expect("second request should complete");
+    let first_response = first_request
+        .join()
+        .expect("first request thread")
+        .expect("first request should complete");
+    assert_eq!(first_response.status, 200);
+
+    RejectionObservation {
+        status: rejection.status,
+        body: String::from_utf8_lossy(&rejection.body).into_owned(),
+        headers: rejection.selected_headers,
+        upstream_calls: upstream_calls.load(Ordering::Relaxed),
+    }
+}
+
+fn run_parity_ingress_request(
+    ingress: IngressKind,
+    harness: &BootstrapQuicParityHarness,
+    request: ParityRequestSpec<'_>,
+) -> Result<support::parity::ParityResponseSnapshot, String> {
+    let observation = match ingress {
+        IngressKind::Quic => harness.run_quic(request)?,
+        IngressKind::Bootstrap => harness.run_bootstrap(request)?,
+    };
+    Ok(observation.response)
+}
+
+fn execute_ingress_request(
+    ingress: IngressKind,
+    listen_addr: std::net::SocketAddr,
+    cert_path: &str,
+    request: ParityRequestSpec<'_>,
+) -> Result<support::parity::ParityResponseSnapshot, String> {
+    match ingress {
+        IngressKind::Quic => {
+            let response = run_request_to(
+                listen_addr,
+                H3RequestSpec {
+                    method: request.method,
+                    authority: request.authority,
+                    path: request.path,
+                    headers: request.headers,
+                    body: request.body,
+                    user_agent: request.user_agent,
+                },
+            )?;
+            Ok(parity_snapshot_from_response(
+                response.status,
+                response.body,
+                response.headers,
+                request.selected_response_headers,
+            ))
+        }
+        IngressKind::Bootstrap => {
+            let response = run_bootstrap_request_to(
+                listen_addr,
+                cert_path,
+                BootstrapRequestSpec {
+                    method: request.method,
+                    authority: request.authority,
+                    path: request.path,
+                    headers: request.headers,
+                    body: request.body,
+                    user_agent: request.user_agent,
+                },
+            )?;
+            Ok(parity_snapshot_from_response(
+                response.status,
+                response.body,
+                response.headers,
+                request.selected_response_headers,
+            ))
+        }
+    }
+}
+
+fn parity_snapshot_from_response(
+    status: u16,
+    body: Vec<u8>,
+    headers: Vec<(String, String)>,
+    selected_response_headers: &[&str],
+) -> support::parity::ParityResponseSnapshot {
+    let mut selected_headers = headers
+        .into_iter()
+        .filter(|(name, _)| {
+            selected_response_headers
+                .iter()
+                .any(|selected| name.eq_ignore_ascii_case(selected))
+        })
+        .collect::<Vec<_>>();
+    selected_headers.sort_by(|left, right| {
+        left.0
+            .to_ascii_lowercase()
+            .cmp(&right.0.to_ascii_lowercase())
+            .then_with(|| left.1.cmp(&right.1))
+    });
+
+    support::parity::ParityResponseSnapshot {
+        status,
+        body,
+        selected_headers,
+    }
 }

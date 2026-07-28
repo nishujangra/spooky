@@ -465,8 +465,32 @@ pub struct BootstrapResponse {
     pub body: Vec<u8>,
 }
 
+impl BootstrapResponse {
+    pub fn body_text(&self) -> String {
+        String::from_utf8_lossy(&self.body).into_owned()
+    }
+
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers.iter().find_map(|(header_name, value)| {
+            header_name
+                .eq_ignore_ascii_case(name)
+                .then_some(value.as_str())
+        })
+    }
+}
+
 pub fn run_request_to(addr: SocketAddr, request: H3RequestSpec<'_>) -> Result<H3Response, String> {
     run_h3_request(addr, request)
+}
+
+pub fn run_bootstrap_request_to(
+    addr: SocketAddr,
+    cert_path: &str,
+    request: BootstrapRequestSpec<'_>,
+) -> Result<BootstrapResponse, String> {
+    tokio::runtime::Runtime::new()
+        .expect("runtime")
+        .block_on(run_bootstrap_h2_request(addr, cert_path, request))
 }
 
 async fn run_bootstrap_h2_request(

@@ -157,6 +157,14 @@ impl BootstrapQuicParityHarness {
         })
     }
 
+    pub fn listen_addr(&self) -> SocketAddr {
+        self.inner.listen_addr.expect("listener address")
+    }
+
+    pub fn cert_path(&self) -> &str {
+        &self.inner.tls.cert_path
+    }
+
     fn capture_metrics(&self, enabled: bool) -> Option<String> {
         enabled.then(|| self.inner.metrics_text()).flatten()
     }
