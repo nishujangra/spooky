@@ -34,6 +34,18 @@ fn response_line(body: &str, prefix: &str) -> String {
         .unwrap_or_else(|| panic!("missing response line with prefix `{prefix}` in body: {body}"))
 }
 
+fn metrics_counter(metrics: &str, prefix: &str) -> u64 {
+    metrics
+        .lines()
+        .find_map(|line| line.strip_prefix(prefix))
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or_else(|| panic!("missing metrics counter `{prefix}` in metrics:\n{metrics}"))
+}
+
+fn metrics_delta(before: &str, after: &str, prefix: &str) -> u64 {
+    metrics_counter(after, prefix).saturating_sub(metrics_counter(before, prefix))
+}
+
 fn configure_http_external_auth(
     harness: &QuicRequestPathHarness,
     backend_address: String,
@@ -1271,5 +1283,409 @@ fn quic_request_path_slow_response_body_before_first_chunk_returns_timeout() {
     assert!(
         response.body_text().contains("upstream timeout"),
         "expected canonical upstream timeout body for stalled response body stream"
+    );
+}
+
+#[test]
+#[serial]
+fn quic_request_path_success_outcome_records_success_bucket() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = QuicRequestPathHarness::new();
+    let backend_addr = harness.start_h1_static_backend(b"ok");
+
+    let mut upstreams = HashMap::new();
+    upstreams.insert(
+        "api".to_string(),
+        make_upstream(
+            "/metrics-success",
+            vec![make_backend("h1-success", format!("http://{backend_addr}"))],
+            None,
+            "round-robin",
+        ),
+    );
+
+    harness
+        .start_listener(harness.make_config(upstreams))
+        .expect("listener");
+    let before = harness
+        .metrics_text()
+        .expect("metrics snapshot before request");
+
+    let response = harness
+        .run_request(H3RequestSpec::get("localhost", "/metrics-success"))
+        .expect("success request should complete");
+    response.assert_status(200);
+
+    let after = harness
+        .metrics_text()
+        .expect("metrics snapshot after request");
+    assert!(
+        metrics_delta(&before, &after, "spooky_requests_success ") > 0,
+        "success request should increment success counter"
+    );
+    assert_eq!(
+        metrics_delta(&before, &after, "spooky_requests_failure "),
+        0
+    );
+    assert!(
+        metrics_delta(
+            &before,
+            &after,
+            "spooky_route_requests_total{route=\"api\"} "
+        ) > 0,
+        "success request should increment route request counter"
+    );
+    assert!(
+        metrics_delta(
+            &before,
+            &after,
+            "spooky_route_success_total{route=\"api\"} "
+        ) > 0,
+        "success request should increment route success counter"
+    );
+    assert_eq!(
+        metrics_delta(
+            &before,
+            &after,
+            "spooky_route_failure_total{route=\"api\"} "
+        ),
+        0
+    );
+    assert_eq!(
+        metrics_delta(
+            &before,
+            &after,
+            "spooky_route_timeout_total{route=\"api\"} "
+        ),
+        0
+    );
+}
+
+#[test]
+#[serial]
+fn quic_request_path_timeout_outcome_records_timeout_bucket() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = QuicRequestPathHarness::new();
+    let backend_addr = harness.start_h1_backend(|_req: hyper::Request<Incoming>| async move {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::from_static(b"late"))))
+    });
+
+    let mut upstreams = HashMap::new();
+    upstreams.insert(
+        "api".to_string(),
+        make_upstream(
+            "/metrics-timeout",
+            vec![make_backend("h1-timeout", format!("http://{backend_addr}"))],
+            None,
+            "round-robin",
+        ),
+    );
+
+    let mut config = harness.make_config(upstreams);
+    config.performance.backend_timeout_ms = 150;
+    config.performance.backend_connect_timeout_ms = 150;
+    harness.start_listener(config).expect("listener");
+    let before = harness
+        .metrics_text()
+        .expect("metrics snapshot before request");
+
+    let response = harness
+        .run_request(H3RequestSpec::get("localhost", "/metrics-timeout"))
+        .expect("timeout request should complete");
+    response.assert_status(503);
+    assert!(response.body_text().contains("upstream timeout"));
+
+    let after = harness
+        .metrics_text()
+        .expect("metrics snapshot after request");
+    assert!(
+        metrics_delta(&before, &after, "spooky_backend_timeouts ") > 0,
+        "timeout request should increment backend timeout counter"
+    );
+    assert!(
+        metrics_delta(&before, &after, "spooky_requests_failure ") > 0,
+        "timeout request should increment failure counter"
+    );
+    assert!(
+        metrics_delta(
+            &before,
+            &after,
+            "spooky_route_timeout_total{route=\"api\"} "
+        ) > 0,
+        "timeout request should increment timeout bucket"
+    );
+    assert_eq!(
+        metrics_delta(
+            &before,
+            &after,
+            "spooky_route_success_total{route=\"api\"} "
+        ),
+        0
+    );
+}
+
+#[test]
+#[serial]
+fn quic_request_path_failure_outcome_records_failure_bucket() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = QuicRequestPathHarness::new();
+    let unused_listener = TcpListener::bind("127.0.0.1:0").expect("bind unused backend port");
+    let unused_addr = unused_listener.local_addr().expect("unused backend addr");
+    drop(unused_listener);
+
+    let mut upstreams = HashMap::new();
+    upstreams.insert(
+        "api".to_string(),
+        make_upstream(
+            "/metrics-failure",
+            vec![make_backend("h1-failure", format!("http://{unused_addr}"))],
+            None,
+            "round-robin",
+        ),
+    );
+
+    let mut config = harness.make_config(upstreams);
+    config.performance.backend_timeout_ms = 150;
+    config.performance.backend_connect_timeout_ms = 150;
+    harness.start_listener(config).expect("listener");
+    let before = harness
+        .metrics_text()
+        .expect("metrics snapshot before request");
+
+    let response = harness
+        .run_request(H3RequestSpec::get("localhost", "/metrics-failure"))
+        .expect("failure request should complete");
+    response.assert_status(502);
+    assert!(response.body_text().contains("upstream error"));
+
+    let after = harness
+        .metrics_text()
+        .expect("metrics snapshot after request");
+    assert!(
+        metrics_delta(&before, &after, "spooky_backend_errors ") > 0,
+        "upstream failure should increment backend error counter"
+    );
+    assert!(
+        metrics_delta(&before, &after, "spooky_requests_failure ") > 0,
+        "upstream failure should increment failure counter"
+    );
+    assert!(
+        metrics_delta(
+            &before,
+            &after,
+            "spooky_route_failure_total{route=\"api\"} "
+        ) > 0,
+        "upstream failure should increment failure bucket"
+    );
+    assert_eq!(
+        metrics_delta(
+            &before,
+            &after,
+            "spooky_route_timeout_total{route=\"api\"} "
+        ),
+        0
+    );
+    assert_eq!(
+        metrics_delta(
+            &before,
+            &after,
+            "spooky_route_overload_shed_total{route=\"api\"} "
+        ),
+        0
+    );
+}
+
+#[test]
+#[serial]
+fn quic_request_path_rate_limit_outcome_records_rate_limited_bucket() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = QuicRequestPathHarness::new();
+    let backend_addr = harness.start_h1_static_backend(b"rate-limit ok");
+
+    let mut upstreams = HashMap::new();
+    upstreams.insert(
+        "api".to_string(),
+        make_upstream(
+            "/metrics-rate-limit",
+            vec![make_backend(
+                "h1-rate-limit",
+                format!("http://{backend_addr}"),
+            )],
+            None,
+            "round-robin",
+        ),
+    );
+
+    let mut config = harness.make_config(upstreams);
+    config.resilience.scoped_rate_limits = vec![ScopedRateLimit {
+        name: "route-cap".to_string(),
+        scope: ScopedRateLimitScope::Route,
+        requests_per_sec: 1,
+        burst: 1,
+        key: None,
+        route_allowlist: vec!["api".to_string()],
+        idle_ttl_secs: 300,
+    }];
+    harness.start_listener(config).expect("listener");
+    let before = harness
+        .metrics_text()
+        .expect("metrics snapshot before requests");
+
+    let first = harness
+        .run_request(H3RequestSpec::get("localhost", "/metrics-rate-limit"))
+        .expect("first request should complete");
+    first.assert_status(200);
+
+    let second = harness
+        .run_request(H3RequestSpec::get("localhost", "/metrics-rate-limit"))
+        .expect("rate-limited request should complete");
+    second.assert_status(429);
+
+    let after = harness
+        .metrics_text()
+        .expect("metrics snapshot after requests");
+    assert!(
+        metrics_delta(&before, &after, "spooky_request_rate_limited ") > 0,
+        "rate-limited request should increment rate-limit counter"
+    );
+    assert!(
+        metrics_delta(
+            &before,
+            &after,
+            "spooky_route_rate_limited_total{route=\"api\"} "
+        ) > 0,
+        "rate-limited request should increment route rate-limit bucket"
+    );
+    assert!(
+        metrics_delta(&before, &after, "spooky_requests_success ") > 0,
+        "admitted request should increment success counter"
+    );
+    assert!(
+        metrics_delta(&before, &after, "spooky_requests_failure ") > 0,
+        "rate-limited request should increment failure counter"
+    );
+    assert_eq!(
+        metrics_delta(
+            &before,
+            &after,
+            "spooky_route_overload_shed_total{route=\"api\"} "
+        ),
+        0
+    );
+}
+
+#[test]
+#[serial]
+fn quic_request_path_overload_outcome_records_overload_bucket() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = QuicRequestPathHarness::new();
+    let backend_addr = harness.start_h1_backend(|_req: hyper::Request<Incoming>| async move {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::from_static(b"slow ok"))))
+    });
+
+    let mut upstreams = HashMap::new();
+    upstreams.insert(
+        "api".to_string(),
+        make_upstream(
+            "/metrics-overload",
+            vec![make_backend(
+                "h1-overload",
+                format!("http://{backend_addr}"),
+            )],
+            None,
+            "round-robin",
+        ),
+    );
+
+    let mut config = harness.make_config(upstreams);
+    config.performance.global_inflight_limit = 64;
+    config.performance.per_upstream_inflight_limit = 1;
+    let listen_addr = harness.start_listener(config).expect("listener");
+    let before = harness
+        .metrics_text()
+        .expect("metrics snapshot before requests");
+    let barrier = Arc::new(Barrier::new(2));
+
+    let responses = thread::scope(|scope| {
+        let first_barrier = Arc::clone(&barrier);
+        let first = scope.spawn(move || {
+            first_barrier.wait();
+            run_request_to(
+                listen_addr,
+                H3RequestSpec::get("localhost", "/metrics-overload"),
+            )
+        });
+
+        let second_barrier = Arc::clone(&barrier);
+        let second = scope.spawn(move || {
+            second_barrier.wait();
+            run_request_to(
+                listen_addr,
+                H3RequestSpec::get("localhost", "/metrics-overload"),
+            )
+        });
+
+        [
+            first.join().expect("first request thread"),
+            second.join().expect("second request thread"),
+        ]
+    });
+
+    let mut saw_success = false;
+    let mut saw_overload = false;
+    for response in responses {
+        let response = response.expect("concurrent request should complete");
+        match response.status {
+            200 => saw_success = true,
+            503 => saw_overload = true,
+            other => panic!("unexpected status in overload metrics test: {other}"),
+        }
+    }
+    assert!(saw_success, "expected one successful request");
+    assert!(saw_overload, "expected one overload-shed request");
+
+    let after = harness
+        .metrics_text()
+        .expect("metrics snapshot after requests");
+    assert!(
+        metrics_delta(
+            &before,
+            &after,
+            "spooky_route_overload_shed_total{route=\"api\"} "
+        ) > 0,
+        "overload request should increment route overload bucket"
+    );
+    assert!(
+        metrics_delta(&before, &after, "spooky_requests_success ") > 0,
+        "one admitted request should increment success counter"
+    );
+    assert!(
+        metrics_delta(&before, &after, "spooky_requests_failure ") > 0,
+        "one shed request should increment failure counter"
+    );
+    assert_eq!(
+        metrics_delta(
+            &before,
+            &after,
+            "spooky_route_rate_limited_total{route=\"api\"} "
+        ),
+        0
     );
 }

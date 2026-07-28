@@ -32,9 +32,10 @@ use spooky_config::{
     validator::validate,
 };
 use spooky_edge::{
-    MAX_DATAGRAM_SIZE_BYTES, MAX_UDP_PAYLOAD_BYTES, QUIC_IDLE_TIMEOUT_MS, QUIC_INITIAL_MAX_DATA,
-    QUIC_INITIAL_MAX_STREAMS_BIDI, QUIC_INITIAL_MAX_STREAMS_UNI, QUIC_INITIAL_STREAM_DATA,
-    REQUEST_TIMEOUT_SECS, UDP_READ_TIMEOUT_MS, runtime::listener::QUICListener,
+    MAX_DATAGRAM_SIZE_BYTES, MAX_UDP_PAYLOAD_BYTES, Metrics, QUIC_IDLE_TIMEOUT_MS,
+    QUIC_INITIAL_MAX_DATA, QUIC_INITIAL_MAX_STREAMS_BIDI, QUIC_INITIAL_MAX_STREAMS_UNI,
+    QUIC_INITIAL_STREAM_DATA, REQUEST_TIMEOUT_SECS, UDP_READ_TIMEOUT_MS,
+    runtime::listener::QUICListener,
 };
 use tempfile::{TempDir, tempdir};
 use tokio::{
@@ -119,6 +120,7 @@ impl Drop for ListenerTaskGuard {
 pub struct QuicRequestPathHarness {
     backends: Vec<BackendFixture>,
     listener_task: Option<ListenerTaskGuard>,
+    metrics: Option<Arc<Metrics>>,
     rt: tokio::runtime::Runtime,
     pub tls: TestTlsMaterial,
     pub listen_addr: Option<SocketAddr>,
@@ -129,6 +131,7 @@ impl QuicRequestPathHarness {
         Self {
             backends: Vec::new(),
             listener_task: None,
+            metrics: None,
             rt: tokio::runtime::Runtime::new().expect("runtime"),
             tls: TestTlsMaterial::localhost(),
             listen_addr: None,
@@ -171,6 +174,7 @@ impl QuicRequestPathHarness {
     pub fn start_listener(&mut self, config: Config) -> Result<SocketAddr, String> {
         validate(&config).map_err(|err| format!("config validation failed: {err}"))?;
         let listener = QUICListener::new(config).map_err(|err| format!("listener: {err}"))?;
+        self.metrics = Some(Arc::clone(&listener.metrics));
         let listen_addr = listener
             .socket
             .local_addr()
@@ -260,6 +264,12 @@ impl QuicRequestPathHarness {
             .listen_addr
             .ok_or_else(|| "listener not started".to_string())?;
         run_h3_request(listen_addr, request)
+    }
+
+    pub fn metrics_text(&self) -> Option<String> {
+        self.metrics
+            .as_ref()
+            .map(|metrics| metrics.render_prometheus())
     }
 }
 
