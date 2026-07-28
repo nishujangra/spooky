@@ -1,0 +1,614 @@
+#![allow(dead_code)]
+
+use std::{
+    collections::HashMap,
+    convert::Infallible,
+    future::Future,
+    net::{IpAddr, SocketAddr, TcpListener as StdTcpListener, UdpSocket},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::{Duration, Instant},
+};
+
+use bytes::Bytes;
+use http_body_util::Full;
+use hyper::{Request, Response, body::Incoming, service::service_fn};
+use hyper_util::rt::{TokioExecutor, TokioIo};
+use quiche::h3::NameValue;
+use rand::RngCore;
+use rcgen::{Certificate, CertificateParams, SanType};
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+use spooky_config::{
+    config::{
+        Backend, ClientAuth, Config, Listen, LoadBalancing, Log, LogFormat, RouteMatch, Security,
+        Tls, Upstream, UpstreamTls,
+    },
+    validator::validate,
+};
+use spooky_edge::{
+    MAX_DATAGRAM_SIZE_BYTES, MAX_UDP_PAYLOAD_BYTES, QUIC_IDLE_TIMEOUT_MS, QUIC_INITIAL_MAX_DATA,
+    QUIC_INITIAL_MAX_STREAMS_BIDI, QUIC_INITIAL_MAX_STREAMS_UNI, QUIC_INITIAL_STREAM_DATA,
+    REQUEST_TIMEOUT_SECS, UDP_READ_TIMEOUT_MS, runtime::listener::QUICListener,
+};
+use tempfile::{TempDir, tempdir};
+use tokio::net::TcpListener;
+use tokio_rustls::{TlsAcceptor, rustls::ServerConfig};
+
+pub struct TestTlsMaterial {
+    _dir: TempDir,
+    pub cert_path: String,
+    pub key_path: String,
+}
+
+impl TestTlsMaterial {
+    pub fn localhost() -> Self {
+        let dir = tempdir().expect("tempdir");
+        let mut params = CertificateParams::new(vec!["localhost".into()]);
+        params
+            .subject_alt_names
+            .push(SanType::DnsName("localhost".to_string()));
+        params
+            .subject_alt_names
+            .push(SanType::IpAddress(IpAddr::from([127, 0, 0, 1])));
+        let cert = Certificate::from_params(params).expect("failed to build cert");
+
+        let cert_path = dir.path().join("cert.pem");
+        let key_path = dir.path().join("key.pem");
+
+        std::fs::write(&cert_path, cert.serialize_pem().expect("serialize cert"))
+            .expect("write cert");
+        std::fs::write(&key_path, cert.serialize_private_key_pem()).expect("write key");
+
+        Self {
+            _dir: dir,
+            cert_path: cert_path.to_string_lossy().to_string(),
+            key_path: key_path.to_string_lossy().to_string(),
+        }
+    }
+}
+
+pub struct BackendFixture {
+    pub addr: SocketAddr,
+    stop: Arc<AtomicBool>,
+    accept_task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for BackendFixture {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        self.accept_task.abort();
+    }
+}
+
+pub struct ListenerTaskGuard {
+    stop: Arc<AtomicBool>,
+    handle: tokio::task::JoinHandle<()>,
+}
+
+impl ListenerTaskGuard {
+    pub fn spawn(rt: &tokio::runtime::Runtime, mut listener: QUICListener) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_flag = Arc::clone(&stop);
+        let runtime_handle = rt.handle().clone();
+        let handle = rt.spawn_blocking(move || {
+            let _enter = runtime_handle.enter();
+            while !stop_flag.load(Ordering::Relaxed) {
+                listener.poll();
+            }
+        });
+        Self { stop, handle }
+    }
+}
+
+impl Drop for ListenerTaskGuard {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        self.handle.abort();
+    }
+}
+
+pub struct QuicRequestPathHarness {
+    backends: Vec<BackendFixture>,
+    listener_task: Option<ListenerTaskGuard>,
+    rt: tokio::runtime::Runtime,
+    pub tls: TestTlsMaterial,
+    pub listen_addr: Option<SocketAddr>,
+}
+
+impl QuicRequestPathHarness {
+    pub fn new() -> Self {
+        Self {
+            backends: Vec::new(),
+            listener_task: None,
+            rt: tokio::runtime::Runtime::new().expect("runtime"),
+            tls: TestTlsMaterial::localhost(),
+            listen_addr: None,
+        }
+    }
+
+    pub fn make_config(&self, upstreams: HashMap<String, Upstream>) -> Config {
+        Config {
+            version: 1,
+            listen: Listen {
+                protocol: "http3".to_string(),
+                port: reserve_unused_udp_port(),
+                address: "127.0.0.1".to_string(),
+                tls: Tls {
+                    cert: self.tls.cert_path.clone(),
+                    key: self.tls.key_path.clone(),
+                    certificates: Vec::new(),
+                    client_auth: ClientAuth::default(),
+                },
+            },
+            listeners: Vec::new(),
+            upstream: upstreams,
+            load_balancing: Some(LoadBalancing {
+                lb_type: "round-robin".to_string(),
+                key: None,
+            }),
+            upstream_tls: UpstreamTls::default(),
+            log: Log {
+                level: "info".to_string(),
+                file: Default::default(),
+                format: LogFormat::Plain,
+            },
+            performance: spooky_config::config::Performance::default(),
+            observability: spooky_config::config::Observability::default(),
+            resilience: spooky_config::config::Resilience::default(),
+            security: Security::default(),
+        }
+    }
+
+    pub fn start_listener(&mut self, config: Config) -> Result<SocketAddr, String> {
+        validate(&config).map_err(|err| format!("config validation failed: {err}"))?;
+        let listener = QUICListener::new(config).map_err(|err| format!("listener: {err}"))?;
+        let listen_addr = listener
+            .socket
+            .local_addr()
+            .map_err(|err| format!("listen addr: {err}"))?;
+        self.listener_task = Some(ListenerTaskGuard::spawn(&self.rt, listener));
+        self.listen_addr = Some(listen_addr);
+        Ok(listen_addr)
+    }
+
+    pub fn start_h1_backend<F, Fut>(&mut self, handler: F) -> SocketAddr
+    where
+        F: Fn(Request<Incoming>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response<Full<Bytes>>, Infallible>> + Send + 'static,
+    {
+        let fixture = self.rt.block_on(start_h1_backend(handler));
+        let addr = fixture.addr;
+        self.backends.push(fixture);
+        addr
+    }
+
+    pub fn start_h1_static_backend(&mut self, body: &'static [u8]) -> SocketAddr {
+        self.start_h1_backend(move |_req| async move {
+            Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(body))))
+        })
+    }
+
+    pub fn start_h2_backend<F, Fut>(&mut self, handler: F) -> SocketAddr
+    where
+        F: Fn(Request<Incoming>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response<Full<Bytes>>, Infallible>> + Send + 'static,
+    {
+        let fixture = self.rt.block_on(start_h2_backend(
+            &self.tls.cert_path,
+            &self.tls.key_path,
+            handler,
+        ));
+        let addr = fixture.addr;
+        self.backends.push(fixture);
+        addr
+    }
+
+    pub fn start_h2_static_backend(&mut self, body: &'static [u8]) -> SocketAddr {
+        self.start_h2_backend(move |_req| async move {
+            Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(body))))
+        })
+    }
+
+    pub fn run_request(&self, request: H3RequestSpec<'_>) -> Result<H3Response, String> {
+        let listen_addr = self
+            .listen_addr
+            .ok_or_else(|| "listener not started".to_string())?;
+        run_h3_request(listen_addr, request)
+    }
+}
+
+impl Default for QuicRequestPathHarness {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub fn make_upstream(
+    path_prefix: &str,
+    backends: Vec<Backend>,
+    tls: Option<UpstreamTls>,
+    lb_type: &str,
+) -> Upstream {
+    Upstream {
+        load_balancing: LoadBalancing {
+            lb_type: lb_type.to_string(),
+            key: None,
+        },
+        auth: Default::default(),
+        host_policy: Default::default(),
+        forwarded_headers: Default::default(),
+        tls,
+        route: RouteMatch {
+            host: None,
+            path_prefix: Some(path_prefix.to_string()),
+            method: None,
+        },
+        backends,
+    }
+}
+
+pub fn make_backend(id: &str, address: impl Into<String>) -> Backend {
+    Backend {
+        id: id.to_string(),
+        address: normalize_backend_address(address.into()),
+        weight: 1,
+        health_check: None,
+    }
+}
+
+pub fn normalize_backend_address(address: String) -> String {
+    if address.contains("://") {
+        address
+    } else {
+        format!("http://{address}")
+    }
+}
+
+pub struct H3RequestSpec<'a> {
+    pub method: &'a str,
+    pub authority: &'a str,
+    pub path: &'a str,
+    pub headers: &'a [(&'a str, &'a str)],
+    pub body: Option<&'a [u8]>,
+    pub user_agent: &'a str,
+}
+
+impl<'a> H3RequestSpec<'a> {
+    pub fn get(authority: &'a str, path: &'a str) -> Self {
+        Self {
+            method: "GET",
+            authority,
+            path,
+            headers: &[],
+            body: None,
+            user_agent: "spooky-request-path-test",
+        }
+    }
+}
+
+pub struct H3Response {
+    pub status: u16,
+    pub headers: Vec<(String, String)>,
+    pub body: Vec<u8>,
+}
+
+impl H3Response {
+    pub fn body_text(&self) -> String {
+        String::from_utf8_lossy(&self.body).into_owned()
+    }
+
+    pub fn header(&self, name: &str) -> Option<&str> {
+        self.headers.iter().find_map(|(header_name, value)| {
+            header_name
+                .eq_ignore_ascii_case(name)
+                .then_some(value.as_str())
+        })
+    }
+
+    pub fn assert_status(&self, expected: u16) {
+        assert_eq!(
+            self.status, expected,
+            "unexpected H3 response status for request-path integration response"
+        );
+    }
+
+    pub fn assert_body_bytes(&self, expected: &[u8]) {
+        assert_eq!(
+            self.body.as_slice(),
+            expected,
+            "unexpected H3 response body for request-path integration response"
+        );
+    }
+
+    pub fn assert_body_text(&self, expected: &str) {
+        assert_eq!(
+            self.body_text(),
+            expected,
+            "unexpected H3 response text body for request-path integration response"
+        );
+    }
+}
+
+pub async fn start_h1_backend<F, Fut>(handler: F) -> BackendFixture
+where
+    F: Fn(Request<Incoming>) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<Response<Full<Bytes>>, Infallible>> + Send + 'static,
+{
+    let listener = bind_tcp_listener();
+    let addr = listener.local_addr().expect("h1 local addr");
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_flag = Arc::clone(&stop);
+    let handler = Arc::new(handler);
+
+    let accept_task = tokio::spawn(async move {
+        while !stop_flag.load(Ordering::Relaxed) {
+            let (stream, _) = match listener.accept().await {
+                Ok(value) => value,
+                Err(_) => break,
+            };
+            let handler = Arc::clone(&handler);
+            tokio::spawn(async move {
+                let service = service_fn(move |req: Request<Incoming>| {
+                    let handler = Arc::clone(&handler);
+                    async move { handler(req).await }
+                });
+
+                let _ = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(TokioIo::new(stream), service)
+                    .await;
+            });
+        }
+    });
+
+    BackendFixture {
+        addr,
+        stop,
+        accept_task,
+    }
+}
+
+pub async fn start_h2_backend<F, Fut>(cert_path: &str, key_path: &str, handler: F) -> BackendFixture
+where
+    F: Fn(Request<Incoming>) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<Response<Full<Bytes>>, Infallible>> + Send + 'static,
+{
+    let mut tls_config = ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(read_test_chain(cert_path), read_test_key(key_path))
+        .expect("server tls config");
+    tls_config.alpn_protocols = vec![b"h2".to_vec()];
+    let acceptor = TlsAcceptor::from(Arc::new(tls_config));
+
+    let listener = bind_tcp_listener();
+    let addr = listener.local_addr().expect("h2 local addr");
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_flag = Arc::clone(&stop);
+    let handler = Arc::new(handler);
+
+    let accept_task = tokio::spawn(async move {
+        while !stop_flag.load(Ordering::Relaxed) {
+            let (stream, _) = match listener.accept().await {
+                Ok(value) => value,
+                Err(_) => break,
+            };
+            let acceptor = acceptor.clone();
+            let handler = Arc::clone(&handler);
+            tokio::spawn(async move {
+                let tls_stream = match acceptor.accept(stream).await {
+                    Ok(stream) => stream,
+                    Err(_) => return,
+                };
+                let service = service_fn(move |req: Request<Incoming>| {
+                    let handler = Arc::clone(&handler);
+                    async move { handler(req).await }
+                });
+
+                let _ = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
+                    .serve_connection(TokioIo::new(tls_stream), service)
+                    .await;
+            });
+        }
+    });
+
+    BackendFixture {
+        addr,
+        stop,
+        accept_task,
+    }
+}
+
+pub fn reserve_unused_udp_port() -> u16 {
+    let socket = UdpSocket::bind("127.0.0.1:0").expect("reserve udp port");
+    let port = socket.local_addr().expect("udp local addr").port();
+    drop(socket);
+    port
+}
+
+fn bind_tcp_listener() -> TcpListener {
+    let listener = StdTcpListener::bind("127.0.0.1:0").expect("bind test backend listener");
+    listener
+        .set_nonblocking(true)
+        .expect("set test backend listener nonblocking");
+    TcpListener::from_std(listener).expect("register test backend listener")
+}
+
+fn quic_read_timeout(conn: &quiche::Connection) -> Duration {
+    conn.timeout()
+        .filter(|timeout| !timeout.is_zero())
+        .unwrap_or(Duration::from_millis(UDP_READ_TIMEOUT_MS))
+}
+
+fn run_h3_request(addr: SocketAddr, request: H3RequestSpec<'_>) -> Result<H3Response, String> {
+    let socket = UdpSocket::bind("0.0.0.0:0").map_err(|err| err.to_string())?;
+    let local_addr = socket.local_addr().map_err(|err| err.to_string())?;
+
+    let mut config =
+        quiche::Config::new(quiche::PROTOCOL_VERSION).map_err(|err| format!("config: {err:?}"))?;
+    config.verify_peer(false);
+    config
+        .set_application_protos(quiche::h3::APPLICATION_PROTOCOL)
+        .map_err(|err| format!("alpn: {err:?}"))?;
+    config.set_max_idle_timeout(QUIC_IDLE_TIMEOUT_MS);
+    config.set_max_recv_udp_payload_size(MAX_UDP_PAYLOAD_BYTES);
+    config.set_max_send_udp_payload_size(MAX_UDP_PAYLOAD_BYTES);
+    config.set_initial_max_data(QUIC_INITIAL_MAX_DATA);
+    config.set_initial_max_stream_data_bidi_local(QUIC_INITIAL_STREAM_DATA);
+    config.set_initial_max_stream_data_bidi_remote(QUIC_INITIAL_STREAM_DATA);
+    config.set_initial_max_stream_data_uni(QUIC_INITIAL_STREAM_DATA);
+    config.set_initial_max_streams_bidi(QUIC_INITIAL_MAX_STREAMS_BIDI);
+    config.set_initial_max_streams_uni(QUIC_INITIAL_MAX_STREAMS_UNI);
+    config.set_disable_active_migration(true);
+
+    let mut scid_bytes = [0u8; quiche::MAX_CONN_ID_LEN];
+    rand::thread_rng().fill_bytes(&mut scid_bytes);
+    let scid = quiche::ConnectionId::from_ref(&scid_bytes);
+
+    let mut conn = quiche::connect(Some("localhost"), &scid, local_addr, addr, &mut config)
+        .map_err(|err| format!("connect: {err:?}"))?;
+    let h3_config = quiche::h3::Config::new().map_err(|err| format!("h3: {err:?}"))?;
+    let mut h3: Option<quiche::h3::Connection> = None;
+
+    let mut out = [0u8; MAX_UDP_PAYLOAD_BYTES];
+    let mut buf = [0u8; MAX_DATAGRAM_SIZE_BYTES];
+    let mut status = 0;
+    let mut headers = Vec::new();
+    let mut body = Vec::new();
+    let mut request_sent = false;
+    let start = Instant::now();
+
+    let (write, send_info) = conn
+        .send(&mut out)
+        .map_err(|err| format!("send: {err:?}"))?;
+    socket
+        .send_to(&out[..write], send_info.to)
+        .map_err(|err| format!("send_to: {err:?}"))?;
+
+    loop {
+        loop {
+            match conn.send(&mut out) {
+                Ok((write, send_info)) => {
+                    let _ = socket.send_to(&out[..write], send_info.to);
+                }
+                Err(quiche::Error::Done) => break,
+                Err(err) => return Err(format!("send loop: {err:?}")),
+            }
+        }
+
+        socket
+            .set_read_timeout(Some(quic_read_timeout(&conn)))
+            .map_err(|err| format!("timeout: {err:?}"))?;
+
+        match socket.recv_from(&mut buf) {
+            Ok((len, from)) => {
+                conn.recv(
+                    &mut buf[..len],
+                    quiche::RecvInfo {
+                        from,
+                        to: local_addr,
+                    },
+                )
+                .map_err(|err| format!("recv: {err:?}"))?;
+            }
+            Err(ref err)
+                if err.kind() == std::io::ErrorKind::WouldBlock
+                    || err.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                conn.on_timeout();
+            }
+            Err(err) => return Err(format!("recv: {err:?}")),
+        }
+
+        if conn.is_established() && h3.is_none() {
+            h3 = Some(
+                quiche::h3::Connection::with_transport(&mut conn, &h3_config)
+                    .map_err(|err| format!("h3 conn: {err:?}"))?,
+            );
+        }
+
+        if let Some(h3_conn) = h3.as_mut() {
+            if conn.is_established() && !request_sent {
+                let mut request_headers = vec![
+                    quiche::h3::Header::new(b":method", request.method.as_bytes()),
+                    quiche::h3::Header::new(b":scheme", b"https"),
+                    quiche::h3::Header::new(b":authority", request.authority.as_bytes()),
+                    quiche::h3::Header::new(b":path", request.path.as_bytes()),
+                    quiche::h3::Header::new(b"user-agent", request.user_agent.as_bytes()),
+                ];
+                request_headers.extend(request.headers.iter().map(|(name, value)| {
+                    quiche::h3::Header::new(name.as_bytes(), value.as_bytes())
+                }));
+                if let Some(body) = request.body {
+                    request_headers.push(quiche::h3::Header::new(
+                        b"content-length",
+                        body.len().to_string().as_bytes(),
+                    ));
+                }
+                let stream_id = h3_conn
+                    .send_request(&mut conn, &request_headers, request.body.is_none())
+                    .map_err(|err| format!("send_request: {err:?}"))?;
+                if let Some(body) = request.body {
+                    h3_conn
+                        .send_body(&mut conn, stream_id, body, true)
+                        .map_err(|err| format!("send_body: {err:?}"))?;
+                }
+                request_sent = true;
+            }
+
+            loop {
+                match h3_conn.poll(&mut conn) {
+                    Ok((_stream_id, quiche::h3::Event::Headers { list, .. })) => {
+                        for header in &list {
+                            let name = String::from_utf8_lossy(header.name()).to_string();
+                            let value = String::from_utf8_lossy(header.value()).to_string();
+                            if name == ":status" {
+                                status = value.parse::<u16>().unwrap_or_default();
+                            }
+                            headers.push((name, value));
+                        }
+                    }
+                    Ok((stream_id, quiche::h3::Event::Data)) => loop {
+                        match h3_conn.recv_body(&mut conn, stream_id, &mut buf) {
+                            Ok(read) => body.extend_from_slice(&buf[..read]),
+                            Err(quiche::h3::Error::Done) => break,
+                            Err(err) => return Err(format!("recv_body: {err:?}")),
+                        }
+                    },
+                    Ok((_stream_id, quiche::h3::Event::Finished)) => {
+                        return Ok(H3Response {
+                            status,
+                            headers,
+                            body,
+                        });
+                    }
+                    Ok((_stream_id, quiche::h3::Event::Reset(_))) => {
+                        return Err("stream reset".to_string());
+                    }
+                    Ok((_stream_id, quiche::h3::Event::PriorityUpdate)) => {}
+                    Ok((_stream_id, quiche::h3::Event::GoAway)) => {}
+                    Err(quiche::h3::Error::Done) => break,
+                    Err(err) => return Err(format!("poll: {err:?}")),
+                }
+            }
+        }
+
+        if start.elapsed() > Duration::from_secs(REQUEST_TIMEOUT_SECS) {
+            return Err(format!(
+                "timeout waiting for response (status={status}, body_len={})",
+                body.len()
+            ));
+        }
+    }
+}
+
+fn read_test_chain(cert_path: &str) -> Vec<CertificateDer<'static>> {
+    CertificateDer::pem_file_iter(cert_path)
+        .expect("open cert file")
+        .collect::<Result<Vec<_>, _>>()
+        .expect("parse certs")
+}
+
+fn read_test_key(key_path: &str) -> PrivateKeyDer<'static> {
+    PrivateKeyDer::from_pem_file(key_path).expect("parse private key")
+}
