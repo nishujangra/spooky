@@ -1,11 +1,12 @@
 use std::{
     collections::HashMap,
     convert::Infallible,
-    thread,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
+    thread,
+    net::SocketAddr,
     time::{Duration, Instant},
 };
 
@@ -24,6 +25,37 @@ use support::{
     net::local_listener_bind_available,
     request_path::{H3RequestSpec, reserve_unused_udp_port},
 };
+
+fn backend_identity(addr: SocketAddr) -> String {
+    format!("http://{addr}")
+}
+
+fn backend_config(id: &str, addr: SocketAddr, health_check: Option<HealthCheck>) -> Backend {
+    Backend {
+        id: id.to_string(),
+        address: backend_identity(addr),
+        weight: 1,
+        health_check,
+    }
+}
+
+fn upstream_with_policy(lb_type: &str, key: Option<&str>, backends: Vec<Backend>) -> Upstream {
+    Upstream {
+        load_balancing: LoadBalancing {
+            lb_type: lb_type.to_string(),
+            key: key.map(str::to_string),
+        },
+        auth: Default::default(),
+        host_policy: Default::default(),
+        forwarded_headers: Default::default(),
+        tls: None,
+        route: RouteMatch {
+            path_prefix: Some("/".to_string()),
+            ..Default::default()
+        },
+        backends,
+    }
+}
 
 fn start_hostname_swap_backends(
     harness: &mut BackendLifecycleHarness,
@@ -63,21 +95,7 @@ fn run_keyed_request(
 }
 
 fn consistent_hash_upstream(backends: Vec<Backend>) -> Upstream {
-    Upstream {
-        load_balancing: LoadBalancing {
-            lb_type: "consistent-hash".to_string(),
-            key: Some("header:x-tenant-id".to_string()),
-        },
-        auth: Default::default(),
-        host_policy: Default::default(),
-        forwarded_headers: Default::default(),
-        tls: None,
-        route: RouteMatch {
-            path_prefix: Some("/".to_string()),
-            ..Default::default()
-        },
-        backends,
-    }
+    upstream_with_policy("consistent-hash", Some("header:x-tenant-id"), backends)
 }
 
 fn find_consistent_hash_key_for_backend(
@@ -117,6 +135,61 @@ fn wait_for_backend_health_state(
 
     false
 }
+
+fn start_counted_backend(
+    harness: &mut BackendLifecycleHarness,
+    bind_addr: SocketAddr,
+    status: http::StatusCode,
+    body: &'static [u8],
+    counter: Arc<AtomicUsize>,
+) -> Option<SocketAddr> {
+    harness
+        .try_start_h1_backend_at(bind_addr, move |_req: hyper::Request<Incoming>| {
+            let counter = Arc::clone(&counter);
+            async move {
+                counter.fetch_add(1, Ordering::Relaxed);
+                Ok::<_, Infallible>(
+                    Response::builder()
+                        .status(status)
+                        .body(Full::new(Bytes::from_static(body)))
+                        .expect("counted backend response"),
+                )
+            }
+        })
+        .ok()
+}
+
+fn start_toggle_failure_backend(
+    harness: &mut BackendLifecycleHarness,
+    bind_addr: SocketAddr,
+    body: &'static [u8],
+    failure_status: http::StatusCode,
+    failing: Arc<AtomicBool>,
+    counter: Arc<AtomicUsize>,
+) -> Option<SocketAddr> {
+    harness
+        .try_start_h1_backend_at(bind_addr, move |_req: hyper::Request<Incoming>| {
+            let counter = Arc::clone(&counter);
+            let failing = Arc::clone(&failing);
+            async move {
+                counter.fetch_add(1, Ordering::Relaxed);
+                let status = if failing.load(Ordering::Relaxed) {
+                    failure_status
+                } else {
+                    http::StatusCode::OK
+                };
+                Ok::<_, Infallible>(
+                    Response::builder()
+                        .status(status)
+                        .body(Full::new(Bytes::from_static(body)))
+                        .expect("toggle backend response"),
+                )
+            }
+        })
+        .ok()
+}
+
+// Refresh behavior.
 
 #[test]
 #[serial]
@@ -317,34 +390,24 @@ fn backend_refresh_rotates_transport_clients_without_leaving_stale_routing() {
     let backend_a_requests = Arc::new(AtomicUsize::new(0));
     let backend_b_requests = Arc::new(AtomicUsize::new(0));
 
-    let backend_a_counter = Arc::clone(&backend_a_requests);
-    let backend_a_addr = harness
-        .try_start_h1_backend_at(backend_a_bind, move |_req: hyper::Request<Incoming>| {
-            let backend_a_counter = Arc::clone(&backend_a_counter);
-            async move {
-                backend_a_counter.fetch_add(1, Ordering::Relaxed);
-                Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(
-                    b"backend-a",
-                ))))
-            }
-        })
-        .ok();
+    let backend_a_addr = start_counted_backend(
+        &mut harness,
+        backend_a_bind,
+        http::StatusCode::OK,
+        b"backend-a",
+        Arc::clone(&backend_a_requests),
+    );
     let Some(backend_a_addr) = backend_a_addr else {
         return;
     };
 
-    let backend_b_counter = Arc::clone(&backend_b_requests);
-    let backend_b_addr = harness
-        .try_start_h1_backend_at(backend_b_bind, move |_req: hyper::Request<Incoming>| {
-            let backend_b_counter = Arc::clone(&backend_b_counter);
-            async move {
-                backend_b_counter.fetch_add(1, Ordering::Relaxed);
-                Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(
-                    b"backend-b",
-                ))))
-            }
-        })
-        .ok();
+    let backend_b_addr = start_counted_backend(
+        &mut harness,
+        backend_b_bind,
+        http::StatusCode::OK,
+        b"backend-b",
+        Arc::clone(&backend_b_requests),
+    );
     let Some(backend_b_addr) = backend_b_addr else {
         return;
     };
@@ -420,6 +483,8 @@ fn backend_refresh_rotates_transport_clients_without_leaving_stale_routing() {
     assert_eq!(backend.resolution.refresh_generation, 2);
 }
 
+// Passive failure.
+
 #[test]
 #[serial]
 fn passive_request_failures_mark_backend_unhealthy_and_shift_selection_to_healthy_alternative() {
@@ -435,48 +500,25 @@ fn passive_request_failures_mark_backend_unhealthy_and_shift_selection_to_health
     let backend_b_requests = Arc::new(AtomicUsize::new(0));
     let backend_a_failing = Arc::new(AtomicBool::new(false));
 
-    let backend_a_counter = Arc::clone(&backend_a_requests);
-    let backend_a_failure = Arc::clone(&backend_a_failing);
-    let backend_a_addr = harness
-        .try_start_h1_backend_at(
-            backend_a_bind,
-            move |_req: hyper::Request<Incoming>| {
-                let backend_a_counter = Arc::clone(&backend_a_counter);
-                let backend_a_failure = Arc::clone(&backend_a_failure);
-                async move {
-                    backend_a_counter.fetch_add(1, Ordering::Relaxed);
-                    let mut response = Response::builder();
-                    if backend_a_failure.load(Ordering::Relaxed) {
-                        response = response.status(503);
-                    }
-                    Ok::<_, Infallible>(
-                        response
-                            .body(Full::new(Bytes::from_static(b"backend-a")))
-                            .expect("backend a response"),
-                    )
-                }
-            },
-        )
-        .ok();
+    let backend_a_addr = start_toggle_failure_backend(
+        &mut harness,
+        backend_a_bind,
+        b"backend-a",
+        http::StatusCode::SERVICE_UNAVAILABLE,
+        Arc::clone(&backend_a_failing),
+        Arc::clone(&backend_a_requests),
+    );
     let Some(backend_a_addr) = backend_a_addr else {
         return;
     };
 
-    let backend_b_counter = Arc::clone(&backend_b_requests);
-    let backend_b_addr = harness
-        .try_start_h1_backend_at(
-            backend_b_bind,
-            move |_req: hyper::Request<Incoming>| {
-                let backend_b_counter = Arc::clone(&backend_b_counter);
-                async move {
-                    backend_b_counter.fetch_add(1, Ordering::Relaxed);
-                    Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(
-                        b"backend-b",
-                    ))))
-                }
-            },
-        )
-        .ok();
+    let backend_b_addr = start_counted_backend(
+        &mut harness,
+        backend_b_bind,
+        http::StatusCode::OK,
+        b"backend-b",
+        Arc::clone(&backend_b_requests),
+    );
     let Some(backend_b_addr) = backend_b_addr else {
         return;
     };
@@ -484,18 +526,8 @@ fn passive_request_failures_mark_backend_unhealthy_and_shift_selection_to_health
     let config = harness.make_config(HashMap::from([(
         "api".to_string(),
         consistent_hash_upstream(vec![
-            Backend {
-                id: "backend-a".to_string(),
-                address: format!("http://{backend_a_addr}"),
-                weight: 1,
-                health_check: None,
-            },
-            Backend {
-                id: "backend-b".to_string(),
-                address: format!("http://{backend_b_addr}"),
-                weight: 1,
-                health_check: None,
-            },
+            backend_config("backend-a", backend_a_addr, None),
+            backend_config("backend-b", backend_b_addr, None),
         ]),
     )]));
     harness.start_listener(config).expect("listener");
@@ -532,8 +564,9 @@ fn passive_request_failures_mark_backend_unhealthy_and_shift_selection_to_health
         }
     }
 
+    let backend_a_identity = backend_identity(backend_a_addr);
     let backend_a_state = harness
-        .backend_snapshot(&format!("http://{backend_a_addr}"))
+        .backend_snapshot(&backend_a_identity)
         .expect("backend A snapshot lookup")
         .expect("backend A lifecycle snapshot");
     assert!(
@@ -545,7 +578,7 @@ fn passive_request_failures_mark_backend_unhealthy_and_shift_selection_to_health
     );
 
     let runtime_state = harness
-        .upstream_backend_runtime_state("api", &format!("http://{backend_a_addr}"))
+        .upstream_backend_runtime_state("api", &backend_a_identity)
         .expect("backend runtime state lookup")
         .expect("backend runtime state");
     assert!(
@@ -575,6 +608,8 @@ fn passive_request_failures_mark_backend_unhealthy_and_shift_selection_to_health
     assert_eq!(summary.healthy_backends, 1);
 }
 
+// Active recovery.
+
 #[test]
 #[serial]
 fn active_health_recovery_restores_backend_availability() {
@@ -591,24 +626,13 @@ fn active_health_recovery_restores_backend_availability() {
 
     let config = harness.make_config(HashMap::from([(
         "api".to_string(),
-        Upstream {
-            load_balancing: LoadBalancing {
-                lb_type: "round-robin".to_string(),
-                key: None,
-            },
-            auth: Default::default(),
-            host_policy: Default::default(),
-            forwarded_headers: Default::default(),
-            tls: None,
-            route: RouteMatch {
-                path_prefix: Some("/".to_string()),
-                ..Default::default()
-            },
-            backends: vec![Backend {
-                id: "backend-a".to_string(),
-                address: format!("http://{backend_addr}"),
-                weight: 1,
-                health_check: Some(HealthCheck {
+        upstream_with_policy(
+            "round-robin",
+            None,
+            vec![backend_config(
+                "backend-a",
+                backend_addr,
+                Some(HealthCheck {
                     path: "/".to_string(),
                     interval: 50,
                     timeout_ms: 100,
@@ -616,12 +640,12 @@ fn active_health_recovery_restores_backend_availability() {
                     success_threshold: 1,
                     cooldown_ms: 1,
                 }),
-            }],
-        },
+            )],
+        ),
     )]));
     harness.start_listener(config).expect("listener");
 
-    let backend_identity = format!("http://{backend_addr}");
+    let backend_identity = backend_identity(backend_addr);
     assert!(
         wait_for_backend_health_state(
             &harness,
@@ -694,6 +718,8 @@ fn active_health_recovery_restores_backend_availability() {
     recovered.assert_body_text("backend-a");
 }
 
+// Partial outage availability.
+
 #[test]
 #[serial]
 fn partial_outage_preserves_healthy_backend_availability() {
@@ -708,77 +734,38 @@ fn partial_outage_preserves_healthy_backend_availability() {
     let backend_a_requests = Arc::new(AtomicUsize::new(0));
     let backend_b_requests = Arc::new(AtomicUsize::new(0));
 
-    let backend_a_counter = Arc::clone(&backend_a_requests);
-    let backend_a_addr = harness
-        .try_start_h1_backend_at(
-            backend_a_bind,
-            move |_req: hyper::Request<Incoming>| {
-                let backend_a_counter = Arc::clone(&backend_a_counter);
-                async move {
-                    backend_a_counter.fetch_add(1, Ordering::Relaxed);
-                    Ok::<_, Infallible>(
-                        Response::builder()
-                            .status(503)
-                            .body(Full::new(Bytes::from_static(b"backend-a")))
-                            .expect("backend a failure response"),
-                    )
-                }
-            },
-        )
-        .ok();
+    let backend_a_addr = start_counted_backend(
+        &mut harness,
+        backend_a_bind,
+        http::StatusCode::SERVICE_UNAVAILABLE,
+        b"backend-a",
+        Arc::clone(&backend_a_requests),
+    );
     let Some(backend_a_addr) = backend_a_addr else {
         return;
     };
 
-    let backend_b_counter = Arc::clone(&backend_b_requests);
-    let backend_b_addr = harness
-        .try_start_h1_backend_at(
-            backend_b_bind,
-            move |_req: hyper::Request<Incoming>| {
-                let backend_b_counter = Arc::clone(&backend_b_counter);
-                async move {
-                    backend_b_counter.fetch_add(1, Ordering::Relaxed);
-                    Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(
-                        b"backend-b",
-                    ))))
-                }
-            },
-        )
-        .ok();
+    let backend_b_addr = start_counted_backend(
+        &mut harness,
+        backend_b_bind,
+        http::StatusCode::OK,
+        b"backend-b",
+        Arc::clone(&backend_b_requests),
+    );
     let Some(backend_b_addr) = backend_b_addr else {
         return;
     };
 
     let config = harness.make_config(HashMap::from([(
         "api".to_string(),
-        Upstream {
-            load_balancing: LoadBalancing {
-                lb_type: "round-robin".to_string(),
-                key: None,
-            },
-            auth: Default::default(),
-            host_policy: Default::default(),
-            forwarded_headers: Default::default(),
-            tls: None,
-            route: RouteMatch {
-                path_prefix: Some("/".to_string()),
-                ..Default::default()
-            },
-            backends: vec![
-                Backend {
-                    id: "backend-a".to_string(),
-                    address: format!("http://{backend_a_addr}"),
-                    weight: 1,
-                    health_check: None,
-                },
-                Backend {
-                    id: "backend-b".to_string(),
-                    address: format!("http://{backend_b_addr}"),
-                    weight: 1,
-                    health_check: None,
-                },
+        upstream_with_policy(
+            "round-robin",
+            None,
+            vec![
+                backend_config("backend-a", backend_a_addr, None),
+                backend_config("backend-b", backend_b_addr, None),
             ],
-        },
+        ),
     )]));
     harness.start_listener(config).expect("listener");
 
@@ -813,7 +800,7 @@ fn partial_outage_preserves_healthy_backend_availability() {
     assert!(
         wait_for_backend_health_state(
             &harness,
-            &format!("http://{backend_a_addr}"),
+            &backend_identity(backend_a_addr),
             1,
             |health| matches!(health, BackendHealthState::Unhealthy { .. }),
         ),
@@ -835,11 +822,11 @@ fn partial_outage_preserves_healthy_backend_availability() {
     assert_eq!(summary.healthy_backends, 1);
 
     let backend_a_state = harness
-        .upstream_backend_runtime_state("api", &format!("http://{backend_a_addr}"))
+        .upstream_backend_runtime_state("api", &backend_identity(backend_a_addr))
         .expect("backend A runtime state lookup")
         .expect("backend A runtime state");
     let backend_b_state = harness
-        .upstream_backend_runtime_state("api", &format!("http://{backend_b_addr}"))
+        .upstream_backend_runtime_state("api", &backend_identity(backend_b_addr))
         .expect("backend B runtime state lookup")
         .expect("backend B runtime state");
     assert!(
