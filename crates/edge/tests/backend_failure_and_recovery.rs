@@ -3,7 +3,7 @@ use std::{
     convert::Infallible,
     sync::{
         Arc,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 
@@ -11,6 +11,7 @@ use bytes::Bytes;
 use http_body_util::Full;
 use hyper::{Response, body::Incoming};
 use serial_test::serial;
+use spooky_config::config::{Backend, LoadBalancing, RouteMatch, Upstream};
 use spooky_edge::runtime::backend::event::BackendRefreshOutcome;
 
 mod support;
@@ -40,6 +41,53 @@ fn start_hostname_swap_backends(
         return Some((port, backend_a_addr, backend_b_addr));
     }
 
+    None
+}
+
+fn run_keyed_request(
+    harness: &BackendLifecycleHarness,
+    key: &str,
+) -> Result<support::request_path::H3Response, String> {
+    let headers = [("x-tenant-id", key)];
+    harness.run_request(H3RequestSpec {
+        method: "GET",
+        authority: "localhost",
+        path: "/",
+        headers: &headers,
+        body: None,
+        user_agent: "spooky-request-path-test",
+    })
+}
+
+fn consistent_hash_upstream(backends: Vec<Backend>) -> Upstream {
+    Upstream {
+        load_balancing: LoadBalancing {
+            lb_type: "consistent-hash".to_string(),
+            key: Some("header:x-tenant-id".to_string()),
+        },
+        auth: Default::default(),
+        host_policy: Default::default(),
+        forwarded_headers: Default::default(),
+        tls: None,
+        route: RouteMatch {
+            path_prefix: Some("/".to_string()),
+            ..Default::default()
+        },
+        backends,
+    }
+}
+
+fn find_consistent_hash_key_for_backend(
+    harness: &BackendLifecycleHarness,
+    expected_body: &str,
+) -> Option<String> {
+    for idx in 0..128 {
+        let key = format!("tenant-{idx}");
+        let response = run_keyed_request(harness, &key).ok()?;
+        if response.status == 200 && response.body_text() == expected_body {
+            return Some(key);
+        }
+    }
     None
 }
 
@@ -343,4 +391,159 @@ fn backend_refresh_rotates_transport_clients_without_leaving_stale_routing() {
         .expect("backend lifecycle snapshot");
     assert_eq!(backend.resolution.resolved_addrs, vec![backend_b_addr]);
     assert_eq!(backend.resolution.refresh_generation, 2);
+}
+
+#[test]
+#[serial]
+fn passive_request_failures_mark_backend_unhealthy_and_shift_selection_to_healthy_alternative() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = BackendLifecycleHarness::new();
+    let port = reserve_unused_udp_port();
+    let (backend_a_bind, backend_b_bind) = alternate_loopback_backend_addrs(port);
+
+    let backend_a_requests = Arc::new(AtomicUsize::new(0));
+    let backend_b_requests = Arc::new(AtomicUsize::new(0));
+    let backend_a_failing = Arc::new(AtomicBool::new(false));
+
+    let backend_a_counter = Arc::clone(&backend_a_requests);
+    let backend_a_failure = Arc::clone(&backend_a_failing);
+    let backend_a_addr = harness
+        .try_start_h1_backend_at(
+            backend_a_bind,
+            move |_req: hyper::Request<Incoming>| {
+                let backend_a_counter = Arc::clone(&backend_a_counter);
+                let backend_a_failure = Arc::clone(&backend_a_failure);
+                async move {
+                    backend_a_counter.fetch_add(1, Ordering::Relaxed);
+                    let mut response = Response::builder();
+                    if backend_a_failure.load(Ordering::Relaxed) {
+                        response = response.status(503);
+                    }
+                    Ok::<_, Infallible>(
+                        response
+                            .body(Full::new(Bytes::from_static(b"backend-a")))
+                            .expect("backend a response"),
+                    )
+                }
+            },
+        )
+        .ok();
+    let Some(backend_a_addr) = backend_a_addr else {
+        return;
+    };
+
+    let backend_b_counter = Arc::clone(&backend_b_requests);
+    let backend_b_addr = harness
+        .try_start_h1_backend_at(
+            backend_b_bind,
+            move |_req: hyper::Request<Incoming>| {
+                let backend_b_counter = Arc::clone(&backend_b_counter);
+                async move {
+                    backend_b_counter.fetch_add(1, Ordering::Relaxed);
+                    Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(
+                        b"backend-b",
+                    ))))
+                }
+            },
+        )
+        .ok();
+    let Some(backend_b_addr) = backend_b_addr else {
+        return;
+    };
+
+    let config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        consistent_hash_upstream(vec![
+            Backend {
+                id: "backend-a".to_string(),
+                address: format!("http://{backend_a_addr}"),
+                weight: 1,
+                health_check: None,
+            },
+            Backend {
+                id: "backend-b".to_string(),
+                address: format!("http://{backend_b_addr}"),
+                weight: 1,
+                health_check: None,
+            },
+        ]),
+    )]));
+    harness.start_listener(config).expect("listener");
+
+    let backend_a_key = find_consistent_hash_key_for_backend(&harness, "backend-a")
+        .expect("consistent-hash key should map to backend A");
+    let healthy_summary = harness
+        .upstream_membership_summary("api")
+        .expect("membership summary");
+    assert_eq!(healthy_summary.total_backends, 2);
+    assert_eq!(healthy_summary.healthy_backends, 2);
+
+    let baseline_a = backend_a_requests.load(Ordering::Relaxed);
+    let baseline_b = backend_b_requests.load(Ordering::Relaxed);
+    backend_a_failing.store(true, Ordering::Relaxed);
+
+    for attempt in 1..=3 {
+        let response = run_keyed_request(&harness, &backend_a_key).expect("failing keyed request");
+        response.assert_status(503);
+        response.assert_body_text("backend-a");
+
+        let backend_state = harness
+            .backend_snapshot(&format!("http://{backend_a_addr}"))
+            .expect("backend snapshot lookup")
+            .expect("backend lifecycle snapshot");
+        if attempt < 3 {
+            assert!(
+                !matches!(
+                    backend_state.health,
+                    spooky_edge::runtime::backend::state::BackendHealthState::Unhealthy { .. }
+                ),
+                "backend should stay healthy until the passive failure threshold is crossed"
+            );
+        }
+    }
+
+    let backend_a_state = harness
+        .backend_snapshot(&format!("http://{backend_a_addr}"))
+        .expect("backend A snapshot lookup")
+        .expect("backend A lifecycle snapshot");
+    assert!(
+        matches!(
+            backend_a_state.health,
+            spooky_edge::runtime::backend::state::BackendHealthState::Unhealthy { .. }
+        ),
+        "passive request failures should mark backend A unhealthy after the threshold"
+    );
+
+    let runtime_state = harness
+        .upstream_backend_runtime_state("api", &format!("http://{backend_a_addr}"))
+        .expect("backend runtime state lookup")
+        .expect("backend runtime state");
+    assert!(
+        !runtime_state.healthy,
+        "upstream pool runtime state should reflect the passive unhealthy transition"
+    );
+
+    let rerouted = run_keyed_request(&harness, &backend_a_key).expect("rerouted keyed request");
+    rerouted.assert_status(200);
+    rerouted.assert_body_text("backend-b");
+
+    assert_eq!(
+        backend_a_requests.load(Ordering::Relaxed) - baseline_a,
+        3,
+        "unhealthy backend should stop receiving the keyed traffic once passive ejection occurs"
+    );
+    assert_eq!(
+        backend_b_requests.load(Ordering::Relaxed) - baseline_b,
+        1,
+        "healthy alternative should take over the keyed traffic after passive ejection"
+    );
+
+    let summary = harness
+        .upstream_membership_summary("api")
+        .expect("membership summary after failure");
+    assert_eq!(summary.total_backends, 2);
+    assert_eq!(summary.healthy_backends, 1);
 }
