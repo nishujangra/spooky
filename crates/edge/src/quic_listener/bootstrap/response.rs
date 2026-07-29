@@ -535,4 +535,51 @@ mod tests {
         assert_eq!(no_content.emission.body, ResponseBodyPolicy::Suppress);
         assert!(no_content.emission.emit_end_stream_on_headers);
     }
+
+    #[test]
+    fn bootstrap_websocket_upgrade_switching_protocols_response_survives_header_cleanup() {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            http::header::CONNECTION,
+            HeaderValue::from_static("upgrade, x-hop-token"),
+        );
+        headers.insert(http::header::UPGRADE, HeaderValue::from_static("websocket"));
+        headers.insert(
+            http::HeaderName::from_static("sec-websocket-accept"),
+            HeaderValue::from_static("test-accept"),
+        );
+        headers.insert(
+            http::HeaderName::from_static("x-hop-token"),
+            HeaderValue::from_static("strip-me"),
+        );
+        headers.insert(
+            http::header::TRANSFER_ENCODING,
+            HeaderValue::from_static("chunked"),
+        );
+
+        let normalized = normalize_upstream_response(ResponseNormalizationInput {
+            upstream: spooky_bridge::response::UpstreamResponseView {
+                status: StatusCode::SWITCHING_PROTOCOLS,
+                headers: &headers,
+                trailers: None,
+            },
+            body_mode: ResponseBodyMode::Normal,
+            constraints: bootstrap_response_constraints(BootstrapResponseMode::WebsocketUpgrade),
+        });
+
+        assert_eq!(normalized.head.status, StatusCode::SWITCHING_PROTOCOLS);
+        assert_eq!(normalized.emission.body, ResponseBodyPolicy::Suppress);
+        assert!(normalized.emission.emit_end_stream_on_headers);
+        assert_eq!(header_value(&normalized.head.headers, "connection"), Some("upgrade, x-hop-token"));
+        assert_eq!(header_value(&normalized.head.headers, "upgrade"), Some("websocket"));
+        assert_eq!(
+            header_value(&normalized.head.headers, "sec-websocket-accept"),
+            Some("test-accept")
+        );
+        assert_eq!(header_value(&normalized.head.headers, "x-hop-token"), None);
+        assert_eq!(
+            header_value(&normalized.head.headers, "transfer-encoding"),
+            None
+        );
+    }
 }
