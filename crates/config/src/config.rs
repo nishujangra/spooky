@@ -59,8 +59,7 @@ use crate::default::{
     resilience_default_watchdog_poll_stall_timeout_ms,
     resilience_default_watchdog_restart_cooldown_ms,
     resilience_default_watchdog_timeout_error_rate_percent,
-    resilience_default_watchdog_unhealthy_consecutive_windows, security_default_drop_privileges,
-    security_default_group, security_default_user, upstream_tls_default_strict_sni,
+    resilience_default_watchdog_unhealthy_consecutive_windows, upstream_tls_default_strict_sni,
     upstream_tls_default_verify_certificates,
 };
 
@@ -110,22 +109,20 @@ pub struct Security {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct PrivilegeDrop {
-    #[serde(default = "security_default_drop_privileges")]
     pub enabled: bool,
-    #[serde(default = "security_default_user")]
     pub user: String,
-    #[serde(default = "security_default_group")]
     pub group: String,
 }
 
 impl Default for PrivilegeDrop {
     fn default() -> Self {
         Self {
-            enabled: security_default_drop_privileges(),
-            user: security_default_user(),
-            group: security_default_group(),
+            enabled: true,
+            user: "nobody".to_string(),
+            group: "nogroup".to_string(),
         }
     }
 }
@@ -1295,7 +1292,7 @@ impl Default for RoutingTransparency {
 
 #[cfg(test)]
 mod tests {
-    use super::Config;
+    use super::{Config, PrivilegeDrop};
 
     #[test]
     fn minimal_yaml_applies_documented_defaults() {
@@ -1352,5 +1349,28 @@ upstream:
         assert_eq!(health_check.failure_threshold, 3);
         assert_eq!(health_check.success_threshold, 2);
         assert_eq!(health_check.cooldown_ms, 5_000);
+    }
+
+    #[test]
+    fn privilege_drop_defaults_are_filled_by_serde_via_type_default() {
+        let yaml = r#"
+listen:
+  tls: {}
+upstream:
+  api:
+    route: {}
+    backends:
+      - id: backend1
+        address: "http://127.0.0.1:7001"
+security:
+  privileges: {}
+"#;
+
+        let config: Config =
+            serde_yaml::from_str(yaml).expect("config with empty privileges should parse");
+
+        assert_eq!(config.security.privileges.enabled, PrivilegeDrop::default().enabled);
+        assert_eq!(config.security.privileges.user, PrivilegeDrop::default().user);
+        assert_eq!(config.security.privileges.group, PrivilegeDrop::default().group);
     }
 }
