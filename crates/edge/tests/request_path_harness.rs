@@ -1,5 +1,6 @@
 use std::{
     collections::HashMap,
+    convert::Infallible,
     net::TcpListener,
     sync::{
         Arc, Barrier,
@@ -1192,6 +1193,55 @@ fn quic_request_path_request_body_cap_breach_returns_413_not_503() {
 
 #[test]
 #[serial]
+fn quic_request_path_request_body_at_cap_is_accepted() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = QuicRequestPathHarness::new();
+    let backend_addr = harness.start_h1_backend(|req: hyper::Request<Incoming>| async move {
+        let body = req
+            .into_body()
+            .collect()
+            .await
+            .expect("collect request body")
+            .to_bytes();
+        Ok::<_, Infallible>(
+            Response::builder()
+                .status(200)
+                .body(Full::new(Bytes::from(body.len().to_string())))
+                .expect("response"),
+        )
+    });
+    let listen_addr = start_single_backend_listener(
+        &mut harness,
+        "/upload-at-cap",
+        "h1-upload-at-cap",
+        format!("http://{backend_addr}"),
+        |_| {},
+    );
+
+    let chunk1 = vec![0u8; spooky_edge::MAX_REQUEST_BODY_BYTES / 2];
+    let chunk2 = vec![0u8; spooky_edge::MAX_REQUEST_BODY_BYTES - chunk1.len()];
+    let expected_len = chunk1.len() + chunk2.len();
+
+    let (response, got_reset) = run_two_chunk_post_to(
+        listen_addr,
+        "localhost",
+        "/upload-at-cap",
+        chunk1,
+        chunk2,
+        Duration::ZERO,
+    )
+    .expect("at-cap request should complete");
+
+    response.assert_status(200);
+    response.assert_body_text(&expected_len.to_string());
+    assert!(!got_reset, "request at cap should not reset stream");
+}
+
+#[test]
+#[serial]
 /// Regression: a slow over-cap producer previously escaped through a generic
 /// fallback path and surfaced as 503 instead of the bounded 413 contract.
 fn quic_request_path_slow_request_body_cap_breach_stays_on_413_path() {
@@ -1235,6 +1285,86 @@ fn quic_request_path_slow_request_body_cap_breach_stays_on_413_path() {
         !got_reset,
         "slow over-cap request should terminate with HTTP response, not reset"
     );
+}
+
+#[test]
+#[serial]
+fn quic_request_path_concurrent_large_body_pressure_is_bounded() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    const CLIENTS: usize = 6;
+
+    let mut harness = QuicRequestPathHarness::new();
+    let backend_addr = harness.start_h1_backend(|req: hyper::Request<Incoming>| async move {
+        let _body = req
+            .into_body()
+            .collect()
+            .await
+            .expect("collect request body")
+            .to_bytes();
+        Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(b"ok"))))
+    });
+
+    let mut upstreams = HashMap::new();
+    upstreams.insert(
+        "api".to_string(),
+        make_upstream(
+            "/pressure",
+            vec![make_backend(
+                "h1-pressure",
+                format!("http://{backend_addr}"),
+            )],
+            None,
+            "round-robin",
+        ),
+    );
+
+    let mut config = harness.make_config(upstreams);
+    config.performance.global_inflight_limit = 1;
+    config.performance.per_upstream_inflight_limit = 1;
+    config.performance.per_backend_inflight_limit = 1;
+    let listen_addr = harness.start_listener(config).expect("listener");
+
+    let barrier = Arc::new(Barrier::new(CLIENTS));
+    let mut handles = Vec::with_capacity(CLIENTS);
+    for _ in 0..CLIENTS {
+        let barrier = Arc::clone(&barrier);
+        handles.push(thread::spawn(move || {
+            barrier.wait();
+            let chunk1 = vec![0u8; (spooky_edge::MAX_REQUEST_BODY_BYTES - 8 * 1024) / 2];
+            let chunk2 =
+                vec![0u8; (spooky_edge::MAX_REQUEST_BODY_BYTES - 8 * 1024) - chunk1.len()];
+            run_two_chunk_post_to(
+                listen_addr,
+                "localhost",
+                "/pressure",
+                chunk1,
+                chunk2,
+                Duration::from_millis(20),
+            )
+        }));
+    }
+
+    let mut count_200 = 0usize;
+    let mut count_503 = 0usize;
+    for handle in handles {
+        let (response, got_reset) = handle
+            .join()
+            .expect("client thread panicked")
+            .expect("client request should terminate");
+        assert!(!got_reset, "pressure requests should terminate cleanly");
+        match response.status {
+            200 => count_200 += 1,
+            503 => count_503 += 1,
+            other => panic!("unexpected status under pressure: {other}"),
+        }
+    }
+
+    assert!(count_200 >= 1, "expected at least one admitted request");
+    assert!(count_503 >= 1, "expected bounded overload shedding");
+    assert_eq!(count_200 + count_503, CLIENTS);
 }
 
 #[test]
