@@ -34,6 +34,20 @@ fn single_backend_upstream(backend_addr: std::net::SocketAddr) -> Upstream {
     }
 }
 
+fn lifecycle_backend_addresses(snapshot: &serde_json::Value) -> Vec<String> {
+    snapshot["backends"]["lifecycle"]
+        .as_array()
+        .expect("backend lifecycle array")
+        .iter()
+        .map(|backend| {
+            backend["backend"]
+                .as_str()
+                .expect("backend lifecycle address")
+                .to_string()
+        })
+        .collect()
+}
+
 #[test]
 #[serial]
 fn runtime_swap_harness_exposes_control_api_metrics_and_reload_surface() {
@@ -294,4 +308,83 @@ fn runtime_reload_rejects_startup_owned_log_sink_change_and_keeps_request_behavi
         .expect("request after log-sink rejection");
     after.assert_status(200);
     after.assert_body_bytes(b"log-sink-stable");
+}
+
+#[test]
+#[serial]
+fn control_api_runtime_snapshot_tracks_active_generation_listener_labels_and_backend_inventory() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = RuntimeSwapHarness::new();
+    let old_backend = harness.start_h1_static_backend(b"snapshot-old");
+    let new_backend = harness.start_h1_static_backend(b"snapshot-new");
+    let config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        single_backend_upstream(old_backend),
+    )]));
+    let listener_label = format!("127.0.0.1:{}", config.listen.port);
+
+    harness
+        .start_listener(config)
+        .expect("start runtime swap listener");
+
+    let startup_snapshot = harness.runtime_snapshot().expect("startup runtime snapshot");
+    assert_eq!(startup_snapshot["runtime"]["generation"], 0);
+    let startup_listeners = startup_snapshot["tls"]["listeners"]
+        .as_object()
+        .expect("startup tls listeners");
+    assert!(
+        startup_listeners.contains_key(&listener_label),
+        "runtime snapshot should render the current active listener label"
+    );
+    assert_eq!(
+        lifecycle_backend_addresses(&startup_snapshot),
+        vec![format!("http://{old_backend}")],
+        "startup runtime snapshot should expose only the active generation backend inventory"
+    );
+
+    harness
+        .rewrite_config(|config| {
+            let upstream = config
+                .upstream
+                .get_mut("api")
+                .expect("runtime swap test upstream");
+            upstream.backends[0].address = format!("http://{new_backend}");
+            config.observability.control_api.runtime_path = "/runtime-live".to_string();
+        })
+        .expect("rewrite active generation fields");
+
+    let reload = harness
+        .trigger_runtime_reload()
+        .expect("trigger runtime reload");
+    assert_eq!(reload["reloaded"], true);
+    assert_eq!(reload["generation"], 1);
+
+    let live_snapshot = harness.runtime_snapshot().expect("live runtime snapshot");
+    assert_eq!(live_snapshot["runtime"]["generation"], 1);
+    let live_listeners = live_snapshot["tls"]["listeners"]
+        .as_object()
+        .expect("live tls listeners");
+    assert!(
+        live_listeners.contains_key(&listener_label),
+        "runtime snapshot should keep rendering the current live listener label after swap"
+    );
+    assert_eq!(
+        live_listeners.len(),
+        1,
+        "runtime snapshot should render only the active generation listener inventory"
+    );
+
+    let live_backends = lifecycle_backend_addresses(&live_snapshot);
+    assert_eq!(
+        live_backends,
+        vec![format!("http://{new_backend}")],
+        "runtime snapshot should expose backend lifecycle inventory from the active generation only"
+    );
+    assert!(
+        !live_backends.iter().any(|backend| backend == &format!("http://{old_backend}")),
+        "runtime snapshot must not leak stale-generation backend inventory"
+    );
 }
