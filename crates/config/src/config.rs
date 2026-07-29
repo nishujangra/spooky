@@ -107,8 +107,8 @@ impl Default for Listen {
 #[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct Tls {
-    pub cert: String, // "/path/to/cert"
-    pub key: String, // "/path/to/key"
+    pub cert: String,                      // "/path/to/cert"
+    pub key: String,                       // "/path/to/key"
     pub certificates: Vec<TlsCertificate>, // SNI keyed certificate set
     pub client_auth: ClientAuth,
 }
@@ -1252,9 +1252,18 @@ security:
         let config: Config =
             serde_yaml::from_str(yaml).expect("config with empty privileges should parse");
 
-        assert_eq!(config.security.privileges.enabled, PrivilegeDrop::default().enabled);
-        assert_eq!(config.security.privileges.user, PrivilegeDrop::default().user);
-        assert_eq!(config.security.privileges.group, PrivilegeDrop::default().group);
+        assert_eq!(
+            config.security.privileges.enabled,
+            PrivilegeDrop::default().enabled
+        );
+        assert_eq!(
+            config.security.privileges.user,
+            PrivilegeDrop::default().user
+        );
+        assert_eq!(
+            config.security.privileges.group,
+            PrivilegeDrop::default().group
+        );
     }
 
     #[test]
@@ -1265,7 +1274,8 @@ security:
         assert_eq!(listen.port, Listen::default().port);
         assert_eq!(listen.address, Listen::default().address);
 
-        let log: Log = serde_yaml::from_str("{}").expect("empty log should parse via type defaults");
+        let log: Log =
+            serde_yaml::from_str("{}").expect("empty log should parse via type defaults");
         assert_eq!(log.level, Log::default().level);
         assert_eq!(log.file, Log::default().file);
         assert_eq!(log.format, Log::default().format);
@@ -1346,7 +1356,10 @@ security:
             routing.expose_header,
             RoutingTransparency::default().expose_header
         );
-        assert_eq!(routing.header_name, RoutingTransparency::default().header_name);
+        assert_eq!(
+            routing.header_name,
+            RoutingTransparency::default().header_name
+        );
     }
 
     #[test]
@@ -1354,7 +1367,10 @@ security:
         let performance: Performance =
             serde_yaml::from_str("{}").expect("empty performance config should parse");
 
-        assert_eq!(performance.worker_threads, Performance::default().worker_threads);
+        assert_eq!(
+            performance.worker_threads,
+            Performance::default().worker_threads
+        );
         assert_eq!(
             performance.control_plane_threads,
             Performance::default().control_plane_threads

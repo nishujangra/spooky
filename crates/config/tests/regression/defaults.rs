@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use spooky_config::{
     config::{
-        ControlApi, CURRENT_CONFIG_VERSION, ExternalAuthFailureMode, ForwardedHeaderPolicyMode,
+        CURRENT_CONFIG_VERSION, ControlApi, ExternalAuthFailureMode, ForwardedHeaderPolicyMode,
         LoadBalancing, MetricsEndpoint, Performance, Resilience, RoutingTransparency, Tracing,
         UpstreamHostPolicyMode, UpstreamTls,
     },
@@ -45,16 +45,31 @@ fn omitted_fields_deserialize_to_the_documented_defaults() {
     assert!(config.listeners.is_empty());
     assert!(config.load_balancing.is_none());
 
-    assert_eq!(config.upstream_tls.verify_certificates, UpstreamTls::default().verify_certificates);
-    assert_eq!(config.upstream_tls.strict_sni, UpstreamTls::default().strict_sni);
+    assert_eq!(
+        config.upstream_tls.verify_certificates,
+        UpstreamTls::default().verify_certificates
+    );
+    assert_eq!(
+        config.upstream_tls.strict_sni,
+        UpstreamTls::default().strict_sni
+    );
     assert_eq!(config.upstream_tls.ca_file, None);
     assert_eq!(config.upstream_tls.ca_dir, None);
 
-    assert_eq!(upstream.load_balancing.lb_type, LoadBalancing::default().lb_type);
+    assert_eq!(
+        upstream.load_balancing.lb_type,
+        LoadBalancing::default().lb_type
+    );
     assert_eq!(upstream.load_balancing.key, LoadBalancing::default().key);
-    assert_eq!(upstream.host_policy.mode, UpstreamHostPolicyMode::PassThrough);
+    assert_eq!(
+        upstream.host_policy.mode,
+        UpstreamHostPolicyMode::PassThrough
+    );
     assert_eq!(upstream.host_policy.host, None);
-    assert_eq!(upstream.forwarded_headers.mode, ForwardedHeaderPolicyMode::Overwrite);
+    assert_eq!(
+        upstream.forwarded_headers.mode,
+        ForwardedHeaderPolicyMode::Overwrite
+    );
     assert!(upstream.auth.api_key.is_none());
     assert!(upstream.auth.jwt.is_none());
     assert!(upstream.auth.external_auth.is_none());
@@ -65,15 +80,27 @@ fn omitted_fields_deserialize_to_the_documented_defaults() {
     assert_eq!(backend.weight, 100);
     assert!(backend.health_check.is_none());
 
-    assert_eq!(config.observability.metrics.port, MetricsEndpoint::default().port);
-    assert_eq!(config.observability.control_api.port, ControlApi::default().port);
-    assert_eq!(config.observability.tracing.service_name, Tracing::default().service_name);
+    assert_eq!(
+        config.observability.metrics.port,
+        MetricsEndpoint::default().port
+    );
+    assert_eq!(
+        config.observability.control_api.port,
+        ControlApi::default().port
+    );
+    assert_eq!(
+        config.observability.tracing.service_name,
+        Tracing::default().service_name
+    );
     assert_eq!(
         config.observability.routing.header_name,
         RoutingTransparency::default().header_name
     );
 
-    assert_eq!(config.performance.backend_timeout_ms, Performance::default().backend_timeout_ms);
+    assert_eq!(
+        config.performance.backend_timeout_ms,
+        Performance::default().backend_timeout_ms
+    );
     assert_eq!(
         config.performance.backend_connect_timeout_ms,
         Performance::default().backend_connect_timeout_ms
@@ -125,7 +152,11 @@ fn runtime_lowering_preserves_effective_defaults_for_sparse_configs() {
         Duration::from_millis(Performance::default().backend_connect_timeout_ms)
     );
     assert_eq!(
-        listener.policies.transport.connection_limits.global_inflight,
+        listener
+            .policies
+            .transport
+            .connection_limits
+            .global_inflight,
         Performance::default().global_inflight_limit
     );
     assert_eq!(
@@ -141,7 +172,10 @@ fn runtime_lowering_preserves_effective_defaults_for_sparse_configs() {
         Duration::from_millis(Resilience::default().watchdog.check_interval_ms)
     );
 
-    assert_eq!(api.load_balancing.strategy, RuntimeLoadBalancingStrategy::RoundRobin);
+    assert_eq!(
+        api.load_balancing.strategy,
+        RuntimeLoadBalancingStrategy::RoundRobin
+    );
     assert_eq!(api.load_balancing.key, None);
     assert!(api.policy.upstream_auth.api_key.is_none());
     assert!(api.policy.upstream_auth.jwt.is_none());
@@ -159,13 +193,25 @@ fn runtime_lowering_preserves_effective_defaults_for_sparse_configs() {
         api.effective_tls.verify_certificates,
         UpstreamTls::default().verify_certificates
     );
-    assert_eq!(api.effective_tls.strict_sni, UpstreamTls::default().strict_sni);
+    assert_eq!(
+        api.effective_tls.strict_sni,
+        UpstreamTls::default().strict_sni
+    );
     assert_eq!(api.backends[0].backend.weight, 100);
     assert!(api.backends[0].health_check.is_none());
 
-    assert_eq!(runtime.observability.metrics.port, MetricsEndpoint::default().port);
-    assert_eq!(runtime.observability.control_api.port, ControlApi::default().port);
-    assert_eq!(runtime.observability.tracing.service_name, Tracing::default().service_name);
+    assert_eq!(
+        runtime.observability.metrics.port,
+        MetricsEndpoint::default().port
+    );
+    assert_eq!(
+        runtime.observability.control_api.port,
+        ControlApi::default().port
+    );
+    assert_eq!(
+        runtime.observability.tracing.service_name,
+        Tracing::default().service_name
+    );
     assert_eq!(
         runtime.observability.routing.header_name,
         RoutingTransparency::default().header_name
