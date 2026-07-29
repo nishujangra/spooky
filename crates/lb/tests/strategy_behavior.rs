@@ -107,12 +107,7 @@ fn round_robin_repeated_picks_keep_alternating_across_backends() {
     let mut pool = pool("round-robin", 2);
 
     let keys = [
-        "tenant-a",
-        "tenant-b",
-        "tenant-c",
-        "tenant-d",
-        "tenant-e",
-        "tenant-f",
+        "tenant-a", "tenant-b", "tenant-c", "tenant-d", "tenant-e", "tenant-f",
     ];
     let picks: Vec<_> = keys
         .into_iter()

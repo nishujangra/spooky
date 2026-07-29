@@ -570,8 +570,14 @@ mod tests {
         assert_eq!(normalized.head.status, StatusCode::SWITCHING_PROTOCOLS);
         assert_eq!(normalized.emission.body, ResponseBodyPolicy::Suppress);
         assert!(normalized.emission.emit_end_stream_on_headers);
-        assert_eq!(header_value(&normalized.head.headers, "connection"), Some("upgrade, x-hop-token"));
-        assert_eq!(header_value(&normalized.head.headers, "upgrade"), Some("websocket"));
+        assert_eq!(
+            header_value(&normalized.head.headers, "connection"),
+            Some("upgrade, x-hop-token")
+        );
+        assert_eq!(
+            header_value(&normalized.head.headers, "upgrade"),
+            Some("websocket")
+        );
         assert_eq!(
             header_value(&normalized.head.headers, "sec-websocket-accept"),
             Some("test-accept")

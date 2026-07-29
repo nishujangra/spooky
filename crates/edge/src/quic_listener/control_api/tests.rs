@@ -462,7 +462,8 @@ async fn control_api_runtime_snapshot_uses_live_primary_listener_label_after_bun
     let startup_bundle = runtime_bundle_from_config("startup.yaml", &startup);
     let (state, runtime_handle) = runtime_bundle_control_api_state(startup_bundle);
 
-    let startup_payload = json_body(QUICListener::render_control_api_runtime_snapshot(&state)).await;
+    let startup_payload =
+        json_body(QUICListener::render_control_api_runtime_snapshot(&state)).await;
     let startup_listeners = startup_payload["tls"]["listeners"]
         .as_object()
         .expect("startup listeners object");

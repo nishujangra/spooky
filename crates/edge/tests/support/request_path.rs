@@ -1009,9 +1009,7 @@ pub fn run_two_chunk_post_to_with_response_timeout(
                             chunk1_written += written;
                         }
                         Err(quiche::h3::Error::Done | quiche::h3::Error::StreamBlocked) => {}
-                        Err(quiche::h3::Error::TransportError(
-                            quiche::Error::StreamStopped(_),
-                        )) => {
+                        Err(quiche::h3::Error::TransportError(quiche::Error::StreamStopped(_))) => {
                             request_stream_stopped = true;
                             chunk1_written = chunk1.len();
                             chunk2_written = chunk2.len();
