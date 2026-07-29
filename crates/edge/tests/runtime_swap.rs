@@ -1,13 +1,24 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
+    time::{Duration, Instant},
+};
 
+use bytes::Bytes;
+use http_body_util::Full;
 use serial_test::serial;
 use spooky_config::config::{Backend, LoadBalancing, RouteMatch, Upstream};
+use spooky_edge::runtime::policy::{LifecycleTransitionResult, RuntimeLifecyclePhase};
 
 mod support;
 
 use support::{
     net::local_listener_bind_available,
-    request_path::H3RequestSpec,
+    request_path::{H3RequestSpec, run_request_to},
     runtime_swap::RuntimeSwapHarness,
 };
 
@@ -445,5 +456,164 @@ fn metrics_endpoint_tracks_active_generation_path_and_metric_surface_after_reloa
         old_path_status,
         http::StatusCode::NOT_FOUND,
         "old metrics path should no longer be treated as the active metrics endpoint after reload"
+    );
+}
+
+#[test]
+#[serial]
+fn watchdog_requested_drain_blocks_new_quic_connections() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = RuntimeSwapHarness::new();
+    let backend_addr = harness.start_h1_static_backend(b"drain-blocked");
+    let mut config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        single_backend_upstream(backend_addr),
+    )]));
+    config.resilience.watchdog.enabled = true;
+
+    harness
+        .start_listener(config)
+        .expect("start runtime swap listener");
+
+    assert!(
+        harness
+            .request_watchdog_restart("runtime-swap-drain-block")
+            .expect("request watchdog restart"),
+        "watchdog restart request should be accepted"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut established = true;
+    while Instant::now() < deadline {
+        established = harness
+            .fresh_quic_connection_establishes_within(Duration::from_millis(250))
+            .expect("fresh quic connection attempt");
+        if !established {
+            break;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    assert!(
+        !established,
+        "fresh QUIC connections must stop establishing once the live listener enters draining"
+    );
+}
+
+#[test]
+#[serial]
+fn in_flight_request_can_complete_while_listener_is_draining() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = RuntimeSwapHarness::new();
+    let request_started = Arc::new(AtomicBool::new(false));
+    let started = Arc::clone(&request_started);
+    let backend_addr = harness.start_h1_backend(move |_req| {
+        let started = Arc::clone(&started);
+        async move {
+            started.store(true, Ordering::Relaxed);
+            tokio::time::sleep(Duration::from_millis(80)).await;
+            Ok::<_, std::convert::Infallible>(hyper::Response::new(Full::new(
+                Bytes::from_static(b"drain-complete"),
+            )))
+        }
+    });
+    let mut config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        single_backend_upstream(backend_addr),
+    )]));
+    config.resilience.watchdog.enabled = true;
+    config.performance.shutdown_drain_timeout_ms = 500;
+
+    let listen_addr = harness
+        .start_listener(config)
+        .expect("start runtime swap listener");
+
+    let client = thread::spawn(move || run_request_to(listen_addr, H3RequestSpec::get("localhost", "/")));
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while Instant::now() < deadline && !request_started.load(Ordering::Relaxed) {
+        thread::sleep(Duration::from_millis(10));
+    }
+    assert!(
+        request_started.load(Ordering::Relaxed),
+        "backend should observe the in-flight request before drain begins"
+    );
+
+    assert!(
+        harness
+            .request_watchdog_restart("runtime-swap-drain-inflight")
+            .expect("request watchdog restart"),
+        "watchdog restart request should be accepted"
+    );
+
+    let response = client.join().expect("client thread join").expect("in-flight response");
+    response.assert_status(200);
+    response.assert_body_bytes(b"drain-complete");
+}
+
+#[test]
+#[serial]
+fn runtime_reload_is_rejected_once_lifecycle_leaves_running() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = RuntimeSwapHarness::new();
+    let backend_addr = harness.start_h1_static_backend(b"lifecycle-running");
+    let config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        single_backend_upstream(backend_addr),
+    )]));
+
+    harness
+        .start_listener(config)
+        .expect("start runtime swap listener");
+
+    assert_eq!(
+        harness.lifecycle_phase().expect("runtime lifecycle phase"),
+        RuntimeLifecyclePhase::Running
+    );
+    assert!(matches!(
+        harness.begin_lifecycle_drain().expect("begin lifecycle drain"),
+        LifecycleTransitionResult::Applied {
+            to: RuntimeLifecyclePhase::Draining,
+            ..
+        }
+        | LifecycleTransitionResult::NoOp {
+            phase: RuntimeLifecyclePhase::Draining
+        }
+    ));
+    assert_eq!(
+        harness.lifecycle_phase().expect("draining lifecycle phase"),
+        RuntimeLifecyclePhase::Draining
+    );
+
+    let generation_before = harness.current_generation().expect("generation before");
+    harness
+        .rewrite_config(|config| {
+            config.log.level = "debug".to_string();
+        })
+        .expect("rewrite live-reloadable config");
+
+    let rejection = harness
+        .trigger_runtime_reload_expect(http::StatusCode::INTERNAL_SERVER_ERROR)
+        .expect("reload rejection after drain");
+    assert_eq!(rejection["reloaded"], false);
+    let error = rejection["error"]
+        .as_str()
+        .expect("reload rejection error string");
+    assert!(
+        error.contains("illegal_transition") || error.contains("Draining") || error.contains("ReloadCommit"),
+        "reload rejection should reflect the non-running lifecycle gate, got: {error}"
+    );
+    assert_eq!(
+        harness.current_generation().expect("generation after rejection"),
+        generation_before,
+        "reload rejection after drain must keep the active generation unchanged"
     );
 }

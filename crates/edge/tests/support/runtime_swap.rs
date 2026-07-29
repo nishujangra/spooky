@@ -30,7 +30,15 @@ use spooky_config::{
     runtime::RuntimeConfig,
     validator::validate,
 };
-use spooky_edge::runtime::{bundle::RuntimeBundleHandle, listener::QUICListener as RuntimeListener};
+use spooky_edge::{
+    MAX_DATAGRAM_SIZE_BYTES, MAX_UDP_PAYLOAD_BYTES, QUIC_IDLE_TIMEOUT_MS, QUIC_INITIAL_MAX_DATA,
+    QUIC_INITIAL_MAX_STREAMS_BIDI, QUIC_INITIAL_MAX_STREAMS_UNI, QUIC_INITIAL_STREAM_DATA,
+    runtime::{
+        bundle::RuntimeBundleHandle,
+        listener::QUICListener as RuntimeListener,
+        policy::{LifecycleTransitionResult, RuntimeLifecyclePhase},
+    },
+};
 use tempfile::{TempDir, tempdir};
 use tokio::net::TcpStream;
 use tokio_rustls::{
@@ -300,6 +308,56 @@ impl RuntimeSwapHarness {
         run_request_to(listen_addr, request)
     }
 
+    pub fn listen_addr(&self) -> Result<SocketAddr, String> {
+        self.listen_addr
+            .ok_or_else(|| "listener not started".to_string())
+    }
+
+    pub fn current_generation(&self) -> Result<u64, String> {
+        Ok(self
+            .runtime_bundle
+            .as_ref()
+            .ok_or_else(|| "runtime bundle unavailable".to_string())?
+            .current_generation())
+    }
+
+    pub fn lifecycle_phase(&self) -> Result<RuntimeLifecyclePhase, String> {
+        Ok(self
+            .runtime_bundle
+            .as_ref()
+            .ok_or_else(|| "runtime bundle unavailable".to_string())?
+            .lifecycle()
+            .phase())
+    }
+
+    pub fn begin_lifecycle_drain(&self) -> Result<LifecycleTransitionResult, String> {
+        Ok(self
+            .runtime_bundle
+            .as_ref()
+            .ok_or_else(|| "runtime bundle unavailable".to_string())?
+            .lifecycle()
+            .begin_drain())
+    }
+
+    pub fn request_watchdog_restart(&self, reason: &str) -> Result<bool, String> {
+        Ok(self
+            .runtime_bundle
+            .as_ref()
+            .ok_or_else(|| "runtime bundle unavailable".to_string())?
+            .current_view()
+            .shared_services()
+            .watchdog
+            .request_restart(reason))
+    }
+
+    pub fn fresh_quic_connection_establishes_within(
+        &self,
+        timeout: Duration,
+    ) -> Result<bool, String> {
+        let listen_addr = self.listen_addr()?;
+        quic_connection_establishes_within(listen_addr, timeout)
+    }
+
     fn control_api_token(&self) -> Result<String, String> {
         self.current_config
             .as_ref()
@@ -526,6 +584,86 @@ async fn control_api_request_once(
         )
     })?;
     Ok((status, json))
+}
+
+fn quic_connection_establishes_within(addr: SocketAddr, timeout: Duration) -> Result<bool, String> {
+    let socket = StdUdpSocket::bind("0.0.0.0:0").map_err(|err| format!("udp bind: {err}"))?;
+    let local_addr = socket
+        .local_addr()
+        .map_err(|err| format!("udp local addr: {err}"))?;
+
+    let mut config =
+        quiche::Config::new(quiche::PROTOCOL_VERSION).map_err(|err| format!("config: {err:?}"))?;
+    config.verify_peer(false);
+    config
+        .set_application_protos(quiche::h3::APPLICATION_PROTOCOL)
+        .map_err(|err| format!("alpn: {err:?}"))?;
+    config.set_max_idle_timeout(QUIC_IDLE_TIMEOUT_MS);
+    config.set_max_recv_udp_payload_size(MAX_UDP_PAYLOAD_BYTES);
+    config.set_max_send_udp_payload_size(MAX_UDP_PAYLOAD_BYTES);
+    config.set_initial_max_data(QUIC_INITIAL_MAX_DATA);
+    config.set_initial_max_stream_data_bidi_local(QUIC_INITIAL_STREAM_DATA);
+    config.set_initial_max_stream_data_bidi_remote(QUIC_INITIAL_STREAM_DATA);
+    config.set_initial_max_stream_data_uni(QUIC_INITIAL_STREAM_DATA);
+    config.set_initial_max_streams_bidi(QUIC_INITIAL_MAX_STREAMS_BIDI);
+    config.set_initial_max_streams_uni(QUIC_INITIAL_MAX_STREAMS_UNI);
+    config.set_disable_active_migration(true);
+
+    let scid_bytes = [7u8; quiche::MAX_CONN_ID_LEN];
+    let scid = quiche::ConnectionId::from_ref(&scid_bytes);
+    let mut conn = quiche::connect(Some("localhost"), &scid, local_addr, addr, &mut config)
+        .map_err(|err| format!("connect: {err:?}"))?;
+
+    let mut out = [0u8; MAX_UDP_PAYLOAD_BYTES];
+    let mut buf = [0u8; MAX_DATAGRAM_SIZE_BYTES];
+
+    let (written, send_info) = conn.send(&mut out).map_err(|err| format!("send: {err:?}"))?;
+    socket
+        .send_to(&out[..written], send_info.to)
+        .map_err(|err| format!("send_to: {err}"))?;
+
+    let deadline = Instant::now() + timeout;
+    while Instant::now() < deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        socket
+            .set_read_timeout(Some(remaining.min(Duration::from_millis(50))))
+            .map_err(|err| format!("read timeout: {err}"))?;
+
+        match socket.recv_from(&mut buf) {
+            Ok((len, from)) => {
+                let _ = conn.recv(
+                    &mut buf[..len],
+                    quiche::RecvInfo {
+                        from,
+                        to: local_addr,
+                    },
+                );
+            }
+            Err(ref err)
+                if err.kind() == std::io::ErrorKind::WouldBlock
+                    || err.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                conn.on_timeout();
+            }
+            Err(err) => return Err(format!("recv_from: {err}")),
+        }
+
+        loop {
+            match conn.send(&mut out) {
+                Ok((written, send_info)) => {
+                    let _ = socket.send_to(&out[..written], send_info.to);
+                }
+                Err(quiche::Error::Done) => break,
+                Err(err) => return Err(format!("send loop: {err:?}")),
+            }
+        }
+
+        if conn.is_established() {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
 }
 
 fn render_runtime_swap_config(config: &Config) -> Result<String, String> {
