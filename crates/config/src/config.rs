@@ -4,19 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::default::{
     auth_default_external_timeout_ms, get_default_load_balancing, get_default_version,
-    observe_default_address,
-    observe_default_control_api_address, observe_default_control_api_connection_timeout_ms,
-    observe_default_control_api_health_path, observe_default_control_api_max_connections,
-    observe_default_control_api_port, observe_default_control_api_ready_path,
-    observe_default_control_api_reload_certs_path, observe_default_control_api_reload_path,
-    observe_default_control_api_restart_path, observe_default_control_api_runtime_path,
-    observe_default_metrics_connection_timeout_ms, observe_default_metrics_max_connections,
-    observe_default_metrics_path, observe_default_port,
-    observe_default_routing_transparency_enabled,
-    observe_default_routing_transparency_expose_header,
-    observe_default_routing_transparency_header_name,
-    observe_default_routing_transparency_include_reason, observe_default_tracing_sample_ratio,
-    observe_default_tracing_service_name, perf_default_backend_body_idle_timeout_ms,
+    perf_default_backend_body_idle_timeout_ms,
     perf_default_backend_body_total_timeout_ms, perf_default_backend_connect_timeout_ms,
     perf_default_backend_dns_refresh_enabled, perf_default_backend_dns_refresh_interval_ms,
     perf_default_backend_timeout_ms, perf_default_backend_total_request_timeout_ms,
@@ -369,18 +357,17 @@ pub enum ForwardedHeaderPolicyMode {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default, PartialEq, Eq)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct ForwardedHeaderPolicy {
-    #[serde(default)]
     pub mode: ForwardedHeaderPolicyMode,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default, PartialEq, Eq)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct UpstreamHostPolicy {
-    #[serde(default)]
     pub mode: UpstreamHostPolicyMode,
-    #[serde(default)]
     pub host: Option<String>,
 }
 
@@ -1146,28 +1133,22 @@ pub struct Observability {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct MetricsEndpoint {
-    #[serde(default)]
     pub enabled: bool,
 
     /// When true, startup fails if metrics endpoint cannot be bound/registered.
-    #[serde(default)]
     pub required: bool,
 
-    #[serde(default = "observe_default_address")]
     pub address: String,
 
-    #[serde(default = "observe_default_port")]
     pub port: u16,
 
-    #[serde(default = "observe_default_metrics_path")]
     pub path: String,
 
-    #[serde(default = "observe_default_metrics_max_connections")]
     pub max_connections: usize,
 
-    #[serde(default = "observe_default_metrics_connection_timeout_ms")]
     pub connection_timeout_ms: u64,
 }
 
@@ -1176,47 +1157,38 @@ impl Default for MetricsEndpoint {
         Self {
             enabled: false,
             required: false,
-            address: observe_default_address(),
-            port: observe_default_port(),
-            path: observe_default_metrics_path(),
-            max_connections: observe_default_metrics_max_connections(),
-            connection_timeout_ms: observe_default_metrics_connection_timeout_ms(),
+            address: "127.0.0.1".to_string(),
+            port: 9901,
+            path: "/metrics".to_string(),
+            max_connections: 512,
+            connection_timeout_ms: 30_000,
         }
     }
 }
 
 #[derive(Deserialize, Serialize, Clone)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct ControlApi {
-    #[serde(default)]
     pub enabled: bool,
 
     /// When true, startup fails if control API endpoint cannot be bound/registered.
-    #[serde(default)]
     pub required: bool,
 
-    #[serde(default = "observe_default_control_api_address")]
     pub address: String,
 
-    #[serde(default = "observe_default_control_api_port")]
     pub port: u16,
 
-    #[serde(default = "observe_default_control_api_health_path")]
     pub health_path: String,
 
-    #[serde(default = "observe_default_control_api_ready_path")]
     pub ready_path: String,
 
-    #[serde(default = "observe_default_control_api_runtime_path")]
     pub runtime_path: String,
 
-    #[serde(default = "observe_default_control_api_restart_path")]
     pub restart_path: String,
 
-    #[serde(default = "observe_default_control_api_reload_path")]
     pub reload_path: String,
 
-    #[serde(default = "observe_default_control_api_reload_certs_path")]
     pub reload_certs_path: String,
 
     // Admin credential: never emitted by Serialize (e.g. the /admin/runtime
@@ -1224,10 +1196,8 @@ pub struct ControlApi {
     #[serde(default, skip_serializing)]
     pub auth_token: Option<String>,
 
-    #[serde(default = "observe_default_control_api_max_connections")]
     pub max_connections: usize,
 
-    #[serde(default = "observe_default_control_api_connection_timeout_ms")]
     pub connection_timeout_ms: u64,
 }
 
@@ -1236,17 +1206,17 @@ impl Default for ControlApi {
         Self {
             enabled: false,
             required: false,
-            address: observe_default_control_api_address(),
-            port: observe_default_control_api_port(),
-            health_path: observe_default_control_api_health_path(),
-            ready_path: observe_default_control_api_ready_path(),
-            runtime_path: observe_default_control_api_runtime_path(),
-            restart_path: observe_default_control_api_restart_path(),
-            reload_path: observe_default_control_api_reload_path(),
-            reload_certs_path: observe_default_control_api_reload_certs_path(),
+            address: "127.0.0.1".to_string(),
+            port: 9902,
+            health_path: "/health".to_string(),
+            ready_path: "/ready".to_string(),
+            runtime_path: "/admin/runtime".to_string(),
+            restart_path: "/admin/runtime/restart".to_string(),
+            reload_path: "/admin/runtime/reload".to_string(),
+            reload_certs_path: "/admin/runtime/reload-certs".to_string(),
             auth_token: None,
-            max_connections: observe_default_control_api_max_connections(),
-            connection_timeout_ms: observe_default_control_api_connection_timeout_ms(),
+            max_connections: 256,
+            connection_timeout_ms: 30_000,
         }
     }
 }
@@ -1276,18 +1246,15 @@ impl std::fmt::Debug for ControlApi {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct Tracing {
-    #[serde(default)]
     pub enabled: bool,
 
-    #[serde(default = "observe_default_tracing_service_name")]
     pub service_name: String,
 
-    #[serde(default)]
     pub otlp_endpoint: Option<String>,
 
-    #[serde(default = "observe_default_tracing_sample_ratio")]
     pub sample_ratio: f64,
 }
 
@@ -1295,40 +1262,40 @@ impl Default for Tracing {
     fn default() -> Self {
         Self {
             enabled: false,
-            service_name: observe_default_tracing_service_name(),
+            service_name: "spooky".to_string(),
             otlp_endpoint: None,
-            sample_ratio: observe_default_tracing_sample_ratio(),
+            sample_ratio: 1.0,
         }
     }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct RoutingTransparency {
-    #[serde(default = "observe_default_routing_transparency_enabled")]
     pub enabled: bool,
-    #[serde(default = "observe_default_routing_transparency_include_reason")]
     pub include_reason: bool,
-    #[serde(default = "observe_default_routing_transparency_expose_header")]
     pub expose_header: bool,
-    #[serde(default = "observe_default_routing_transparency_header_name")]
     pub header_name: String,
 }
 
 impl Default for RoutingTransparency {
     fn default() -> Self {
         Self {
-            enabled: observe_default_routing_transparency_enabled(),
-            include_reason: observe_default_routing_transparency_include_reason(),
-            expose_header: observe_default_routing_transparency_expose_header(),
-            header_name: observe_default_routing_transparency_header_name(),
+            enabled: false,
+            include_reason: true,
+            expose_header: false,
+            header_name: "x-spooky-route-decision".to_string(),
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ApiKeyAuth, Config, JwtAuth, Listen, Log, PrivilegeDrop};
+    use super::{
+        ApiKeyAuth, Config, ControlApi, ForwardedHeaderPolicy, JwtAuth, Listen, Log,
+        MetricsEndpoint, PrivilegeDrop, RoutingTransparency, Tracing, UpstreamHostPolicy,
+    };
 
     #[test]
     fn minimal_yaml_applies_documented_defaults() {
@@ -1433,5 +1400,72 @@ security:
         assert_eq!(jwt.issuer, JwtAuth::default().issuer);
         assert_eq!(jwt.audience, JwtAuth::default().audience);
         assert_eq!(jwt.clock_skew_secs, JwtAuth::default().clock_skew_secs);
+    }
+
+    #[test]
+    fn serde_defaults_for_small_policy_structs_match_type_defaults() {
+        let forwarded: ForwardedHeaderPolicy =
+            serde_yaml::from_str("{}").expect("empty forwarded header policy should parse");
+        assert_eq!(forwarded, ForwardedHeaderPolicy::default());
+
+        let host_policy: UpstreamHostPolicy =
+            serde_yaml::from_str("{}").expect("empty upstream host policy should parse");
+        assert_eq!(host_policy, UpstreamHostPolicy::default());
+
+        let metrics: MetricsEndpoint =
+            serde_yaml::from_str("{}").expect("empty metrics endpoint should parse");
+        assert_eq!(metrics.address, MetricsEndpoint::default().address);
+        assert_eq!(metrics.port, MetricsEndpoint::default().port);
+        assert_eq!(metrics.path, MetricsEndpoint::default().path);
+        assert_eq!(
+            metrics.max_connections,
+            MetricsEndpoint::default().max_connections
+        );
+        assert_eq!(
+            metrics.connection_timeout_ms,
+            MetricsEndpoint::default().connection_timeout_ms
+        );
+
+        let control_api: ControlApi =
+            serde_yaml::from_str("{}").expect("empty control api should parse");
+        assert_eq!(control_api.address, ControlApi::default().address);
+        assert_eq!(control_api.port, ControlApi::default().port);
+        assert_eq!(control_api.health_path, ControlApi::default().health_path);
+        assert_eq!(control_api.ready_path, ControlApi::default().ready_path);
+        assert_eq!(control_api.runtime_path, ControlApi::default().runtime_path);
+        assert_eq!(control_api.restart_path, ControlApi::default().restart_path);
+        assert_eq!(control_api.reload_path, ControlApi::default().reload_path);
+        assert_eq!(
+            control_api.reload_certs_path,
+            ControlApi::default().reload_certs_path
+        );
+        assert_eq!(
+            control_api.max_connections,
+            ControlApi::default().max_connections
+        );
+        assert_eq!(
+            control_api.connection_timeout_ms,
+            ControlApi::default().connection_timeout_ms
+        );
+
+        let tracing: Tracing =
+            serde_yaml::from_str("{}").expect("empty tracing config should parse");
+        assert_eq!(tracing.enabled, Tracing::default().enabled);
+        assert_eq!(tracing.service_name, Tracing::default().service_name);
+        assert_eq!(tracing.otlp_endpoint, Tracing::default().otlp_endpoint);
+        assert_eq!(tracing.sample_ratio, Tracing::default().sample_ratio);
+
+        let routing: RoutingTransparency =
+            serde_yaml::from_str("{}").expect("empty routing transparency should parse");
+        assert_eq!(routing.enabled, RoutingTransparency::default().enabled);
+        assert_eq!(
+            routing.include_reason,
+            RoutingTransparency::default().include_reason
+        );
+        assert_eq!(
+            routing.expose_header,
+            RoutingTransparency::default().expose_header
+        );
+        assert_eq!(routing.header_name, RoutingTransparency::default().header_name);
     }
 }

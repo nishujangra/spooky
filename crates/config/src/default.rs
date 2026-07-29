@@ -1,4 +1,7 @@
-use crate::config::{CURRENT_CONFIG_VERSION, ApiKeyAuth, HealthCheck, Listen, LoadBalancing, Log, JwtAuth};
+use crate::config::{
+    ApiKeyAuth, ControlApi, CURRENT_CONFIG_VERSION, HealthCheck, Listen, LoadBalancing, Log,
+    MetricsEndpoint, RoutingTransparency, Tracing, JwtAuth,
+};
 
 // default values
 pub fn get_default_version() -> u32 {
@@ -14,10 +17,6 @@ pub fn get_default_load_balancing() -> LoadBalancing {
 
 pub fn auth_default_external_timeout_ms() -> u64 {
     1_000
-}
-
-pub fn auth_default_external_failure_mode() -> String {
-    String::from("fail_closed")
 }
 
 pub fn perf_default_worker_threads() -> usize {
@@ -300,90 +299,6 @@ pub fn resilience_default_watchdog_restart_cooldown_ms() -> u64 {
     120_000
 }
 
-pub fn observe_default_address() -> String {
-    String::from("127.0.0.1")
-}
-
-pub fn observe_default_port() -> u16 {
-    9901
-}
-
-pub fn observe_default_metrics_path() -> String {
-    String::from("/metrics")
-}
-
-pub fn observe_default_metrics_max_connections() -> usize {
-    512
-}
-
-pub fn observe_default_metrics_connection_timeout_ms() -> u64 {
-    30_000
-}
-
-pub fn observe_default_control_api_address() -> String {
-    String::from("127.0.0.1")
-}
-
-pub fn observe_default_control_api_port() -> u16 {
-    9902
-}
-
-pub fn observe_default_control_api_health_path() -> String {
-    String::from("/health")
-}
-
-pub fn observe_default_control_api_ready_path() -> String {
-    String::from("/ready")
-}
-
-pub fn observe_default_control_api_runtime_path() -> String {
-    String::from("/admin/runtime")
-}
-
-pub fn observe_default_control_api_restart_path() -> String {
-    String::from("/admin/runtime/restart")
-}
-
-pub fn observe_default_control_api_reload_path() -> String {
-    String::from("/admin/runtime/reload")
-}
-
-pub fn observe_default_control_api_reload_certs_path() -> String {
-    String::from("/admin/runtime/reload-certs")
-}
-
-pub fn observe_default_control_api_max_connections() -> usize {
-    256
-}
-
-pub fn observe_default_control_api_connection_timeout_ms() -> u64 {
-    30_000
-}
-
-pub fn observe_default_tracing_service_name() -> String {
-    String::from("spooky")
-}
-
-pub fn observe_default_tracing_sample_ratio() -> f64 {
-    1.0
-}
-
-pub fn observe_default_routing_transparency_enabled() -> bool {
-    false
-}
-
-pub fn observe_default_routing_transparency_include_reason() -> bool {
-    true
-}
-
-pub fn observe_default_routing_transparency_expose_header() -> bool {
-    false
-}
-
-pub fn observe_default_routing_transparency_header_name() -> String {
-    String::from("x-spooky-route-decision")
-}
-
 pub fn upstream_tls_default_verify_certificates() -> bool {
     true
 }
@@ -409,6 +324,10 @@ mod tests {
         assert_eq!(HealthCheck::default().success_threshold, 2);
         assert_eq!(ApiKeyAuth::default().header_name, "x-api-key");
         assert_eq!(JwtAuth::default().clock_skew_secs, 30);
+        assert_eq!(MetricsEndpoint::default().port, 9901);
+        assert_eq!(ControlApi::default().port, 9902);
+        assert_eq!(Tracing::default().sample_ratio, 1.0);
+        assert!(RoutingTransparency::default().include_reason);
     }
 
     #[test]
@@ -422,5 +341,31 @@ mod tests {
         assert!(!log.file.enabled);
         assert_eq!(log.file.path, "/var/log/spooky/spooky.log");
         assert_eq!(log.format, crate::config::LogFormat::Plain);
+
+        let metrics = MetricsEndpoint::default();
+        assert_eq!(metrics.address, "127.0.0.1");
+        assert_eq!(metrics.path, "/metrics");
+        assert_eq!(metrics.max_connections, 512);
+        assert_eq!(metrics.connection_timeout_ms, 30_000);
+
+        let control_api = ControlApi::default();
+        assert_eq!(control_api.address, "127.0.0.1");
+        assert_eq!(control_api.health_path, "/health");
+        assert_eq!(control_api.ready_path, "/ready");
+        assert_eq!(control_api.runtime_path, "/admin/runtime");
+        assert_eq!(control_api.restart_path, "/admin/runtime/restart");
+        assert_eq!(control_api.reload_path, "/admin/runtime/reload");
+        assert_eq!(control_api.reload_certs_path, "/admin/runtime/reload-certs");
+        assert_eq!(control_api.max_connections, 256);
+        assert_eq!(control_api.connection_timeout_ms, 30_000);
+
+        let tracing = Tracing::default();
+        assert_eq!(tracing.service_name, "spooky");
+        assert_eq!(tracing.otlp_endpoint, None);
+
+        let routing = RoutingTransparency::default();
+        assert!(!routing.enabled);
+        assert!(!routing.expose_header);
+        assert_eq!(routing.header_name, "x-spooky-route-decision");
     }
 }
