@@ -250,6 +250,25 @@ impl RuntimeSwapHarness {
         ))
     }
 
+    pub fn ready_snapshot_expect(&self, expected_status: StatusCode) -> Result<JsonValue, String> {
+        let path = self
+            .current_config
+            .as_ref()
+            .ok_or_else(|| "listener not started".to_string())?
+            .observability
+            .control_api
+            .ready_path
+            .clone();
+        let token = self.control_api_token()?;
+        self.rt.block_on(self.poll_control_api_json(
+            Method::GET,
+            path,
+            token,
+            expected_status,
+            Duration::from_secs(5),
+        ))
+    }
+
     pub fn trigger_runtime_reload(&self) -> Result<JsonValue, String> {
         self.trigger_runtime_reload_expect(StatusCode::ACCEPTED)
     }

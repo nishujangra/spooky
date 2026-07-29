@@ -504,6 +504,79 @@ fn watchdog_requested_drain_blocks_new_quic_connections() {
 
 #[test]
 #[serial]
+fn watchdog_restart_surfaces_drain_state_consistently_across_control_api_views() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = RuntimeSwapHarness::new();
+    let backend_addr = harness.start_h1_static_backend(b"watchdog-drain-state");
+    let mut config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        single_backend_upstream(backend_addr),
+    )]));
+    config.resilience.watchdog.enabled = true;
+
+    harness
+        .start_listener(config)
+        .expect("start runtime swap listener");
+
+    let ready_before = harness
+        .ready_snapshot_expect(http::StatusCode::OK)
+        .expect("ready snapshot before watchdog restart");
+    assert_eq!(ready_before["ready"], true);
+    assert_eq!(ready_before["restart_requested"], false);
+
+    let runtime_before = harness.runtime_snapshot().expect("runtime snapshot before restart");
+    assert_eq!(runtime_before["watchdog"]["restart_requested"], false);
+    assert_eq!(runtime_before["watchdog"]["restart_reason"], "");
+
+    assert!(
+        harness
+            .request_watchdog_restart("runtime-swap-drain-visible")
+            .expect("request watchdog restart"),
+        "watchdog restart request should be accepted"
+    );
+
+    let ready_after = harness
+        .ready_snapshot_expect(http::StatusCode::SERVICE_UNAVAILABLE)
+        .expect("ready snapshot after watchdog restart");
+    assert_eq!(ready_after["ready"], false);
+    assert_eq!(ready_after["restart_requested"], true);
+
+    let runtime_after = harness.runtime_snapshot().expect("runtime snapshot after restart");
+    assert_eq!(runtime_after["watchdog"]["restart_requested"], true);
+    assert_eq!(
+        runtime_after["watchdog"]["restart_reason"],
+        "runtime-swap-drain-visible"
+    );
+    assert!(
+        runtime_after["watchdog"]["restart_requested_at_ms"]
+            .as_u64()
+            .expect("watchdog restart timestamp")
+            > 0,
+        "runtime snapshot should expose the watchdog restart timestamp while drain is pending"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut established = true;
+    while Instant::now() < deadline {
+        established = harness
+            .fresh_quic_connection_establishes_within(Duration::from_millis(250))
+            .expect("fresh quic connection attempt");
+        if !established {
+            break;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    assert!(
+        !established,
+        "watchdog restart should surface as both not-ready control-plane state and a draining listener that stops accepting fresh QUIC connections"
+    );
+}
+
+#[test]
+#[serial]
 fn in_flight_request_can_complete_while_listener_is_draining() {
     if !local_listener_bind_available() {
         return;

@@ -741,6 +741,80 @@ fn start_draining_is_idempotent_and_drain_completes_when_idle() {
 }
 
 #[test]
+fn watchdog_restart_transitions_listener_into_draining_and_counts_worker_drain_once() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let mut startup = tls_test_config(cert, key, Vec::new());
+    startup.listen.port = 0;
+    startup.performance.shutdown_drain_timeout_ms = 5_000;
+    startup.resilience.watchdog.enabled = true;
+
+    let startup_runtime = RuntimeConfig::from_config(&startup).expect("startup runtime");
+    let startup_bundle = super::QUICListener::build_runtime_bundle(
+        "startup.yaml".to_string(),
+        startup.log.clone(),
+        &startup_runtime,
+    )
+    .expect("startup bundle");
+    let runtime_handle = Arc::new(super::RuntimeBundleHandle::new(startup_bundle.clone()));
+    let listener_config = startup_bundle
+        .runtime_config
+        .primary_listener_runtime_config()
+        .expect("listener runtime config");
+    let socket = match super::QUICListener::bind_socket(&listener_config, false) {
+        Ok(socket) => socket,
+        Err(spooky_errors::ProxyError::Transport(message))
+            if message.contains("Operation not permitted") =>
+        {
+            return;
+        }
+        Err(err) => panic!("bind socket: {err:?}"),
+    };
+    let mut listener = super::QUICListener::new_with_socket_and_shared_state(
+        listener_config,
+        socket,
+        Arc::clone(&startup_bundle.shared_state),
+    )
+    .expect("listener")
+    .with_runtime_bundle(Arc::clone(&runtime_handle));
+
+    listener.watchdog.set_expected_workers(2);
+    assert!(
+        listener.watchdog.request_restart("unit-test-drain"),
+        "watchdog restart should be accepted when the runtime watchdog is enabled"
+    );
+    assert!(!listener.draining);
+    assert!(!listener.watchdog_worker_drained);
+    assert!(!listener.watchdog.workers_drained());
+
+    assert!(
+        !listener.poll_preamble(),
+        "an idle listener should finish its watchdog drain in the same preamble cycle"
+    );
+    assert!(
+        listener.draining,
+        "watchdog restart should transition the listener into draining mode"
+    );
+    assert!(
+        listener.watchdog_worker_drained,
+        "listener should mark its worker drain completion once the watchdog drain finishes"
+    );
+    assert!(
+        !listener.watchdog.workers_drained(),
+        "one drained listener must not satisfy a two-worker watchdog restart"
+    );
+
+    assert!(
+        !listener.poll_preamble(),
+        "re-entering the idle drain preamble should remain terminal for this listener"
+    );
+    assert!(
+        !listener.watchdog.workers_drained(),
+        "repeated drain completion must not double-count the same worker toward restart completion"
+    );
+}
+
+#[test]
 fn build_server_tls_acceptor_rejects_mismatched_sni_certificate_mapping() {
     let dir = tempdir().expect("tempdir");
     let (api_cert, api_key) = write_test_cert_for_name(dir.path(), "api", "api.example.com");
