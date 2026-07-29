@@ -4,25 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::default::{
     auth_default_external_timeout_ms, get_default_load_balancing, get_default_version,
-    perf_default_backend_body_idle_timeout_ms,
-    perf_default_backend_body_total_timeout_ms, perf_default_backend_connect_timeout_ms,
-    perf_default_backend_dns_refresh_enabled, perf_default_backend_dns_refresh_interval_ms,
-    perf_default_backend_timeout_ms, perf_default_backend_total_request_timeout_ms,
-    perf_default_client_body_idle_timeout_ms, perf_default_control_plane_threads,
-    perf_default_global_inflight_limit, perf_default_h2_pool_idle_timeout_ms,
-    perf_default_h2_pool_max_idle_per_backend, perf_default_inflight_acquire_wait_ms,
-    perf_default_max_active_connections, perf_default_max_request_body_bytes,
-    perf_default_max_response_body_bytes, perf_default_new_connections_burst,
-    perf_default_new_connections_per_sec, perf_default_packet_shard_queue_capacity,
-    perf_default_packet_shard_queue_max_bytes, perf_default_packet_shards_per_worker,
-    perf_default_per_backend_inflight_limit, perf_default_per_upstream_inflight_limit,
-    perf_default_pin_workers, perf_default_quic_initial_max_data,
-    perf_default_quic_initial_max_stream_data, perf_default_quic_initial_max_streams_bidi,
-    perf_default_quic_initial_max_streams_uni, perf_default_quic_max_idle_timeout_ms,
-    perf_default_request_buffer_global_cap_bytes, perf_default_reuseport,
-    perf_default_shutdown_drain_timeout_ms, perf_default_udp_recv_buffer_bytes,
-    perf_default_udp_send_buffer_bytes, perf_default_unknown_length_response_prebuffer_bytes,
-    perf_default_worker_threads, resilience_default_adaptive_decrease_step,
+    resilience_default_adaptive_decrease_step,
     resilience_default_adaptive_enabled, resilience_default_adaptive_high_latency_ms,
     resilience_default_adaptive_increase_step, resilience_default_adaptive_min_limit,
     resilience_default_brownout_enabled, resilience_default_brownout_recover_inflight_percent,
@@ -501,188 +483,152 @@ impl Default for LogFile {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct Performance {
-    #[serde(default = "perf_default_worker_threads")]
     pub worker_threads: usize,
 
     /// Tokio worker threads used by the control-plane runtime.
-    #[serde(default = "perf_default_control_plane_threads")]
     pub control_plane_threads: usize,
 
     /// Number of packet-processing shards per bound UDP worker socket.
     /// `1` preserves single-loop behavior; values >1 enable parallel shard workers.
-    #[serde(default = "perf_default_packet_shards_per_worker")]
     pub packet_shards_per_worker: usize,
 
     /// Capacity of bounded ingress queue per shard.
-    #[serde(default = "perf_default_packet_shard_queue_capacity")]
     pub packet_shard_queue_capacity: usize,
 
     /// Memory-aware cap for queued datagram bytes per ingress shard dispatch queue.
-    #[serde(default = "perf_default_packet_shard_queue_max_bytes")]
     pub packet_shard_queue_max_bytes: usize,
 
-    #[serde(default = "perf_default_reuseport")]
     pub reuseport: bool,
 
-    #[serde(default = "perf_default_pin_workers")]
     pub pin_workers: bool,
 
-    #[serde(default = "perf_default_global_inflight_limit")]
     pub global_inflight_limit: usize,
 
-    #[serde(default = "perf_default_per_upstream_inflight_limit")]
     pub per_upstream_inflight_limit: usize,
 
     /// Optional micro-wait before shedding on global/upstream inflight permit acquisition.
     /// `0` disables waiting and preserves immediate-shed behavior.
-    #[serde(default = "perf_default_inflight_acquire_wait_ms")]
     pub inflight_acquire_wait_ms: u64,
 
-    #[serde(default = "perf_default_backend_timeout_ms")]
     pub backend_timeout_ms: u64,
 
-    #[serde(default = "perf_default_backend_connect_timeout_ms")]
     pub backend_connect_timeout_ms: u64,
 
-    #[serde(default = "perf_default_backend_body_idle_timeout_ms")]
     pub backend_body_idle_timeout_ms: u64,
 
-    #[serde(default = "perf_default_backend_body_total_timeout_ms")]
     pub backend_body_total_timeout_ms: u64,
 
-    #[serde(default = "perf_default_backend_total_request_timeout_ms")]
     pub backend_total_request_timeout_ms: u64,
 
-    #[serde(default = "perf_default_shutdown_drain_timeout_ms")]
     pub shutdown_drain_timeout_ms: u64,
 
-    #[serde(default = "perf_default_udp_recv_buffer_bytes")]
     pub udp_recv_buffer_bytes: usize,
 
-    #[serde(default = "perf_default_udp_send_buffer_bytes")]
     pub udp_send_buffer_bytes: usize,
 
-    #[serde(default = "perf_default_h2_pool_max_idle_per_backend")]
     pub h2_pool_max_idle_per_backend: usize,
 
-    #[serde(default = "perf_default_h2_pool_idle_timeout_ms")]
     pub h2_pool_idle_timeout_ms: u64,
 
     /// Enables periodic DNS refresh for hostname-based upstream backends.
-    #[serde(default = "perf_default_backend_dns_refresh_enabled")]
     pub backend_dns_refresh_enabled: bool,
 
     /// Control-plane interval for refreshing hostname-based backend DNS records.
-    #[serde(default = "perf_default_backend_dns_refresh_interval_ms")]
     pub backend_dns_refresh_interval_ms: u64,
 
-    #[serde(default = "perf_default_per_backend_inflight_limit")]
     pub per_backend_inflight_limit: usize,
 
     /// Steady-state new QUIC connections allowed per second (token-bucket refill rate).
-    #[serde(default = "perf_default_new_connections_per_sec")]
     pub new_connections_per_sec: u32,
 
     /// Maximum burst of new QUIC connections above the steady-state rate.
     /// Must be >= 1; values below 1 are clamped to 1 at runtime.
-    #[serde(default = "perf_default_new_connections_burst")]
     pub new_connections_burst: u32,
 
     /// Hard cap on concurrently tracked active QUIC connections per worker.
     /// New Initial packets above this cap are dropped deterministically.
-    #[serde(default = "perf_default_max_active_connections")]
     pub max_active_connections: usize,
 
     /// QUIC idle timeout: connection is closed after this many ms of inactivity.
-    #[serde(default = "perf_default_quic_max_idle_timeout_ms")]
     pub quic_max_idle_timeout_ms: u64,
 
     /// QUIC connection-level flow control: total bytes the client may send before
     /// receiving a MAX_DATA frame.
-    #[serde(default = "perf_default_quic_initial_max_data")]
     pub quic_initial_max_data: u64,
 
     /// QUIC stream-level flow control: bytes allowed per stream (bidi and uni).
     /// Must be <= `quic_initial_max_data`.
-    #[serde(default = "perf_default_quic_initial_max_stream_data")]
     pub quic_initial_max_stream_data: u64,
 
     /// Maximum number of concurrent bidirectional streams per connection.
-    #[serde(default = "perf_default_quic_initial_max_streams_bidi")]
     pub quic_initial_max_streams_bidi: u64,
 
     /// Maximum number of concurrent unidirectional streams per connection.
-    #[serde(default = "perf_default_quic_initial_max_streams_uni")]
     pub quic_initial_max_streams_uni: u64,
 
     /// Hard cap on upstream response body bytes per stream.
     /// Streams whose response body exceeds this size are terminated with 502.
     /// Protects against runaway or adversarial upstreams streaming unboundedly.
-    #[serde(default = "perf_default_max_response_body_bytes")]
     pub max_response_body_bytes: usize,
 
     /// Hard cap on request body bytes per stream.
     /// Requests exceeding this size are rejected with 413.
-    #[serde(default = "perf_default_max_request_body_bytes")]
     pub max_request_body_bytes: usize,
 
     /// Global cap for bytes buffered in request backpressure queues across a worker.
-    #[serde(default = "perf_default_request_buffer_global_cap_bytes")]
     pub request_buffer_global_cap_bytes: usize,
 
     /// Max bytes buffered for unknown-length upstream responses before headers are emitted.
     /// Responses exceeding this prebuffer cap are terminated with overload response.
-    #[serde(default = "perf_default_unknown_length_response_prebuffer_bytes")]
     pub unknown_length_response_prebuffer_bytes: usize,
 
     /// Idle timeout for request body upload progress.
     /// If no request-body bytes arrive for this period, the stream is failed.
-    #[serde(default = "perf_default_client_body_idle_timeout_ms")]
     pub client_body_idle_timeout_ms: u64,
 }
 
 impl Default for Performance {
     fn default() -> Self {
         Self {
-            worker_threads: perf_default_worker_threads(),
-            control_plane_threads: perf_default_control_plane_threads(),
-            packet_shards_per_worker: perf_default_packet_shards_per_worker(),
-            packet_shard_queue_capacity: perf_default_packet_shard_queue_capacity(),
-            packet_shard_queue_max_bytes: perf_default_packet_shard_queue_max_bytes(),
-            reuseport: perf_default_reuseport(),
-            pin_workers: perf_default_pin_workers(),
-            global_inflight_limit: perf_default_global_inflight_limit(),
-            per_upstream_inflight_limit: perf_default_per_upstream_inflight_limit(),
-            inflight_acquire_wait_ms: perf_default_inflight_acquire_wait_ms(),
-            backend_timeout_ms: perf_default_backend_timeout_ms(),
-            backend_connect_timeout_ms: perf_default_backend_connect_timeout_ms(),
-            backend_body_idle_timeout_ms: perf_default_backend_body_idle_timeout_ms(),
-            backend_body_total_timeout_ms: perf_default_backend_body_total_timeout_ms(),
-            backend_total_request_timeout_ms: perf_default_backend_total_request_timeout_ms(),
-            shutdown_drain_timeout_ms: perf_default_shutdown_drain_timeout_ms(),
-            udp_recv_buffer_bytes: perf_default_udp_recv_buffer_bytes(),
-            udp_send_buffer_bytes: perf_default_udp_send_buffer_bytes(),
-            h2_pool_max_idle_per_backend: perf_default_h2_pool_max_idle_per_backend(),
-            h2_pool_idle_timeout_ms: perf_default_h2_pool_idle_timeout_ms(),
-            backend_dns_refresh_enabled: perf_default_backend_dns_refresh_enabled(),
-            backend_dns_refresh_interval_ms: perf_default_backend_dns_refresh_interval_ms(),
-            per_backend_inflight_limit: perf_default_per_backend_inflight_limit(),
-            new_connections_per_sec: perf_default_new_connections_per_sec(),
-            new_connections_burst: perf_default_new_connections_burst(),
-            max_active_connections: perf_default_max_active_connections(),
-            quic_max_idle_timeout_ms: perf_default_quic_max_idle_timeout_ms(),
-            quic_initial_max_data: perf_default_quic_initial_max_data(),
-            quic_initial_max_stream_data: perf_default_quic_initial_max_stream_data(),
-            quic_initial_max_streams_bidi: perf_default_quic_initial_max_streams_bidi(),
-            quic_initial_max_streams_uni: perf_default_quic_initial_max_streams_uni(),
-            max_response_body_bytes: perf_default_max_response_body_bytes(),
-            max_request_body_bytes: perf_default_max_request_body_bytes(),
-            request_buffer_global_cap_bytes: perf_default_request_buffer_global_cap_bytes(),
-            unknown_length_response_prebuffer_bytes:
-                perf_default_unknown_length_response_prebuffer_bytes(),
-            client_body_idle_timeout_ms: perf_default_client_body_idle_timeout_ms(),
+            worker_threads: 1,
+            control_plane_threads: 2,
+            packet_shards_per_worker: 1,
+            packet_shard_queue_capacity: 2048,
+            packet_shard_queue_max_bytes: 64 * 1024 * 1024,
+            reuseport: true,
+            pin_workers: false,
+            global_inflight_limit: 4096,
+            per_upstream_inflight_limit: 1024,
+            inflight_acquire_wait_ms: 0,
+            backend_timeout_ms: 2_000,
+            backend_connect_timeout_ms: 500,
+            backend_body_idle_timeout_ms: 2_000,
+            backend_body_total_timeout_ms: 30_000,
+            backend_total_request_timeout_ms: 35_000,
+            shutdown_drain_timeout_ms: 5_000,
+            udp_recv_buffer_bytes: 8 * 1024 * 1024,
+            udp_send_buffer_bytes: 8 * 1024 * 1024,
+            h2_pool_max_idle_per_backend: 256,
+            h2_pool_idle_timeout_ms: 90_000,
+            backend_dns_refresh_enabled: false,
+            backend_dns_refresh_interval_ms: 30_000,
+            per_backend_inflight_limit: 64,
+            new_connections_per_sec: 2000,
+            new_connections_burst: 500,
+            max_active_connections: 20_000,
+            quic_max_idle_timeout_ms: 5_000,
+            quic_initial_max_data: 10_000_000,
+            quic_initial_max_stream_data: 1_000_000,
+            quic_initial_max_streams_bidi: 100,
+            quic_initial_max_streams_uni: 100,
+            max_response_body_bytes: 100 * 1024 * 1024,
+            max_request_body_bytes: 1_000_000,
+            request_buffer_global_cap_bytes: 64 * 1024 * 1024,
+            unknown_length_response_prebuffer_bytes: 2 * 1024 * 1024,
+            client_body_idle_timeout_ms: 10_000,
         }
     }
 }
@@ -1294,7 +1240,8 @@ impl Default for RoutingTransparency {
 mod tests {
     use super::{
         ApiKeyAuth, Config, ControlApi, ForwardedHeaderPolicy, JwtAuth, Listen, Log,
-        MetricsEndpoint, PrivilegeDrop, RoutingTransparency, Tracing, UpstreamHostPolicy,
+        MetricsEndpoint, Performance, PrivilegeDrop, RoutingTransparency, Tracing,
+        UpstreamHostPolicy,
     };
 
     #[test]
@@ -1467,5 +1414,41 @@ security:
             RoutingTransparency::default().expose_header
         );
         assert_eq!(routing.header_name, RoutingTransparency::default().header_name);
+    }
+
+    #[test]
+    fn serde_defaults_for_performance_match_type_defaults() {
+        let performance: Performance =
+            serde_yaml::from_str("{}").expect("empty performance config should parse");
+
+        assert_eq!(performance.worker_threads, Performance::default().worker_threads);
+        assert_eq!(
+            performance.control_plane_threads,
+            Performance::default().control_plane_threads
+        );
+        assert_eq!(
+            performance.packet_shards_per_worker,
+            Performance::default().packet_shards_per_worker
+        );
+        assert_eq!(
+            performance.global_inflight_limit,
+            Performance::default().global_inflight_limit
+        );
+        assert_eq!(
+            performance.backend_timeout_ms,
+            Performance::default().backend_timeout_ms
+        );
+        assert_eq!(
+            performance.backend_dns_refresh_enabled,
+            Performance::default().backend_dns_refresh_enabled
+        );
+        assert_eq!(
+            performance.max_response_body_bytes,
+            Performance::default().max_response_body_bytes
+        );
+        assert_eq!(
+            performance.unknown_length_response_prebuffer_bytes,
+            Performance::default().unknown_length_response_prebuffer_bytes
+        );
     }
 }
