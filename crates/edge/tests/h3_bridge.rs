@@ -54,9 +54,9 @@ use spooky_edge::{
     BACKEND_TIMEOUT_SECS, MAX_DATAGRAM_SIZE_BYTES, MAX_REQUEST_BODY_BYTES,
     MAX_STREAMS_PER_CONNECTION, MAX_UDP_PAYLOAD_BYTES, QUIC_IDLE_TIMEOUT_MS, QUIC_INITIAL_MAX_DATA,
     QUIC_INITIAL_MAX_STREAMS_BIDI, QUIC_INITIAL_MAX_STREAMS_UNI, QUIC_INITIAL_STREAM_DATA,
-    REQUEST_TIMEOUT_SECS, UDP_READ_TIMEOUT_MS, runtime::listener::QUICListener,
+    REQUEST_TIMEOUT_SECS, runtime::listener::QUICListener,
 };
-use support::net::local_listener_bind_available;
+use support::{net::local_listener_bind_available, request_path as request_support};
 
 type TrailerPairs = Vec<(String, String)>;
 type H3TrailerResponse = (String, Vec<u8>, TrailerPairs);
@@ -234,11 +234,7 @@ fn make_config_with_upstreams(
 }
 
 fn normalize_backend_address(address: String) -> String {
-    if address.contains("://") {
-        address
-    } else {
-        format!("http://{address}")
-    }
+    request_support::normalize_backend_address(address)
 }
 
 fn encode_test_hs256_jwt(secret: &str, claims: serde_json::Value) -> String {
@@ -259,35 +255,10 @@ fn encode_test_hs256_jwt(secret: &str, claims: serde_json::Value) -> String {
 }
 
 fn quic_read_timeout(conn: &quiche::Connection) -> Duration {
-    conn.timeout()
-        .filter(|d| !d.is_zero())
-        .unwrap_or(Duration::from_millis(UDP_READ_TIMEOUT_MS))
+    request_support::quic_read_timeout(conn)
 }
 
-struct ListenerTaskGuard {
-    stop: Arc<AtomicBool>,
-    handle: tokio::task::JoinHandle<()>,
-}
-
-impl ListenerTaskGuard {
-    fn spawn(rt: &tokio::runtime::Runtime, mut listener: QUICListener) -> Self {
-        let stop = Arc::new(AtomicBool::new(false));
-        let stop_flag = stop.clone();
-        let handle = rt.spawn_blocking(move || {
-            while !stop_flag.load(Ordering::Relaxed) {
-                listener.poll();
-            }
-        });
-        Self { stop, handle }
-    }
-}
-
-impl Drop for ListenerTaskGuard {
-    fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
-        self.handle.abort();
-    }
-}
+type ListenerTaskGuard = request_support::ListenerTaskGuard;
 
 fn make_listener_with_bootstrap(config: Config) -> QUICListener {
     let runtime_config = RuntimeConfig::from_config(&config).expect("runtime config");
@@ -308,122 +279,29 @@ fn make_listener_with_bootstrap(config: Config) -> QUICListener {
 }
 
 async fn start_h2_backend() -> SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        loop {
-            let (stream, _) = match listener.accept().await {
-                Ok(v) => v,
-                Err(_) => break,
-            };
-            tokio::spawn(async move {
-                let io = TokioIo::new(stream);
-                let service = service_fn(|_req: Request<Incoming>| async move {
-                    Ok::<_, hyper::Error>(Response::new(Full::new(Bytes::from("backend ok\n"))))
-                });
-
-                let _ = hyper::server::conn::http1::Builder::new()
-                    .serve_connection(io, service)
-                    .await;
-            });
-        }
-    });
-
+    let fixture = request_support::start_h1_backend(move |_req: Request<Incoming>| async move {
+        Ok::<_, Infallible>(Response::new(Full::new(Bytes::from("backend ok\n"))))
+    })
+    .await;
+    let addr = fixture.addr;
+    std::mem::forget(fixture);
     addr
 }
 
 async fn start_h2_backend_with_static_body(body: &'static [u8]) -> SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        loop {
-            let (stream, _) = match listener.accept().await {
-                Ok(v) => v,
-                Err(_) => break,
-            };
-            tokio::spawn(async move {
-                let io = TokioIo::new(stream);
-                let service = service_fn(move |_req: Request<Incoming>| async move {
-                    Ok::<_, hyper::Error>(Response::new(
-                        Full::new(Bytes::from_static(body)).boxed(),
-                    ))
-                });
-
-                let _ = hyper::server::conn::http1::Builder::new()
-                    .serve_connection(io, service)
-                    .await;
-            });
-        }
-    });
-
+    let fixture = request_support::start_h1_backend(move |_req: Request<Incoming>| async move {
+        Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(body))))
+    })
+    .await;
+    let addr = fixture.addr;
+    std::mem::forget(fixture);
     addr
 }
 
 async fn start_h1_backend_with_websocket_upgrade() -> SocketAddr {
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
-
-    tokio::spawn(async move {
-        loop {
-            let (stream, _) = match listener.accept().await {
-                Ok(v) => v,
-                Err(_) => break,
-            };
-            tokio::spawn(async move {
-                let io = TokioIo::new(stream);
-                let service = service_fn(|mut req: Request<Incoming>| async move {
-                    let is_upgrade = req
-                        .headers()
-                        .get(http::header::UPGRADE)
-                        .and_then(|value| value.to_str().ok())
-                        .map(|value| value.eq_ignore_ascii_case("websocket"))
-                        .unwrap_or(false)
-                        && req
-                            .headers()
-                            .get(http::header::CONNECTION)
-                            .and_then(|value| value.to_str().ok())
-                            .map(|value| {
-                                value
-                                    .split(',')
-                                    .any(|part| part.trim().eq_ignore_ascii_case("upgrade"))
-                            })
-                            .unwrap_or(false);
-
-                    if !is_upgrade {
-                        return Ok::<_, hyper::Error>(
-                            Response::builder()
-                                .status(StatusCode::BAD_REQUEST)
-                                .body(Full::new(Bytes::from_static(b"missing upgrade\n")))
-                                .unwrap(),
-                        );
-                    }
-
-                    let on_upgrade = hyper::upgrade::on(&mut req);
-                    tokio::spawn(async move {
-                        let _ = on_upgrade.await;
-                    });
-
-                    Ok::<_, hyper::Error>(
-                        Response::builder()
-                            .status(StatusCode::SWITCHING_PROTOCOLS)
-                            .header(http::header::CONNECTION, "upgrade")
-                            .header(http::header::UPGRADE, "websocket")
-                            .header("sec-websocket-accept", "test-accept")
-                            .body(Full::new(Bytes::new()))
-                            .unwrap(),
-                    )
-                });
-
-                let _ = hyper::server::conn::http1::Builder::new()
-                    .serve_connection(io, service)
-                    .with_upgrades()
-                    .await;
-            });
-        }
-    });
-
+    let fixture = request_support::start_h1_websocket_upgrade_backend().await;
+    let addr = fixture.addr;
+    std::mem::forget(fixture);
     addr
 }
 
@@ -459,133 +337,8 @@ async fn start_h2_backend_draining() -> SocketAddr {
 }
 
 fn run_h3_client(addr: SocketAddr) -> Result<String, String> {
-    let socket = std::net::UdpSocket::bind("0.0.0.0:0").map_err(|e| e.to_string())?;
-    let local_addr = socket.local_addr().map_err(|e| e.to_string())?;
-
-    let mut config =
-        quiche::Config::new(quiche::PROTOCOL_VERSION).map_err(|e| format!("config: {e:?}"))?;
-    config.verify_peer(false);
-    config
-        .set_application_protos(quiche::h3::APPLICATION_PROTOCOL)
-        .map_err(|e| format!("alpn: {e:?}"))?;
-    config.set_max_idle_timeout(QUIC_IDLE_TIMEOUT_MS);
-    config.set_max_recv_udp_payload_size(MAX_UDP_PAYLOAD_BYTES);
-    config.set_max_send_udp_payload_size(MAX_UDP_PAYLOAD_BYTES);
-    config.set_initial_max_data(QUIC_INITIAL_MAX_DATA);
-    let client_stream_window = QUIC_INITIAL_STREAM_DATA.saturating_add(128 * 1024);
-    config.set_initial_max_stream_data_bidi_local(client_stream_window);
-    config.set_initial_max_stream_data_bidi_remote(client_stream_window);
-    config.set_initial_max_stream_data_uni(client_stream_window);
-    config.set_initial_max_streams_bidi(QUIC_INITIAL_MAX_STREAMS_BIDI);
-    config.set_initial_max_streams_uni(QUIC_INITIAL_MAX_STREAMS_UNI);
-    config.set_disable_active_migration(true);
-
-    let mut scid_bytes = [0u8; quiche::MAX_CONN_ID_LEN];
-    rand::thread_rng().fill_bytes(&mut scid_bytes);
-    let scid = quiche::ConnectionId::from_ref(&scid_bytes);
-
-    let mut conn = quiche::connect(Some("localhost"), &scid, local_addr, addr, &mut config)
-        .map_err(|e| format!("connect: {e:?}"))?;
-
-    let h3_config = quiche::h3::Config::new().map_err(|e| format!("h3: {e:?}"))?;
-    let mut h3_conn: Option<quiche::h3::Connection> = None;
-
-    let mut out = [0u8; MAX_UDP_PAYLOAD_BYTES];
-    let mut buf = [0u8; MAX_DATAGRAM_SIZE_BYTES];
-
-    let (write, send_info) = conn.send(&mut out).map_err(|e| format!("send: {e:?}"))?;
-    socket
-        .send_to(&out[..write], send_info.to)
-        .map_err(|e| format!("send_to: {e:?}"))?;
-
-    let start = Instant::now();
-    let mut req_sent = false;
-    let mut response_body = Vec::new();
-
-    loop {
-        loop {
-            match conn.send(&mut out) {
-                Ok((write, send_info)) => {
-                    let _ = socket.send_to(&out[..write], send_info.to);
-                }
-                Err(quiche::Error::Done) => break,
-                Err(e) => return Err(format!("send loop: {e:?}")),
-            }
-        }
-
-        let read_timeout = quic_read_timeout(&conn);
-        socket
-            .set_read_timeout(Some(read_timeout))
-            .map_err(|e| format!("timeout: {e:?}"))?;
-
-        match socket.recv_from(&mut buf) {
-            Ok((len, from)) => {
-                let recv_info = quiche::RecvInfo {
-                    from,
-                    to: local_addr,
-                };
-                conn.recv(&mut buf[..len], recv_info)
-                    .map_err(|e| format!("recv: {e:?}"))?;
-            }
-            Err(ref e)
-                if e.kind() == std::io::ErrorKind::WouldBlock
-                    || e.kind() == std::io::ErrorKind::TimedOut =>
-            {
-                conn.on_timeout();
-            }
-            Err(e) => return Err(format!("recv: {e:?}")),
-        }
-
-        if conn.is_established() && h3_conn.is_none() {
-            h3_conn = Some(
-                quiche::h3::Connection::with_transport(&mut conn, &h3_config)
-                    .map_err(|e| format!("h3 conn: {e:?}"))?,
-            );
-        }
-
-        if let Some(h3) = h3_conn.as_mut() {
-            if conn.is_established() && !req_sent {
-                let req = vec![
-                    quiche::h3::Header::new(b":method", b"GET"),
-                    quiche::h3::Header::new(b":scheme", b"https"),
-                    quiche::h3::Header::new(b":authority", b"localhost"),
-                    quiche::h3::Header::new(b":path", b"/"),
-                    quiche::h3::Header::new(b"user-agent", b"spooky-test"),
-                ];
-                h3.send_request(&mut conn, &req, true)
-                    .map_err(|e| format!("send_request: {e:?}"))?;
-                req_sent = true;
-            }
-
-            loop {
-                match h3.poll(&mut conn) {
-                    Ok((stream_id, quiche::h3::Event::Data)) => loop {
-                        match h3.recv_body(&mut conn, stream_id, &mut buf) {
-                            Ok(read) => response_body.extend_from_slice(&buf[..read]),
-                            Err(quiche::h3::Error::Done) => break,
-                            Err(e) => return Err(format!("recv_body: {e:?}")),
-                        }
-                    },
-                    Ok((_stream_id, quiche::h3::Event::Headers { .. })) => {}
-                    Ok((_stream_id, quiche::h3::Event::Finished)) => {
-                        let body = String::from_utf8_lossy(&response_body).to_string();
-                        return Ok(body);
-                    }
-                    Ok((_stream_id, quiche::h3::Event::Reset(_))) => {
-                        return Err("stream reset".to_string());
-                    }
-                    Ok((_stream_id, quiche::h3::Event::PriorityUpdate)) => {}
-                    Ok((_stream_id, quiche::h3::Event::GoAway)) => {}
-                    Err(quiche::h3::Error::Done) => break,
-                    Err(e) => return Err(format!("poll: {e:?}")),
-                }
-            }
-        }
-
-        if start.elapsed() > Duration::from_secs(REQUEST_TIMEOUT_SECS) {
-            return Err("timeout waiting for response".to_string());
-        }
-    }
+    request_support::run_h3_get_to(addr, "localhost", "/", &[])
+        .map(|response| String::from_utf8_lossy(&response.body).into_owned())
 }
 
 fn run_h3_client_chunked_post(

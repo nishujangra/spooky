@@ -314,6 +314,35 @@ impl Default for QuicRequestPathHarness {
     }
 }
 
+pub fn make_quic_test_config(
+    cert_path: &str,
+    key_path: &str,
+    upstreams: HashMap<String, Upstream>,
+) -> Config {
+    make_quic_test_config_with_upstream_tls(
+        cert_path,
+        key_path,
+        upstreams,
+        UpstreamTls::default(),
+    )
+}
+
+pub fn make_quic_test_config_with_upstream_tls(
+    cert_path: &str,
+    key_path: &str,
+    upstreams: HashMap<String, Upstream>,
+    upstream_tls: UpstreamTls,
+) -> Config {
+    let mut config = base_quic_test_config(
+        reserve_unused_listener_port(),
+        cert_path,
+        key_path,
+        upstreams,
+    );
+    config.upstream_tls = upstream_tls;
+    config
+}
+
 pub fn make_upstream(
     path_prefix: &str,
     backends: Vec<Backend>,
@@ -465,6 +494,25 @@ impl BootstrapResponse {
 
 pub fn run_request_to(addr: SocketAddr, request: H3RequestSpec<'_>) -> Result<H3Response, String> {
     run_h3_request(addr, request)
+}
+
+pub fn run_h3_get_to(
+    addr: SocketAddr,
+    authority: &str,
+    path: &str,
+    headers: &[(&str, &str)],
+) -> Result<H3Response, String> {
+    run_request_to(
+        addr,
+        H3RequestSpec {
+            method: "GET",
+            authority,
+            path,
+            headers,
+            body: None,
+            user_agent: "spooky-test",
+        },
+    )
 }
 
 pub fn run_bootstrap_request_to(
@@ -1481,7 +1529,7 @@ pub fn reserve_unused_udp_port() -> u16 {
     port
 }
 
-fn reserve_unused_listener_port() -> u16 {
+pub fn reserve_unused_listener_port() -> u16 {
     for _ in 0..32 {
         let tcp = StdTcpListener::bind("127.0.0.1:0").expect("reserve listener tcp port");
         let port = tcp.local_addr().expect("tcp local addr").port();
@@ -1496,11 +1544,11 @@ fn reserve_unused_listener_port() -> u16 {
     reserve_unused_udp_port()
 }
 
-fn bind_tcp_listener() -> TcpListener {
+pub fn bind_tcp_listener() -> TcpListener {
     bind_tcp_listener_at(SocketAddr::from(([127, 0, 0, 1], 0))).expect("bind test backend listener")
 }
 
-fn bind_tcp_listener_at(bind_addr: SocketAddr) -> Result<TcpListener, String> {
+pub fn bind_tcp_listener_at(bind_addr: SocketAddr) -> Result<TcpListener, String> {
     let listener = StdTcpListener::bind(bind_addr)
         .map_err(|err| format!("bind test backend listener {bind_addr}: {err}"))?;
     listener
@@ -1510,7 +1558,7 @@ fn bind_tcp_listener_at(bind_addr: SocketAddr) -> Result<TcpListener, String> {
         .map_err(|err| format!("register test backend listener {bind_addr}: {err}"))
 }
 
-fn quic_read_timeout(conn: &quiche::Connection) -> Duration {
+pub fn quic_read_timeout(conn: &quiche::Connection) -> Duration {
     conn.timeout()
         .filter(|timeout| !timeout.is_zero())
         .unwrap_or(Duration::from_millis(UDP_READ_TIMEOUT_MS))
@@ -1678,14 +1726,14 @@ fn run_h3_request(addr: SocketAddr, request: H3RequestSpec<'_>) -> Result<H3Resp
     }
 }
 
-fn read_test_chain(cert_path: &str) -> Vec<CertificateDer<'static>> {
+pub fn read_test_chain(cert_path: &str) -> Vec<CertificateDer<'static>> {
     CertificateDer::pem_file_iter(cert_path)
         .expect("open cert file")
         .collect::<Result<Vec<_>, _>>()
         .expect("parse certs")
 }
 
-fn read_test_key(key_path: &str) -> PrivateKeyDer<'static> {
+pub fn read_test_key(key_path: &str) -> PrivateKeyDer<'static> {
     PrivateKeyDer::from_pem_file(key_path).expect("parse private key")
 }
 
