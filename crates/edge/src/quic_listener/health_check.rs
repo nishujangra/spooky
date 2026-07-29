@@ -208,6 +208,70 @@ impl QUICListener {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::Ordering;
+
+    use spooky_errors::{PoolError, ProxyError};
+    use spooky_lb::health::HealthFailureReason;
+
+    use super::*;
+
+    #[test]
+    fn timeout_health_check_failures_remain_mapped_to_timeout_reason() {
+        let metrics = Metrics::default();
+
+        let evaluation = QUICListener::evaluate_failed_health_check(
+            "http://backend-a",
+            &metrics,
+            1_000,
+            0,
+            ProxyError::Timeout,
+            HealthFailureReason::Timeout,
+        );
+
+        assert_eq!(
+            evaluation.observation.outcome,
+            BackendHealthObservationOutcome::Failure
+        );
+        assert_eq!(
+            evaluation.observation.reason,
+            Some(HealthFailureReason::Timeout),
+            "timeout health checks must keep the canonical timeout failure mapping after lint cleanup"
+        );
+        assert_eq!(evaluation.next_consecutive_failures, 1);
+        assert_eq!(metrics.health_failure_timeout.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.health_failure_transport.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn unclassified_health_check_failures_fall_back_to_supplied_reason() {
+        let metrics = Metrics::default();
+
+        let evaluation = QUICListener::evaluate_failed_health_check(
+            "http://backend-a",
+            &metrics,
+            1_000,
+            2,
+            ProxyError::Pool(PoolError::UnknownBackend("backend-a".to_string())),
+            HealthFailureReason::Transport,
+        );
+
+        assert_eq!(
+            evaluation.observation.outcome,
+            BackendHealthObservationOutcome::Failure
+        );
+        assert_eq!(
+            evaluation.observation.reason,
+            Some(HealthFailureReason::Transport),
+            "health checks must still emit the fallback transport reason when proxy classification is unavailable"
+        );
+        assert_eq!(evaluation.next_consecutive_failures, 3);
+        assert_eq!(metrics.health_failure_transport.load(Ordering::Relaxed), 1);
+        assert_eq!(metrics.health_failure_timeout.load(Ordering::Relaxed), 0);
+    }
+}
+
 pub(super) fn classify_active_health_check_response(status: StatusCode) -> HealthClassification {
     outcome_from_status(status)
 }

@@ -524,6 +524,63 @@ mod tests {
         }
 
         #[test]
+        fn current_view_helpers_follow_the_live_generation_after_replacement() {
+            let dir = tempdir().expect("tempdir");
+            let (current_bundle, next_bundle) = runtime_bundle_pair(
+                dir.path(),
+                "startup.yaml",
+                "http://127.0.0.1:7001",
+                2,
+                "reloaded.yaml",
+                "http://127.0.0.1:7002",
+            );
+            let handle = RuntimeBundleHandle::new(current_bundle);
+
+            handle.replace(next_bundle).expect("replace");
+
+            let via_generation = handle.with_current_generation(|active| {
+                (
+                    active.generation(),
+                    active.startup().config_path.clone(),
+                    active
+                        .runtime_config()
+                        .upstreams
+                        .get("api")
+                        .expect("active upstream")
+                        .backends[0]
+                        .backend
+                        .address
+                        .clone(),
+                )
+            });
+            let via_view = handle.with_current_view(|view| {
+                (
+                    view.generation,
+                    view.startup.config_path.clone(),
+                    view.runtime_config
+                        .upstreams
+                        .get("api")
+                        .expect("active upstream")
+                        .backends[0]
+                        .backend
+                        .address
+                        .clone(),
+                )
+            });
+
+            assert_eq!(handle.current_generation(), 2);
+            assert_eq!(
+                via_generation,
+                (
+                    2,
+                    "reloaded.yaml".to_string(),
+                    "http://127.0.0.1:7002".to_string()
+                )
+            );
+            assert_eq!(via_generation, via_view);
+        }
+
+        #[test]
         fn stale_generation_views_keep_the_original_runtime_snapshot_after_replacement() {
             let dir = tempdir().expect("tempdir");
             let (current_bundle, next_bundle) = runtime_bundle_pair(
