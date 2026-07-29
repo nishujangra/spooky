@@ -8,6 +8,10 @@
 //! module and the `#[cfg(test)] pub(crate)` `upstreams_as_config` /
 //! `upstream_policy_sets` helpers) remain as unit tests in
 //! `crates/config/src/runtime.rs`.
+//!
+//! See `tests/regression/README.md` for the split between runtime-lowering
+//! regressions kept here and interpreter-internal unit tests kept beside the
+//! owning modules.
 
 mod common;
 
