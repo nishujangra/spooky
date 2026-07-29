@@ -1059,7 +1059,20 @@ where
     F: Fn(Request<Incoming>) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<Response<Full<Bytes>>, Infallible>> + Send + 'static,
 {
-    let listener = bind_tcp_listener();
+    start_h1_backend_on(SocketAddr::from(([127, 0, 0, 1], 0)), handler)
+        .await
+        .expect("bind h1 test backend listener")
+}
+
+pub async fn start_h1_backend_on<F, Fut>(
+    bind_addr: SocketAddr,
+    handler: F,
+) -> Result<BackendFixture, String>
+where
+    F: Fn(Request<Incoming>) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<Response<Full<Bytes>>, Infallible>> + Send + 'static,
+{
+    let listener = bind_tcp_listener_at(bind_addr)?;
     let addr = listener.local_addr().expect("h1 local addr");
     let stop = Arc::new(AtomicBool::new(false));
     let stop_flag = Arc::clone(&stop);
@@ -1085,11 +1098,11 @@ where
         }
     });
 
-    BackendFixture {
+    Ok(BackendFixture {
         addr,
         stop,
         accept_task,
-    }
+    })
 }
 
 pub async fn start_h1_websocket_upgrade_backend() -> BackendFixture {
@@ -1467,11 +1480,19 @@ fn reserve_unused_listener_port() -> u16 {
 }
 
 fn bind_tcp_listener() -> TcpListener {
-    let listener = StdTcpListener::bind("127.0.0.1:0").expect("bind test backend listener");
+    bind_tcp_listener_at(SocketAddr::from(([127, 0, 0, 1], 0)))
+        .expect("bind test backend listener")
+}
+
+fn bind_tcp_listener_at(bind_addr: SocketAddr) -> Result<TcpListener, String> {
+    let listener = StdTcpListener::bind(bind_addr)
+        .map_err(|err| format!("bind test backend listener {bind_addr}: {err}"))?;
     listener
         .set_nonblocking(true)
         .expect("set test backend listener nonblocking");
-    TcpListener::from_std(listener).expect("register test backend listener")
+    TcpListener::from_std(listener).map_err(|err| {
+        format!("register test backend listener {bind_addr}: {err}")
+    })
 }
 
 fn quic_read_timeout(conn: &quiche::Connection) -> Duration {

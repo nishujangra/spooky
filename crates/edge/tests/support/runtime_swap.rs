@@ -44,7 +44,7 @@ use tokio_rustls::{
 
 use super::request_path::{
     BackendFixture, H3RequestSpec, H3Response, ListenerTaskGuard, TestTlsMaterial, run_request_to,
-    start_h1_backend,
+    start_h1_backend, start_h1_backend_on,
 };
 
 pub struct RuntimeSwapHarness {
@@ -153,6 +153,21 @@ impl RuntimeSwapHarness {
         let addr = fixture.addr;
         self.backends.push(fixture);
         addr
+    }
+
+    pub fn try_start_h1_backend_at<F, Fut>(
+        &mut self,
+        bind_addr: SocketAddr,
+        handler: F,
+    ) -> Result<SocketAddr, String>
+    where
+        F: Fn(Request<Incoming>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response<Full<Bytes>>, Infallible>> + Send + 'static,
+    {
+        let fixture = self.rt.block_on(start_h1_backend_on(bind_addr, handler))?;
+        let addr = fixture.addr;
+        self.backends.push(fixture);
+        Ok(addr)
     }
 
     pub fn start_h1_static_backend(&mut self, body: &'static [u8]) -> SocketAddr {

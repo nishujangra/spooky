@@ -4,7 +4,7 @@ use std::{
     collections::HashMap,
     convert::Infallible,
     future::Future,
-    net::SocketAddr,
+    net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -137,12 +137,34 @@ impl BackendLifecycleHarness {
         self.runtime.start_h1_static_backend(body)
     }
 
+    pub fn try_start_h1_static_backend_at(
+        &mut self,
+        bind_addr: SocketAddr,
+        body: &'static [u8],
+    ) -> Result<SocketAddr, String> {
+        self.try_start_h1_backend_at(bind_addr, move |_req| async move {
+            Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(body))))
+        })
+    }
+
     pub fn start_h1_backend<F, Fut>(&mut self, handler: F) -> SocketAddr
     where
         F: Fn(Request<Incoming>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = Result<Response<Full<Bytes>>, Infallible>> + Send + 'static,
     {
         self.runtime.start_h1_backend(handler)
+    }
+
+    pub fn try_start_h1_backend_at<F, Fut>(
+        &mut self,
+        bind_addr: SocketAddr,
+        handler: F,
+    ) -> Result<SocketAddr, String>
+    where
+        F: Fn(Request<Incoming>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response<Full<Bytes>>, Infallible>> + Send + 'static,
+    {
+        self.runtime.try_start_h1_backend_at(bind_addr, handler)
     }
 
     pub fn start_h1_fail_then_recover_backend(
@@ -417,6 +439,13 @@ impl Default for BackendLifecycleHarness {
     fn default() -> Self {
         Self::new()
     }
+}
+
+pub fn alternate_loopback_backend_addrs(port: u16) -> (SocketAddr, SocketAddr) {
+    (
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 2)), port),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 3)), port),
+    )
 }
 
 pub fn hostname_backend_uri(authority_host: &str, authority_port: u16) -> Uri {
