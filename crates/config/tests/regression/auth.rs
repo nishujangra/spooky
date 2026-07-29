@@ -10,13 +10,13 @@ use spooky_config::{
 };
 
 use crate::common::{
-    api_runtime_upstream, api_upstream_mut, runtime_config, sample_config,
-    sample_config_with_api_upstream,
+    api_runtime_upstream, api_upstream_mut, sample_runtime_config_with,
+    sample_runtime_config_with_api_upstream,
 };
 
 #[test]
 fn runtime_config_lowers_http_external_auth_into_canonical_contract() {
-    let config = sample_config_with_api_upstream(|upstream| {
+    let runtime = sample_runtime_config_with_api_upstream(|upstream| {
         upstream.auth.external_auth = Some(ExternalAuth::Http {
             endpoint: "https://auth.internal/check".to_string(),
             request_headers: Vec::new(),
@@ -25,8 +25,6 @@ fn runtime_config_lowers_http_external_auth_into_canonical_contract() {
             failure_mode: ExternalAuthFailureMode::FailClosed,
         });
     });
-
-    let runtime = runtime_config(&config);
     let auth = &api_runtime_upstream(&runtime).policy.upstream_auth;
     match auth.external_auth.as_ref() {
         Some(RuntimeExternalAuth::Http {
@@ -47,7 +45,7 @@ fn runtime_config_lowers_http_external_auth_into_canonical_contract() {
 
 #[test]
 fn runtime_config_lowers_oidc_external_auth_metadata_into_canonical_contract() {
-    let config = sample_config_with_api_upstream(|upstream| {
+    let runtime = sample_runtime_config_with_api_upstream(|upstream| {
         upstream.auth.external_auth = Some(ExternalAuth::Oidc {
             discovery_url: Some(
                 "https://issuer.example.com/.well-known/openid-configuration".to_string(),
@@ -63,8 +61,6 @@ fn runtime_config_lowers_oidc_external_auth_metadata_into_canonical_contract() {
             failure_mode: ExternalAuthFailureMode::FailClosed,
         });
     });
-
-    let runtime = runtime_config(&config);
     match api_runtime_upstream(&runtime)
         .policy
         .upstream_auth
@@ -102,27 +98,26 @@ fn runtime_config_lowers_oidc_external_auth_metadata_into_canonical_contract() {
 
 #[test]
 fn runtime_config_normalizes_jwt_and_scoped_rate_limit_contracts() {
-    let mut config = sample_config();
-    let upstream = api_upstream_mut(&mut config);
-    upstream.auth.jwt = Some(JwtAuth {
-        secret: "jwt-secret".to_string(),
-        issuer: Some(" issuer-1 ".to_string()),
-        audience: Some(" spooky-api ".to_string()),
-        clock_skew_secs: 45,
+    let runtime = sample_runtime_config_with(|config| {
+        let upstream = api_upstream_mut(config);
+        upstream.auth.jwt = Some(JwtAuth {
+            secret: "jwt-secret".to_string(),
+            issuer: Some(" issuer-1 ".to_string()),
+            audience: Some(" spooky-api ".to_string()),
+            clock_skew_secs: 45,
+        });
+        upstream.auth.required_scopes = vec![" read:api ".to_string()];
+        upstream.auth.required_roles = vec![" admin ".to_string()];
+        config.resilience.scoped_rate_limits = vec![ScopedRateLimit {
+            name: " tenant-default ".to_string(),
+            scope: ScopedRateLimitScope::Tenant,
+            requests_per_sec: 12,
+            burst: 34,
+            key: Some("header:x-tenant-id".to_string()),
+            route_allowlist: vec![" api ".to_string()],
+            idle_ttl_secs: 9,
+        }];
     });
-    upstream.auth.required_scopes = vec![" read:api ".to_string()];
-    upstream.auth.required_roles = vec![" admin ".to_string()];
-    config.resilience.scoped_rate_limits = vec![ScopedRateLimit {
-        name: " tenant-default ".to_string(),
-        scope: ScopedRateLimitScope::Tenant,
-        requests_per_sec: 12,
-        burst: 34,
-        key: Some("header:x-tenant-id".to_string()),
-        route_allowlist: vec![" api ".to_string()],
-        idle_ttl_secs: 9,
-    }];
-
-    let runtime = runtime_config(&config);
     let api = api_runtime_upstream(&runtime);
     let jwt = api.policy.upstream_auth.jwt.as_ref().expect("jwt policy");
     let scoped_limit = runtime
