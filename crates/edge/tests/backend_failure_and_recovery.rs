@@ -1,18 +1,21 @@
 use std::{
     collections::HashMap,
     convert::Infallible,
+    thread,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
+    time::{Duration, Instant},
 };
 
 use bytes::Bytes;
 use http_body_util::Full;
 use hyper::{Response, body::Incoming};
 use serial_test::serial;
-use spooky_config::config::{Backend, LoadBalancing, RouteMatch, Upstream};
+use spooky_config::config::{Backend, HealthCheck, LoadBalancing, RouteMatch, Upstream};
 use spooky_edge::runtime::backend::event::BackendRefreshOutcome;
+use spooky_edge::runtime::backend::state::BackendHealthState;
 
 mod support;
 
@@ -89,6 +92,30 @@ fn find_consistent_hash_key_for_backend(
         }
     }
     None
+}
+
+fn wait_for_backend_health_state(
+    harness: &BackendLifecycleHarness,
+    backend_addr: &str,
+    expected_healthy_backends: usize,
+    expected_health: fn(&BackendHealthState) -> bool,
+) -> bool {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while Instant::now() < deadline {
+        let snapshot = harness.backend_snapshot(backend_addr).ok().flatten();
+        let summary = harness.upstream_membership_summary("api").ok();
+
+        if let (Some(snapshot), Some(summary)) = (snapshot, summary)
+            && summary.healthy_backends == expected_healthy_backends
+            && expected_health(&snapshot.health)
+        {
+            return true;
+        }
+
+        thread::sleep(Duration::from_millis(25));
+    }
+
+    false
 }
 
 #[test]
@@ -546,4 +573,123 @@ fn passive_request_failures_mark_backend_unhealthy_and_shift_selection_to_health
         .expect("membership summary after failure");
     assert_eq!(summary.total_backends, 2);
     assert_eq!(summary.healthy_backends, 1);
+}
+
+#[test]
+#[serial]
+fn active_health_recovery_restores_backend_availability() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = BackendLifecycleHarness::new();
+    let (backend_addr, backend_fixture) = harness.start_h1_fail_then_recover_backend(
+        b"backend-a",
+        http::StatusCode::SERVICE_UNAVAILABLE,
+        b"backend-a",
+    );
+
+    let config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        Upstream {
+            load_balancing: LoadBalancing {
+                lb_type: "round-robin".to_string(),
+                key: None,
+            },
+            auth: Default::default(),
+            host_policy: Default::default(),
+            forwarded_headers: Default::default(),
+            tls: None,
+            route: RouteMatch {
+                path_prefix: Some("/".to_string()),
+                ..Default::default()
+            },
+            backends: vec![Backend {
+                id: "backend-a".to_string(),
+                address: format!("http://{backend_addr}"),
+                weight: 1,
+                health_check: Some(HealthCheck {
+                    path: "/".to_string(),
+                    interval: 50,
+                    timeout_ms: 100,
+                    failure_threshold: 1,
+                    success_threshold: 1,
+                    cooldown_ms: 1,
+                }),
+            }],
+        },
+    )]));
+    harness.start_listener(config).expect("listener");
+
+    let backend_identity = format!("http://{backend_addr}");
+    assert!(
+        wait_for_backend_health_state(
+            &harness,
+            &backend_identity,
+            1,
+            |health| !matches!(health, BackendHealthState::Unhealthy { .. }),
+        ),
+        "backend should start available before active health transitions run"
+    );
+
+    let initial = harness
+        .run_request(H3RequestSpec::get("localhost", "/"))
+        .expect("initial request");
+    initial.assert_status(200);
+    initial.assert_body_text("backend-a");
+
+    backend_fixture.set_failing(true);
+    assert!(
+        wait_for_backend_health_state(
+            &harness,
+            &backend_identity,
+            0,
+            |_| true,
+        ),
+        "active health checks should mark the backend unhealthy after it begins failing"
+    );
+
+    let unhealthy_state = harness
+        .upstream_backend_runtime_state("api", &backend_identity)
+        .expect("backend runtime state lookup")
+        .expect("backend runtime state");
+    assert!(
+        !unhealthy_state.healthy,
+        "membership state should reflect the active-health unhealthy transition"
+    );
+
+    backend_fixture.set_failing(false);
+    assert!(
+        wait_for_backend_health_state(
+            &harness,
+            &backend_identity,
+            1,
+            |health| !matches!(health, BackendHealthState::Unhealthy { .. }),
+        ),
+        "active health checks should restore backend availability after recovery"
+    );
+
+    let recovered_state = harness
+        .upstream_backend_runtime_state("api", &backend_identity)
+        .expect("backend runtime state lookup")
+        .expect("backend runtime state");
+    assert!(
+        recovered_state.healthy,
+        "membership state should return to healthy after active recovery"
+    );
+
+    let recovered_snapshot = harness
+        .backend_snapshot(&backend_identity)
+        .expect("backend snapshot lookup")
+        .expect("backend lifecycle snapshot");
+    assert!(
+        !matches!(recovered_snapshot.health, BackendHealthState::Unhealthy { .. }),
+        "lifecycle snapshot should no longer report the backend as unhealthy after recovery"
+    );
+
+    let recovered = harness
+        .run_request(H3RequestSpec::get("localhost", "/"))
+        .expect("request after recovery");
+    recovered.assert_status(200);
+    recovered.assert_body_text("backend-a");
 }
