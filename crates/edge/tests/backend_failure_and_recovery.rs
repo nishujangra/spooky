@@ -693,3 +693,161 @@ fn active_health_recovery_restores_backend_availability() {
     recovered.assert_status(200);
     recovered.assert_body_text("backend-a");
 }
+
+#[test]
+#[serial]
+fn partial_outage_preserves_healthy_backend_availability() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = BackendLifecycleHarness::new();
+    let port = reserve_unused_udp_port();
+    let (backend_a_bind, backend_b_bind) = alternate_loopback_backend_addrs(port);
+
+    let backend_a_requests = Arc::new(AtomicUsize::new(0));
+    let backend_b_requests = Arc::new(AtomicUsize::new(0));
+
+    let backend_a_counter = Arc::clone(&backend_a_requests);
+    let backend_a_addr = harness
+        .try_start_h1_backend_at(
+            backend_a_bind,
+            move |_req: hyper::Request<Incoming>| {
+                let backend_a_counter = Arc::clone(&backend_a_counter);
+                async move {
+                    backend_a_counter.fetch_add(1, Ordering::Relaxed);
+                    Ok::<_, Infallible>(
+                        Response::builder()
+                            .status(503)
+                            .body(Full::new(Bytes::from_static(b"backend-a")))
+                            .expect("backend a failure response"),
+                    )
+                }
+            },
+        )
+        .ok();
+    let Some(backend_a_addr) = backend_a_addr else {
+        return;
+    };
+
+    let backend_b_counter = Arc::clone(&backend_b_requests);
+    let backend_b_addr = harness
+        .try_start_h1_backend_at(
+            backend_b_bind,
+            move |_req: hyper::Request<Incoming>| {
+                let backend_b_counter = Arc::clone(&backend_b_counter);
+                async move {
+                    backend_b_counter.fetch_add(1, Ordering::Relaxed);
+                    Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(
+                        b"backend-b",
+                    ))))
+                }
+            },
+        )
+        .ok();
+    let Some(backend_b_addr) = backend_b_addr else {
+        return;
+    };
+
+    let config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        Upstream {
+            load_balancing: LoadBalancing {
+                lb_type: "round-robin".to_string(),
+                key: None,
+            },
+            auth: Default::default(),
+            host_policy: Default::default(),
+            forwarded_headers: Default::default(),
+            tls: None,
+            route: RouteMatch {
+                path_prefix: Some("/".to_string()),
+                ..Default::default()
+            },
+            backends: vec![
+                Backend {
+                    id: "backend-a".to_string(),
+                    address: format!("http://{backend_a_addr}"),
+                    weight: 1,
+                    health_check: None,
+                },
+                Backend {
+                    id: "backend-b".to_string(),
+                    address: format!("http://{backend_b_addr}"),
+                    weight: 1,
+                    health_check: None,
+                },
+            ],
+        },
+    )]));
+    harness.start_listener(config).expect("listener");
+
+    let mut success_count = 0usize;
+    let mut failure_count = 0usize;
+    for _ in 0..6 {
+        let response = harness
+            .run_request(H3RequestSpec::get("localhost", "/"))
+            .expect("partial outage request");
+        match response.status {
+            200 => {
+                success_count += 1;
+                response.assert_body_text("backend-b");
+            }
+            503 => {
+                failure_count += 1;
+                response.assert_body_text("backend-a");
+            }
+            other => panic!("unexpected partial-outage response status {other}"),
+        }
+    }
+
+    assert!(
+        success_count >= 3,
+        "healthy backend should preserve overall availability during a partial outage"
+    );
+    assert!(
+        failure_count >= 1,
+        "failing backend should still surface degraded outcomes before passive ejection completes"
+    );
+
+    assert!(
+        wait_for_backend_health_state(
+            &harness,
+            &format!("http://{backend_a_addr}"),
+            1,
+            |health| matches!(health, BackendHealthState::Unhealthy { .. }),
+        ),
+        "failing backend should eventually be removed from the effective healthy set"
+    );
+
+    for _ in 0..4 {
+        let response = harness
+            .run_request(H3RequestSpec::get("localhost", "/"))
+            .expect("request after passive ejection");
+        response.assert_status(200);
+        response.assert_body_text("backend-b");
+    }
+
+    let summary = harness
+        .upstream_membership_summary("api")
+        .expect("membership summary after partial outage");
+    assert_eq!(summary.total_backends, 2);
+    assert_eq!(summary.healthy_backends, 1);
+
+    let backend_a_state = harness
+        .upstream_backend_runtime_state("api", &format!("http://{backend_a_addr}"))
+        .expect("backend A runtime state lookup")
+        .expect("backend A runtime state");
+    let backend_b_state = harness
+        .upstream_backend_runtime_state("api", &format!("http://{backend_b_addr}"))
+        .expect("backend B runtime state lookup")
+        .expect("backend B runtime state");
+    assert!(
+        !backend_a_state.healthy,
+        "failing backend should be degraded out of the effective healthy pool"
+    );
+    assert!(
+        backend_b_state.healthy,
+        "healthy backend should remain available throughout the partial outage"
+    );
+}
