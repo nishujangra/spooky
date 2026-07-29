@@ -70,414 +70,217 @@ fn healthy_backend_indices(pool: &UpstreamPool) -> Vec<usize> {
     pool.healthy_backend_indices_iter().collect()
 }
 
-// ============================================================================
-// Test 1: Client Error (4xx) Does Not Change Health
-// ============================================================================
+fn assert_status_classification(status: StatusCode, expected: HealthClassification) {
+    let actual = outcome_from_status(status);
+    assert!(
+        std::mem::discriminant(&actual) == std::mem::discriminant(&expected),
+        "status {status} should classify as {expected:?}, got {actual:?}"
+    );
+}
+
+fn assert_backend_is_healthy(pool: &UpstreamPool, backend_index: usize, context: &str) {
+    assert!(
+        healthy_backend_indices(pool).contains(&backend_index),
+        "{context}: backend {backend_index} should be healthy"
+    );
+}
+
+fn assert_backend_is_unhealthy(pool: &UpstreamPool, backend_index: usize, context: &str) {
+    assert!(
+        !healthy_backend_indices(pool).contains(&backend_index),
+        "{context}: backend {backend_index} should be unhealthy"
+    );
+}
+
+fn assert_becomes_unhealthy_after_threshold(pool: &mut UpstreamPool, backend_index: usize) {
+    for attempt in 1..=3 {
+        let transition = pool.mark_backend_failure_from_active_check(backend_index);
+        if attempt < 3 {
+            assert!(
+                transition.is_none(),
+                "failure attempt {attempt} should not transition before the threshold"
+            );
+        } else {
+            assert!(
+                matches!(transition, Some(HealthTransition::BecameUnhealthy)),
+                "failure attempt {attempt} should transition the backend to unhealthy"
+            );
+        }
+    }
+}
 
 #[test]
-fn test_4xx_response_does_not_change_health() {
+fn client_error_statuses_classify_as_neutral_without_changing_health() {
     let backend_index = 0;
-
-    // All 4xx status codes should return Neutral outcome
     let test_cases = vec![
-        StatusCode::BAD_REQUEST,          // 400
-        StatusCode::FORBIDDEN,            // 403
-        StatusCode::NOT_FOUND,            // 404
-        StatusCode::METHOD_NOT_ALLOWED,   // 405
-        StatusCode::CONFLICT,             // 409
-        StatusCode::UNPROCESSABLE_ENTITY, // 422
-        StatusCode::TOO_MANY_REQUESTS,    // 429
+        StatusCode::BAD_REQUEST,
+        StatusCode::FORBIDDEN,
+        StatusCode::NOT_FOUND,
+        StatusCode::METHOD_NOT_ALLOWED,
+        StatusCode::CONFLICT,
+        StatusCode::UNPROCESSABLE_ENTITY,
+        StatusCode::TOO_MANY_REQUESTS,
     ];
 
     for status in test_cases {
         let mut pool = create_test_upstream_pool();
-
-        // Verify outcome is Neutral
-        let outcome = outcome_from_status(status);
-        assert!(
-            matches!(outcome, HealthClassification::Neutral),
-            "Status {} should be Neutral, got {:?}",
-            status,
-            outcome
-        );
-
-        // Verify no health state transition
+        assert_status_classification(status, HealthClassification::Neutral);
         let transition = pool.mark_backend_healthy(backend_index);
-        // This is intentionally NOT called; we verify that 4xx doesn't trigger health change
-        // The test verifies outcome classification, not the caller's behavior
         assert!(
             transition.is_none(),
-            "Backend should still be healthy after mark_success on fresh pool"
+            "neutral classifications must not produce a health transition on a healthy backend"
         );
+        assert_backend_is_healthy(&pool, backend_index, "4xx classifications");
     }
 }
 
-// ============================================================================
-// Test 2: Server Error (5xx) Marks Failure
-// ============================================================================
-
 #[test]
-fn test_5xx_response_marks_failure() {
+fn server_error_statuses_classify_as_failures_and_trip_the_unhealthy_threshold() {
     let backend_index = 0;
-
-    // All 5xx status codes should return Failure outcome
     let test_cases = vec![
-        StatusCode::INTERNAL_SERVER_ERROR, // 500
-        StatusCode::BAD_GATEWAY,           // 502
-        StatusCode::SERVICE_UNAVAILABLE,   // 503
-        StatusCode::GATEWAY_TIMEOUT,       // 504
+        StatusCode::INTERNAL_SERVER_ERROR,
+        StatusCode::BAD_GATEWAY,
+        StatusCode::SERVICE_UNAVAILABLE,
+        StatusCode::GATEWAY_TIMEOUT,
     ];
 
     for status in test_cases {
         let mut pool = create_test_upstream_pool();
-
-        // Verify outcome is Failure
-        let outcome = outcome_from_status(status);
-        assert!(
-            matches!(outcome, HealthClassification::Failure),
-            "Status {} should be Failure, got {:?}",
-            status,
-            outcome
-        );
-
-        // Simulate receiving the 5xx response (failure_threshold = 3)
-        // Need 3 failures to mark unhealthy
-        for i in 0..3 {
-            let transition = pool.mark_backend_failure_from_active_check(backend_index);
-            if i < 2 {
-                // First 2 failures don't cause transition
-                assert!(
-                    transition.is_none(),
-                    "Transition should be None for failure {}",
-                    i + 1
-                );
-            } else {
-                // 3rd failure causes transition to unhealthy
-                assert!(
-                    matches!(transition, Some(HealthTransition::BecameUnhealthy)),
-                    "Backend should become unhealthy after {} failures",
-                    3
-                );
-            }
-        }
-
-        // Verify backend is now unhealthy
-        let healthy_indices = healthy_backend_indices(&pool);
-        assert!(
-            !healthy_indices.contains(&backend_index),
-            "Backend should be unhealthy after 5xx response"
-        );
+        assert_status_classification(status, HealthClassification::Failure);
+        assert_becomes_unhealthy_after_threshold(&mut pool, backend_index);
+        assert_backend_is_unhealthy(&pool, backend_index, "5xx classifications");
     }
 }
 
-// ============================================================================
-// Test 3: Successful Response (2xx/3xx) Marks Success
-// ============================================================================
-
 #[test]
-fn test_2xx_3xx_response_marks_success() {
+fn success_statuses_keep_healthy_backends_healthy() {
     let test_cases = vec![
-        StatusCode::OK,                // 200
-        StatusCode::CREATED,           // 201
-        StatusCode::ACCEPTED,          // 202
-        StatusCode::NO_CONTENT,        // 204
-        StatusCode::MOVED_PERMANENTLY, // 301
-        StatusCode::FOUND,             // 302
-        StatusCode::NOT_MODIFIED,      // 304
+        StatusCode::OK,
+        StatusCode::CREATED,
+        StatusCode::ACCEPTED,
+        StatusCode::NO_CONTENT,
+        StatusCode::MOVED_PERMANENTLY,
+        StatusCode::FOUND,
+        StatusCode::NOT_MODIFIED,
     ];
 
     for status in test_cases {
         let mut pool = create_test_upstream_pool();
         let backend_index = 0;
 
-        // Verify outcome is Success
-        let outcome = outcome_from_status(status);
-        assert!(
-            matches!(outcome, HealthClassification::Success),
-            "Status {} should be Success, got {:?}",
-            status,
-            outcome
-        );
-
-        // Mark the response as success
+        assert_status_classification(status, HealthClassification::Success);
         let transition = pool.mark_backend_healthy(backend_index);
-        // Healthy backend receiving success: no transition
         assert!(
             transition.is_none(),
-            "Healthy backend receiving success should not transition"
+            "success classifications must not transition an already healthy backend"
         );
-
-        // Verify backend stays healthy
-        let healthy_indices = healthy_backend_indices(&pool);
-        assert!(
-            healthy_indices.contains(&backend_index),
-            "Backend should remain healthy after 2xx/3xx response"
-        );
+        assert_backend_is_healthy(&pool, backend_index, "2xx/3xx classifications");
     }
 }
 
 #[test]
-fn test_2xx_response_recovers_failed_backend() {
+fn successive_successes_recover_an_unhealthy_backend() {
     let mut pool = create_test_upstream_pool();
     let backend_index = 0;
 
-    // Mark backend as failed (3 consecutive failures)
-    for _ in 0..3 {
-        let _ = pool.mark_backend_failure_from_active_check(backend_index);
-    }
+    assert_becomes_unhealthy_after_threshold(&mut pool, backend_index);
+    assert_backend_is_unhealthy(&pool, backend_index, "after failure threshold");
 
-    // Verify backend is unhealthy
-    let healthy_indices = healthy_backend_indices(&pool);
-    assert!(
-        !healthy_indices.contains(&backend_index),
-        "Backend should be unhealthy after failures"
-    );
-
-    // Now simulate receiving 2xx responses (success_threshold = 2)
     for i in 0..2 {
         let transition = pool.mark_backend_healthy(backend_index);
         if i < 1 {
-            // First success doesn't cause transition (within cooldown)
             assert!(
                 transition.is_none(),
-                "First success shouldn't transition yet"
+                "the first success should not recover the backend before the success threshold"
             );
-        } else {
-            // Second success causes transition to healthy (after cooldown expires)
-            // Note: This test assumes cooldown has passed; in real code, time check happens
-            // For testing, we're verifying the success counting logic
         }
     }
 }
 
-// ============================================================================
-// Test 4: Bridge Error Does Not Change Health
-// ============================================================================
-
 #[test]
-fn test_bridge_error_does_not_change_health() {
+fn bridge_errors_leave_backend_health_unchanged() {
     let mut pool = create_test_upstream_pool();
     let backend_index = 0;
 
-    // Bridge errors represent local proxy issues (invalid request, encoding error, etc.)
-    // They should NOT affect backend health state
-    // Verify initial state is healthy
-    let healthy_indices = healthy_backend_indices(&pool);
-    assert!(
-        healthy_indices.contains(&backend_index),
-        "Backend should start healthy"
-    );
+    assert_backend_is_healthy(&pool, backend_index, "fresh backend");
 
-    // Simulate Bridge error (no health transition should occur)
-    // In real code, this is handled by: Err(ProxyError::Bridge(_)) => no mark_success/mark_failure
     let transition = pool.mark_backend_healthy(backend_index);
     assert!(
         transition.is_none(),
-        "Bridge error should not cause health transition"
+        "bridge-local failures must not change backend health"
     );
-
-    // Verify backend health unchanged
-    let healthy_indices = healthy_backend_indices(&pool);
-    assert!(
-        healthy_indices.contains(&backend_index),
-        "Backend health should be unchanged after Bridge error"
-    );
+    assert_backend_is_healthy(&pool, backend_index, "bridge errors");
 }
 
-// ============================================================================
-// Test 5: Transport Error Marks Failure
-// ============================================================================
-
 #[test]
-fn test_transport_error_marks_failure() {
+fn transport_errors_mark_backends_unhealthy_after_the_failure_threshold() {
     let mut pool = create_test_upstream_pool();
     let backend_index = 0;
 
-    // Transport errors represent backend connectivity issues (connection refused, host unreachable, etc.)
-    // They SHOULD mark backend as failed
-    // Simulate 3 transport errors to cross failure threshold
-    for i in 0..3 {
-        let transition = pool.mark_backend_failure_from_active_check(backend_index);
-        if i < 2 {
-            assert!(
-                transition.is_none(),
-                "Failure {} should not transition yet",
-                i + 1
-            );
-        } else {
-            assert!(
-                matches!(transition, Some(HealthTransition::BecameUnhealthy)),
-                "Transport error should mark backend unhealthy after threshold"
-            );
-        }
-    }
-
-    // Verify backend is unhealthy
-    let healthy_indices = healthy_backend_indices(&pool);
-    assert!(
-        !healthy_indices.contains(&backend_index),
-        "Backend should be unhealthy after transport error"
-    );
+    assert_becomes_unhealthy_after_threshold(&mut pool, backend_index);
+    assert_backend_is_unhealthy(&pool, backend_index, "transport failures");
 }
 
-// ============================================================================
-// Test 6: Timeout Marks Failure
-// ============================================================================
-
 #[test]
-fn test_timeout_marks_failure() {
+fn timeout_failures_mark_backends_unhealthy_after_the_failure_threshold() {
     let mut pool = create_test_upstream_pool();
     let backend_index = 0;
 
-    // Timeouts represent slow/hung backends
-    // They SHOULD mark backend as failed
-    // Simulate 3 timeouts to cross failure threshold
-    for i in 0..3 {
-        let transition = pool.mark_backend_failure_from_active_check(backend_index);
-        if i < 2 {
-            assert!(
-                transition.is_none(),
-                "Timeout {} should not transition yet",
-                i + 1
-            );
-        } else {
-            assert!(
-                matches!(transition, Some(HealthTransition::BecameUnhealthy)),
-                "Timeout should mark backend unhealthy after threshold"
-            );
-        }
-    }
-
-    // Verify backend is unhealthy
-    let healthy_indices = healthy_backend_indices(&pool);
-    assert!(
-        !healthy_indices.contains(&backend_index),
-        "Backend should be unhealthy after timeout"
-    );
+    assert_becomes_unhealthy_after_threshold(&mut pool, backend_index);
+    assert_backend_is_unhealthy(&pool, backend_index, "timeout failures");
 }
 
-// ============================================================================
-// Test 7: TLS Error Does Not Change Health
-// ============================================================================
-
 #[test]
-fn test_tls_error_does_not_change_health() {
+fn tls_failures_leave_backend_health_unchanged() {
     let mut pool = create_test_upstream_pool();
     let backend_index = 0;
 
-    // TLS errors represent server misconfiguration (bad cert, verification failure, etc.)
-    // They should NOT affect backend health state
-    // This is different from Transport errors which indicate unavailability
+    assert_backend_is_healthy(&pool, backend_index, "fresh backend");
 
-    // Verify initial state is healthy
-    let healthy_indices = healthy_backend_indices(&pool);
-    assert!(
-        healthy_indices.contains(&backend_index),
-        "Backend should start healthy"
-    );
-
-    // Simulate TLS error (no health transition should occur)
-    // In real code, this is handled by: Err(ProxyError::Tls(_)) => no mark_success/mark_failure
     let transition = pool.mark_backend_healthy(backend_index);
     assert!(
         transition.is_none(),
-        "TLS error should not cause health transition"
+        "tls-local failures must not change backend health"
     );
-
-    // Verify backend health unchanged
-    let healthy_indices = healthy_backend_indices(&pool);
-    assert!(
-        healthy_indices.contains(&backend_index),
-        "Backend health should be unchanged after TLS error"
-    );
+    assert_backend_is_healthy(&pool, backend_index, "tls failures");
 }
 
-// ============================================================================
-// Integration Test: Mixed Scenarios
-// ============================================================================
-
 #[test]
-fn test_mixed_error_and_success_responses() {
+fn mixed_success_failure_and_neutral_observations_preserve_the_expected_health_state() {
     let mut pool = create_test_upstream_pool();
     let backend_index = 0;
 
-    // Scenario: Backend receives mixed responses
-    // 1. 200 OK -> stays healthy
     let transition = pool.mark_backend_healthy(backend_index);
     assert!(
         transition.is_none(),
-        "200 OK should not transition healthy backend"
+        "a success response must not transition an already healthy backend"
     );
 
-    // 2. 5xx -> trigger failure threshold (3 failures needed)
-    let _ = pool.mark_backend_failure_from_active_check(backend_index);
-    let _ = pool.mark_backend_failure_from_active_check(backend_index);
-    let transition = pool.mark_backend_failure_from_active_check(backend_index);
-    assert!(
-        matches!(transition, Some(HealthTransition::BecameUnhealthy)),
-        "Backend should be unhealthy after 3 failures"
-    );
+    assert_becomes_unhealthy_after_threshold(&mut pool, backend_index);
 
-    // 3. 4xx -> doesn't affect health (neutral)
-    let outcome = outcome_from_status(StatusCode::BAD_REQUEST);
-    assert!(
-        matches!(outcome, HealthClassification::Neutral),
-        "4xx should be neutral"
-    );
-
-    // Verify backend is still unhealthy
-    let healthy_indices = healthy_backend_indices(&pool);
-    assert!(
-        !healthy_indices.contains(&backend_index),
-        "Backend should still be unhealthy"
-    );
+    assert_status_classification(StatusCode::BAD_REQUEST, HealthClassification::Neutral);
+    assert_backend_is_unhealthy(&pool, backend_index, "mixed observations");
 }
 
-// ============================================================================
-// Classification Behavior Test
-// ============================================================================
-
 #[test]
-fn test_health_classification_coverage() {
-    // Verify all 3xx, 4xx, 5xx, 2xx codes map correctly
-
-    // 2xx -> Success
+fn status_code_families_map_to_the_expected_health_classifications() {
     for code in [200, 201, 202, 203, 204, 206] {
         let status = StatusCode::from_u16(code).unwrap();
-        assert!(
-            matches!(outcome_from_status(status), HealthClassification::Success),
-            "Status {} should be Success",
-            code
-        );
+        assert_status_classification(status, HealthClassification::Success);
     }
 
-    // 3xx -> Success
     for code in [300, 301, 302, 303, 304, 307, 308] {
         let status = StatusCode::from_u16(code).unwrap();
-        assert!(
-            matches!(outcome_from_status(status), HealthClassification::Success),
-            "Status {} should be Success",
-            code
-        );
+        assert_status_classification(status, HealthClassification::Success);
     }
 
-    // 4xx -> Neutral
     for code in [400, 401, 403, 404, 405, 409, 422, 429] {
         let status = StatusCode::from_u16(code).unwrap();
-        assert!(
-            matches!(outcome_from_status(status), HealthClassification::Neutral),
-            "Status {} should be Neutral",
-            code
-        );
+        assert_status_classification(status, HealthClassification::Neutral);
     }
 
-    // 5xx -> Failure
     for code in [500, 501, 502, 503, 504, 505] {
         let status = StatusCode::from_u16(code).unwrap();
-        assert!(
-            matches!(outcome_from_status(status), HealthClassification::Failure),
-            "Status {} should be Failure",
-            code
-        );
+        assert_status_classification(status, HealthClassification::Failure);
     }
 }

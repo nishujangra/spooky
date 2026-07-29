@@ -8,7 +8,7 @@ use spooky_lb::load_balancing::LoadBalancing;
 use common::pool;
 
 #[test]
-fn supported_strategy_names_normalize_through_the_canonical_facade() {
+fn load_balancing_facade_normalizes_supported_strategy_names() {
     assert!(LoadBalancing::from_config("round-robin").is_ok());
     assert!(LoadBalancing::from_config("consistent-hash").is_ok());
     assert!(LoadBalancing::from_config("random").is_ok());
@@ -19,7 +19,7 @@ fn supported_strategy_names_normalize_through_the_canonical_facade() {
 }
 
 #[test]
-fn round_robin_sequences_across_healthy_backends() {
+fn round_robin_cycles_across_healthy_backends() {
     let mut pool = pool("round-robin", 3);
 
     let picks: Vec<_> = (0..6)
@@ -33,7 +33,7 @@ fn round_robin_sequences_across_healthy_backends() {
 }
 
 #[test]
-fn round_robin_repeated_picks_keep_alternating_across_backends() {
+fn round_robin_keeps_alternating_when_request_keys_vary() {
     let mut pool = pool("round-robin", 2);
 
     let keys = [
@@ -55,7 +55,7 @@ fn round_robin_repeated_picks_keep_alternating_across_backends() {
 }
 
 #[test]
-fn random_selection_stays_within_healthy_membership() {
+fn random_strategy_only_selects_healthy_membership() {
     let mut pool = pool("random", 3);
     let _ = pool.mark_backend_failure_from_active_check(0);
 
@@ -70,7 +70,7 @@ fn random_selection_stays_within_healthy_membership() {
 }
 
 #[test]
-fn consistent_hash_is_sticky_while_membership_is_stable() {
+fn consistent_hash_remains_sticky_while_membership_is_stable() {
     let mut pool = pool("consistent-hash", 3);
 
     let first = pool
@@ -90,7 +90,7 @@ fn consistent_hash_is_sticky_while_membership_is_stable() {
 }
 
 #[test]
-fn least_connections_prefers_the_backend_with_fewer_active_requests() {
+fn least_connections_prefers_the_backend_with_fewer_inflight_requests() {
     let mut pool = pool("least-connections", 3);
     pool.begin_request_for_accounting(0);
     pool.begin_request_for_accounting(0);
@@ -104,7 +104,7 @@ fn least_connections_prefers_the_backend_with_fewer_active_requests() {
 }
 
 #[test]
-fn latency_aware_prefers_the_backend_with_lower_latency() {
+fn latency_aware_prefers_the_backend_with_lower_observed_latency() {
     let mut pool = pool("latency-aware", 2);
     pool.finish_request(0, Duration::from_millis(150), Some(200));
     pool.finish_request(1, Duration::from_millis(20), Some(200));
@@ -117,7 +117,7 @@ fn latency_aware_prefers_the_backend_with_lower_latency() {
 }
 
 #[test]
-fn strategies_return_none_when_all_backends_are_unhealthy() {
+fn strategies_return_no_backend_when_every_backend_is_unhealthy() {
     for strategy in [
         "round-robin",
         "random",

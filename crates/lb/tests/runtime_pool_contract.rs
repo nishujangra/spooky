@@ -10,7 +10,7 @@ use spooky_lb::upstream_pool::UpstreamPool;
 use common::{runtime_upstream, weighted_backend};
 
 #[test]
-fn runtime_upstream_builds_a_pool_with_canonical_lb_contract() {
+fn runtime_upstream_lowers_into_a_pool_with_canonical_lb_contract() {
     let health_check = HealthCheck {
         path: "/health".to_string(),
         interval: 5000,
