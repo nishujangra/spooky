@@ -1,12 +1,12 @@
 use std::{
     collections::HashMap,
     convert::Infallible,
+    net::SocketAddr,
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     thread,
-    net::SocketAddr,
     time::{Duration, Instant},
 };
 
@@ -15,13 +15,14 @@ use http_body_util::Full;
 use hyper::{Response, body::Incoming};
 use serial_test::serial;
 use spooky_config::config::{Backend, HealthCheck, LoadBalancing, RouteMatch, Upstream};
-use spooky_edge::runtime::backend::event::BackendRefreshOutcome;
-use spooky_edge::runtime::backend::state::BackendHealthState;
+use spooky_edge::runtime::backend::{event::BackendRefreshOutcome, state::BackendHealthState};
 
 mod support;
 
 use support::{
-    backend_lifecycle::{BackendLifecycleHarness, ForcedBackendRefresh, alternate_loopback_backend_addrs},
+    backend_lifecycle::{
+        BackendLifecycleHarness, ForcedBackendRefresh, alternate_loopback_backend_addrs,
+    },
     net::local_listener_bind_available,
     request_path::{H3RequestSpec, reserve_unused_udp_port},
 };
@@ -64,11 +65,13 @@ fn start_hostname_swap_backends(
         let port = reserve_unused_udp_port();
         let (backend_a_bind, backend_b_bind) = alternate_loopback_backend_addrs(port);
 
-        let Ok(backend_a_addr) = harness.try_start_h1_static_backend_at(backend_a_bind, b"backend-a")
+        let Ok(backend_a_addr) =
+            harness.try_start_h1_static_backend_at(backend_a_bind, b"backend-a")
         else {
             continue;
         };
-        let Ok(backend_b_addr) = harness.try_start_h1_static_backend_at(backend_b_bind, b"backend-b")
+        let Ok(backend_b_addr) =
+            harness.try_start_h1_static_backend_at(backend_b_bind, b"backend-b")
         else {
             continue;
         };
@@ -216,7 +219,10 @@ fn dns_refresh_with_changed_backend_addresses_moves_requests_and_updates_invento
             result,
             client_rotation,
         } => {
-            assert!(client_rotation.rotated(), "seed refresh should rotate the backend client");
+            assert!(
+                client_rotation.rotated(),
+                "seed refresh should rotate the backend client"
+            );
             match result.outcome {
                 BackendRefreshOutcome::Updated {
                     current_addrs,
@@ -246,7 +252,10 @@ fn dns_refresh_with_changed_backend_addresses_moves_requests_and_updates_invento
             result,
             client_rotation,
         } => {
-            assert!(client_rotation.rotated(), "address change should rotate the backend client");
+            assert!(
+                client_rotation.rotated(),
+                "address change should rotate the backend client"
+            );
             match result.outcome {
                 BackendRefreshOutcome::Updated {
                     previous_addrs,
@@ -647,12 +656,10 @@ fn active_health_recovery_restores_backend_availability() {
 
     let backend_identity = backend_identity(backend_addr);
     assert!(
-        wait_for_backend_health_state(
-            &harness,
-            &backend_identity,
-            1,
-            |health| !matches!(health, BackendHealthState::Unhealthy { .. }),
-        ),
+        wait_for_backend_health_state(&harness, &backend_identity, 1, |health| !matches!(
+            health,
+            BackendHealthState::Unhealthy { .. }
+        ),),
         "backend should start available before active health transitions run"
     );
 
@@ -664,12 +671,7 @@ fn active_health_recovery_restores_backend_availability() {
 
     backend_fixture.set_failing(true);
     assert!(
-        wait_for_backend_health_state(
-            &harness,
-            &backend_identity,
-            0,
-            |_| true,
-        ),
+        wait_for_backend_health_state(&harness, &backend_identity, 0, |_| true,),
         "active health checks should mark the backend unhealthy after it begins failing"
     );
 
@@ -684,12 +686,10 @@ fn active_health_recovery_restores_backend_availability() {
 
     backend_fixture.set_failing(false);
     assert!(
-        wait_for_backend_health_state(
-            &harness,
-            &backend_identity,
-            1,
-            |health| !matches!(health, BackendHealthState::Unhealthy { .. }),
-        ),
+        wait_for_backend_health_state(&harness, &backend_identity, 1, |health| !matches!(
+            health,
+            BackendHealthState::Unhealthy { .. }
+        ),),
         "active health checks should restore backend availability after recovery"
     );
 
@@ -707,7 +707,10 @@ fn active_health_recovery_restores_backend_availability() {
         .expect("backend snapshot lookup")
         .expect("backend lifecycle snapshot");
     assert!(
-        !matches!(recovered_snapshot.health, BackendHealthState::Unhealthy { .. }),
+        !matches!(
+            recovered_snapshot.health,
+            BackendHealthState::Unhealthy { .. }
+        ),
         "lifecycle snapshot should no longer report the backend as unhealthy after recovery"
     );
 

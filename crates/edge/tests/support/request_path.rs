@@ -1480,8 +1480,7 @@ fn reserve_unused_listener_port() -> u16 {
 }
 
 fn bind_tcp_listener() -> TcpListener {
-    bind_tcp_listener_at(SocketAddr::from(([127, 0, 0, 1], 0)))
-        .expect("bind test backend listener")
+    bind_tcp_listener_at(SocketAddr::from(([127, 0, 0, 1], 0))).expect("bind test backend listener")
 }
 
 fn bind_tcp_listener_at(bind_addr: SocketAddr) -> Result<TcpListener, String> {
@@ -1490,9 +1489,8 @@ fn bind_tcp_listener_at(bind_addr: SocketAddr) -> Result<TcpListener, String> {
     listener
         .set_nonblocking(true)
         .expect("set test backend listener nonblocking");
-    TcpListener::from_std(listener).map_err(|err| {
-        format!("register test backend listener {bind_addr}: {err}")
-    })
+    TcpListener::from_std(listener)
+        .map_err(|err| format!("register test backend listener {bind_addr}: {err}"))
 }
 
 fn quic_read_timeout(conn: &quiche::Connection) -> Duration {
