@@ -2,18 +2,13 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::default::{
-    auth_default_external_timeout_ms, get_default_load_balancing, get_default_version,
-    upstream_tls_default_strict_sni, upstream_tls_default_verify_certificates,
-};
-
 pub const CURRENT_CONFIG_VERSION: u32 = 1;
 pub const SUPPORTED_CONFIG_VERSIONS: &[u32] = &[CURRENT_CONFIG_VERSION];
 
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    #[serde(default = "get_default_version")] // Make version optional with default
+    #[serde(default = "Config::default_version")] // Make version optional with default
     pub version: u32,
 
     pub listen: Listen,
@@ -43,6 +38,12 @@ pub struct Config {
 
     #[serde(default)]
     pub security: Security,
+}
+
+impl Config {
+    fn default_version() -> u32 {
+        CURRENT_CONFIG_VERSION
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
@@ -135,23 +136,20 @@ pub struct ClientAuth {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct UpstreamTls {
-    #[serde(default = "upstream_tls_default_verify_certificates")]
     pub verify_certificates: bool,
-    #[serde(default = "upstream_tls_default_strict_sni")]
     pub strict_sni: bool,
-    #[serde(default)]
     pub ca_file: Option<String>,
-    #[serde(default)]
     pub ca_dir: Option<String>,
 }
 
 impl Default for UpstreamTls {
     fn default() -> Self {
         Self {
-            verify_certificates: upstream_tls_default_verify_certificates(),
-            strict_sni: upstream_tls_default_strict_sni(),
+            verify_certificates: true,
+            strict_sni: true,
             ca_file: None,
             ca_dir: None,
         }
@@ -161,7 +159,7 @@ impl Default for UpstreamTls {
 #[derive(Debug, Deserialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Upstream {
-    #[serde(default = "get_default_load_balancing")]
+    #[serde(default)]
     pub load_balancing: LoadBalancing,
 
     #[serde(default)]
@@ -215,7 +213,7 @@ pub enum ExternalAuth {
         request_headers: Vec<ExternalAuthRequestHeader>,
         #[serde(default)]
         response_header_allowlist: Vec<String>,
-        #[serde(default = "auth_default_external_timeout_ms")]
+        #[serde(default = "ExternalAuth::default_timeout_ms")]
         timeout_ms: u64,
         #[serde(default = "ExternalAuthFailureMode::default")]
         failure_mode: ExternalAuthFailureMode,
@@ -236,11 +234,17 @@ pub enum ExternalAuth {
         request_headers: Vec<ExternalAuthRequestHeader>,
         #[serde(default)]
         response_header_allowlist: Vec<String>,
-        #[serde(default = "auth_default_external_timeout_ms")]
+        #[serde(default = "ExternalAuth::default_timeout_ms")]
         timeout_ms: u64,
         #[serde(default = "ExternalAuthFailureMode::default")]
         failure_mode: ExternalAuthFailureMode,
     },
+}
+
+impl ExternalAuth {
+    fn default_timeout_ms() -> u64 {
+        1_000
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -396,7 +400,8 @@ impl Default for HealthCheck {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct LoadBalancing {
     #[serde(rename = "type")]
@@ -405,6 +410,15 @@ pub struct LoadBalancing {
     // Configurable key source for hash-based/sticky load balancing.
     #[serde(default)]
     pub key: Option<String>, // Examples: header:x-user-id, cookie:session_id, query:user_id
+}
+
+impl Default for LoadBalancing {
+    fn default() -> Self {
+        Self {
+            lb_type: "round-robin".to_string(),
+            key: None,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -1183,10 +1197,11 @@ impl Default for RoutingTransparency {
 #[cfg(test)]
 mod tests {
     use super::{
-        ApiKeyAuth, Config, ControlApi, ForwardedHeaderPolicy, JwtAuth, Listen, Log,
-        MetricsEndpoint, Performance, PrivilegeDrop, Resilience, RoutingTransparency, Tracing,
-        UpstreamHostPolicy, Watchdog,
+        ApiKeyAuth, Config, ControlApi, ExternalAuth, ForwardedHeaderPolicy, JwtAuth, Listen,
+        LoadBalancing, Log, MetricsEndpoint, Performance, PrivilegeDrop, Resilience,
+        RoutingTransparency, Tracing, UpstreamHostPolicy, UpstreamTls, Watchdog,
     };
+    use crate::config::CURRENT_CONFIG_VERSION;
 
     #[test]
     fn minimal_yaml_applies_documented_defaults() {
@@ -1441,5 +1456,24 @@ security:
             Watchdog::default().unhealthy_consecutive_windows
         );
         assert_eq!(super::ScopedRateLimit::default_idle_ttl_secs(), 300);
+    }
+
+    #[test]
+    fn remaining_type_owned_defaults_match_documented_contract() {
+        assert_eq!(Config::default_version(), CURRENT_CONFIG_VERSION);
+
+        let lb: LoadBalancing =
+            serde_yaml::from_str("{}").expect("empty lb config should parse via type default");
+        assert_eq!(lb.lb_type, LoadBalancing::default().lb_type);
+        assert_eq!(lb.key, LoadBalancing::default().key);
+
+        let upstream_tls: UpstreamTls =
+            serde_yaml::from_str("{}").expect("empty upstream tls config should parse");
+        assert!(upstream_tls.verify_certificates);
+        assert!(upstream_tls.strict_sni);
+        assert_eq!(upstream_tls.ca_file, None);
+        assert_eq!(upstream_tls.ca_dir, None);
+
+        assert_eq!(ExternalAuth::default_timeout_ms(), 1_000);
     }
 }
