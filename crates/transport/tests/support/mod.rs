@@ -24,6 +24,28 @@ enum TestServerProtocol {
     H2,
 }
 
+#[derive(Clone, Copy)]
+pub enum TransportTestProtocol {
+    Http1,
+    H2,
+}
+
+impl TransportTestProtocol {
+    fn server_protocol(self) -> TestServerProtocol {
+        match self {
+            Self::Http1 => TestServerProtocol::Http1,
+            Self::H2 => TestServerProtocol::H2,
+        }
+    }
+
+    pub fn runtime_kind(self) -> RuntimeBackendTransportKind {
+        match self {
+            Self::Http1 => RuntimeBackendTransportKind::Http1,
+            Self::H2 => RuntimeBackendTransportKind::H2,
+        }
+    }
+}
+
 pub struct ConcurrencyTracker {
     current: AtomicUsize,
     max: AtomicUsize,
@@ -71,6 +93,12 @@ pub fn request(uri: &str) -> Request<BoxBody<Bytes, std::convert::Infallible>> {
         .uri(uri)
         .body(Full::new(Bytes::new()).boxed())
         .expect("request")
+}
+
+pub fn request_to_backend(
+    backend: &str,
+) -> Request<BoxBody<Bytes, std::convert::Infallible>> {
+    request(&format!("http://{backend}/"))
 }
 
 pub fn reserve_unused_port() -> u16 {
@@ -125,10 +153,55 @@ pub fn build_single_backend_pool(
 pub async fn read_body(response: Response<Incoming>) -> Bytes {
     response
         .into_body()
-        .collect()
+    .collect()
         .await
         .expect("collect body")
         .to_bytes()
+}
+
+pub fn backend_address(port: u16) -> String {
+    format!("127.0.0.1:{port}")
+}
+
+pub async fn start_backend_server(
+    protocol: TransportTestProtocol,
+    body: &'static [u8],
+    delay: Duration,
+    tracker: Option<Arc<ConcurrencyTracker>>,
+) -> std::io::Result<String> {
+    let port = start_server(protocol.server_protocol(), body, delay, tracker).await?;
+    Ok(backend_address(port))
+}
+
+pub async fn start_backend_pool(
+    protocol: TransportTestProtocol,
+    body: &'static [u8],
+    delay: Duration,
+    tracker: Option<Arc<ConcurrencyTracker>>,
+    max_inflight: usize,
+    resolver: SharedDnsResolver,
+) -> std::io::Result<(String, UpstreamTransportPool)> {
+    let backend = start_backend_server(protocol, body, delay, tracker).await?;
+    let pool = build_single_backend_pool(
+        backend.clone(),
+        protocol.runtime_kind(),
+        max_inflight,
+        resolver,
+    );
+    Ok((backend, pool))
+}
+
+pub async fn start_shared_backend_pool(
+    protocol: TransportTestProtocol,
+    body: &'static [u8],
+    delay: Duration,
+    tracker: Option<Arc<ConcurrencyTracker>>,
+    max_inflight: usize,
+    resolver: SharedDnsResolver,
+) -> std::io::Result<(String, Arc<UpstreamTransportPool>)> {
+    let (backend, pool) =
+        start_backend_pool(protocol, body, delay, tracker, max_inflight, resolver).await?;
+    Ok((backend, Arc::new(pool)))
 }
 
 pub async fn start_h1_server(
@@ -136,7 +209,7 @@ pub async fn start_h1_server(
     delay: Duration,
     tracker: Option<Arc<ConcurrencyTracker>>,
 ) -> std::io::Result<u16> {
-    start_server(TestServerProtocol::Http1, body, delay, tracker).await
+    start_server(TransportTestProtocol::Http1.server_protocol(), body, delay, tracker).await
 }
 
 pub async fn start_h2_server(
@@ -144,7 +217,7 @@ pub async fn start_h2_server(
     delay: Duration,
     tracker: Option<Arc<ConcurrencyTracker>>,
 ) -> std::io::Result<u16> {
-    start_server(TestServerProtocol::H2, body, delay, tracker).await
+    start_server(TransportTestProtocol::H2.server_protocol(), body, delay, tracker).await
 }
 
 async fn start_server(

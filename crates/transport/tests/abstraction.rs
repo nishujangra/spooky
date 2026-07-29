@@ -19,9 +19,9 @@ use spooky_errors::{PoolError, ProxyError};
 use spooky_transport::{SharedDnsResolver, UpstreamTransportPool};
 
 use crate::support::{
-    ConcurrencyTracker, build_pool, build_pool_with_policy, connection_policy,
-    loopback_bind_restricted, read_body, request, reserve_unused_port, start_h1_server,
-    start_h2_server,
+    ConcurrencyTracker, TransportTestProtocol, build_pool, build_pool_with_policy,
+    connection_policy, loopback_bind_restricted, read_body, request, request_to_backend,
+    reserve_unused_port, start_backend_server, start_shared_backend_pool,
 };
 
 fn transport_test_config(http_backend: &str, https_backend: &str) -> Config {
@@ -110,42 +110,48 @@ fn runtime_upstream_interpretation_selects_protocol_without_caller_branching() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn transport_facade_executes_requests_without_protocol_specific_callers() {
-    let h1_port = match start_h1_server(b"h1", Duration::ZERO, None).await {
-        Ok(port) => port,
+    let h1_backend = match start_backend_server(
+        TransportTestProtocol::Http1,
+        b"h1",
+        Duration::ZERO,
+        None,
+    )
+    .await
+    {
+        Ok(backend) => backend,
         Err(err) if loopback_bind_restricted(&err) => return,
         Err(err) => panic!("failed to start h1 server: {err}"),
     };
-    let h2_port = match start_h2_server(b"h2", Duration::ZERO, None).await {
-        Ok(port) => port,
+    let h2_backend = match start_backend_server(
+        TransportTestProtocol::H2,
+        b"h2",
+        Duration::ZERO,
+        None,
+    )
+    .await
+    {
+        Ok(backend) => backend,
         Err(err) if loopback_bind_restricted(&err) => return,
         Err(err) => panic!("failed to start h2 server: {err}"),
     };
 
-    let h1_backend = "h1-backend".to_string();
-    let h2_backend = "h2-backend".to_string();
     let pool = build_pool(
         [
-            (h1_backend.clone(), RuntimeBackendTransportKind::Http1),
-            (h2_backend.clone(), RuntimeBackendTransportKind::H2),
+            (h1_backend.clone(), TransportTestProtocol::Http1.runtime_kind()),
+            (h2_backend.clone(), TransportTestProtocol::H2.runtime_kind()),
         ],
         4,
         SharedDnsResolver::new(),
     );
 
     let h1_response = pool
-        .send_backend_request(
-            &h1_backend,
-            request(&format!("http://127.0.0.1:{h1_port}/")),
-        )
+        .send_backend_request(&h1_backend, request_to_backend(&h1_backend))
         .await
         .expect("h1 response");
     assert_eq!(read_body(h1_response).await, Bytes::from_static(b"h1"));
 
     let h2_response = pool
-        .send_backend_request(
-            &h2_backend,
-            request(&format!("http://127.0.0.1:{h2_port}/")),
-        )
+        .send_backend_request(&h2_backend, request_to_backend(&h2_backend))
         .await
         .expect("h2 response");
     assert_eq!(read_body(h2_response).await, Bytes::from_static(b"h2"));
@@ -155,8 +161,14 @@ async fn transport_facade_executes_requests_without_protocol_specific_callers() 
 fn transport_facade_exposes_stable_rotation_contract_across_protocols() {
     let pool = build_pool(
         [
-            ("h1-backend".to_string(), RuntimeBackendTransportKind::Http1),
-            ("h2-backend".to_string(), RuntimeBackendTransportKind::H2),
+            (
+                "h1-backend".to_string(),
+                TransportTestProtocol::Http1.runtime_kind(),
+            ),
+            (
+                "h2-backend".to_string(),
+                TransportTestProtocol::H2.runtime_kind(),
+            ),
         ],
         4,
         SharedDnsResolver::new(),
@@ -190,7 +202,7 @@ fn transport_facade_exposes_stable_rotation_contract_across_protocols() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn transport_facade_maps_unknown_backend_send_failure_and_overload_consistently() {
     let unknown_pool = build_pool(
-        [("known".to_string(), RuntimeBackendTransportKind::Http1)],
+        [("known".to_string(), TransportTestProtocol::Http1.runtime_kind())],
         1,
         SharedDnsResolver::new(),
     );
@@ -204,7 +216,10 @@ async fn transport_facade_maps_unknown_backend_send_failure_and_overload_consist
     ));
 
     let failing_h1_pool = build_pool(
-        [("h1-fail".to_string(), RuntimeBackendTransportKind::Http1)],
+        [(
+            "h1-fail".to_string(),
+            TransportTestProtocol::Http1.runtime_kind(),
+        )],
         1,
         SharedDnsResolver::new(),
     );
@@ -216,7 +231,10 @@ async fn transport_facade_maps_unknown_backend_send_failure_and_overload_consist
     assert!(matches!(h1_err, ProxyError::Pool(PoolError::Send(_))));
 
     let failing_h2_pool = build_pool(
-        [("h2-fail".to_string(), RuntimeBackendTransportKind::H2)],
+        [(
+            "h2-fail".to_string(),
+            TransportTestProtocol::H2.runtime_kind(),
+        )],
         1,
         SharedDnsResolver::new(),
     );
@@ -228,40 +246,30 @@ async fn transport_facade_maps_unknown_backend_send_failure_and_overload_consist
     assert!(matches!(h2_err, ProxyError::Pool(PoolError::Send(_))));
 
     let h1_tracker = Arc::new(ConcurrencyTracker::new());
-    let h1_overload_port = match start_h1_server(
+    let (h1_backend, h1_overload_pool) = match start_shared_backend_pool(
+        TransportTestProtocol::Http1,
         b"h1",
         Duration::from_millis(50),
         Some(Arc::clone(&h1_tracker)),
+        1,
+        SharedDnsResolver::new(),
     )
     .await
     {
-        Ok(port) => port,
+        Ok(fixture) => fixture,
         Err(err) if loopback_bind_restricted(&err) => return,
         Err(err) => panic!("failed to start h1 overload server: {err}"),
     };
-    let h1_overload_pool = Arc::new(build_pool(
-        [(
-            "h1-overload".to_string(),
-            RuntimeBackendTransportKind::Http1,
-        )],
-        1,
-        SharedDnsResolver::new(),
-    ));
     let h1_task_pool = Arc::clone(&h1_overload_pool);
+    let h1_task_backend = h1_backend.clone();
     let h1_task = tokio::spawn(async move {
         h1_task_pool
-            .send_backend_request(
-                "h1-overload",
-                request(&format!("http://127.0.0.1:{h1_overload_port}/")),
-            )
+            .send_backend_request(&h1_task_backend, request_to_backend(&h1_task_backend))
             .await
     });
     tokio::time::sleep(Duration::from_millis(10)).await;
     let h1_overload = h1_overload_pool
-        .send_backend_request(
-            "h1-overload",
-            request(&format!("http://127.0.0.1:{h1_overload_port}/")),
-        )
+        .send_backend_request(&h1_backend, request_to_backend(&h1_backend))
         .await;
     assert!(matches!(
         h1_overload,
@@ -275,37 +283,30 @@ async fn transport_facade_maps_unknown_backend_send_failure_and_overload_consist
     );
 
     let h2_tracker = Arc::new(ConcurrencyTracker::new());
-    let h2_overload_port = match start_h2_server(
+    let (h2_backend, h2_overload_pool) = match start_shared_backend_pool(
+        TransportTestProtocol::H2,
         b"h2",
         Duration::from_millis(50),
         Some(Arc::clone(&h2_tracker)),
+        1,
+        SharedDnsResolver::new(),
     )
     .await
     {
-        Ok(port) => port,
+        Ok(fixture) => fixture,
         Err(err) if loopback_bind_restricted(&err) => return,
         Err(err) => panic!("failed to start h2 overload server: {err}"),
     };
-    let h2_overload_pool = Arc::new(build_pool(
-        [("h2-overload".to_string(), RuntimeBackendTransportKind::H2)],
-        1,
-        SharedDnsResolver::new(),
-    ));
     let h2_task_pool = Arc::clone(&h2_overload_pool);
+    let h2_task_backend = h2_backend.clone();
     let h2_task = tokio::spawn(async move {
         h2_task_pool
-            .send_backend_request(
-                "h2-overload",
-                request(&format!("http://127.0.0.1:{h2_overload_port}/")),
-            )
+            .send_backend_request(&h2_task_backend, request_to_backend(&h2_task_backend))
             .await
     });
     tokio::time::sleep(Duration::from_millis(10)).await;
     let h2_overload = h2_overload_pool
-        .send_backend_request(
-            "h2-overload",
-            request(&format!("http://127.0.0.1:{h2_overload_port}/")),
-        )
+        .send_backend_request(&h2_backend, request_to_backend(&h2_backend))
         .await;
     assert!(matches!(
         h2_overload,
@@ -321,13 +322,27 @@ async fn transport_facade_maps_unknown_backend_send_failure_and_overload_consist
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn transport_facade_maps_execution_timeouts_to_proxy_timeout_across_protocols() {
-    let h1_port = match start_h1_server(b"h1", Duration::from_millis(50), None).await {
-        Ok(port) => port,
+    let h1_backend = match start_backend_server(
+        TransportTestProtocol::Http1,
+        b"h1",
+        Duration::from_millis(50),
+        None,
+    )
+    .await
+    {
+        Ok(backend) => backend,
         Err(err) if loopback_bind_restricted(&err) => return,
         Err(err) => panic!("failed to start h1 timeout server: {err}"),
     };
-    let h2_port = match start_h2_server(b"h2", Duration::from_millis(50), None).await {
-        Ok(port) => port,
+    let h2_backend = match start_backend_server(
+        TransportTestProtocol::H2,
+        b"h2",
+        Duration::from_millis(50),
+        None,
+    )
+    .await
+    {
+        Ok(backend) => backend,
         Err(err) if loopback_bind_restricted(&err) => return,
         Err(err) => panic!("failed to start h2 timeout server: {err}"),
     };
@@ -339,27 +354,21 @@ async fn transport_facade_maps_execution_timeouts_to_proxy_timeout_across_protoc
 
     let pool = build_pool_with_policy(
         [
-            ("h1-timeout".to_string(), RuntimeBackendTransportKind::Http1),
-            ("h2-timeout".to_string(), RuntimeBackendTransportKind::H2),
+            (h1_backend.clone(), TransportTestProtocol::Http1.runtime_kind()),
+            (h2_backend.clone(), TransportTestProtocol::H2.runtime_kind()),
         ],
         timeout_policy,
         SharedDnsResolver::new(),
     );
 
     let h1_err = pool
-        .send_backend_request(
-            "h1-timeout",
-            request(&format!("http://127.0.0.1:{h1_port}/")),
-        )
+        .send_backend_request(&h1_backend, request_to_backend(&h1_backend))
         .await
         .expect_err("h1 execution should time out");
     assert!(matches!(h1_err, ProxyError::Timeout));
 
     let h2_err = pool
-        .send_backend_request(
-            "h2-timeout",
-            request(&format!("http://127.0.0.1:{h2_port}/")),
-        )
+        .send_backend_request(&h2_backend, request_to_backend(&h2_backend))
         .await
         .expect_err("h2 execution should time out");
     assert!(matches!(h2_err, ProxyError::Timeout));

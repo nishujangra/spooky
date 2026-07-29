@@ -4,34 +4,33 @@ mod support;
 
 use std::{sync::Arc, time::Duration};
 
-use spooky_config::runtime::RuntimeBackendTransportKind;
 use spooky_errors::{PoolError, ProxyError};
 use spooky_transport::SharedDnsResolver;
 
 use crate::support::{
-    ConcurrencyTracker, build_single_backend_pool, loopback_bind_restricted, request,
-    start_h1_server,
+    ConcurrencyTracker, TransportTestProtocol, build_single_backend_pool, loopback_bind_restricted,
+    request_to_backend, start_shared_backend_pool,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn http1_transport_enforces_per_backend_inflight_contract() {
     let tracker = Arc::new(ConcurrencyTracker::new());
-    let port =
-        match start_h1_server(b"ok", Duration::from_millis(50), Some(Arc::clone(&tracker))).await {
-            Ok(port) => port,
-            Err(err) if loopback_bind_restricted(&err) => return,
-            Err(err) => panic!("failed to start h1 test server: {err}"),
-        };
-    let backend = format!("127.0.0.1:{port}");
-
-    let pool = Arc::new(build_single_backend_pool(
-        backend.clone(),
-        RuntimeBackendTransportKind::Http1,
+    let (backend, pool) = match start_shared_backend_pool(
+        TransportTestProtocol::Http1,
+        b"ok",
+        Duration::from_millis(50),
+        Some(Arc::clone(&tracker)),
         1,
         SharedDnsResolver::new(),
-    ));
-    let req1 = request(&format!("http://{backend}/"));
-    let req2 = request(&format!("http://{backend}/"));
+    )
+    .await
+    {
+        Ok(fixture) => fixture,
+        Err(err) if loopback_bind_restricted(&err) => return,
+        Err(err) => panic!("failed to start h1 test server: {err}"),
+    };
+    let req1 = request_to_backend(&backend);
+    let req2 = request_to_backend(&backend);
 
     let pool1 = pool.clone();
     let backend1 = backend.clone();
@@ -64,11 +63,11 @@ async fn http1_transport_enforces_per_backend_inflight_contract() {
 async fn http1_transport_rejects_unknown_backend_at_facade_boundary() {
     let pool = build_single_backend_pool(
         "127.0.0.1:12345".to_string(),
-        RuntimeBackendTransportKind::Http1,
+        TransportTestProtocol::Http1.runtime_kind(),
         1,
         SharedDnsResolver::new(),
     );
-    let req = request("http://127.0.0.1:12345/");
+    let req = request_to_backend("127.0.0.1:12345");
 
     let err = pool
         .send_backend_request("127.0.0.1:9999", req)
@@ -85,21 +84,23 @@ async fn http1_transport_rejects_unknown_backend_at_facade_boundary() {
 #[tokio::test]
 async fn http1_transport_reports_backend_overload_when_inflight_is_exhausted() {
     let tracker = Arc::new(ConcurrencyTracker::new());
-    let port = match start_h1_server(b"ok", Duration::from_millis(50), Some(tracker)).await {
-        Ok(port) => port,
+    let (backend, pool) = match start_shared_backend_pool(
+        TransportTestProtocol::Http1,
+        b"ok",
+        Duration::from_millis(50),
+        Some(tracker),
+        1,
+        SharedDnsResolver::new(),
+    )
+    .await
+    {
+        Ok(fixture) => fixture,
         Err(err) if loopback_bind_restricted(&err) => return,
         Err(err) => panic!("failed to start h1 test server: {err}"),
     };
-    let backend = format!("127.0.0.1:{port}");
-    let pool = Arc::new(build_single_backend_pool(
-        backend.clone(),
-        RuntimeBackendTransportKind::Http1,
-        1,
-        SharedDnsResolver::new(),
-    ));
 
-    let req1 = request(&format!("http://{backend}/"));
-    let req2 = request(&format!("http://{backend}/"));
+    let req1 = request_to_backend(&backend);
+    let req2 = request_to_backend(&backend);
 
     let pool_task = Arc::clone(&pool);
     let backend_task = backend.clone();
@@ -120,7 +121,7 @@ async fn http1_transport_reports_backend_overload_when_inflight_is_exhausted() {
 fn http1_transport_rotation_contract_is_effective_for_known_backends_and_noop_for_missing_ones() {
     let pool = build_single_backend_pool(
         "127.0.0.1:12345".to_string(),
-        RuntimeBackendTransportKind::Http1,
+        TransportTestProtocol::Http1.runtime_kind(),
         1,
         SharedDnsResolver::new(),
     );
