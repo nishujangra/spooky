@@ -19,142 +19,6 @@ pub fn auth_default_external_timeout_ms() -> u64 {
     1_000
 }
 
-pub fn resilience_default_scoped_rate_limit_idle_ttl_secs() -> u64 {
-    300
-}
-
-pub fn resilience_default_adaptive_enabled() -> bool {
-    true
-}
-
-pub fn resilience_default_adaptive_min_limit() -> usize {
-    64
-}
-
-pub fn resilience_default_adaptive_decrease_step() -> usize {
-    16
-}
-
-pub fn resilience_default_adaptive_increase_step() -> usize {
-    16
-}
-
-pub fn resilience_default_adaptive_high_latency_ms() -> u64 {
-    500
-}
-
-pub fn resilience_default_route_queue_default_cap() -> usize {
-    512
-}
-
-pub fn resilience_default_route_queue_global_cap() -> usize {
-    2048
-}
-
-pub fn resilience_default_route_queue_shed_retry_after_seconds() -> u32 {
-    1
-}
-
-pub fn resilience_default_protocol_allow_0rtt() -> bool {
-    false
-}
-
-pub fn resilience_default_protocol_max_headers_count() -> usize {
-    128
-}
-
-pub fn resilience_default_protocol_max_headers_bytes() -> usize {
-    16 * 1024
-}
-
-pub fn resilience_default_protocol_enforce_authority_host_match() -> bool {
-    true
-}
-
-pub fn resilience_default_protocol_allow_connect() -> bool {
-    false
-}
-
-pub fn resilience_default_cb_enabled() -> bool {
-    true
-}
-
-pub fn resilience_default_cb_failure_threshold() -> u32 {
-    3
-}
-
-pub fn resilience_default_cb_open_ms() -> u64 {
-    30_000
-}
-
-pub fn resilience_default_cb_half_open_max_probes() -> u32 {
-    1
-}
-
-pub fn resilience_default_hedging_enabled() -> bool {
-    false
-}
-
-pub fn resilience_default_hedging_delay_ms() -> u64 {
-    100
-}
-
-pub fn resilience_default_retry_budget_enabled() -> bool {
-    true
-}
-
-pub fn resilience_default_retry_budget_ratio_percent() -> u8 {
-    10
-}
-
-pub fn resilience_default_brownout_enabled() -> bool {
-    true
-}
-
-pub fn resilience_default_brownout_trigger_inflight_percent() -> u8 {
-    90
-}
-
-pub fn resilience_default_brownout_recover_inflight_percent() -> u8 {
-    60
-}
-
-pub fn resilience_default_watchdog_enabled() -> bool {
-    false
-}
-
-pub fn resilience_default_watchdog_check_interval_ms() -> u64 {
-    1_000
-}
-
-pub fn resilience_default_watchdog_poll_stall_timeout_ms() -> u64 {
-    5_000
-}
-
-pub fn resilience_default_watchdog_timeout_error_rate_percent() -> u8 {
-    60
-}
-
-pub fn resilience_default_watchdog_min_requests_per_window() -> u64 {
-    20
-}
-
-pub fn resilience_default_watchdog_overload_inflight_percent() -> u8 {
-    95
-}
-
-pub fn resilience_default_watchdog_unhealthy_consecutive_windows() -> u32 {
-    3
-}
-
-pub fn resilience_default_watchdog_drain_grace_ms() -> u64 {
-    8_000
-}
-
-pub fn resilience_default_watchdog_restart_cooldown_ms() -> u64 {
-    120_000
-}
-
 pub fn upstream_tls_default_verify_certificates() -> bool {
     true
 }
@@ -184,6 +48,9 @@ mod tests {
         assert_eq!(ControlApi::default().port, 9902);
         assert_eq!(Tracing::default().sample_ratio, 1.0);
         assert!(RoutingTransparency::default().include_reason);
+        assert_eq!(crate::config::ScopedRateLimit::default_idle_ttl_secs(), 300);
+        assert_eq!(crate::config::Watchdog::default().check_interval_ms, 1_000);
+        assert_eq!(crate::config::Resilience::default().retry_budget.ratio_percent, 10);
     }
 
     #[test]
@@ -223,5 +90,17 @@ mod tests {
         assert!(!routing.enabled);
         assert!(!routing.expose_header);
         assert_eq!(routing.header_name, "x-spooky-route-decision");
+
+        let resilience = crate::config::Resilience::default();
+        assert_eq!(resilience.adaptive_admission.min_limit, 64);
+        assert_eq!(resilience.route_queue.default_cap, 512);
+        assert_eq!(resilience.protocol.max_headers_bytes, 16 * 1024);
+        assert_eq!(resilience.circuit_breaker.failure_threshold, 3);
+        assert_eq!(resilience.hedging.delay_ms, 100);
+        assert_eq!(resilience.brownout.recover_inflight_percent, 60);
+
+        let watchdog = crate::config::Watchdog::default();
+        assert_eq!(watchdog.poll_stall_timeout_ms, 5_000);
+        assert_eq!(watchdog.timeout_error_rate_percent, 60);
     }
 }

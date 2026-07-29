@@ -4,29 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::default::{
     auth_default_external_timeout_ms, get_default_load_balancing, get_default_version,
-    resilience_default_adaptive_decrease_step,
-    resilience_default_adaptive_enabled, resilience_default_adaptive_high_latency_ms,
-    resilience_default_adaptive_increase_step, resilience_default_adaptive_min_limit,
-    resilience_default_brownout_enabled, resilience_default_brownout_recover_inflight_percent,
-    resilience_default_brownout_trigger_inflight_percent, resilience_default_cb_enabled,
-    resilience_default_cb_failure_threshold, resilience_default_cb_half_open_max_probes,
-    resilience_default_cb_open_ms, resilience_default_hedging_delay_ms,
-    resilience_default_hedging_enabled, resilience_default_protocol_allow_0rtt,
-    resilience_default_protocol_allow_connect,
-    resilience_default_protocol_enforce_authority_host_match,
-    resilience_default_protocol_max_headers_bytes, resilience_default_protocol_max_headers_count,
-    resilience_default_retry_budget_enabled, resilience_default_retry_budget_ratio_percent,
-    resilience_default_route_queue_default_cap, resilience_default_route_queue_global_cap,
-    resilience_default_route_queue_shed_retry_after_seconds,
-    resilience_default_scoped_rate_limit_idle_ttl_secs,
-    resilience_default_watchdog_check_interval_ms, resilience_default_watchdog_drain_grace_ms,
-    resilience_default_watchdog_enabled, resilience_default_watchdog_min_requests_per_window,
-    resilience_default_watchdog_overload_inflight_percent,
-    resilience_default_watchdog_poll_stall_timeout_ms,
-    resilience_default_watchdog_restart_cooldown_ms,
-    resilience_default_watchdog_timeout_error_rate_percent,
-    resilience_default_watchdog_unhealthy_consecutive_windows, upstream_tls_default_strict_sni,
-    upstream_tls_default_verify_certificates,
+    upstream_tls_default_strict_sni, upstream_tls_default_verify_certificates,
 };
 
 pub const CURRENT_CONFIG_VERSION: u32 = 1;
@@ -657,19 +635,14 @@ pub struct Resilience {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct AdaptiveAdmission {
-    #[serde(default = "resilience_default_adaptive_enabled")]
     pub enabled: bool,
-    #[serde(default = "resilience_default_adaptive_min_limit")]
     pub min_limit: usize,
-    #[serde(default)]
     pub max_limit: Option<usize>,
-    #[serde(default = "resilience_default_adaptive_decrease_step")]
     pub decrease_step: usize,
-    #[serde(default = "resilience_default_adaptive_increase_step")]
     pub increase_step: usize,
-    #[serde(default = "resilience_default_adaptive_high_latency_ms")]
     pub high_latency_ms: u64,
 }
 
@@ -819,35 +792,32 @@ impl Resilience {
 impl Default for AdaptiveAdmission {
     fn default() -> Self {
         Self {
-            enabled: resilience_default_adaptive_enabled(),
-            min_limit: resilience_default_adaptive_min_limit(),
+            enabled: true,
+            min_limit: 64,
             max_limit: None,
-            decrease_step: resilience_default_adaptive_decrease_step(),
-            increase_step: resilience_default_adaptive_increase_step(),
-            high_latency_ms: resilience_default_adaptive_high_latency_ms(),
+            decrease_step: 16,
+            increase_step: 16,
+            high_latency_ms: 500,
         }
     }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct RouteQueue {
-    #[serde(default = "resilience_default_route_queue_default_cap")]
     pub default_cap: usize,
-    #[serde(default = "resilience_default_route_queue_global_cap")]
     pub global_cap: usize,
-    #[serde(default = "resilience_default_route_queue_shed_retry_after_seconds")]
     pub shed_retry_after_seconds: u32,
-    #[serde(default)]
     pub caps: HashMap<String, usize>,
 }
 
 impl Default for RouteQueue {
     fn default() -> Self {
         Self {
-            default_cap: resilience_default_route_queue_default_cap(),
-            global_cap: resilience_default_route_queue_global_cap(),
-            shed_retry_after_seconds: resilience_default_route_queue_shed_retry_after_seconds(),
+            default_cap: 512,
+            global_cap: 2048,
+            shed_retry_after_seconds: 1,
             caps: HashMap::new(),
         }
     }
@@ -873,45 +843,41 @@ pub struct ScopedRateLimit {
     pub key: Option<String>,
     #[serde(default)]
     pub route_allowlist: Vec<String>,
-    #[serde(default = "resilience_default_scoped_rate_limit_idle_ttl_secs")]
+    #[serde(default = "ScopedRateLimit::default_idle_ttl_secs")]
     pub idle_ttl_secs: u64,
 }
 
+impl ScopedRateLimit {
+    pub(crate) fn default_idle_ttl_secs() -> u64 {
+        300
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct ProtocolPolicy {
-    #[serde(default = "resilience_default_protocol_allow_0rtt")]
     pub allow_0rtt: bool,
-    #[serde(default = "resilience_default_protocol_allow_connect")]
     pub allow_connect: bool,
-    #[serde(default)]
     pub early_data_safe_methods: Vec<String>,
-    #[serde(default = "resilience_default_protocol_max_headers_count")]
     pub max_headers_count: usize,
-    #[serde(default = "resilience_default_protocol_max_headers_bytes")]
     pub max_headers_bytes: usize,
-    #[serde(default = "resilience_default_protocol_enforce_authority_host_match")]
     pub enforce_authority_host_match: bool,
-    #[serde(default)]
     pub allowed_methods: Vec<String>,
-    #[serde(default)]
     pub denied_path_prefixes: Vec<String>,
-    #[serde(default)]
     pub connect_allowed_ports: Vec<u16>,
-    #[serde(default)]
     pub connect_allowed_authorities: Vec<String>,
 }
 
 impl Default for ProtocolPolicy {
     fn default() -> Self {
         Self {
-            allow_0rtt: resilience_default_protocol_allow_0rtt(),
-            allow_connect: resilience_default_protocol_allow_connect(),
+            allow_0rtt: false,
+            allow_connect: false,
             early_data_safe_methods: vec!["GET".to_string(), "HEAD".to_string()],
-            max_headers_count: resilience_default_protocol_max_headers_count(),
-            max_headers_bytes: resilience_default_protocol_max_headers_bytes(),
-            enforce_authority_host_match: resilience_default_protocol_enforce_authority_host_match(
-            ),
+            max_headers_count: 128,
+            max_headers_bytes: 16 * 1024,
+            enforce_authority_host_match: true,
             allowed_methods: Vec::new(),
             denied_path_prefixes: Vec::new(),
             connect_allowed_ports: Vec::new(),
@@ -921,47 +887,41 @@ impl Default for ProtocolPolicy {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct CircuitBreaker {
-    #[serde(default = "resilience_default_cb_enabled")]
     pub enabled: bool,
-    #[serde(default = "resilience_default_cb_failure_threshold")]
     pub failure_threshold: u32,
-    #[serde(default = "resilience_default_cb_open_ms")]
     pub open_ms: u64,
-    #[serde(default = "resilience_default_cb_half_open_max_probes")]
     pub half_open_max_probes: u32,
 }
 
 impl Default for CircuitBreaker {
     fn default() -> Self {
         Self {
-            enabled: resilience_default_cb_enabled(),
-            failure_threshold: resilience_default_cb_failure_threshold(),
-            open_ms: resilience_default_cb_open_ms(),
-            half_open_max_probes: resilience_default_cb_half_open_max_probes(),
+            enabled: true,
+            failure_threshold: 3,
+            open_ms: 30_000,
+            half_open_max_probes: 1,
         }
     }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct Hedging {
-    #[serde(default = "resilience_default_hedging_enabled")]
     pub enabled: bool,
-    #[serde(default = "resilience_default_hedging_delay_ms")]
     pub delay_ms: u64,
-    #[serde(default)]
     pub safe_methods: Vec<String>,
-    #[serde(default)]
     pub route_allowlist: Vec<String>,
 }
 
 impl Default for Hedging {
     fn default() -> Self {
         Self {
-            enabled: resilience_default_hedging_enabled(),
-            delay_ms: resilience_default_hedging_delay_ms(),
+            enabled: false,
+            delay_ms: 100,
             safe_methods: vec!["GET".to_string(), "HEAD".to_string()],
             route_allowlist: Vec::new(),
         }
@@ -969,96 +929,80 @@ impl Default for Hedging {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct RetryBudget {
-    #[serde(default = "resilience_default_retry_budget_enabled")]
     pub enabled: bool,
-    #[serde(default = "resilience_default_retry_budget_ratio_percent")]
     pub ratio_percent: u8,
-    #[serde(default)]
     pub per_route_ratio_percent: HashMap<String, u8>,
 }
 
 impl Default for RetryBudget {
     fn default() -> Self {
         Self {
-            enabled: resilience_default_retry_budget_enabled(),
-            ratio_percent: resilience_default_retry_budget_ratio_percent(),
+            enabled: true,
+            ratio_percent: 10,
             per_route_ratio_percent: HashMap::new(),
         }
     }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct Brownout {
-    #[serde(default = "resilience_default_brownout_enabled")]
     pub enabled: bool,
-    #[serde(default = "resilience_default_brownout_trigger_inflight_percent")]
     pub trigger_inflight_percent: u8,
-    #[serde(default = "resilience_default_brownout_recover_inflight_percent")]
     pub recover_inflight_percent: u8,
-    #[serde(default)]
     pub core_routes: Vec<String>,
 }
 
 impl Default for Brownout {
     fn default() -> Self {
         Self {
-            enabled: resilience_default_brownout_enabled(),
-            trigger_inflight_percent: resilience_default_brownout_trigger_inflight_percent(),
-            recover_inflight_percent: resilience_default_brownout_recover_inflight_percent(),
+            enabled: true,
+            trigger_inflight_percent: 90,
+            recover_inflight_percent: 60,
             core_routes: Vec::new(),
         }
     }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct Watchdog {
-    #[serde(default = "resilience_default_watchdog_enabled")]
     pub enabled: bool,
-    #[serde(default = "resilience_default_watchdog_check_interval_ms")]
     pub check_interval_ms: u64,
-    #[serde(default = "resilience_default_watchdog_poll_stall_timeout_ms")]
     pub poll_stall_timeout_ms: u64,
-    #[serde(default = "resilience_default_watchdog_timeout_error_rate_percent")]
     pub timeout_error_rate_percent: u8,
-    #[serde(default = "resilience_default_watchdog_min_requests_per_window")]
     pub min_requests_per_window: u64,
-    #[serde(default = "resilience_default_watchdog_overload_inflight_percent")]
     pub overload_inflight_percent: u8,
-    #[serde(default = "resilience_default_watchdog_unhealthy_consecutive_windows")]
     pub unhealthy_consecutive_windows: u32,
-    #[serde(default = "resilience_default_watchdog_drain_grace_ms")]
     pub drain_grace_ms: u64,
-    #[serde(default = "resilience_default_watchdog_restart_cooldown_ms")]
     pub restart_cooldown_ms: u64,
 
     /// Structured restart hook command: first element is executable, rest are args.
     /// Preferred over `restart_hook` because it avoids shell evaluation.
-    #[serde(default)]
     pub restart_command: Vec<String>,
 
     /// Legacy shell command restart hook.
     /// Deprecated: use `restart_command` instead.
-    #[serde(default)]
     pub restart_hook: Option<String>,
 }
 
 impl Default for Watchdog {
     fn default() -> Self {
         Self {
-            enabled: resilience_default_watchdog_enabled(),
-            check_interval_ms: resilience_default_watchdog_check_interval_ms(),
-            poll_stall_timeout_ms: resilience_default_watchdog_poll_stall_timeout_ms(),
-            timeout_error_rate_percent: resilience_default_watchdog_timeout_error_rate_percent(),
-            min_requests_per_window: resilience_default_watchdog_min_requests_per_window(),
-            overload_inflight_percent: resilience_default_watchdog_overload_inflight_percent(),
-            unhealthy_consecutive_windows:
-                resilience_default_watchdog_unhealthy_consecutive_windows(),
-            drain_grace_ms: resilience_default_watchdog_drain_grace_ms(),
-            restart_cooldown_ms: resilience_default_watchdog_restart_cooldown_ms(),
+            enabled: false,
+            check_interval_ms: 1_000,
+            poll_stall_timeout_ms: 5_000,
+            timeout_error_rate_percent: 60,
+            min_requests_per_window: 20,
+            overload_inflight_percent: 95,
+            unhealthy_consecutive_windows: 3,
+            drain_grace_ms: 8_000,
+            restart_cooldown_ms: 120_000,
             restart_command: Vec::new(),
             restart_hook: None,
         }
@@ -1240,8 +1184,8 @@ impl Default for RoutingTransparency {
 mod tests {
     use super::{
         ApiKeyAuth, Config, ControlApi, ForwardedHeaderPolicy, JwtAuth, Listen, Log,
-        MetricsEndpoint, Performance, PrivilegeDrop, RoutingTransparency, Tracing,
-        UpstreamHostPolicy,
+        MetricsEndpoint, Performance, PrivilegeDrop, Resilience, RoutingTransparency, Tracing,
+        UpstreamHostPolicy, Watchdog,
     };
 
     #[test]
@@ -1450,5 +1394,52 @@ security:
             performance.unknown_length_response_prebuffer_bytes,
             Performance::default().unknown_length_response_prebuffer_bytes
         );
+    }
+
+    #[test]
+    fn serde_defaults_for_resilience_match_type_defaults() {
+        let resilience: Resilience =
+            serde_yaml::from_str("{}").expect("empty resilience config should parse");
+
+        assert_eq!(
+            resilience.adaptive_admission.enabled,
+            Resilience::default().adaptive_admission.enabled
+        );
+        assert_eq!(
+            resilience.route_queue.default_cap,
+            Resilience::default().route_queue.default_cap
+        );
+        assert_eq!(
+            resilience.protocol.max_headers_count,
+            Resilience::default().protocol.max_headers_count
+        );
+        assert_eq!(
+            resilience.hedging.delay_ms,
+            Resilience::default().hedging.delay_ms
+        );
+        assert_eq!(
+            resilience.retry_budget.ratio_percent,
+            Resilience::default().retry_budget.ratio_percent
+        );
+        assert_eq!(
+            resilience.brownout.trigger_inflight_percent,
+            Resilience::default().brownout.trigger_inflight_percent
+        );
+        assert_eq!(
+            resilience.watchdog.restart_cooldown_ms,
+            Resilience::default().watchdog.restart_cooldown_ms
+        );
+    }
+
+    #[test]
+    fn watchdog_and_scoped_rate_limit_local_defaults_remain_stable() {
+        let watchdog: Watchdog =
+            serde_yaml::from_str("{}").expect("empty watchdog should parse via type defaults");
+        assert_eq!(watchdog.enabled, Watchdog::default().enabled);
+        assert_eq!(
+            watchdog.unhealthy_consecutive_windows,
+            Watchdog::default().unhealthy_consecutive_windows
+        );
+        assert_eq!(super::ScopedRateLimit::default_idle_ttl_secs(), 300);
     }
 }
