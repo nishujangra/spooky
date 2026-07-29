@@ -47,9 +47,9 @@ impl Config {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct Security {
-    #[serde(default)]
     pub privileges: PrivilegeDrop,
 }
 
@@ -104,15 +104,12 @@ impl Default for Listen {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct Tls {
-    #[serde(default)]
     pub cert: String, // "/path/to/cert"
-    #[serde(default)]
     pub key: String, // "/path/to/key"
-    #[serde(default)]
     pub certificates: Vec<TlsCertificate>, // SNI keyed certificate set
-    #[serde(default)]
     pub client_auth: ClientAuth,
 }
 
@@ -125,13 +122,11 @@ pub struct TlsCertificate {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct ClientAuth {
-    #[serde(default)]
     pub enabled: bool,
-    #[serde(default)]
     pub require_client_cert: bool,
-    #[serde(default)]
     pub ca_file: Option<String>,
 }
 
@@ -182,17 +177,13 @@ pub struct Upstream {
 /// Upstream-scoped auth policy. External auth is a single-provider contract
 /// per upstream; there is no provider chaining.
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct RouteAuth {
-    #[serde(default)]
     pub api_key: Option<ApiKeyAuth>,
-    #[serde(default)]
     pub jwt: Option<JwtAuth>,
-    #[serde(default)]
     pub external_auth: Option<ExternalAuth>,
-    #[serde(default)]
     pub required_scopes: Vec<String>,
-    #[serde(default)]
     pub required_roles: Vec<String>,
 }
 
@@ -259,7 +250,6 @@ pub struct ExternalAuthRequestHeader {
 #[serde(deny_unknown_fields)]
 pub struct ApiKeyAuth {
     pub header_name: String,
-    #[serde(default)]
     pub keys: Vec<String>,
 }
 
@@ -277,9 +267,7 @@ impl Default for ApiKeyAuth {
 #[serde(deny_unknown_fields)]
 pub struct JwtAuth {
     pub secret: String,
-    #[serde(default)]
     pub issuer: Option<String>,
-    #[serde(default)]
     pub audience: Option<String>,
     pub clock_skew_secs: u64,
 }
@@ -358,15 +346,13 @@ impl Backend {
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct RouteMatch {
-    #[serde(default)]
     pub host: Option<String>, // host-based routing (e.g., "api.example.com")
 
-    #[serde(default)]
     pub path_prefix: Option<String>, // path prefix matching (e.g., "/api")
 
-    #[serde(default)]
     pub method: Option<String>, // Optional HTTP method filtering (GET, POST, etc.)
 }
 
@@ -408,7 +394,6 @@ pub struct LoadBalancing {
     pub lb_type: String, // "random","round_robin","consistent_hash","least_connections","latency_aware","sticky_cid"
 
     // Configurable key source for hash-based/sticky load balancing.
-    #[serde(default)]
     pub key: Option<String>, // Examples: header:x-user-id, cookie:session_id, query:user_id
 }
 
@@ -626,25 +611,17 @@ impl Default for Performance {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct Resilience {
-    #[serde(default)]
     pub adaptive_admission: AdaptiveAdmission,
-    #[serde(default)]
     pub route_queue: RouteQueue,
-    #[serde(default)]
     pub scoped_rate_limits: Vec<ScopedRateLimit>,
-    #[serde(default)]
     pub protocol: ProtocolPolicy,
-    #[serde(default)]
     pub circuit_breaker: CircuitBreaker,
-    #[serde(default)]
     pub hedging: Hedging,
-    #[serde(default)]
     pub retry_budget: RetryBudget,
-    #[serde(default)]
     pub brownout: Brownout,
-    #[serde(default)]
     pub watchdog: Watchdog,
 }
 
@@ -1024,15 +1001,12 @@ impl Default for Watchdog {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct Observability {
-    #[serde(default)]
     pub metrics: MetricsEndpoint,
-    #[serde(default)]
     pub control_api: ControlApi,
-    #[serde(default)]
     pub tracing: Tracing,
-    #[serde(default)]
     pub routing: RoutingTransparency,
 }
 
@@ -1097,7 +1071,7 @@ pub struct ControlApi {
 
     // Admin credential: never emitted by Serialize (e.g. the /admin/runtime
     // dump) and redacted in Debug; still accepted on deserialize.
-    #[serde(default, skip_serializing)]
+    #[serde(skip_serializing)]
     pub auth_token: Option<String>,
 
     pub max_connections: usize,
@@ -1198,7 +1172,7 @@ impl Default for RoutingTransparency {
 mod tests {
     use super::{
         ApiKeyAuth, Config, ControlApi, ExternalAuth, ForwardedHeaderPolicy, JwtAuth, Listen,
-        LoadBalancing, Log, MetricsEndpoint, Performance, PrivilegeDrop, Resilience,
+        LoadBalancing, Log, MetricsEndpoint, Performance, PrivilegeDrop, Resilience, RouteAuth,
         RoutingTransparency, Tracing, UpstreamHostPolicy, UpstreamTls, Watchdog,
     };
     use crate::config::CURRENT_CONFIG_VERSION;
@@ -1475,5 +1449,40 @@ security:
         assert_eq!(upstream_tls.ca_dir, None);
 
         assert_eq!(ExternalAuth::default_timeout_ms(), 1_000);
+    }
+
+    #[test]
+    fn partial_struct_inputs_still_fill_missing_fields_from_type_defaults() {
+        let auth: ApiKeyAuth = serde_yaml::from_str(
+            r#"
+header_name: x-custom-key
+"#,
+        )
+        .expect("partial api key auth should parse");
+        assert_eq!(auth.header_name, "x-custom-key");
+        assert!(auth.keys.is_empty());
+
+        let control_api: ControlApi = serde_yaml::from_str(
+            r#"
+enabled: true
+"#,
+        )
+        .expect("partial control api should parse");
+        assert!(control_api.enabled);
+        assert_eq!(control_api.port, ControlApi::default().port);
+        assert_eq!(control_api.auth_token, None);
+
+        let route_auth: RouteAuth = serde_yaml::from_str(
+            r#"
+required_scopes:
+  - payments.read
+"#,
+        )
+        .expect("partial route auth should parse");
+        assert_eq!(route_auth.required_scopes, vec!["payments.read"]);
+        assert!(route_auth.required_roles.is_empty());
+        assert!(route_auth.api_key.is_none());
+        assert!(route_auth.jwt.is_none());
+        assert!(route_auth.external_auth.is_none());
     }
 }
