@@ -1,5 +1,15 @@
-use std::collections::HashMap;
+use std::{
+    collections::HashMap,
+    convert::Infallible,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+};
 
+use bytes::Bytes;
+use http_body_util::Full;
+use hyper::{Response, body::Incoming};
 use serial_test::serial;
 use spooky_edge::runtime::backend::event::BackendRefreshOutcome;
 
@@ -211,4 +221,126 @@ fn empty_dns_refresh_retains_previous_resolution_and_keeps_requests_flowing() {
         .expect("backend inventory entry");
     assert_eq!(backend.resolution.resolved_addrs, vec![backend_a_addr]);
     assert_eq!(backend.resolution.refresh_generation, 1);
+}
+
+#[test]
+#[serial]
+fn backend_refresh_rotates_transport_clients_without_leaving_stale_routing() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = BackendLifecycleHarness::new();
+    let Some((port, backend_a_bind, backend_b_bind)) = ({
+        let port = reserve_unused_udp_port();
+        let (a, b) = alternate_loopback_backend_addrs(port);
+        Some((port, a, b))
+    }) else {
+        return;
+    };
+
+    let backend_a_requests = Arc::new(AtomicUsize::new(0));
+    let backend_b_requests = Arc::new(AtomicUsize::new(0));
+
+    let backend_a_counter = Arc::clone(&backend_a_requests);
+    let backend_a_addr = harness
+        .try_start_h1_backend_at(backend_a_bind, move |_req: hyper::Request<Incoming>| {
+            let backend_a_counter = Arc::clone(&backend_a_counter);
+            async move {
+                backend_a_counter.fetch_add(1, Ordering::Relaxed);
+                Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(
+                    b"backend-a",
+                ))))
+            }
+        })
+        .ok();
+    let Some(backend_a_addr) = backend_a_addr else {
+        return;
+    };
+
+    let backend_b_counter = Arc::clone(&backend_b_requests);
+    let backend_b_addr = harness
+        .try_start_h1_backend_at(backend_b_bind, move |_req: hyper::Request<Incoming>| {
+            let backend_b_counter = Arc::clone(&backend_b_counter);
+            async move {
+                backend_b_counter.fetch_add(1, Ordering::Relaxed);
+                Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(
+                    b"backend-b",
+                ))))
+            }
+        })
+        .ok();
+    let Some(backend_b_addr) = backend_b_addr else {
+        return;
+    };
+
+    let route = harness.hostname_backend_route("backend.internal", port);
+    let config = harness.make_config(HashMap::from([("api".to_string(), route.upstream())]));
+    harness.start_listener(config).expect("listener");
+
+    harness
+        .force_hostname_refresh(&route.backend_addr, vec![backend_a_addr])
+        .expect("seed hostname refresh to backend A");
+
+    let before = harness
+        .run_request(H3RequestSpec::get("localhost", "/"))
+        .expect("request before refresh");
+    before.assert_status(200);
+    before.assert_body_text("backend-a");
+    assert_eq!(
+        backend_a_requests.load(Ordering::Relaxed),
+        1,
+        "initial request should be served by the original backend address"
+    );
+    assert_eq!(
+        backend_b_requests.load(Ordering::Relaxed),
+        0,
+        "replacement backend should not receive traffic before refresh"
+    );
+
+    let refreshed = harness
+        .force_hostname_refresh(&route.backend_addr, vec![backend_b_addr])
+        .expect("refresh hostname resolution to backend B");
+    match refreshed {
+        ForcedBackendRefresh::Updated { result, .. } => match result.outcome {
+            BackendRefreshOutcome::Updated {
+                previous_addrs,
+                current_addrs,
+                refresh_generation,
+                ..
+            } => {
+                assert_eq!(previous_addrs, vec![backend_a_addr]);
+                assert_eq!(current_addrs, vec![backend_b_addr]);
+                assert_eq!(refresh_generation, 2);
+            }
+            other => panic!("expected updated refresh outcome, got {other:?}"),
+        },
+        other => panic!("expected updated refresh result, got {other:?}"),
+    }
+
+    for _ in 0..3 {
+        let response = harness
+            .run_request(H3RequestSpec::get("localhost", "/"))
+            .expect("request after refresh");
+        response.assert_status(200);
+        response.assert_body_text("backend-b");
+    }
+
+    assert_eq!(
+        backend_a_requests.load(Ordering::Relaxed),
+        1,
+        "old backend address should stop serving traffic after refresh settles"
+    );
+    assert_eq!(
+        backend_b_requests.load(Ordering::Relaxed),
+        3,
+        "new backend address should begin serving all post-refresh traffic"
+    );
+
+    let backend = harness
+        .backend_snapshot(&route.backend_addr)
+        .expect("backend snapshot lookup")
+        .expect("backend lifecycle snapshot");
+    assert_eq!(backend.resolution.resolved_addrs, vec![backend_b_addr]);
+    assert_eq!(backend.resolution.refresh_generation, 2);
 }
