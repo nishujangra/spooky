@@ -243,6 +243,13 @@ impl RuntimeSwapHarness {
     }
 
     pub fn trigger_runtime_reload(&self) -> Result<JsonValue, String> {
+        self.trigger_runtime_reload_expect(StatusCode::ACCEPTED)
+    }
+
+    pub fn trigger_runtime_reload_expect(
+        &self,
+        expected_status: StatusCode,
+    ) -> Result<JsonValue, String> {
         let path = self
             .current_config
             .as_ref()
@@ -256,7 +263,7 @@ impl RuntimeSwapHarness {
             Method::POST,
             path,
             token,
-            StatusCode::ACCEPTED,
+            expected_status,
             Duration::from_secs(5),
         ))
     }
@@ -537,6 +544,19 @@ fn render_runtime_swap_config(config: &Config) -> Result<String, String> {
 
     writeln!(&mut yaml, "log:").map_err(|err| err.to_string())?;
     writeln!(&mut yaml, "  level: {}", yaml_scalar(&config.log.level)).map_err(|err| err.to_string())?;
+    writeln!(&mut yaml, "  file:").map_err(|err| err.to_string())?;
+    writeln!(
+        &mut yaml,
+        "    enabled: {}",
+        config.log.file.enabled
+    )
+    .map_err(|err| err.to_string())?;
+    writeln!(
+        &mut yaml,
+        "    path: \"{}\"",
+        config.log.file.path
+    )
+    .map_err(|err| err.to_string())?;
     writeln!(
         &mut yaml,
         "  format: {}",

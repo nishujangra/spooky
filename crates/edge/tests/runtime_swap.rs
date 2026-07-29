@@ -165,3 +165,133 @@ fn runtime_reload_swaps_generation_owned_backend_targets_without_changing_listen
         "startup-owned listener TLS identity should not change across generation-only reloads"
     );
 }
+
+#[test]
+#[serial]
+fn runtime_reload_rejects_listener_bind_change_and_keeps_active_generation_live() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = RuntimeSwapHarness::new();
+    let backend_addr = harness.start_h1_static_backend(b"bind-stable");
+    let config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        single_backend_upstream(backend_addr),
+    )]));
+
+    harness
+        .start_listener(config)
+        .expect("start runtime swap listener");
+
+    let before = harness
+        .run_request(H3RequestSpec::get("localhost", "/"))
+        .expect("request before bind-change reload");
+    before.assert_status(200);
+    before.assert_body_bytes(b"bind-stable");
+
+    let startup_snapshot = harness.runtime_snapshot().expect("startup runtime snapshot");
+    assert_eq!(startup_snapshot["runtime"]["generation"], 0);
+
+    harness
+        .rewrite_config(|config| {
+            config.listen.port = config.listen.port.saturating_add(1);
+        })
+        .expect("rewrite listener bind");
+
+    let rejection = harness
+        .trigger_runtime_reload_expect(http::StatusCode::CONFLICT)
+        .expect("reload rejection");
+    assert_eq!(rejection["reloaded"], false);
+    let error = rejection["error"]
+        .as_str()
+        .expect("reload rejection error string");
+    assert!(
+        error.contains("restart required"),
+        "listener bind change should be restart-required, got: {error}"
+    );
+    assert!(
+        error.contains("listener"),
+        "listener bind rejection should mention the listener, got: {error}"
+    );
+
+    let after_snapshot = harness.runtime_snapshot().expect("post-rejection runtime snapshot");
+    assert_eq!(
+        after_snapshot["runtime"]["generation"], 0,
+        "startup-owned rejection must leave the active generation unchanged"
+    );
+    assert_eq!(
+        after_snapshot["runtime"]["config_path"],
+        startup_snapshot["runtime"]["config_path"],
+        "config path should remain the same for a rejected same-path reload attempt"
+    );
+
+    let after = harness
+        .run_request(H3RequestSpec::get("localhost", "/"))
+        .expect("request after bind-change rejection");
+    after.assert_status(200);
+    after.assert_body_bytes(b"bind-stable");
+}
+
+#[test]
+#[serial]
+fn runtime_reload_rejects_startup_owned_log_sink_change_and_keeps_request_behavior() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = RuntimeSwapHarness::new();
+    let backend_addr = harness.start_h1_static_backend(b"log-sink-stable");
+    let config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        single_backend_upstream(backend_addr),
+    )]));
+
+    harness
+        .start_listener(config)
+        .expect("start runtime swap listener");
+
+    let before = harness
+        .run_request(H3RequestSpec::get("localhost", "/"))
+        .expect("request before log-sink reload");
+    before.assert_status(200);
+    before.assert_body_bytes(b"log-sink-stable");
+
+    let startup_snapshot = harness.runtime_snapshot().expect("startup runtime snapshot");
+    assert_eq!(startup_snapshot["runtime"]["generation"], 0);
+
+    harness
+        .rewrite_config(|config| {
+            config.log.file.enabled = true;
+            config.log.file.path = "/tmp/spooky-runtime-swap.log".to_string();
+        })
+        .expect("rewrite log sink shape");
+
+    let rejection = harness
+        .trigger_runtime_reload_expect(http::StatusCode::CONFLICT)
+        .expect("reload rejection");
+    assert_eq!(rejection["reloaded"], false);
+    let error = rejection["error"]
+        .as_str()
+        .expect("reload rejection error string");
+    assert!(
+        error.contains("restart required"),
+        "log sink shape change should be restart-required, got: {error}"
+    );
+    assert!(
+        error.contains("log.file.enabled") || error.contains("log.file.path"),
+        "log sink rejection should point at startup-owned log file fields, got: {error}"
+    );
+
+    let after_snapshot = harness.runtime_snapshot().expect("post-rejection runtime snapshot");
+    assert_eq!(
+        after_snapshot["runtime"]["generation"], 0,
+        "startup-owned log sink rejection must keep the active generation unchanged"
+    );
+
+    let after = harness
+        .run_request(H3RequestSpec::get("localhost", "/"))
+        .expect("request after log-sink rejection");
+    after.assert_status(200);
+    after.assert_body_bytes(b"log-sink-stable");
+}
