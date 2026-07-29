@@ -388,3 +388,62 @@ fn control_api_runtime_snapshot_tracks_active_generation_listener_labels_and_bac
         "runtime snapshot must not leak stale-generation backend inventory"
     );
 }
+
+#[test]
+#[serial]
+fn metrics_endpoint_tracks_active_generation_path_and_metric_surface_after_reload() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = RuntimeSwapHarness::new();
+    let backend_addr = harness.start_h1_static_backend(b"metrics-live");
+    let config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        single_backend_upstream(backend_addr),
+    )]));
+
+    harness
+        .start_listener(config)
+        .expect("start runtime swap listener");
+
+    let startup_metrics = harness.metrics_text().expect("startup metrics text");
+    assert!(
+        startup_metrics.contains("spooky_route_requests_total{route=\"api\"} 0\n"),
+        "startup metrics should render the startup generation route label"
+    );
+    let old_path = "/metrics".to_string();
+
+    harness
+        .rewrite_config(|config| {
+            let upstream = config.upstream.remove("api").expect("startup upstream");
+            config.upstream.insert("api-reloaded".to_string(), upstream);
+            config.observability.metrics.path = "/metrics-live".to_string();
+        })
+        .expect("rewrite metrics path and route labels");
+
+    let reload = harness
+        .trigger_runtime_reload()
+        .expect("trigger runtime reload");
+    assert_eq!(reload["reloaded"], true);
+    assert_eq!(reload["generation"], 1);
+
+    let live_metrics = harness.metrics_text().expect("live metrics text");
+    assert!(
+        live_metrics.contains("spooky_route_requests_total{route=\"api-reloaded\"} 0\n"),
+        "reloaded metrics should render the active generation route label"
+    );
+    assert!(
+        !live_metrics.contains("spooky_route_requests_total{route=\"api\"}"),
+        "reloaded metrics must not fall back to the startup metrics surface after reload"
+    );
+
+    let old_path_status = harness
+        .metrics_status_at(&old_path)
+        .expect("old metrics path status");
+    assert_eq!(
+        old_path_status,
+        http::StatusCode::NOT_FOUND,
+        "old metrics path should no longer be treated as the active metrics endpoint after reload"
+    );
+}

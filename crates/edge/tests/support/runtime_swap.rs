@@ -277,8 +277,20 @@ impl RuntimeSwapHarness {
             .metrics
             .path
             .clone();
-        self.rt
-            .block_on(self.poll_metrics_text(path, Duration::from_secs(5)))
+        self.metrics_text_at(&path)
+    }
+
+    pub fn metrics_text_at(&self, path: &str) -> Result<String, String> {
+        self.rt.block_on(
+            self.poll_metrics_text(path.to_string(), StatusCode::OK, Duration::from_secs(5)),
+        )
+    }
+
+    pub fn metrics_status_at(&self, path: &str) -> Result<StatusCode, String> {
+        self.rt.block_on(self.poll_metrics_status(
+            path.to_string(),
+            Duration::from_secs(5),
+        ))
     }
 
     pub fn run_request(&self, request: H3RequestSpec<'_>) -> Result<H3Response, String> {
@@ -304,6 +316,7 @@ impl RuntimeSwapHarness {
     async fn poll_metrics_text(
         &self,
         path: String,
+        expected_status: StatusCode,
         timeout: Duration,
     ) -> Result<String, String> {
         let addr = SocketAddr::from(([127, 0, 0, 1], self.metrics_port));
@@ -312,7 +325,7 @@ impl RuntimeSwapHarness {
 
         while Instant::now() < deadline {
             match metrics_request_once(addr, &path).await {
-                Ok((status, body)) if status == StatusCode::OK && !body.is_empty() => {
+                Ok((status, body)) if status == expected_status && !body.is_empty() => {
                     return Ok(body);
                 }
                 Ok((status, body)) => {
@@ -327,6 +340,29 @@ impl RuntimeSwapHarness {
 
         Err(format!(
             "metrics endpoint not reachable within {:?} ({})",
+            timeout, last_error
+        ))
+    }
+
+    async fn poll_metrics_status(
+        &self,
+        path: String,
+        timeout: Duration,
+    ) -> Result<StatusCode, String> {
+        let addr = SocketAddr::from(([127, 0, 0, 1], self.metrics_port));
+        let deadline = Instant::now() + timeout;
+        let mut last_error = String::new();
+
+        while Instant::now() < deadline {
+            match metrics_request_once(addr, &path).await {
+                Ok((status, _body)) => return Ok(status),
+                Err(err) => last_error = err,
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+
+        Err(format!(
+            "metrics endpoint status not reachable within {:?} ({})",
             timeout, last_error
         ))
     }
