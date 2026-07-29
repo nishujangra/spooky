@@ -336,6 +336,13 @@ impl RuntimeSwapHarness {
             .current_generation())
     }
 
+    pub fn runtime_bundle_handle(&self) -> Result<Arc<RuntimeBundleHandle>, String> {
+        self.runtime_bundle
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| "runtime bundle unavailable".to_string())
+    }
+
     pub fn lifecycle_phase(&self) -> Result<RuntimeLifecyclePhase, String> {
         Ok(self
             .runtime_bundle
