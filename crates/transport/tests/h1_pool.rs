@@ -6,10 +6,11 @@ use std::{sync::Arc, time::Duration};
 
 use spooky_config::runtime::RuntimeBackendTransportKind;
 use spooky_errors::{PoolError, ProxyError};
-use spooky_transport::{SharedDnsResolver, UpstreamTransportPool};
+use spooky_transport::SharedDnsResolver;
 
 use crate::support::{
-    ConcurrencyTracker, connection_policy, loopback_bind_restricted, request, start_h1_server,
+    ConcurrencyTracker, build_single_backend_pool, loopback_bind_restricted, request,
+    start_h1_server,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -23,15 +24,12 @@ async fn http1_transport_enforces_per_backend_inflight_contract() {
         };
     let backend = format!("127.0.0.1:{port}");
 
-    let pool = Arc::new(
-        UpstreamTransportPool::new_from_runtime_backends(
-            [(backend.clone(), RuntimeBackendTransportKind::Http1)],
-            std::collections::HashMap::new(),
-            connection_policy(1),
-            SharedDnsResolver::new(),
-        )
-        .expect("pool"),
-    );
+    let pool = Arc::new(build_single_backend_pool(
+        backend.clone(),
+        RuntimeBackendTransportKind::Http1,
+        1,
+        SharedDnsResolver::new(),
+    ));
     let req1 = request(&format!("http://{backend}/"));
     let req2 = request(&format!("http://{backend}/"));
 
@@ -64,16 +62,12 @@ async fn http1_transport_enforces_per_backend_inflight_contract() {
 
 #[tokio::test]
 async fn http1_transport_rejects_unknown_backend_at_facade_boundary() {
-    let pool = UpstreamTransportPool::new_from_runtime_backends(
-        [(
-            "127.0.0.1:12345".to_string(),
-            RuntimeBackendTransportKind::Http1,
-        )],
-        std::collections::HashMap::new(),
-        connection_policy(1),
+    let pool = build_single_backend_pool(
+        "127.0.0.1:12345".to_string(),
+        RuntimeBackendTransportKind::Http1,
+        1,
         SharedDnsResolver::new(),
-    )
-    .expect("pool");
+    );
     let req = request("http://127.0.0.1:12345/");
 
     let err = pool
@@ -97,15 +91,12 @@ async fn http1_transport_reports_backend_overload_when_inflight_is_exhausted() {
         Err(err) => panic!("failed to start h1 test server: {err}"),
     };
     let backend = format!("127.0.0.1:{port}");
-    let pool = Arc::new(
-        UpstreamTransportPool::new_from_runtime_backends(
-            [(backend.clone(), RuntimeBackendTransportKind::Http1)],
-            std::collections::HashMap::new(),
-            connection_policy(1),
-            SharedDnsResolver::new(),
-        )
-        .expect("pool"),
-    );
+    let pool = Arc::new(build_single_backend_pool(
+        backend.clone(),
+        RuntimeBackendTransportKind::Http1,
+        1,
+        SharedDnsResolver::new(),
+    ));
 
     let req1 = request(&format!("http://{backend}/"));
     let req2 = request(&format!("http://{backend}/"));
@@ -127,16 +118,12 @@ async fn http1_transport_reports_backend_overload_when_inflight_is_exhausted() {
 
 #[test]
 fn http1_transport_rotation_contract_is_effective_for_known_backends_and_noop_for_missing_ones() {
-    let pool = UpstreamTransportPool::new_from_runtime_backends(
-        [(
-            "127.0.0.1:12345".to_string(),
-            RuntimeBackendTransportKind::Http1,
-        )],
-        std::collections::HashMap::new(),
-        connection_policy(1),
+    let pool = build_single_backend_pool(
+        "127.0.0.1:12345".to_string(),
+        RuntimeBackendTransportKind::Http1,
+        1,
         SharedDnsResolver::new(),
-    )
-    .expect("pool");
+    );
 
     assert!(
         pool.rotate_backend_client("127.0.0.1:12345")

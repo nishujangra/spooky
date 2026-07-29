@@ -18,6 +18,12 @@ use spooky_config::runtime::{RuntimeBackendConnectionPolicy, RuntimeBackendTrans
 use spooky_transport::{SharedDnsResolver, UpstreamTransportPool};
 use tokio::net::TcpListener;
 
+#[derive(Clone, Copy)]
+enum TestServerProtocol {
+    Http1,
+    H2,
+}
+
 pub struct ConcurrencyTracker {
     current: AtomicUsize,
     max: AtomicUsize,
@@ -107,6 +113,15 @@ pub fn build_pool_with_policy(
     .expect("transport pool")
 }
 
+pub fn build_single_backend_pool(
+    backend: String,
+    transport_kind: RuntimeBackendTransportKind,
+    max_inflight: usize,
+    resolver: SharedDnsResolver,
+) -> UpstreamTransportPool {
+    build_pool([(backend, transport_kind)], max_inflight, resolver)
+}
+
 pub async fn read_body(response: Response<Incoming>) -> Bytes {
     response
         .into_body()
@@ -121,44 +136,19 @@ pub async fn start_h1_server(
     delay: Duration,
     tracker: Option<Arc<ConcurrencyTracker>>,
 ) -> std::io::Result<u16> {
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let port = listener.local_addr()?.port();
-
-    tokio::spawn(async move {
-        loop {
-            let (stream, _) = match listener.accept().await {
-                Ok(v) => v,
-                Err(_) => break,
-            };
-            let tracker = tracker.clone();
-            let service = service_fn(move |_req: Request<Incoming>| {
-                let tracker = tracker.clone();
-                async move {
-                    if let Some(tracker) = &tracker {
-                        tracker.enter();
-                    }
-                    tokio::time::sleep(delay).await;
-                    if let Some(tracker) = &tracker {
-                        tracker.exit();
-                    }
-                    Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::from_static(
-                        body,
-                    ))))
-                }
-            });
-
-            tokio::spawn(async move {
-                let _ = hyper::server::conn::http1::Builder::new()
-                    .serve_connection(TokioIo::new(stream), service)
-                    .await;
-            });
-        }
-    });
-
-    Ok(port)
+    start_server(TestServerProtocol::Http1, body, delay, tracker).await
 }
 
 pub async fn start_h2_server(
+    body: &'static [u8],
+    delay: Duration,
+    tracker: Option<Arc<ConcurrencyTracker>>,
+) -> std::io::Result<u16> {
+    start_server(TestServerProtocol::H2, body, delay, tracker).await
+}
+
+async fn start_server(
+    protocol: TestServerProtocol,
     body: &'static [u8],
     delay: Duration,
     tracker: Option<Arc<ConcurrencyTracker>>,
@@ -190,9 +180,19 @@ pub async fn start_h2_server(
             });
 
             tokio::spawn(async move {
-                let _ = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
-                    .serve_connection(TokioIo::new(stream), service)
-                    .await;
+                let io = TokioIo::new(stream);
+                match protocol {
+                    TestServerProtocol::Http1 => {
+                        let _ = hyper::server::conn::http1::Builder::new()
+                            .serve_connection(io, service)
+                            .await;
+                    }
+                    TestServerProtocol::H2 => {
+                        let _ = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
+                            .serve_connection(io, service)
+                            .await;
+                    }
+                }
             });
         }
     });

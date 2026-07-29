@@ -7,7 +7,7 @@ use spooky_config::{
     runtime::RuntimeListenerSource,
 };
 
-use crate::common::{runtime_config, sample_config};
+use crate::common::{primary_listener_runtime_config, runtime_config, sample_config};
 
 #[test]
 fn runtime_config_keeps_generation_policies_normalized_and_listener_inputs_raw() {
@@ -29,9 +29,7 @@ fn runtime_config_keeps_generation_policies_normalized_and_listener_inputs_raw()
 
     let runtime = runtime_config(&config);
     let policies = runtime.policies();
-    let listener = runtime
-        .primary_listener_runtime_config()
-        .expect("primary listener");
+    let listener = primary_listener_runtime_config(&runtime);
 
     assert_eq!(
         policies.timeouts.backend_request,
@@ -173,12 +171,8 @@ fn runtime_config_excludes_log_sink_shape_from_generation_owned_runtime_state() 
         json_runtime.listeners[0].listen.port
     );
 
-    let plain_listener = plain_runtime
-        .primary_listener_runtime_config()
-        .expect("plain primary listener");
-    let json_listener = json_runtime
-        .primary_listener_runtime_config()
-        .expect("json primary listener");
+    let plain_listener = primary_listener_runtime_config(&plain_runtime);
+    let json_listener = primary_listener_runtime_config(&json_runtime);
     assert_eq!(
         plain_listener.policies.timeouts,
         json_listener.policies.timeouts

@@ -3,7 +3,8 @@
 use std::time::Duration;
 
 use crate::common::{
-    assert_config_error_contains, runtime_config, runtime_config_err, sample_config,
+    assert_config_error_contains, primary_listener_runtime_config, runtime_config,
+    runtime_config_err, sample_config,
 };
 
 #[test]
@@ -44,9 +45,7 @@ fn runtime_config_normalizes_timeout_and_transport_knobs_into_runtime_policies()
 fn runtime_config_keeps_listener_and_runtime_policy_views_in_sync_for_defaults() {
     let config = sample_config();
     let runtime = runtime_config(&config);
-    let listener = runtime
-        .primary_listener_runtime_config()
-        .expect("primary listener");
+    let listener = primary_listener_runtime_config(&runtime);
 
     assert_eq!(
         runtime.policies.timeouts.backend_request,

@@ -42,6 +42,10 @@ pub fn request_target<'a>(
     }
 }
 
+pub fn parse_backend_endpoint(backend: &str) -> Result<BackendEndpoint, BridgeError> {
+    BackendEndpoint::parse(backend).map_err(|_| BridgeError::InvalidUri)
+}
+
 pub fn bridge_headers(headers: &HeaderMap) -> Vec<Header> {
     headers
         .iter()
@@ -105,4 +109,37 @@ pub fn build_h1_and_h2_requests<'a>(
         request_input(method, path, headers, meta),
     )?;
     Ok((h1, h2))
+}
+
+pub fn build_h2_request_for_backend<'a>(
+    backend: &str,
+    method: &'a str,
+    path: &'a str,
+    headers: &'a [Header],
+    meta: RequestInputMeta<'a>,
+) -> Result<CanonicalBridgeRequest, BridgeError> {
+    let endpoint = parse_backend_endpoint(backend)?;
+    build_h2_request_for_target(
+        request_target(
+            &endpoint,
+            &UpstreamHostPolicy::default(),
+            &ForwardedHeaderPolicy::default(),
+        ),
+        request_input(method, path, headers, meta),
+    )
+}
+
+pub fn build_h2_request_with_policy<'a>(
+    endpoint: &'a BackendEndpoint,
+    host_policy: &'a UpstreamHostPolicy,
+    forwarded_policy: &'a ForwardedHeaderPolicy,
+    method: &'a str,
+    path: &'a str,
+    headers: &'a [Header],
+    meta: RequestInputMeta<'a>,
+) -> Result<CanonicalBridgeRequest, BridgeError> {
+    build_h2_request_for_target(
+        request_target(endpoint, host_policy, forwarded_policy),
+        request_input(method, path, headers, meta),
+    )
 }

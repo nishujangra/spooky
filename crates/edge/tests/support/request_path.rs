@@ -27,8 +27,7 @@ use rcgen::{Certificate, CertificateParams, SanType};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use spooky_config::{
     config::{
-        Backend, ClientAuth, Config, Listen, LoadBalancing, Log, LogFormat, RouteMatch, Security,
-        Tls, Upstream, UpstreamTls,
+        Backend, Config, LoadBalancing, RouteMatch, Upstream, UpstreamTls,
     },
     runtime::RuntimeConfig,
     validator::validate,
@@ -48,6 +47,8 @@ use tokio_rustls::{
     TlsAcceptor, TlsConnector,
     rustls::{ClientConfig, RootCertStore, ServerConfig, pki_types::ServerName},
 };
+
+use super::{base_quic_test_config, static_full_response};
 
 pub struct TestTlsMaterial {
     _dir: TempDir,
@@ -144,36 +145,12 @@ impl QuicRequestPathHarness {
     }
 
     pub fn make_config(&self, upstreams: HashMap<String, Upstream>) -> Config {
-        Config {
-            version: 1,
-            listen: Listen {
-                protocol: "http3".to_string(),
-                port: reserve_unused_listener_port(),
-                address: "127.0.0.1".to_string(),
-                tls: Tls {
-                    cert: self.tls.cert_path.clone(),
-                    key: self.tls.key_path.clone(),
-                    certificates: Vec::new(),
-                    client_auth: ClientAuth::default(),
-                },
-            },
-            listeners: Vec::new(),
-            upstream: upstreams,
-            load_balancing: Some(LoadBalancing {
-                lb_type: "round-robin".to_string(),
-                key: None,
-            }),
-            upstream_tls: UpstreamTls::default(),
-            log: Log {
-                level: "info".to_string(),
-                file: Default::default(),
-                format: LogFormat::Plain,
-            },
-            performance: spooky_config::config::Performance::default(),
-            observability: spooky_config::config::Observability::default(),
-            resilience: spooky_config::config::Resilience::default(),
-            security: Security::default(),
-        }
+        base_quic_test_config(
+            reserve_unused_listener_port(),
+            &self.tls.cert_path,
+            &self.tls.key_path,
+            upstreams,
+        )
     }
 
     pub fn start_listener(&mut self, config: Config) -> Result<SocketAddr, String> {
@@ -234,7 +211,7 @@ impl QuicRequestPathHarness {
 
     pub fn start_h1_static_backend(&mut self, body: &'static [u8]) -> SocketAddr {
         self.start_h1_backend(move |_req| async move {
-            Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(body))))
+            Ok::<_, Infallible>(static_full_response(body))
         })
     }
 
@@ -288,7 +265,7 @@ impl QuicRequestPathHarness {
 
     pub fn start_h2_static_backend(&mut self, body: &'static [u8]) -> SocketAddr {
         self.start_h2_backend(move |_req| async move {
-            Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(body))))
+            Ok::<_, Infallible>(static_full_response(body))
         })
     }
 

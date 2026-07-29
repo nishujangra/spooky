@@ -8,7 +8,7 @@ use spooky_config::{
         LoadBalancing, Log, Observability, Performance, Resilience, RouteMatch, Security, Tls,
         Upstream, UpstreamHostPolicy, UpstreamHostPolicyMode, UpstreamTls,
     },
-    runtime::{RuntimeConfig, RuntimeConfigError, RuntimeUpstream},
+    runtime::{ListenerRuntimeConfig, RuntimeConfig, RuntimeConfigError, RuntimeUpstream},
 };
 
 const API_UPSTREAM: &str = "api";
@@ -72,6 +72,12 @@ pub fn sample_config() -> Config {
     config
 }
 
+pub fn sample_config_with_api_upstream(edit: impl FnOnce(&mut Upstream)) -> Config {
+    let mut config = sample_config();
+    edit(api_upstream_mut(&mut config));
+    config
+}
+
 pub fn api_upstream_mut(config: &mut Config) -> &mut Upstream {
     config
         .upstream
@@ -94,6 +100,12 @@ pub fn api_runtime_upstream(runtime: &RuntimeConfig) -> &RuntimeUpstream {
         .upstreams
         .get(API_UPSTREAM)
         .expect("runtime lowering output must include the 'api' upstream")
+}
+
+pub fn primary_listener_runtime_config(runtime: &RuntimeConfig) -> ListenerRuntimeConfig {
+    runtime
+        .primary_listener_runtime_config()
+        .expect("primary listener")
 }
 
 pub fn assert_config_error_contains(err: &RuntimeConfigError, category: &str, needle: &str) {

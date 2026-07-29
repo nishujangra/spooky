@@ -9,17 +9,21 @@ use spooky_config::{
     runtime::RuntimeExternalAuth,
 };
 
-use crate::common::{api_runtime_upstream, api_upstream_mut, runtime_config, sample_config};
+use crate::common::{
+    api_runtime_upstream, api_upstream_mut, runtime_config, sample_config,
+    sample_config_with_api_upstream,
+};
 
 #[test]
 fn runtime_config_lowers_http_external_auth_into_canonical_contract() {
-    let mut config = sample_config();
-    api_upstream_mut(&mut config).auth.external_auth = Some(ExternalAuth::Http {
-        endpoint: "https://auth.internal/check".to_string(),
-        request_headers: Vec::new(),
-        response_header_allowlist: Vec::new(),
-        timeout_ms: 1_000,
-        failure_mode: ExternalAuthFailureMode::FailClosed,
+    let config = sample_config_with_api_upstream(|upstream| {
+        upstream.auth.external_auth = Some(ExternalAuth::Http {
+            endpoint: "https://auth.internal/check".to_string(),
+            request_headers: Vec::new(),
+            response_header_allowlist: Vec::new(),
+            timeout_ms: 1_000,
+            failure_mode: ExternalAuthFailureMode::FailClosed,
+        });
     });
 
     let runtime = runtime_config(&config);
@@ -43,20 +47,21 @@ fn runtime_config_lowers_http_external_auth_into_canonical_contract() {
 
 #[test]
 fn runtime_config_lowers_oidc_external_auth_metadata_into_canonical_contract() {
-    let mut config = sample_config();
-    api_upstream_mut(&mut config).auth.external_auth = Some(ExternalAuth::Oidc {
-        discovery_url: Some(
-            "https://issuer.example.com/.well-known/openid-configuration".to_string(),
-        ),
-        issuer_url: Some("https://issuer.example.com".to_string()),
-        client_id: "edge-gateway".to_string(),
-        client_secret: Some("secret-1".to_string()),
-        audience: Some("spooky-api".to_string()),
-        scopes: vec!["openid".to_string(), "profile".to_string()],
-        request_headers: Vec::new(),
-        response_header_allowlist: Vec::new(),
-        timeout_ms: 1_500,
-        failure_mode: ExternalAuthFailureMode::FailClosed,
+    let config = sample_config_with_api_upstream(|upstream| {
+        upstream.auth.external_auth = Some(ExternalAuth::Oidc {
+            discovery_url: Some(
+                "https://issuer.example.com/.well-known/openid-configuration".to_string(),
+            ),
+            issuer_url: Some("https://issuer.example.com".to_string()),
+            client_id: "edge-gateway".to_string(),
+            client_secret: Some("secret-1".to_string()),
+            audience: Some("spooky-api".to_string()),
+            scopes: vec!["openid".to_string(), "profile".to_string()],
+            request_headers: Vec::new(),
+            response_header_allowlist: Vec::new(),
+            timeout_ms: 1_500,
+            failure_mode: ExternalAuthFailureMode::FailClosed,
+        });
     });
 
     let runtime = runtime_config(&config);

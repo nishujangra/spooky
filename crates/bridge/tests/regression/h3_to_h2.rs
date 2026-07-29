@@ -1,15 +1,10 @@
 //! h3→h2 request building: scheme, host/forwarded policy, WebSocket, H1/H2 parity.
 
-use std::convert::Infallible;
-
-use bytes::Bytes;
 use http::header::HOST;
-use http_body_util::combinators::BoxBody;
 use hyper::ext::Protocol;
 use quiche::h3::Header;
 use spooky_bridge::request::{build_h1_request, build_h2_request_for_target};
 use spooky_config::{
-    backend_endpoint::BackendEndpoint,
     config::{
         ForwardedHeaderPolicy, ForwardedHeaderPolicyMode, UpstreamHostPolicy,
         UpstreamHostPolicyMode,
@@ -17,44 +12,14 @@ use spooky_config::{
 };
 use spooky_errors::BridgeError;
 
-use crate::common::{RequestInputMeta, request_input, request_target};
-
-fn canonical_h2_request(
-    backend: &str,
-    method: &str,
-    path: &str,
-    headers: &[Header],
-    meta: RequestInputMeta<'_>,
-) -> Result<http::Request<BoxBody<Bytes, Infallible>>, BridgeError> {
-    let endpoint = BackendEndpoint::parse(backend).map_err(|_| BridgeError::InvalidUri)?;
-    build_h2_request_for_target(
-        request_target(
-            &endpoint,
-            &UpstreamHostPolicy::default(),
-            &ForwardedHeaderPolicy::default(),
-        ),
-        request_input(method, path, headers, meta),
-    )
-}
-
-fn canonical_h2_request_with_policy(
-    endpoint: &BackendEndpoint,
-    host_policy: &UpstreamHostPolicy,
-    forwarded_policy: &ForwardedHeaderPolicy,
-    method: &str,
-    path: &str,
-    headers: &[Header],
-    meta: RequestInputMeta<'_>,
-) -> Result<http::Request<BoxBody<Bytes, Infallible>>, BridgeError> {
-    build_h2_request_for_target(
-        request_target(endpoint, host_policy, forwarded_policy),
-        request_input(method, path, headers, meta),
-    )
-}
+use crate::common::{
+    RequestInputMeta, build_h2_request_for_backend, build_h2_request_with_policy,
+    parse_backend_endpoint, request_input, request_target,
+};
 
 #[test]
 fn defaults_to_https_origin_for_host_port_backend() {
-    let req = canonical_h2_request(
+    let req = build_h2_request_for_backend(
         "backend.internal:443",
         "GET",
         "/health",
@@ -84,7 +49,7 @@ fn defaults_to_https_origin_for_host_port_backend() {
 
 #[test]
 fn keeps_explicit_http_scheme() {
-    let req = canonical_h2_request(
+    let req = build_h2_request_for_backend(
         "http://127.0.0.1:8080",
         "GET",
         "/",
@@ -108,7 +73,7 @@ fn keeps_explicit_http_scheme() {
 
 #[test]
 fn rejects_invalid_backend_endpoint() {
-    let err = canonical_h2_request(
+    let err = build_h2_request_for_backend(
         "https://backend.internal:443/path",
         "GET",
         "/",
@@ -139,7 +104,7 @@ fn strips_spoofed_forwarded_headers_and_normalizes() {
         Header::new(b"x-keep", b"ok"),
     ];
 
-    let req = canonical_h2_request(
+    let req = build_h2_request_for_backend(
         "backend.internal:443",
         "GET",
         "/",
@@ -179,7 +144,7 @@ fn strips_spoofed_forwarded_headers_and_normalizes() {
 
 #[test]
 fn forwarded_header_policy_append_and_preserve_behave_as_expected() {
-    let endpoint = BackendEndpoint::parse("backend.internal:443").expect("endpoint");
+    let endpoint = parse_backend_endpoint("backend.internal:443").expect("endpoint");
     let headers = vec![
         Header::new(b"forwarded", b"for=1.2.3.4;proto=http;host=\"old.example\""),
         Header::new(b"x-forwarded-for", b"1.2.3.4"),
@@ -191,7 +156,7 @@ fn forwarded_header_policy_append_and_preserve_behave_as_expected() {
     let append_policy = ForwardedHeaderPolicy {
         mode: ForwardedHeaderPolicyMode::Append,
     };
-    let req = canonical_h2_request_with_policy(
+    let req = build_h2_request_with_policy(
         &endpoint,
         &host_policy,
         &append_policy,
@@ -236,7 +201,7 @@ fn forwarded_header_policy_append_and_preserve_behave_as_expected() {
     let preserve_policy = ForwardedHeaderPolicy {
         mode: ForwardedHeaderPolicyMode::Preserve,
     };
-    let req = canonical_h2_request_with_policy(
+    let req = build_h2_request_with_policy(
         &endpoint,
         &host_policy,
         &preserve_policy,
@@ -279,7 +244,7 @@ fn forwarded_header_policy_append_and_preserve_behave_as_expected() {
 
 #[test]
 fn forwarded_header_formats_ipv6_clients() {
-    let req = canonical_h2_request(
+    let req = build_h2_request_for_backend(
         "backend.internal:443",
         "GET",
         "/",
@@ -302,12 +267,12 @@ fn forwarded_header_formats_ipv6_clients() {
 
 #[test]
 fn host_policy_rewrite_uses_configured_host() {
-    let endpoint = BackendEndpoint::parse("backend.internal:443").expect("endpoint");
+    let endpoint = parse_backend_endpoint("backend.internal:443").expect("endpoint");
     let policy = UpstreamHostPolicy {
         mode: UpstreamHostPolicyMode::Rewrite,
         host: Some("origin.example.com".to_string()),
     };
-    let req = canonical_h2_request_with_policy(
+    let req = build_h2_request_with_policy(
         &endpoint,
         &policy,
         &ForwardedHeaderPolicy::default(),
@@ -338,12 +303,12 @@ fn host_policy_rewrite_uses_configured_host() {
 
 #[test]
 fn host_policy_upstream_uses_backend_authority() {
-    let endpoint = BackendEndpoint::parse("backend.internal:8443").expect("endpoint");
+    let endpoint = parse_backend_endpoint("backend.internal:8443").expect("endpoint");
     let policy = UpstreamHostPolicy {
         mode: UpstreamHostPolicyMode::Upstream,
         host: None,
     };
-    let req = canonical_h2_request_with_policy(
+    let req = build_h2_request_with_policy(
         &endpoint,
         &policy,
         &ForwardedHeaderPolicy::default(),
@@ -368,7 +333,7 @@ fn host_policy_upstream_uses_backend_authority() {
 
 #[test]
 fn connect_uses_authority_form_request_target() {
-    let req = canonical_h2_request(
+    let req = build_h2_request_for_backend(
         "proxy.internal:8443",
         "CONNECT",
         "/",
@@ -393,7 +358,7 @@ fn connect_uses_authority_form_request_target() {
 
 #[test]
 fn websocket_requests_are_shaped_as_extended_connect() {
-    let endpoint = BackendEndpoint::parse("backend.internal:443").expect("endpoint");
+    let endpoint = parse_backend_endpoint("backend.internal:443").expect("endpoint");
     let headers = vec![
         Header::new(b"connection", b"upgrade"),
         Header::new(b"upgrade", b"websocket"),
@@ -445,7 +410,7 @@ fn websocket_requests_are_shaped_as_extended_connect() {
 
 #[test]
 fn h1_and_h2_share_canonical_policy_outputs() {
-    let endpoint = BackendEndpoint::parse("backend.internal:443").expect("endpoint");
+    let endpoint = parse_backend_endpoint("backend.internal:443").expect("endpoint");
     let headers = vec![
         Header::new(b"host", b"spoofed.example.com"),
         Header::new(b"x-forwarded-for", b"1.2.3.4"),
