@@ -1,3 +1,8 @@
+//! Shared support modules for edge integration-style tests.
+//!
+//! These helpers stay local to `crates/edge/tests` and group by behavioral
+//! domain rather than by protocol or scenario file.
+
 use std::collections::HashMap;
 
 use bytes::Bytes;
@@ -8,11 +13,11 @@ use spooky_config::config::{
     UpstreamTls,
 };
 
-pub mod backend_lifecycle;
-pub mod net;
-pub mod parity;
-pub mod request_path;
-pub mod runtime_swap;
+pub(crate) mod backend_lifecycle;
+pub(crate) mod net;
+pub(crate) mod parity;
+pub(crate) mod request_path;
+pub(crate) mod runtime_swap;
 
 pub(super) fn base_quic_test_config(
     listen_port: u16,

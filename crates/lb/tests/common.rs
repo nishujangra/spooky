@@ -1,3 +1,7 @@
+//! Shared runtime-upstream builders for the LB contract suites.
+
+#![allow(dead_code)]
+
 use std::collections::HashMap;
 
 use spooky_config::{
@@ -9,7 +13,7 @@ use spooky_config::{
 };
 use spooky_lb::upstream_pool::UpstreamPool;
 
-pub fn runtime_upstream(strategy: &str, backends: Vec<Backend>) -> RuntimeUpstream {
+pub(crate) fn runtime_upstream(strategy: &str, backends: Vec<Backend>) -> RuntimeUpstream {
     let mut upstreams = HashMap::new();
     upstreams.insert(
         "api".to_string(),
@@ -54,8 +58,7 @@ pub fn runtime_upstream(strategy: &str, backends: Vec<Backend>) -> RuntimeUpstre
     .expect("runtime upstream")
 }
 
-#[allow(dead_code)]
-pub fn test_backend(id: impl Into<String>, address: impl Into<String>) -> Backend {
+pub(crate) fn test_backend(id: impl Into<String>, address: impl Into<String>) -> Backend {
     Backend {
         id: id.into(),
         address: address.into(),
@@ -71,8 +74,7 @@ pub fn test_backend(id: impl Into<String>, address: impl Into<String>) -> Backen
     }
 }
 
-#[allow(dead_code)]
-pub fn weighted_backend(
+pub(crate) fn weighted_backend(
     id: impl Into<String>,
     address: impl Into<String>,
     weight: u32,
@@ -86,8 +88,7 @@ pub fn weighted_backend(
     }
 }
 
-#[allow(dead_code)]
-pub fn indexed_backends(backend_count: usize, base_port: u16) -> Vec<Backend> {
+pub(crate) fn indexed_backends(backend_count: usize, base_port: u16) -> Vec<Backend> {
     (0..backend_count)
         .map(|index| {
             test_backend(
@@ -98,8 +99,7 @@ pub fn indexed_backends(backend_count: usize, base_port: u16) -> Vec<Backend> {
         .collect()
 }
 
-#[allow(dead_code)]
-pub fn pool(strategy: &str, backend_count: usize) -> UpstreamPool {
+pub(crate) fn pool(strategy: &str, backend_count: usize) -> UpstreamPool {
     UpstreamPool::from_runtime_upstream(&runtime_upstream(
         strategy,
         indexed_backends(backend_count, 7001),

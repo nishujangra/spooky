@@ -1,3 +1,5 @@
+//! Local support helpers for transport facade contract tests.
+
 #![allow(dead_code)]
 
 use std::{
@@ -25,7 +27,7 @@ enum TestServerProtocol {
 }
 
 #[derive(Clone, Copy)]
-pub enum TransportTestProtocol {
+pub(crate) enum TransportTestProtocol {
     Http1,
     H2,
 }
@@ -38,7 +40,7 @@ impl TransportTestProtocol {
         }
     }
 
-    pub fn runtime_kind(self) -> RuntimeBackendTransportKind {
+    pub(crate) fn runtime_kind(self) -> RuntimeBackendTransportKind {
         match self {
             Self::Http1 => RuntimeBackendTransportKind::Http1,
             Self::H2 => RuntimeBackendTransportKind::H2,
@@ -46,20 +48,20 @@ impl TransportTestProtocol {
     }
 }
 
-pub struct ConcurrencyTracker {
+pub(crate) struct ConcurrencyTracker {
     current: AtomicUsize,
     max: AtomicUsize,
 }
 
 impl ConcurrencyTracker {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             current: AtomicUsize::new(0),
             max: AtomicUsize::new(0),
         }
     }
 
-    pub fn enter(&self) {
+    pub(crate) fn enter(&self) {
         let now = self.current.fetch_add(1, Ordering::SeqCst) + 1;
         let mut prev = self.max.load(Ordering::SeqCst);
         while now > prev {
@@ -73,21 +75,21 @@ impl ConcurrencyTracker {
         }
     }
 
-    pub fn exit(&self) {
+    pub(crate) fn exit(&self) {
         self.current.fetch_sub(1, Ordering::SeqCst);
     }
 
-    pub fn max_observed(&self) -> usize {
+    pub(crate) fn max_observed(&self) -> usize {
         self.max.load(Ordering::SeqCst)
     }
 }
 
-pub fn loopback_bind_restricted(err: &std::io::Error) -> bool {
+pub(crate) fn loopback_bind_restricted(err: &std::io::Error) -> bool {
     err.kind() == std::io::ErrorKind::PermissionDenied
         || matches!(err.raw_os_error(), Some(1) | Some(13))
 }
 
-pub fn request(uri: &str) -> Request<BoxBody<Bytes, std::convert::Infallible>> {
+pub(crate) fn request(uri: &str) -> Request<BoxBody<Bytes, std::convert::Infallible>> {
     Request::builder()
         .method("GET")
         .uri(uri)
@@ -95,13 +97,13 @@ pub fn request(uri: &str) -> Request<BoxBody<Bytes, std::convert::Infallible>> {
         .expect("request")
 }
 
-pub fn request_to_backend(
+pub(crate) fn request_to_backend(
     backend: &str,
 ) -> Request<BoxBody<Bytes, std::convert::Infallible>> {
     request(&format!("http://{backend}/"))
 }
 
-pub fn reserve_unused_port() -> u16 {
+pub(crate) fn reserve_unused_port() -> u16 {
     StdTcpListener::bind("127.0.0.1:0")
         .expect("bind ephemeral port")
         .local_addr()
@@ -109,7 +111,7 @@ pub fn reserve_unused_port() -> u16 {
         .port()
 }
 
-pub fn connection_policy(max_inflight: usize) -> RuntimeBackendConnectionPolicy {
+pub(crate) fn connection_policy(max_inflight: usize) -> RuntimeBackendConnectionPolicy {
     RuntimeBackendConnectionPolicy {
         max_inflight,
         max_idle_per_backend: 64,
@@ -119,7 +121,7 @@ pub fn connection_policy(max_inflight: usize) -> RuntimeBackendConnectionPolicy 
     }
 }
 
-pub fn build_pool(
+pub(crate) fn build_pool(
     backends: impl IntoIterator<Item = (String, RuntimeBackendTransportKind)>,
     max_inflight: usize,
     resolver: SharedDnsResolver,
@@ -127,7 +129,7 @@ pub fn build_pool(
     build_pool_with_policy(backends, connection_policy(max_inflight), resolver)
 }
 
-pub fn build_pool_with_policy(
+pub(crate) fn build_pool_with_policy(
     backends: impl IntoIterator<Item = (String, RuntimeBackendTransportKind)>,
     connection_policy: RuntimeBackendConnectionPolicy,
     resolver: SharedDnsResolver,
@@ -141,7 +143,7 @@ pub fn build_pool_with_policy(
     .expect("transport pool")
 }
 
-pub fn build_single_backend_pool(
+pub(crate) fn build_single_backend_pool(
     backend: String,
     transport_kind: RuntimeBackendTransportKind,
     max_inflight: usize,
@@ -150,7 +152,7 @@ pub fn build_single_backend_pool(
     build_pool([(backend, transport_kind)], max_inflight, resolver)
 }
 
-pub async fn read_body(response: Response<Incoming>) -> Bytes {
+pub(crate) async fn read_body(response: Response<Incoming>) -> Bytes {
     response
         .into_body()
     .collect()
@@ -159,11 +161,11 @@ pub async fn read_body(response: Response<Incoming>) -> Bytes {
         .to_bytes()
 }
 
-pub fn backend_address(port: u16) -> String {
+pub(crate) fn backend_address(port: u16) -> String {
     format!("127.0.0.1:{port}")
 }
 
-pub async fn start_backend_server(
+pub(crate) async fn start_backend_server(
     protocol: TransportTestProtocol,
     body: &'static [u8],
     delay: Duration,
@@ -173,7 +175,7 @@ pub async fn start_backend_server(
     Ok(backend_address(port))
 }
 
-pub async fn start_backend_pool(
+pub(crate) async fn start_backend_pool(
     protocol: TransportTestProtocol,
     body: &'static [u8],
     delay: Duration,
@@ -191,7 +193,7 @@ pub async fn start_backend_pool(
     Ok((backend, pool))
 }
 
-pub async fn start_shared_backend_pool(
+pub(crate) async fn start_shared_backend_pool(
     protocol: TransportTestProtocol,
     body: &'static [u8],
     delay: Duration,
@@ -204,7 +206,7 @@ pub async fn start_shared_backend_pool(
     Ok((backend, Arc::new(pool)))
 }
 
-pub async fn start_h1_server(
+pub(crate) async fn start_h1_server(
     body: &'static [u8],
     delay: Duration,
     tracker: Option<Arc<ConcurrencyTracker>>,
@@ -212,7 +214,7 @@ pub async fn start_h1_server(
     start_server(TransportTestProtocol::Http1.server_protocol(), body, delay, tracker).await
 }
 
-pub async fn start_h2_server(
+pub(crate) async fn start_h2_server(
     body: &'static [u8],
     delay: Duration,
     tracker: Option<Arc<ConcurrencyTracker>>,

@@ -1,5 +1,8 @@
-#[allow(dead_code)]
-pub fn local_listener_bind_available() -> bool {
+//! Bind-availability helpers for edge integration tests.
+
+#![allow(dead_code)]
+
+pub(crate) fn local_listener_bind_available() -> bool {
     let tcp_available = match std::net::TcpListener::bind(("127.0.0.1", 0)) {
         Ok(listener) => {
             drop(listener);
@@ -21,8 +24,7 @@ pub fn local_listener_bind_available() -> bool {
     tcp_available && udp_available
 }
 
-#[allow(dead_code)]
-pub fn local_tcp_bind_available() -> bool {
+pub(crate) fn local_tcp_bind_available() -> bool {
     match std::net::TcpListener::bind(("127.0.0.1", 0)) {
         Ok(listener) => {
             drop(listener);
