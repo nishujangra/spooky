@@ -135,3 +135,80 @@ fn dns_refresh_with_changed_backend_addresses_moves_requests_and_updates_invento
         "backend lifecycle inventory should keep the backend placed in the active upstream"
     );
 }
+
+#[test]
+#[serial]
+fn empty_dns_refresh_retains_previous_resolution_and_keeps_requests_flowing() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = BackendLifecycleHarness::new();
+    let Some((port, backend_a_addr, _backend_b_addr)) = start_hostname_swap_backends(&mut harness)
+    else {
+        return;
+    };
+
+    let route = harness.hostname_backend_route("backend.internal", port);
+    let config = harness.make_config(HashMap::from([("api".to_string(), route.upstream())]));
+    harness.start_listener(config).expect("listener");
+
+    let seeded_refresh = harness
+        .force_hostname_refresh(&route.backend_addr, vec![backend_a_addr])
+        .expect("seed hostname refresh to backend A");
+    match seeded_refresh {
+        ForcedBackendRefresh::Updated { result, .. } => match result.outcome {
+            BackendRefreshOutcome::Updated {
+                current_addrs,
+                refresh_generation,
+                ..
+            } => {
+                assert_eq!(current_addrs, vec![backend_a_addr]);
+                assert_eq!(refresh_generation, 1);
+            }
+            other => panic!("expected updated seed refresh outcome, got {other:?}"),
+        },
+        other => panic!("expected updated seed refresh, got {other:?}"),
+    }
+
+    let before = harness
+        .run_request(H3RequestSpec::get("localhost", "/"))
+        .expect("request before empty refresh");
+    before.assert_status(200);
+    before.assert_body_text("backend-a");
+
+    let empty_refresh = harness
+        .force_hostname_refresh(&route.backend_addr, Vec::new())
+        .expect("empty hostname refresh");
+    match empty_refresh {
+        ForcedBackendRefresh::EmptyAnswerRetained { retained_addrs } => {
+            assert_eq!(retained_addrs, vec![backend_a_addr]);
+        }
+        other => panic!("expected empty-answer retained refresh, got {other:?}"),
+    }
+
+    let after = harness
+        .run_request(H3RequestSpec::get("localhost", "/"))
+        .expect("request after empty refresh");
+    after.assert_status(200);
+    after.assert_body_text("backend-a");
+
+    let backend = harness
+        .backend_snapshot(&route.backend_addr)
+        .expect("backend snapshot lookup")
+        .expect("backend lifecycle snapshot");
+    assert_eq!(backend.resolution.resolved_addrs, vec![backend_a_addr]);
+    assert_eq!(
+        backend.resolution.refresh_generation, 1,
+        "empty-answer refresh should preserve the existing visible resolution generation"
+    );
+
+    let inventory = harness.backend_inventory().expect("backend inventory");
+    let backend = inventory
+        .backends
+        .iter()
+        .find(|backend| backend.identity.backend_addr == route.backend_addr)
+        .expect("backend inventory entry");
+    assert_eq!(backend.resolution.resolved_addrs, vec![backend_a_addr]);
+    assert_eq!(backend.resolution.refresh_generation, 1);
+}
