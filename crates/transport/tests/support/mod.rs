@@ -155,7 +155,7 @@ pub(crate) fn build_single_backend_pool(
 pub(crate) async fn read_body(response: Response<Incoming>) -> Bytes {
     response
         .into_body()
-    .collect()
+        .collect()
         .await
         .expect("collect body")
         .to_bytes()
@@ -211,7 +211,13 @@ pub(crate) async fn start_h1_server(
     delay: Duration,
     tracker: Option<Arc<ConcurrencyTracker>>,
 ) -> std::io::Result<u16> {
-    start_server(TransportTestProtocol::Http1.server_protocol(), body, delay, tracker).await
+    start_server(
+        TransportTestProtocol::Http1.server_protocol(),
+        body,
+        delay,
+        tracker,
+    )
+    .await
 }
 
 pub(crate) async fn start_h2_server(
@@ -219,7 +225,13 @@ pub(crate) async fn start_h2_server(
     delay: Duration,
     tracker: Option<Arc<ConcurrencyTracker>>,
 ) -> std::io::Result<u16> {
-    start_server(TransportTestProtocol::H2.server_protocol(), body, delay, tracker).await
+    start_server(
+        TransportTestProtocol::H2.server_protocol(),
+        body,
+        delay,
+        tracker,
+    )
+    .await
 }
 
 async fn start_server(

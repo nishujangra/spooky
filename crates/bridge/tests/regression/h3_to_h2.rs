@@ -3,11 +3,8 @@
 use http::header::HOST;
 use hyper::ext::Protocol;
 use quiche::h3::Header;
-use spooky_config::{
-    config::{
-        ForwardedHeaderPolicy, ForwardedHeaderPolicyMode, UpstreamHostPolicy,
-        UpstreamHostPolicyMode,
-    },
+use spooky_config::config::{
+    ForwardedHeaderPolicy, ForwardedHeaderPolicyMode, UpstreamHostPolicy, UpstreamHostPolicyMode,
 };
 use spooky_errors::BridgeError;
 

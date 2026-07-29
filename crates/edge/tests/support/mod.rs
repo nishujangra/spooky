@@ -9,8 +9,7 @@ use bytes::Bytes;
 use http_body_util::Full;
 use hyper::Response;
 use spooky_config::config::{
-    ClientAuth, Config, Listen, LoadBalancing, Log, LogFormat, Security, Tls, Upstream,
-    UpstreamTls,
+    ClientAuth, Config, Listen, LoadBalancing, Log, LogFormat, Security, Tls, Upstream, UpstreamTls,
 };
 
 pub(crate) mod backend_lifecycle;

@@ -142,11 +142,7 @@ pub(crate) fn primary_listener_runtime_config(runtime: &RuntimeConfig) -> Listen
         .expect("primary listener")
 }
 
-pub(crate) fn assert_config_error_contains(
-    err: &RuntimeConfigError,
-    category: &str,
-    needle: &str,
-) {
+pub(crate) fn assert_config_error_contains(err: &RuntimeConfigError, category: &str, needle: &str) {
     assert_eq!(
         err.category(),
         category,

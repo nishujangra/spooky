@@ -19,9 +19,7 @@ use hyper_util::rt::TokioIo;
 use rustls_pki_types::{CertificateDer, pem::PemObject};
 use serde_json::Value as JsonValue;
 use spooky_config::{
-    config::{
-        Config, ControlApi, LogFormat, MetricsEndpoint, Observability, Upstream,
-    },
+    config::{Config, ControlApi, LogFormat, MetricsEndpoint, Observability, Upstream},
     runtime::RuntimeConfig,
     validator::validate,
 };
@@ -41,10 +39,13 @@ use tokio_rustls::{
     rustls::{ClientConfig, RootCertStore, pki_types::ServerName},
 };
 
-use super::{base_quic_test_config, static_full_response};
-use super::request_path::{
-    BackendFixture, H3RequestSpec, H3Response, ListenerTaskGuard, TestTlsMaterial, run_request_to,
-    start_h1_backend, start_h1_backend_on,
+use super::{
+    base_quic_test_config,
+    request_path::{
+        BackendFixture, H3RequestSpec, H3Response, ListenerTaskGuard, TestTlsMaterial,
+        run_request_to, start_h1_backend, start_h1_backend_on,
+    },
+    static_full_response,
 };
 
 pub struct RuntimeSwapHarness {
@@ -149,9 +150,9 @@ impl RuntimeSwapHarness {
     }
 
     pub fn start_h1_static_backend(&mut self, body: &'static [u8]) -> SocketAddr {
-        self.start_h1_backend(move |_req| async move {
-            Ok::<_, Infallible>(static_full_response(body))
-        })
+        self.start_h1_backend(
+            move |_req| async move { Ok::<_, Infallible>(static_full_response(body)) },
+        )
     }
 
     pub fn start_listener(&mut self, config: Config) -> Result<SocketAddr, String> {

@@ -1334,8 +1334,7 @@ fn quic_request_path_concurrent_large_body_pressure_is_bounded() {
         handles.push(thread::spawn(move || {
             barrier.wait();
             let chunk1 = vec![0u8; (spooky_edge::MAX_REQUEST_BODY_BYTES - 8 * 1024) / 2];
-            let chunk2 =
-                vec![0u8; (spooky_edge::MAX_REQUEST_BODY_BYTES - 8 * 1024) - chunk1.len()];
+            let chunk2 = vec![0u8; (spooky_edge::MAX_REQUEST_BODY_BYTES - 8 * 1024) - chunk1.len()];
             run_two_chunk_post_to(
                 listen_addr,
                 "localhost",

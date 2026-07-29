@@ -26,9 +26,7 @@ use rand::RngCore;
 use rcgen::{Certificate, CertificateParams, SanType};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use spooky_config::{
-    config::{
-        Backend, Config, LoadBalancing, RouteMatch, Upstream, UpstreamTls,
-    },
+    config::{Backend, Config, LoadBalancing, RouteMatch, Upstream, UpstreamTls},
     runtime::RuntimeConfig,
     validator::validate,
 };
@@ -210,9 +208,9 @@ impl QuicRequestPathHarness {
     }
 
     pub fn start_h1_static_backend(&mut self, body: &'static [u8]) -> SocketAddr {
-        self.start_h1_backend(move |_req| async move {
-            Ok::<_, Infallible>(static_full_response(body))
-        })
+        self.start_h1_backend(
+            move |_req| async move { Ok::<_, Infallible>(static_full_response(body)) },
+        )
     }
 
     pub fn start_h1_websocket_upgrade_backend(&mut self) -> SocketAddr {
@@ -264,9 +262,9 @@ impl QuicRequestPathHarness {
     }
 
     pub fn start_h2_static_backend(&mut self, body: &'static [u8]) -> SocketAddr {
-        self.start_h2_backend(move |_req| async move {
-            Ok::<_, Infallible>(static_full_response(body))
-        })
+        self.start_h2_backend(
+            move |_req| async move { Ok::<_, Infallible>(static_full_response(body)) },
+        )
     }
 
     pub fn start_h2_streaming_backend(&mut self, chunks: Vec<&'static [u8]>) -> SocketAddr {
@@ -319,12 +317,7 @@ pub fn make_quic_test_config(
     key_path: &str,
     upstreams: HashMap<String, Upstream>,
 ) -> Config {
-    make_quic_test_config_with_upstream_tls(
-        cert_path,
-        key_path,
-        upstreams,
-        UpstreamTls::default(),
-    )
+    make_quic_test_config_with_upstream_tls(cert_path, key_path, upstreams, UpstreamTls::default())
 }
 
 pub fn make_quic_test_config_with_upstream_tls(

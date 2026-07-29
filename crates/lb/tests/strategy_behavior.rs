@@ -4,8 +4,8 @@ mod common;
 
 use std::time::Duration;
 
-use spooky_lb::load_balancing::LoadBalancing;
 use common::pool;
+use spooky_lb::load_balancing::LoadBalancing;
 
 #[test]
 fn load_balancing_facade_normalizes_supported_strategy_names() {

@@ -1,9 +1,4 @@
-use std::{
-    collections::HashMap,
-    convert::Infallible,
-    net::SocketAddr,
-    time::Duration,
-};
+use std::{collections::HashMap, convert::Infallible, net::SocketAddr, time::Duration};
 
 use bytes::Bytes;
 use http_body_util::Full;
@@ -11,9 +6,7 @@ use hyper::{Request, Response, body::Incoming};
 use rcgen::{Certificate, CertificateParams, SanType};
 use serial_test::serial;
 use spooky_config::{
-    config::{
-        Backend, Config, Upstream, UpstreamTls,
-    },
+    config::{Backend, Config, Upstream, UpstreamTls},
     validator::validate,
 };
 use spooky_edge::runtime::listener::QUICListener;
@@ -21,10 +14,7 @@ use tempfile::{TempDir, tempdir};
 
 mod support;
 
-use support::{
-    net::local_tcp_bind_available,
-    request_path as request_support,
-};
+use support::{net::local_tcp_bind_available, request_path as request_support};
 
 fn write_test_certs(dir: &TempDir) -> (String, String) {
     let mut params = CertificateParams::new(vec!["localhost".into()]);
@@ -87,7 +77,9 @@ where
 async fn start_h1_delayed_backend(body: &'static str, delay: Duration) -> SocketAddr {
     let fixture = request_support::start_h1_backend(move |_req| async move {
         tokio::time::sleep(delay).await;
-        Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(body.as_bytes()))))
+        Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(
+            body.as_bytes(),
+        ))))
     })
     .await;
     let addr = fixture.addr;
@@ -154,9 +146,8 @@ fn http_only_upstream_starts_and_forwards_requests_end_to_end() {
     let listen_addr = listener.socket.local_addr().expect("listen addr");
     let _listener_task = request_support::ListenerTaskGuard::spawn(&rt, listener);
 
-    let response =
-        request_support::run_h3_get_to(listen_addr, "public.example.com", "/", &[])
-            .expect("h3 request");
+    let response = request_support::run_h3_get_to(listen_addr, "public.example.com", "/", &[])
+        .expect("h3 request");
     assert_eq!(response.status, 200);
     assert_eq!(String::from_utf8_lossy(&response.body), "http-only ok\n");
 }

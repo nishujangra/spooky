@@ -2,12 +2,9 @@
 
 mod common;
 
-use spooky_config::{
-    config::HealthCheck,
-};
-use spooky_lb::upstream_pool::UpstreamPool;
-
 use common::{runtime_upstream, weighted_backend};
+use spooky_config::config::HealthCheck;
+use spooky_lb::upstream_pool::UpstreamPool;
 
 #[test]
 fn runtime_upstream_lowers_into_a_pool_with_canonical_lb_contract() {

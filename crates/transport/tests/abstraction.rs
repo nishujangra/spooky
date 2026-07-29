@@ -110,34 +110,26 @@ fn runtime_upstream_interpretation_selects_protocol_without_caller_branching() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn transport_facade_executes_requests_without_protocol_specific_callers() {
-    let h1_backend = match start_backend_server(
-        TransportTestProtocol::Http1,
-        b"h1",
-        Duration::ZERO,
-        None,
-    )
-    .await
-    {
-        Ok(backend) => backend,
-        Err(err) if loopback_bind_restricted(&err) => return,
-        Err(err) => panic!("failed to start h1 server: {err}"),
-    };
-    let h2_backend = match start_backend_server(
-        TransportTestProtocol::H2,
-        b"h2",
-        Duration::ZERO,
-        None,
-    )
-    .await
-    {
-        Ok(backend) => backend,
-        Err(err) if loopback_bind_restricted(&err) => return,
-        Err(err) => panic!("failed to start h2 server: {err}"),
-    };
+    let h1_backend =
+        match start_backend_server(TransportTestProtocol::Http1, b"h1", Duration::ZERO, None).await
+        {
+            Ok(backend) => backend,
+            Err(err) if loopback_bind_restricted(&err) => return,
+            Err(err) => panic!("failed to start h1 server: {err}"),
+        };
+    let h2_backend =
+        match start_backend_server(TransportTestProtocol::H2, b"h2", Duration::ZERO, None).await {
+            Ok(backend) => backend,
+            Err(err) if loopback_bind_restricted(&err) => return,
+            Err(err) => panic!("failed to start h2 server: {err}"),
+        };
 
     let pool = build_pool(
         [
-            (h1_backend.clone(), TransportTestProtocol::Http1.runtime_kind()),
+            (
+                h1_backend.clone(),
+                TransportTestProtocol::Http1.runtime_kind(),
+            ),
             (h2_backend.clone(), TransportTestProtocol::H2.runtime_kind()),
         ],
         4,
@@ -202,7 +194,10 @@ fn transport_facade_exposes_stable_rotation_contract_across_protocols() {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn transport_facade_maps_unknown_backend_send_failure_and_overload_consistently() {
     let unknown_pool = build_pool(
-        [("known".to_string(), TransportTestProtocol::Http1.runtime_kind())],
+        [(
+            "known".to_string(),
+            TransportTestProtocol::Http1.runtime_kind(),
+        )],
         1,
         SharedDnsResolver::new(),
     );
@@ -354,7 +349,10 @@ async fn transport_facade_maps_execution_timeouts_to_proxy_timeout_across_protoc
 
     let pool = build_pool_with_policy(
         [
-            (h1_backend.clone(), TransportTestProtocol::Http1.runtime_kind()),
+            (
+                h1_backend.clone(),
+                TransportTestProtocol::Http1.runtime_kind(),
+            ),
             (h2_backend.clone(), TransportTestProtocol::H2.runtime_kind()),
         ],
         timeout_policy,

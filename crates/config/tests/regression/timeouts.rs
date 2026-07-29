@@ -3,8 +3,8 @@
 use std::time::Duration;
 
 use crate::common::{
-    assert_config_error_contains, primary_listener_runtime_config, runtime_config,
-    sample_config, sample_runtime_config_err_with, sample_runtime_config_with,
+    assert_config_error_contains, primary_listener_runtime_config, runtime_config, sample_config,
+    sample_runtime_config_err_with, sample_runtime_config_with,
 };
 
 #[test]

@@ -7,8 +7,8 @@ use http::{
 use quiche::h3::Header;
 
 use crate::common::{
-    RequestInputMeta, bridge_headers, build_h1_request_for_backend, parse_backend_endpoint,
-    build_h1_request_with_policy,
+    RequestInputMeta, bridge_headers, build_h1_request_for_backend, build_h1_request_with_policy,
+    parse_backend_endpoint,
 };
 
 #[test]

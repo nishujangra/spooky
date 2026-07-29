@@ -12,9 +12,7 @@ use spooky_config::config::{
     Backend, ClientAuth, Config, HealthCheck, Listen, LoadBalancing, Log, LogFormat, RouteMatch,
     Security, Tls, Upstream, UpstreamTls,
 };
-use spooky_edge::{
-    runtime::listener::QUICListener,
-};
+use spooky_edge::runtime::listener::QUICListener;
 use support::{net::local_listener_bind_available, request_path as request_support};
 
 fn write_test_certs(dir: &TempDir) -> (String, String) {
