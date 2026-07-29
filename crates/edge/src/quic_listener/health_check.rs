@@ -208,6 +208,48 @@ impl QUICListener {
     }
 }
 
+pub(super) fn classify_active_health_check_response(status: StatusCode) -> HealthClassification {
+    outcome_from_status(status)
+}
+
+impl QUICListener {
+    fn evaluate_failed_health_check(
+        backend_identity: &str,
+        metrics: &Metrics,
+        base_interval_ms: u64,
+        consecutive_failures: u32,
+        proxy_error: ProxyError,
+        fallback_reason: HealthFailureReason,
+    ) -> ActiveHealthCheckEvaluation {
+        let reason = if let Some(classified) = classify_upstream_proxy_error(&proxy_error) {
+            Self::log_classified_upstream_failure(
+                "health_check",
+                None,
+                None,
+                backend_identity,
+                &classified,
+            );
+            record_classified_backend_failure_metrics(
+                "health_check",
+                backend_identity,
+                metrics,
+                &classified,
+            )
+        } else {
+            metrics.inc_health_failure(fallback_reason);
+            Some(fallback_reason)
+        };
+
+        evaluate_active_health_check(
+            BackendIdentity::new(backend_identity.to_string()),
+            BackendHealthObservationOutcome::Failure,
+            reason,
+            base_interval_ms,
+            consecutive_failures,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::atomic::Ordering;
@@ -269,47 +311,5 @@ mod tests {
         assert_eq!(evaluation.next_consecutive_failures, 3);
         assert_eq!(metrics.health_failure_transport.load(Ordering::Relaxed), 1);
         assert_eq!(metrics.health_failure_timeout.load(Ordering::Relaxed), 0);
-    }
-}
-
-pub(super) fn classify_active_health_check_response(status: StatusCode) -> HealthClassification {
-    outcome_from_status(status)
-}
-
-impl QUICListener {
-    fn evaluate_failed_health_check(
-        backend_identity: &str,
-        metrics: &Metrics,
-        base_interval_ms: u64,
-        consecutive_failures: u32,
-        proxy_error: ProxyError,
-        fallback_reason: HealthFailureReason,
-    ) -> ActiveHealthCheckEvaluation {
-        let reason = if let Some(classified) = classify_upstream_proxy_error(&proxy_error) {
-            Self::log_classified_upstream_failure(
-                "health_check",
-                None,
-                None,
-                backend_identity,
-                &classified,
-            );
-            record_classified_backend_failure_metrics(
-                "health_check",
-                backend_identity,
-                metrics,
-                &classified,
-            )
-        } else {
-            metrics.inc_health_failure(fallback_reason);
-            Some(fallback_reason)
-        };
-
-        evaluate_active_health_check(
-            BackendIdentity::new(backend_identity.to_string()),
-            BackendHealthObservationOutcome::Failure,
-            reason,
-            base_interval_ms,
-            consecutive_failures,
-        )
     }
 }
