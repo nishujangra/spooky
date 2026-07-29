@@ -103,6 +103,33 @@ fn round_robin_sequences_across_healthy_backends() {
 }
 
 #[test]
+fn round_robin_repeated_picks_keep_alternating_across_backends() {
+    let mut pool = pool("round-robin", 2);
+
+    let keys = [
+        "tenant-a",
+        "tenant-b",
+        "tenant-c",
+        "tenant-d",
+        "tenant-e",
+        "tenant-f",
+    ];
+    let picks: Vec<_> = keys
+        .into_iter()
+        .map(|key| {
+            pool.pick_without_begin(key)
+                .expect("round-robin regression pick")
+        })
+        .collect();
+
+    assert_eq!(
+        picks,
+        vec![0, 1, 0, 1, 0, 1],
+        "round-robin must keep alternating across healthy backends even when caller keys vary"
+    );
+}
+
+#[test]
 fn random_selection_stays_within_healthy_membership() {
     let mut pool = pool("random", 3);
     let _ = pool.mark_backend_failure_from_active_check(0);
