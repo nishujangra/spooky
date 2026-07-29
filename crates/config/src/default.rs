@@ -5,51 +5,55 @@ pub fn get_default_version() -> u32 {
     CURRENT_CONFIG_VERSION
 }
 
-pub fn get_default_protocol() -> String {
+// Listen defaults
+pub(crate) fn get_default_protocol() -> String {
     String::from("http3")
 }
 
-pub fn get_default_port() -> u16 {
+pub(crate) fn get_default_port() -> u16 {
     9889
 }
 
-pub fn get_default_address() -> String {
+pub(crate) fn get_default_address() -> String {
     String::from("0.0.0.0")
 }
 
-pub fn get_default_weight() -> u32 {
+// Backend defaults
+pub(crate) fn get_default_weight() -> u32 {
     100
 }
 
-pub fn get_default_path() -> String {
+// Health-check defaults
+pub(crate) fn get_default_path() -> String {
     String::from("/health")
 }
 
-pub fn get_default_interval() -> u64 {
+pub(crate) fn get_default_interval() -> u64 {
     5000
 }
 
-pub fn get_default_health_timeout() -> u64 {
+pub(crate) fn get_default_health_timeout() -> u64 {
     1000
 }
 
-pub fn get_default_failure_threshold() -> u32 {
+pub(crate) fn get_default_failure_threshold() -> u32 {
     3
 }
 
-pub fn get_default_success_threshold() -> u32 {
+pub(crate) fn get_default_success_threshold() -> u32 {
     2
 }
 
-pub fn get_default_cooldown_ms() -> u64 {
+pub(crate) fn get_default_cooldown_ms() -> u64 {
     5_000
 }
 
-pub fn get_default_log_level() -> String {
+// Log and LogFile defaults
+pub(crate) fn get_default_log_level() -> String {
     String::from("info")
 }
 
-pub fn get_default_log_file_path() -> String {
+pub(crate) fn get_default_log_file_path() -> String {
     String::from("/var/log/spooky/spooky.log")
 }
 
@@ -60,7 +64,7 @@ pub fn get_default_load_balancing() -> LoadBalancing {
     }
 }
 
-pub fn get_default_log() -> Log {
+pub(crate) fn get_default_log() -> Log {
     Log {
         level: String::from("info"),
         file: LogFile {
@@ -71,15 +75,16 @@ pub fn get_default_log() -> Log {
     }
 }
 
-pub fn security_default_drop_privileges() -> bool {
+// PrivilegeDrop defaults
+pub(crate) fn security_default_drop_privileges() -> bool {
     true
 }
 
-pub fn security_default_user() -> String {
+pub(crate) fn security_default_user() -> String {
     String::from("nobody")
 }
 
-pub fn security_default_group() -> String {
+pub(crate) fn security_default_group() -> String {
     String::from("nogroup")
 }
 
