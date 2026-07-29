@@ -865,6 +865,26 @@ pub fn run_two_chunk_post_to(
     chunk2: Vec<u8>,
     delay_between_chunks: Duration,
 ) -> Result<(H3Response, bool), String> {
+    run_two_chunk_post_to_with_response_timeout(
+        addr,
+        authority,
+        path,
+        chunk1,
+        chunk2,
+        delay_between_chunks,
+        Duration::from_secs(REQUEST_TIMEOUT_SECS + 4),
+    )
+}
+
+pub fn run_two_chunk_post_to_with_response_timeout(
+    addr: SocketAddr,
+    authority: &str,
+    path: &str,
+    chunk1: Vec<u8>,
+    chunk2: Vec<u8>,
+    delay_between_chunks: Duration,
+    response_timeout: Duration,
+) -> Result<(H3Response, bool), String> {
     let socket = UdpSocket::bind("0.0.0.0:0").map_err(|err| err.to_string())?;
     let local_addr = socket.local_addr().map_err(|err| err.to_string())?;
 
@@ -901,11 +921,12 @@ pub fn run_two_chunk_post_to(
     let mut stream_id: Option<u64> = None;
     let mut chunk1_written = 0usize;
     let mut chunk2_written = 0usize;
-    let mut chunk2_ready_at: Option<Instant> = None;
+    let mut delayed_once = false;
     let mut status = 0u16;
     let mut headers = Vec::new();
     let mut body = Vec::new();
     let mut got_reset = false;
+    let mut request_stream_stopped = false;
 
     let (write, send_info) = conn
         .send(&mut out)
@@ -975,24 +996,43 @@ pub fn run_two_chunk_post_to(
             }
 
             if let Some(sid) = stream_id {
-                if chunk1_written < chunk1.len() {
+                if request_stream_stopped {
+                    // Keep polling for the terminal response after the server
+                    // has stopped accepting request-body bytes.
+                } else if status != 0 {
+                    request_stream_stopped = true;
+                    chunk1_written = chunk1.len();
+                    chunk2_written = chunk2.len();
+                } else if chunk1_written < chunk1.len() {
                     match h3_conn.send_body(&mut conn, sid, &chunk1[chunk1_written..], false) {
                         Ok(written) => {
                             chunk1_written += written;
-                            if chunk1_written == chunk1.len() {
-                                chunk2_ready_at = Some(Instant::now() + delay_between_chunks);
-                            }
                         }
                         Err(quiche::h3::Error::Done | quiche::h3::Error::StreamBlocked) => {}
+                        Err(quiche::h3::Error::TransportError(quiche::Error::StreamStopped(_))) => {
+                            request_stream_stopped = true;
+                            chunk1_written = chunk1.len();
+                            chunk2_written = chunk2.len();
+                        }
                         Err(err) => return Err(format!("send_body chunk1: {err:?}")),
                     }
-                } else if chunk2_written < chunk2.len()
-                    && chunk2_ready_at.is_some_and(|deadline| Instant::now() >= deadline)
-                {
-                    match h3_conn.send_body(&mut conn, sid, &chunk2[chunk2_written..], true) {
-                        Ok(written) => chunk2_written += written,
-                        Err(quiche::h3::Error::Done | quiche::h3::Error::StreamBlocked) => {}
-                        Err(err) => return Err(format!("send_body chunk2: {err:?}")),
+                } else {
+                    if !delayed_once && !delay_between_chunks.is_zero() {
+                        std::thread::sleep(delay_between_chunks);
+                        delayed_once = true;
+                    }
+                    if chunk2_written < chunk2.len() {
+                        match h3_conn.send_body(&mut conn, sid, &chunk2[chunk2_written..], true) {
+                            Ok(written) => chunk2_written += written,
+                            Err(quiche::h3::Error::Done | quiche::h3::Error::StreamBlocked) => {}
+                            Err(quiche::h3::Error::TransportError(
+                                quiche::Error::StreamStopped(_),
+                            )) => {
+                                request_stream_stopped = true;
+                                chunk2_written = chunk2.len();
+                            }
+                            Err(err) => return Err(format!("send_body chunk2: {err:?}")),
+                        }
                     }
                 }
             }
@@ -1045,7 +1085,7 @@ pub fn run_two_chunk_post_to(
             }
         }
 
-        if start.elapsed() > Duration::from_secs(REQUEST_TIMEOUT_SECS + 4) {
+        if start.elapsed() > response_timeout {
             return Err(format!(
                 "timeout waiting for response (status={status}, body_len={}, got_reset={got_reset})",
                 body.len()

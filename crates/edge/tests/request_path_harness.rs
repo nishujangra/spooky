@@ -24,7 +24,7 @@ use support::{
     net::local_listener_bind_available,
     request_path::{
         H3RequestSpec, QuicRequestPathHarness, make_backend, make_upstream, run_request_to,
-        run_two_chunk_post_to,
+        run_two_chunk_post_to, run_two_chunk_post_to_with_response_timeout,
     },
 };
 
@@ -44,6 +44,29 @@ fn metrics_counter(metrics: &str, prefix: &str) -> u64 {
 
 fn metrics_delta(before: &str, after: &str, prefix: &str) -> u64 {
     metrics_counter(after, prefix).saturating_sub(metrics_counter(before, prefix))
+}
+
+fn start_single_backend_listener(
+    harness: &mut QuicRequestPathHarness,
+    path: &str,
+    backend_id: &str,
+    backend_addr: String,
+    configure: impl FnOnce(&mut spooky_config::config::Config),
+) -> std::net::SocketAddr {
+    let mut upstreams = HashMap::new();
+    upstreams.insert(
+        "api".to_string(),
+        make_upstream(
+            path,
+            vec![make_backend(backend_id, backend_addr)],
+            None,
+            "round-robin",
+        ),
+    );
+
+    let mut config = harness.make_config(upstreams);
+    configure(&mut config);
+    harness.start_listener(config).expect("listener")
 }
 
 fn configure_http_external_auth(
@@ -1125,28 +1148,22 @@ fn quic_request_path_malformed_upstream_response_maps_to_upstream_error() {
 
 #[test]
 #[serial]
-fn quic_request_path_request_body_too_large_returns_413() {
+fn quic_request_path_request_body_cap_breach_returns_413_not_503() {
     if !local_listener_bind_available() {
         return;
     }
 
     let mut harness = QuicRequestPathHarness::new();
     let backend_addr = harness.start_h1_static_backend(b"backend upload");
-
-    let mut upstreams = HashMap::new();
-    upstreams.insert(
-        "api".to_string(),
-        make_upstream(
-            "/upload",
-            vec![make_backend("h1-upload", format!("http://{backend_addr}"))],
-            None,
-            "round-robin",
-        ),
+    let listen_addr = start_single_backend_listener(
+        &mut harness,
+        "/upload",
+        "h1-upload",
+        format!("http://{backend_addr}"),
+        |config| {
+            config.performance.max_request_body_bytes = 1024;
+        },
     );
-
-    let mut config = harness.make_config(upstreams);
-    config.performance.max_request_body_bytes = 1024;
-    let listen_addr = harness.start_listener(config).expect("listener");
 
     let (response, got_reset) = run_two_chunk_post_to(
         listen_addr,
@@ -1159,6 +1176,10 @@ fn quic_request_path_request_body_too_large_returns_413() {
     .expect("oversized request should complete");
 
     response.assert_status(413);
+    assert_ne!(
+        response.status, 503,
+        "request body cap breaches must stay on the bounded 413 path"
+    );
     assert!(
         response.body_text().contains("request body too large"),
         "expected canonical request-body-too-large response body"
@@ -1166,6 +1187,53 @@ fn quic_request_path_request_body_too_large_returns_413() {
     assert!(
         !got_reset,
         "oversized request should terminate with HTTP response"
+    );
+}
+
+#[test]
+#[serial]
+/// Regression: a slow over-cap producer previously escaped through a generic
+/// fallback path and surfaced as 503 instead of the bounded 413 contract.
+fn quic_request_path_slow_request_body_cap_breach_stays_on_413_path() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = QuicRequestPathHarness::new();
+    let backend_addr = harness.start_h2_static_backend(b"unexpected backend call");
+    let listen_addr = start_single_backend_listener(
+        &mut harness,
+        "/upload-slow-over-cap",
+        "h2-upload-slow-over-cap",
+        backend_addr.to_string(),
+        |config| {
+            config.performance.max_request_body_bytes = 1024;
+        },
+    );
+
+    let (response, got_reset) = run_two_chunk_post_to_with_response_timeout(
+        listen_addr,
+        "localhost",
+        "/upload-slow-over-cap",
+        vec![0u8; 600],
+        vec![0u8; 600],
+        Duration::from_millis(120),
+        Duration::from_secs(spooky_edge::REQUEST_TIMEOUT_SECS + 12),
+    )
+    .expect("slow over-cap request should complete");
+
+    response.assert_status(413);
+    assert_ne!(
+        response.status, 503,
+        "slow over-cap request bodies must not escape through a fallback 503 path"
+    );
+    assert!(
+        response.body_text().contains("request body too large"),
+        "expected canonical request-body-too-large response body"
+    );
+    assert!(
+        !got_reset,
+        "slow over-cap request should terminate with HTTP response, not reset"
     );
 }
 
@@ -1299,6 +1367,57 @@ fn quic_request_path_slow_response_body_before_first_chunk_returns_timeout() {
     assert!(
         response.body_text().contains("upstream timeout"),
         "expected canonical upstream timeout body for stalled response body stream"
+    );
+}
+
+#[test]
+#[serial]
+/// Regression: the total response-body timer must not kill streams that keep
+/// making forward progress before the idle timer expires.
+fn quic_request_path_progressing_long_stream_ignores_body_total_timeout() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = QuicRequestPathHarness::new();
+    let backend_addr = harness.start_h1_delayed_chunked_backend(vec![
+        (b"part-1".to_vec(), Duration::from_millis(50)),
+        (b"part-2".to_vec(), Duration::from_millis(100)),
+        (b"part-3".to_vec(), Duration::from_millis(100)),
+        (b"part-4".to_vec(), Duration::from_millis(100)),
+    ]);
+
+    let mut upstreams = HashMap::new();
+    upstreams.insert(
+        "api".to_string(),
+        make_upstream(
+            "/long-stream",
+            vec![make_backend(
+                "h1-long-stream-progress",
+                format!("http://{backend_addr}"),
+            )],
+            None,
+            "round-robin",
+        ),
+    );
+
+    let mut config = harness.make_config(upstreams);
+    config.performance.backend_timeout_ms = 240;
+    config.performance.backend_connect_timeout_ms = 240;
+    config.performance.backend_body_total_timeout_ms = 250;
+    config.performance.backend_body_idle_timeout_ms = 240;
+    config.performance.backend_total_request_timeout_ms = 5_000;
+    harness.start_listener(config).expect("listener");
+
+    let response = harness
+        .run_request(H3RequestSpec::get("localhost", "/long-stream"))
+        .expect("long stream request should complete");
+
+    response.assert_status(200);
+    assert_eq!(
+        response.body_text(),
+        "part-1part-2part-3part-4",
+        "body-total timeout must not kill a response stream that keeps making progress"
     );
 }
 

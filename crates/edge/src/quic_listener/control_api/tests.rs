@@ -452,6 +452,70 @@ fn control_api_state_uses_live_primary_listener_label_after_runtime_swap() {
     );
 }
 
+#[tokio::test]
+async fn control_api_runtime_snapshot_uses_live_primary_listener_label_after_bundle_replace() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let mut startup = test_config(cert.clone(), key.clone());
+    startup.observability.control_api.enabled = true;
+
+    let startup_bundle = runtime_bundle_from_config("startup.yaml", &startup);
+    let (state, runtime_handle) = runtime_bundle_control_api_state(startup_bundle);
+
+    let startup_payload =
+        json_body(QUICListener::render_control_api_runtime_snapshot(&state)).await;
+    let startup_listeners = startup_payload["tls"]["listeners"]
+        .as_object()
+        .expect("startup listeners object");
+    assert!(
+        startup_listeners.contains_key("127.0.0.1:9889"),
+        "startup snapshot should expose the startup primary listener label"
+    );
+
+    let mut reloaded = startup.clone();
+    reloaded.listeners = vec![
+        Listen {
+            protocol: "http3".to_string(),
+            port: 9890,
+            address: "127.0.0.1".to_string(),
+            tls: Tls {
+                cert: cert.clone(),
+                key: key.clone(),
+                certificates: vec![],
+                client_auth: ClientAuth::default(),
+            },
+        },
+        startup.listen.clone(),
+    ];
+
+    let mut reloaded_bundle = runtime_bundle_from_config("reloaded.yaml", &reloaded);
+    reloaded_bundle.generation = 1;
+    runtime_handle
+        .replace(reloaded_bundle)
+        .expect("replace runtime bundle");
+
+    assert_eq!(
+        state.current_primary_listener_label().as_deref(),
+        Some("127.0.0.1:9890"),
+        "control api state must prefer the live generation's primary listener label"
+    );
+
+    let live_payload = json_body(QUICListener::render_control_api_runtime_snapshot(&state)).await;
+    let live_listeners = live_payload["tls"]["listeners"]
+        .as_object()
+        .expect("live listeners object");
+
+    assert_eq!(live_payload["runtime"]["generation"], 1);
+    assert!(
+        live_listeners.contains_key("127.0.0.1:9890"),
+        "runtime snapshot must render the live generation's primary listener label after bundle replacement"
+    );
+    assert!(
+        live_listeners.contains_key("127.0.0.1:9889"),
+        "runtime snapshot should keep the remaining listener inventory from the live generation"
+    );
+}
+
 #[test]
 fn control_api_state_sees_the_active_runtime_generation_after_bundle_replace() {
     let dir = tempdir().expect("tempdir");
@@ -490,6 +554,55 @@ fn control_api_state_sees_the_active_runtime_generation_after_bundle_replace() {
         state.current_paths().runtime_path,
         "/runtime-reloaded".to_string()
     );
+}
+
+#[test]
+fn control_api_gating_uses_live_generation_paths_and_auth_after_bundle_replace() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let mut startup = test_config(cert.clone(), key.clone());
+    startup.observability.control_api.enabled = true;
+    startup.observability.control_api.runtime_path = "/runtime-startup".to_string();
+    startup.observability.control_api.auth_token = Some("startup-token".to_string());
+
+    let startup_bundle = runtime_bundle_from_config("startup.yaml", &startup);
+    let (state, runtime_handle) = runtime_bundle_control_api_state(startup_bundle);
+
+    let mut reloaded = startup.clone();
+    reloaded.observability.control_api.runtime_path = "/runtime-reloaded".to_string();
+    reloaded.observability.control_api.auth_token = Some("reloaded-token".to_string());
+    let mut reloaded_bundle = runtime_bundle_from_config("reloaded.yaml", &reloaded);
+    reloaded_bundle.generation = 1;
+    runtime_handle
+        .replace(reloaded_bundle)
+        .expect("replace runtime bundle");
+
+    let startup_path = control_api_request(
+        Method::GET,
+        "/runtime-startup",
+        Some("Bearer startup-token"),
+    );
+    let startup_err = QUICListener::gate_control_api_request_for(&startup_path, &state)
+        .expect_err("stale runtime path should be rejected after replacement");
+    assert_eq!(startup_err.status(), StatusCode::NOT_FOUND);
+
+    let stale_token = control_api_request(
+        Method::GET,
+        "/runtime-reloaded",
+        Some("Bearer startup-token"),
+    );
+    let stale_token_err = QUICListener::gate_control_api_request_for(&stale_token, &state)
+        .expect_err("stale token should be rejected after replacement");
+    assert_eq!(stale_token_err.status(), StatusCode::UNAUTHORIZED);
+
+    let live = control_api_request(
+        Method::GET,
+        "/runtime-reloaded",
+        Some("Bearer reloaded-token"),
+    );
+    let route = QUICListener::gate_control_api_request_for(&live, &state)
+        .expect("live control api path and auth should be accepted");
+    assert!(matches!(route, super::auth::ControlApiRoute::Runtime));
 }
 
 #[test]

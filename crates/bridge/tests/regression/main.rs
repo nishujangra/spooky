@@ -5,6 +5,10 @@
 //! hop-by-hop stripping, spoofed-header removal, WebSocket shaping, and H1/H2
 //! output parity. Shared fixtures live in `common`, while response-normalization
 //! contracts live under the bridge unit tests.
+//!
+//! See `tests/regression/README.md` for the boundary between request-shaping
+//! regressions kept here and response-normalization contracts kept beside the
+//! owning bridge entrypoints.
 
 mod common;
 
