@@ -72,6 +72,11 @@ pub(crate) fn sample_config() -> Config {
     config
 }
 
+pub(crate) fn parse_config(yaml: &str) -> Config {
+    serde_yaml::from_str(yaml)
+        .unwrap_or_else(|err| panic!("regression fixture yaml should parse: {err}"))
+}
+
 pub(crate) fn sample_config_with(edit: impl FnOnce(&mut Config)) -> Config {
     let mut config = sample_config();
     edit(&mut config);
@@ -114,6 +119,10 @@ pub(crate) fn duplicate_api_upstream(config: &mut Config, name: &str) {
 pub(crate) fn runtime_config(config: &Config) -> RuntimeConfig {
     RuntimeConfig::from_config(config)
         .unwrap_or_else(|err| panic!("shared regression fixture should lower successfully: {err}"))
+}
+
+pub(crate) fn runtime_config_from_yaml(yaml: &str) -> RuntimeConfig {
+    runtime_config(&parse_config(yaml))
 }
 
 pub(crate) fn sample_runtime_config_with(edit: impl FnOnce(&mut Config)) -> RuntimeConfig {
