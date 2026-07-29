@@ -11,7 +11,7 @@ use std::{
 use bytes::Bytes;
 use http_body_util::Full;
 use serial_test::serial;
-use spooky_config::config::{Backend, LoadBalancing, RouteMatch, Upstream};
+use spooky_config::config::{Backend, Config, LoadBalancing, RouteMatch, Upstream};
 use spooky_edge::runtime::policy::{LifecycleTransitionResult, RuntimeLifecyclePhase};
 
 mod support;
@@ -59,23 +59,63 @@ fn lifecycle_backend_addresses(snapshot: &serde_json::Value) -> Vec<String> {
         .collect()
 }
 
-#[test]
-#[serial]
-fn runtime_swap_harness_exposes_control_api_metrics_and_reload_surface() {
+fn start_static_runtime_swap_listener(
+    body: &'static [u8],
+    configure: impl FnOnce(&mut Config),
+) -> Option<RuntimeSwapHarness> {
     if !local_listener_bind_available() {
-        return;
+        return None;
     }
 
     let mut harness = RuntimeSwapHarness::new();
-    let backend_addr = harness.start_h1_static_backend(b"ok");
-    let config = harness.make_config(HashMap::from([(
+    let backend_addr = harness.start_h1_static_backend(body);
+    let mut config = harness.make_config(HashMap::from([(
         "api".to_string(),
         single_backend_upstream(backend_addr),
     )]));
+    configure(&mut config);
 
     harness
         .start_listener(config)
         .expect("start runtime swap listener");
+    Some(harness)
+}
+
+fn assert_listener_stops_accepting_fresh_quic_connections(harness: &RuntimeSwapHarness) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut established = true;
+    while Instant::now() < deadline {
+        established = harness
+            .fresh_quic_connection_establishes_within(Duration::from_millis(250))
+            .expect("fresh quic connection attempt");
+        if !established {
+            break;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    assert!(
+        !established,
+        "fresh QUIC connections must stop establishing once the live listener enters draining"
+    );
+}
+
+fn assert_watchdog_restart_drains_listener(harness: &RuntimeSwapHarness, reason: &str) {
+    assert!(
+        harness
+            .request_watchdog_restart(reason)
+            .expect("request watchdog restart"),
+        "watchdog restart request should be accepted"
+    );
+    assert_listener_stops_accepting_fresh_quic_connections(harness);
+}
+
+// Domain: reload swap.
+#[test]
+#[serial]
+fn runtime_swap_harness_exposes_reload_control_plane_and_metrics_surfaces() {
+    let Some(mut harness) = start_static_runtime_swap_listener(b"ok", |_| {}) else {
+        return;
+    };
 
     let startup_snapshot = harness.runtime_snapshot().expect("runtime snapshot");
     assert_eq!(startup_snapshot["runtime"]["generation"], 0);
@@ -103,7 +143,9 @@ fn runtime_swap_harness_exposes_control_api_metrics_and_reload_surface() {
     assert_eq!(reload["reloaded"], true);
     assert_eq!(reload["generation"], 1);
 
-    let reloaded_snapshot = harness.runtime_snapshot().expect("reloaded runtime snapshot");
+    let reloaded_snapshot = harness
+        .runtime_snapshot()
+        .expect("reloaded runtime snapshot");
     assert_eq!(reloaded_snapshot["runtime"]["generation"], 1);
     assert_eq!(
         reloaded_snapshot["runtime"]["config_path"],
@@ -113,7 +155,7 @@ fn runtime_swap_harness_exposes_control_api_metrics_and_reload_surface() {
 
 #[test]
 #[serial]
-fn runtime_reload_swaps_generation_owned_backend_targets_without_changing_listener_identity() {
+fn generation_owned_reload_swaps_backend_targets_without_changing_listener_identity() {
     if !local_listener_bind_available() {
         return;
     }
@@ -136,7 +178,9 @@ fn runtime_reload_swaps_generation_owned_backend_targets_without_changing_listen
     before.assert_status(200);
     before.assert_body_bytes(b"backend-old");
 
-    let startup_snapshot = harness.runtime_snapshot().expect("startup runtime snapshot");
+    let startup_snapshot = harness
+        .runtime_snapshot()
+        .expect("startup runtime snapshot");
     assert_eq!(startup_snapshot["runtime"]["generation"], 0);
     let startup_tls = startup_snapshot["tls"]["listeners"]
         .as_object()
@@ -169,7 +213,9 @@ fn runtime_reload_swaps_generation_owned_backend_targets_without_changing_listen
     after.assert_status(200);
     after.assert_body_bytes(b"backend-new");
 
-    let reloaded_snapshot = harness.runtime_snapshot().expect("reloaded runtime snapshot");
+    let reloaded_snapshot = harness
+        .runtime_snapshot()
+        .expect("reloaded runtime snapshot");
     assert_eq!(reloaded_snapshot["runtime"]["generation"], 1);
     assert_eq!(
         startup_snapshot["runtime"]["generation"], 0,
@@ -191,23 +237,13 @@ fn runtime_reload_swaps_generation_owned_backend_targets_without_changing_listen
     );
 }
 
+// Domain: reload rejection.
 #[test]
 #[serial]
-fn runtime_reload_rejects_listener_bind_change_and_keeps_active_generation_live() {
-    if !local_listener_bind_available() {
+fn startup_owned_listener_bind_change_is_rejected_and_keeps_active_generation_live() {
+    let Some(mut harness) = start_static_runtime_swap_listener(b"bind-stable", |_| {}) else {
         return;
-    }
-
-    let mut harness = RuntimeSwapHarness::new();
-    let backend_addr = harness.start_h1_static_backend(b"bind-stable");
-    let config = harness.make_config(HashMap::from([(
-        "api".to_string(),
-        single_backend_upstream(backend_addr),
-    )]));
-
-    harness
-        .start_listener(config)
-        .expect("start runtime swap listener");
+    };
 
     let before = harness
         .run_request(H3RequestSpec::get("localhost", "/"))
@@ -215,7 +251,9 @@ fn runtime_reload_rejects_listener_bind_change_and_keeps_active_generation_live(
     before.assert_status(200);
     before.assert_body_bytes(b"bind-stable");
 
-    let startup_snapshot = harness.runtime_snapshot().expect("startup runtime snapshot");
+    let startup_snapshot = harness
+        .runtime_snapshot()
+        .expect("startup runtime snapshot");
     assert_eq!(startup_snapshot["runtime"]["generation"], 0);
 
     harness
@@ -240,14 +278,15 @@ fn runtime_reload_rejects_listener_bind_change_and_keeps_active_generation_live(
         "listener bind rejection should mention the listener, got: {error}"
     );
 
-    let after_snapshot = harness.runtime_snapshot().expect("post-rejection runtime snapshot");
+    let after_snapshot = harness
+        .runtime_snapshot()
+        .expect("post-rejection runtime snapshot");
     assert_eq!(
         after_snapshot["runtime"]["generation"], 0,
         "startup-owned rejection must leave the active generation unchanged"
     );
     assert_eq!(
-        after_snapshot["runtime"]["config_path"],
-        startup_snapshot["runtime"]["config_path"],
+        after_snapshot["runtime"]["config_path"], startup_snapshot["runtime"]["config_path"],
         "config path should remain the same for a rejected same-path reload attempt"
     );
 
@@ -260,21 +299,10 @@ fn runtime_reload_rejects_listener_bind_change_and_keeps_active_generation_live(
 
 #[test]
 #[serial]
-fn runtime_reload_rejects_startup_owned_log_sink_change_and_keeps_request_behavior() {
-    if !local_listener_bind_available() {
+fn startup_owned_log_sink_change_is_rejected_and_keeps_request_behavior() {
+    let Some(mut harness) = start_static_runtime_swap_listener(b"log-sink-stable", |_| {}) else {
         return;
-    }
-
-    let mut harness = RuntimeSwapHarness::new();
-    let backend_addr = harness.start_h1_static_backend(b"log-sink-stable");
-    let config = harness.make_config(HashMap::from([(
-        "api".to_string(),
-        single_backend_upstream(backend_addr),
-    )]));
-
-    harness
-        .start_listener(config)
-        .expect("start runtime swap listener");
+    };
 
     let before = harness
         .run_request(H3RequestSpec::get("localhost", "/"))
@@ -282,7 +310,9 @@ fn runtime_reload_rejects_startup_owned_log_sink_change_and_keeps_request_behavi
     before.assert_status(200);
     before.assert_body_bytes(b"log-sink-stable");
 
-    let startup_snapshot = harness.runtime_snapshot().expect("startup runtime snapshot");
+    let startup_snapshot = harness
+        .runtime_snapshot()
+        .expect("startup runtime snapshot");
     assert_eq!(startup_snapshot["runtime"]["generation"], 0);
 
     harness
@@ -308,7 +338,9 @@ fn runtime_reload_rejects_startup_owned_log_sink_change_and_keeps_request_behavi
         "log sink rejection should point at startup-owned log file fields, got: {error}"
     );
 
-    let after_snapshot = harness.runtime_snapshot().expect("post-rejection runtime snapshot");
+    let after_snapshot = harness
+        .runtime_snapshot()
+        .expect("post-rejection runtime snapshot");
     assert_eq!(
         after_snapshot["runtime"]["generation"], 0,
         "startup-owned log sink rejection must keep the active generation unchanged"
@@ -323,7 +355,64 @@ fn runtime_reload_rejects_startup_owned_log_sink_change_and_keeps_request_behavi
 
 #[test]
 #[serial]
-fn control_api_runtime_snapshot_tracks_active_generation_listener_labels_and_backend_inventory() {
+fn runtime_reload_is_rejected_after_listener_lifecycle_leaves_running() {
+    let Some(mut harness) = start_static_runtime_swap_listener(b"lifecycle-running", |_| {}) else {
+        return;
+    };
+
+    assert_eq!(
+        harness.lifecycle_phase().expect("runtime lifecycle phase"),
+        RuntimeLifecyclePhase::Running
+    );
+    assert!(matches!(
+        harness
+            .begin_lifecycle_drain()
+            .expect("begin lifecycle drain"),
+        LifecycleTransitionResult::Applied {
+            to: RuntimeLifecyclePhase::Draining,
+            ..
+        } | LifecycleTransitionResult::NoOp {
+            phase: RuntimeLifecyclePhase::Draining
+        }
+    ));
+    assert_eq!(
+        harness.lifecycle_phase().expect("draining lifecycle phase"),
+        RuntimeLifecyclePhase::Draining
+    );
+
+    let generation_before = harness.current_generation().expect("generation before");
+    harness
+        .rewrite_config(|config| {
+            config.log.level = "debug".to_string();
+        })
+        .expect("rewrite live-reloadable config");
+
+    let rejection = harness
+        .trigger_runtime_reload_expect(http::StatusCode::INTERNAL_SERVER_ERROR)
+        .expect("reload rejection after drain");
+    assert_eq!(rejection["reloaded"], false);
+    let error = rejection["error"]
+        .as_str()
+        .expect("reload rejection error string");
+    assert!(
+        error.contains("illegal_transition")
+            || error.contains("Draining")
+            || error.contains("ReloadCommit"),
+        "reload rejection should reflect the non-running lifecycle gate, got: {error}"
+    );
+    assert_eq!(
+        harness
+            .current_generation()
+            .expect("generation after rejection"),
+        generation_before,
+        "reload rejection after drain must keep the active generation unchanged"
+    );
+}
+
+// Domain: control-plane visibility.
+#[test]
+#[serial]
+fn control_api_runtime_snapshot_tracks_active_generation_listener_and_backend_inventory() {
     if !local_listener_bind_available() {
         return;
     }
@@ -341,7 +430,9 @@ fn control_api_runtime_snapshot_tracks_active_generation_listener_labels_and_bac
         .start_listener(config)
         .expect("start runtime swap listener");
 
-    let startup_snapshot = harness.runtime_snapshot().expect("startup runtime snapshot");
+    let startup_snapshot = harness
+        .runtime_snapshot()
+        .expect("startup runtime snapshot");
     assert_eq!(startup_snapshot["runtime"]["generation"], 0);
     let startup_listeners = startup_snapshot["tls"]["listeners"]
         .as_object()
@@ -395,28 +486,73 @@ fn control_api_runtime_snapshot_tracks_active_generation_listener_labels_and_bac
         "runtime snapshot should expose backend lifecycle inventory from the active generation only"
     );
     assert!(
-        !live_backends.iter().any(|backend| backend == &format!("http://{old_backend}")),
+        !live_backends
+            .iter()
+            .any(|backend| backend == &format!("http://{old_backend}")),
         "runtime snapshot must not leak stale-generation backend inventory"
     );
 }
 
 #[test]
 #[serial]
-fn metrics_endpoint_tracks_active_generation_path_and_metric_surface_after_reload() {
-    if !local_listener_bind_available() {
+fn watchdog_restart_surfaces_not_ready_and_restart_pending_control_plane_state() {
+    let Some(harness) = start_static_runtime_swap_listener(b"watchdog-drain-state", |config| {
+        config.resilience.watchdog.enabled = true;
+    }) else {
         return;
-    }
+    };
 
-    let mut harness = RuntimeSwapHarness::new();
-    let backend_addr = harness.start_h1_static_backend(b"metrics-live");
-    let config = harness.make_config(HashMap::from([(
-        "api".to_string(),
-        single_backend_upstream(backend_addr),
-    )]));
+    let ready_before = harness
+        .ready_snapshot_expect(http::StatusCode::OK)
+        .expect("ready snapshot before watchdog restart");
+    assert_eq!(ready_before["ready"], true);
+    assert_eq!(ready_before["restart_requested"], false);
 
-    harness
-        .start_listener(config)
-        .expect("start runtime swap listener");
+    let runtime_before = harness
+        .runtime_snapshot()
+        .expect("runtime snapshot before restart");
+    assert_eq!(runtime_before["watchdog"]["restart_requested"], false);
+    assert_eq!(runtime_before["watchdog"]["restart_reason"], "");
+
+    assert!(
+        harness
+            .request_watchdog_restart("runtime-swap-drain-visible")
+            .expect("request watchdog restart"),
+        "watchdog restart request should be accepted"
+    );
+
+    let ready_after = harness
+        .ready_snapshot_expect(http::StatusCode::SERVICE_UNAVAILABLE)
+        .expect("ready snapshot after watchdog restart");
+    assert_eq!(ready_after["ready"], false);
+    assert_eq!(ready_after["restart_requested"], true);
+
+    let runtime_after = harness
+        .runtime_snapshot()
+        .expect("runtime snapshot after restart");
+    assert_eq!(runtime_after["watchdog"]["restart_requested"], true);
+    assert_eq!(
+        runtime_after["watchdog"]["restart_reason"],
+        "runtime-swap-drain-visible"
+    );
+    assert!(
+        runtime_after["watchdog"]["restart_requested_at_ms"]
+            .as_u64()
+            .expect("watchdog restart timestamp")
+            > 0,
+        "runtime snapshot should expose the watchdog restart timestamp while drain is pending"
+    );
+
+    assert_listener_stops_accepting_fresh_quic_connections(&harness);
+}
+
+// Domain: metrics visibility.
+#[test]
+#[serial]
+fn metrics_endpoint_tracks_active_generation_route_label_and_path_after_reload() {
+    let Some(mut harness) = start_static_runtime_swap_listener(b"metrics-live", |_| {}) else {
+        return;
+    };
 
     let startup_metrics = harness.metrics_text().expect("startup metrics text");
     assert!(
@@ -459,125 +595,10 @@ fn metrics_endpoint_tracks_active_generation_path_and_metric_surface_after_reloa
     );
 }
 
+// Domain: drain behavior.
 #[test]
 #[serial]
-fn watchdog_requested_drain_blocks_new_quic_connections() {
-    if !local_listener_bind_available() {
-        return;
-    }
-
-    let mut harness = RuntimeSwapHarness::new();
-    let backend_addr = harness.start_h1_static_backend(b"drain-blocked");
-    let mut config = harness.make_config(HashMap::from([(
-        "api".to_string(),
-        single_backend_upstream(backend_addr),
-    )]));
-    config.resilience.watchdog.enabled = true;
-
-    harness
-        .start_listener(config)
-        .expect("start runtime swap listener");
-
-    assert!(
-        harness
-            .request_watchdog_restart("runtime-swap-drain-block")
-            .expect("request watchdog restart"),
-        "watchdog restart request should be accepted"
-    );
-
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let mut established = true;
-    while Instant::now() < deadline {
-        established = harness
-            .fresh_quic_connection_establishes_within(Duration::from_millis(250))
-            .expect("fresh quic connection attempt");
-        if !established {
-            break;
-        }
-        thread::sleep(Duration::from_millis(25));
-    }
-    assert!(
-        !established,
-        "fresh QUIC connections must stop establishing once the live listener enters draining"
-    );
-}
-
-#[test]
-#[serial]
-fn watchdog_restart_surfaces_drain_state_consistently_across_control_api_views() {
-    if !local_listener_bind_available() {
-        return;
-    }
-
-    let mut harness = RuntimeSwapHarness::new();
-    let backend_addr = harness.start_h1_static_backend(b"watchdog-drain-state");
-    let mut config = harness.make_config(HashMap::from([(
-        "api".to_string(),
-        single_backend_upstream(backend_addr),
-    )]));
-    config.resilience.watchdog.enabled = true;
-
-    harness
-        .start_listener(config)
-        .expect("start runtime swap listener");
-
-    let ready_before = harness
-        .ready_snapshot_expect(http::StatusCode::OK)
-        .expect("ready snapshot before watchdog restart");
-    assert_eq!(ready_before["ready"], true);
-    assert_eq!(ready_before["restart_requested"], false);
-
-    let runtime_before = harness.runtime_snapshot().expect("runtime snapshot before restart");
-    assert_eq!(runtime_before["watchdog"]["restart_requested"], false);
-    assert_eq!(runtime_before["watchdog"]["restart_reason"], "");
-
-    assert!(
-        harness
-            .request_watchdog_restart("runtime-swap-drain-visible")
-            .expect("request watchdog restart"),
-        "watchdog restart request should be accepted"
-    );
-
-    let ready_after = harness
-        .ready_snapshot_expect(http::StatusCode::SERVICE_UNAVAILABLE)
-        .expect("ready snapshot after watchdog restart");
-    assert_eq!(ready_after["ready"], false);
-    assert_eq!(ready_after["restart_requested"], true);
-
-    let runtime_after = harness.runtime_snapshot().expect("runtime snapshot after restart");
-    assert_eq!(runtime_after["watchdog"]["restart_requested"], true);
-    assert_eq!(
-        runtime_after["watchdog"]["restart_reason"],
-        "runtime-swap-drain-visible"
-    );
-    assert!(
-        runtime_after["watchdog"]["restart_requested_at_ms"]
-            .as_u64()
-            .expect("watchdog restart timestamp")
-            > 0,
-        "runtime snapshot should expose the watchdog restart timestamp while drain is pending"
-    );
-
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let mut established = true;
-    while Instant::now() < deadline {
-        established = harness
-            .fresh_quic_connection_establishes_within(Duration::from_millis(250))
-            .expect("fresh quic connection attempt");
-        if !established {
-            break;
-        }
-        thread::sleep(Duration::from_millis(25));
-    }
-    assert!(
-        !established,
-        "watchdog restart should surface as both not-ready control-plane state and a draining listener that stops accepting fresh QUIC connections"
-    );
-}
-
-#[test]
-#[serial]
-fn in_flight_request_can_complete_while_listener_is_draining() {
+fn in_flight_request_completes_while_watchdog_restart_drains_listener() {
     if !local_listener_bind_available() {
         return;
     }
@@ -590,9 +611,9 @@ fn in_flight_request_can_complete_while_listener_is_draining() {
         async move {
             started.store(true, Ordering::Relaxed);
             tokio::time::sleep(Duration::from_millis(80)).await;
-            Ok::<_, std::convert::Infallible>(hyper::Response::new(Full::new(
-                Bytes::from_static(b"drain-complete"),
-            )))
+            Ok::<_, std::convert::Infallible>(hyper::Response::new(Full::new(Bytes::from_static(
+                b"drain-complete",
+            ))))
         }
     });
     let mut config = harness.make_config(HashMap::from([(
@@ -606,7 +627,8 @@ fn in_flight_request_can_complete_while_listener_is_draining() {
         .start_listener(config)
         .expect("start runtime swap listener");
 
-    let client = thread::spawn(move || run_request_to(listen_addr, H3RequestSpec::get("localhost", "/")));
+    let client =
+        thread::spawn(move || run_request_to(listen_addr, H3RequestSpec::get("localhost", "/")));
 
     let deadline = Instant::now() + Duration::from_secs(2);
     while Instant::now() < deadline && !request_started.load(Ordering::Relaxed) {
@@ -624,69 +646,23 @@ fn in_flight_request_can_complete_while_listener_is_draining() {
         "watchdog restart request should be accepted"
     );
 
-    let response = client.join().expect("client thread join").expect("in-flight response");
+    let response = client
+        .join()
+        .expect("client thread join")
+        .expect("in-flight response");
     response.assert_status(200);
     response.assert_body_bytes(b"drain-complete");
 }
 
+// Domain: watchdog restart path.
 #[test]
 #[serial]
-fn runtime_reload_is_rejected_once_lifecycle_leaves_running() {
-    if !local_listener_bind_available() {
+fn watchdog_restart_blocks_new_quic_connections_once_listener_starts_draining() {
+    let Some(harness) = start_static_runtime_swap_listener(b"drain-blocked", |config| {
+        config.resilience.watchdog.enabled = true;
+    }) else {
         return;
-    }
+    };
 
-    let mut harness = RuntimeSwapHarness::new();
-    let backend_addr = harness.start_h1_static_backend(b"lifecycle-running");
-    let config = harness.make_config(HashMap::from([(
-        "api".to_string(),
-        single_backend_upstream(backend_addr),
-    )]));
-
-    harness
-        .start_listener(config)
-        .expect("start runtime swap listener");
-
-    assert_eq!(
-        harness.lifecycle_phase().expect("runtime lifecycle phase"),
-        RuntimeLifecyclePhase::Running
-    );
-    assert!(matches!(
-        harness.begin_lifecycle_drain().expect("begin lifecycle drain"),
-        LifecycleTransitionResult::Applied {
-            to: RuntimeLifecyclePhase::Draining,
-            ..
-        }
-        | LifecycleTransitionResult::NoOp {
-            phase: RuntimeLifecyclePhase::Draining
-        }
-    ));
-    assert_eq!(
-        harness.lifecycle_phase().expect("draining lifecycle phase"),
-        RuntimeLifecyclePhase::Draining
-    );
-
-    let generation_before = harness.current_generation().expect("generation before");
-    harness
-        .rewrite_config(|config| {
-            config.log.level = "debug".to_string();
-        })
-        .expect("rewrite live-reloadable config");
-
-    let rejection = harness
-        .trigger_runtime_reload_expect(http::StatusCode::INTERNAL_SERVER_ERROR)
-        .expect("reload rejection after drain");
-    assert_eq!(rejection["reloaded"], false);
-    let error = rejection["error"]
-        .as_str()
-        .expect("reload rejection error string");
-    assert!(
-        error.contains("illegal_transition") || error.contains("Draining") || error.contains("ReloadCommit"),
-        "reload rejection should reflect the non-running lifecycle gate, got: {error}"
-    );
-    assert_eq!(
-        harness.current_generation().expect("generation after rejection"),
-        generation_before,
-        "reload rejection after drain must keep the active generation unchanged"
-    );
+    assert_watchdog_restart_drains_listener(&harness, "runtime-swap-drain-block");
 }

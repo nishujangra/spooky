@@ -14,11 +14,7 @@ use std::{
 use bytes::Bytes;
 use http::{Method, StatusCode};
 use http_body_util::{BodyExt, Empty, Full};
-use hyper::{
-    Request, Response,
-    body::Incoming,
-    client::conn::http1,
-};
+use hyper::{Request, Response, body::Incoming, client::conn::http1};
 use hyper_util::rt::TokioIo;
 use rustls_pki_types::{CertificateDer, pem::PemObject};
 use serde_json::Value as JsonValue;
@@ -47,8 +43,8 @@ use tokio_rustls::{
 };
 
 use super::request_path::{
-    BackendFixture, H3RequestSpec, H3Response, ListenerTaskGuard, TestTlsMaterial,
-    run_request_to, start_h1_backend,
+    BackendFixture, H3RequestSpec, H3Response, ListenerTaskGuard, TestTlsMaterial, run_request_to,
+    start_h1_backend,
 };
 
 pub struct RuntimeSwapHarness {
@@ -308,16 +304,16 @@ impl RuntimeSwapHarness {
     }
 
     pub fn metrics_text_at(&self, path: &str) -> Result<String, String> {
-        self.rt.block_on(
-            self.poll_metrics_text(path.to_string(), StatusCode::OK, Duration::from_secs(5)),
-        )
+        self.rt.block_on(self.poll_metrics_text(
+            path.to_string(),
+            StatusCode::OK,
+            Duration::from_secs(5),
+        ))
     }
 
     pub fn metrics_status_at(&self, path: &str) -> Result<StatusCode, String> {
-        self.rt.block_on(self.poll_metrics_status(
-            path.to_string(),
-            Duration::from_secs(5),
-        ))
+        self.rt
+            .block_on(self.poll_metrics_status(path.to_string(), Duration::from_secs(5)))
     }
 
     pub fn run_request(&self, request: H3RequestSpec<'_>) -> Result<H3Response, String> {
@@ -457,14 +453,8 @@ impl RuntimeSwapHarness {
         let mut last_error = String::new();
 
         while Instant::now() < deadline {
-            match control_api_request_once(
-                addr,
-                &self.tls.cert_path,
-                method.clone(),
-                &path,
-                &token,
-            )
-            .await
+            match control_api_request_once(addr, &self.tls.cert_path, method.clone(), &path, &token)
+                .await
             {
                 Ok((status, body)) if status == expected_status => return Ok(body),
                 Ok((status, body)) => {
@@ -516,7 +506,10 @@ fn read_test_root_store(cert_path: &str) -> Result<RootCertStore, String> {
     Ok(roots)
 }
 
-async fn metrics_request_once(addr: SocketAddr, path: &str) -> Result<(StatusCode, String), String> {
+async fn metrics_request_once(
+    addr: SocketAddr,
+    path: &str,
+) -> Result<(StatusCode, String), String> {
     let stream = TcpStream::connect(addr)
         .await
         .map_err(|err| format!("metrics connect: {err}"))?;
@@ -636,7 +629,9 @@ fn quic_connection_establishes_within(addr: SocketAddr, timeout: Duration) -> Re
     let mut out = [0u8; MAX_UDP_PAYLOAD_BYTES];
     let mut buf = [0u8; MAX_DATAGRAM_SIZE_BYTES];
 
-    let (written, send_info) = conn.send(&mut out).map_err(|err| format!("send: {err:?}"))?;
+    let (written, send_info) = conn
+        .send(&mut out)
+        .map_err(|err| format!("send: {err:?}"))?;
     socket
         .send_to(&out[..written], send_info.to)
         .map_err(|err| format!("send_to: {err}"))?;
@@ -690,10 +685,12 @@ fn render_runtime_swap_config(config: &Config) -> Result<String, String> {
     writeln!(&mut yaml, "version: {}", config.version).map_err(|err| err.to_string())?;
     writeln!(&mut yaml, "listen:").map_err(|err| err.to_string())?;
     writeln!(&mut yaml, "  protocol: {}", config.listen.protocol).map_err(|err| err.to_string())?;
-    writeln!(&mut yaml, "  address: \"{}\"", config.listen.address).map_err(|err| err.to_string())?;
+    writeln!(&mut yaml, "  address: \"{}\"", config.listen.address)
+        .map_err(|err| err.to_string())?;
     writeln!(&mut yaml, "  port: {}", config.listen.port).map_err(|err| err.to_string())?;
     writeln!(&mut yaml, "  tls:").map_err(|err| err.to_string())?;
-    writeln!(&mut yaml, "    cert: \"{}\"", config.listen.tls.cert).map_err(|err| err.to_string())?;
+    writeln!(&mut yaml, "    cert: \"{}\"", config.listen.tls.cert)
+        .map_err(|err| err.to_string())?;
     writeln!(&mut yaml, "    key: \"{}\"", config.listen.tls.key).map_err(|err| err.to_string())?;
 
     if let Some(load_balancing) = &config.load_balancing {
@@ -705,51 +702,31 @@ fn render_runtime_swap_config(config: &Config) -> Result<String, String> {
     for (name, upstream) in &config.upstream {
         writeln!(&mut yaml, "  {}:", yaml_scalar(name)).map_err(|err| err.to_string())?;
         writeln!(&mut yaml, "    load_balancing:").map_err(|err| err.to_string())?;
-        writeln!(
-            &mut yaml,
-            "      type: {}",
-            upstream.load_balancing.lb_type
-        )
-        .map_err(|err| err.to_string())?;
+        writeln!(&mut yaml, "      type: {}", upstream.load_balancing.lb_type)
+            .map_err(|err| err.to_string())?;
         writeln!(&mut yaml, "    route:").map_err(|err| err.to_string())?;
         if let Some(path_prefix) = upstream.route.path_prefix.as_deref() {
-            writeln!(
-                &mut yaml,
-                "      path_prefix: \"{}\"",
-                path_prefix
-            )
-            .map_err(|err| err.to_string())?;
+            writeln!(&mut yaml, "      path_prefix: \"{}\"", path_prefix)
+                .map_err(|err| err.to_string())?;
         }
         writeln!(&mut yaml, "    backends:").map_err(|err| err.to_string())?;
         for backend in &upstream.backends {
             writeln!(&mut yaml, "      - id: {}", yaml_scalar(&backend.id))
                 .map_err(|err| err.to_string())?;
-            writeln!(
-                &mut yaml,
-                "        address: \"{}\"",
-                backend.address
-            )
-            .map_err(|err| err.to_string())?;
+            writeln!(&mut yaml, "        address: \"{}\"", backend.address)
+                .map_err(|err| err.to_string())?;
             writeln!(&mut yaml, "        weight: {}", backend.weight)
                 .map_err(|err| err.to_string())?;
         }
     }
 
     writeln!(&mut yaml, "log:").map_err(|err| err.to_string())?;
-    writeln!(&mut yaml, "  level: {}", yaml_scalar(&config.log.level)).map_err(|err| err.to_string())?;
+    writeln!(&mut yaml, "  level: {}", yaml_scalar(&config.log.level))
+        .map_err(|err| err.to_string())?;
     writeln!(&mut yaml, "  file:").map_err(|err| err.to_string())?;
-    writeln!(
-        &mut yaml,
-        "    enabled: {}",
-        config.log.file.enabled
-    )
-    .map_err(|err| err.to_string())?;
-    writeln!(
-        &mut yaml,
-        "    path: \"{}\"",
-        config.log.file.path
-    )
-    .map_err(|err| err.to_string())?;
+    writeln!(&mut yaml, "    enabled: {}", config.log.file.enabled)
+        .map_err(|err| err.to_string())?;
+    writeln!(&mut yaml, "    path: \"{}\"", config.log.file.path).map_err(|err| err.to_string())?;
     writeln!(
         &mut yaml,
         "  format: {}",
@@ -794,12 +771,8 @@ fn render_runtime_swap_config(config: &Config) -> Result<String, String> {
         config.observability.metrics.address
     )
     .map_err(|err| err.to_string())?;
-    writeln!(
-        &mut yaml,
-        "    port: {}",
-        config.observability.metrics.port
-    )
-    .map_err(|err| err.to_string())?;
+    writeln!(&mut yaml, "    port: {}", config.observability.metrics.port)
+        .map_err(|err| err.to_string())?;
     writeln!(
         &mut yaml,
         "    path: \"{}\"",
