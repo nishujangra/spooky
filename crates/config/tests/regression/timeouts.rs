@@ -3,24 +3,24 @@
 use std::time::Duration;
 
 use crate::common::{
-    assert_config_error_contains, runtime_config, runtime_config_err, sample_config,
+    assert_config_error_contains, primary_listener_runtime_config, runtime_config, sample_config,
+    sample_runtime_config_err_with, sample_runtime_config_with,
 };
 
 #[test]
 fn runtime_config_normalizes_timeout_and_transport_knobs_into_runtime_policies() {
-    let mut config = sample_config();
-    config.performance.backend_timeout_ms = 2_500;
-    config.performance.backend_connect_timeout_ms = 400;
-    config.performance.backend_body_idle_timeout_ms = 3_500;
-    config.performance.backend_body_total_timeout_ms = 4_500;
-    config.performance.backend_total_request_timeout_ms = 5_500;
-    config.performance.h2_pool_idle_timeout_ms = 91_000;
-    config.performance.max_active_connections = 1234;
-    config.performance.max_request_body_bytes = 8_000;
-    config.performance.request_buffer_global_cap_bytes = 9_999;
-    config.resilience.route_queue.shed_retry_after_seconds = 17;
-
-    let runtime = runtime_config(&config);
+    let runtime = sample_runtime_config_with(|config| {
+        config.performance.backend_timeout_ms = 2_500;
+        config.performance.backend_connect_timeout_ms = 400;
+        config.performance.backend_body_idle_timeout_ms = 3_500;
+        config.performance.backend_body_total_timeout_ms = 4_500;
+        config.performance.backend_total_request_timeout_ms = 5_500;
+        config.performance.h2_pool_idle_timeout_ms = 91_000;
+        config.performance.max_active_connections = 1234;
+        config.performance.max_request_body_bytes = 8_000;
+        config.performance.request_buffer_global_cap_bytes = 9_999;
+        config.resilience.route_queue.shed_retry_after_seconds = 17;
+    });
     let policies = runtime.policies();
 
     assert_eq!(
@@ -44,9 +44,7 @@ fn runtime_config_normalizes_timeout_and_transport_knobs_into_runtime_policies()
 fn runtime_config_keeps_listener_and_runtime_policy_views_in_sync_for_defaults() {
     let config = sample_config();
     let runtime = runtime_config(&config);
-    let listener = runtime
-        .primary_listener_runtime_config()
-        .expect("primary listener");
+    let listener = primary_listener_runtime_config(&runtime);
 
     assert_eq!(
         runtime.policies.timeouts.backend_request,
@@ -74,11 +72,10 @@ fn runtime_config_keeps_listener_and_runtime_policy_views_in_sync_for_defaults()
 
 #[test]
 fn runtime_config_rejects_timeout_ordering_that_breaks_runtime_contract() {
-    let mut config = sample_config();
-    config.performance.backend_connect_timeout_ms = 2_000;
-    config.performance.backend_timeout_ms = 1_000;
-
-    let err = runtime_config_err(&config);
+    let err = sample_runtime_config_err_with(|config| {
+        config.performance.backend_connect_timeout_ms = 2_000;
+        config.performance.backend_timeout_ms = 1_000;
+    });
     assert_config_error_contains(
         &err,
         "config_invalid",

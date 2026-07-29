@@ -8,13 +8,13 @@ use spooky_config::{
         LoadBalancing, Log, Observability, Performance, Resilience, RouteMatch, Security, Tls,
         Upstream, UpstreamHostPolicy, UpstreamHostPolicyMode, UpstreamTls,
     },
-    runtime::{RuntimeConfig, RuntimeConfigError, RuntimeUpstream},
+    runtime::{ListenerRuntimeConfig, RuntimeConfig, RuntimeConfigError, RuntimeUpstream},
 };
 
 const API_UPSTREAM: &str = "api";
 
 /// A minimal, valid single-upstream config used as the base for regression cases.
-pub fn sample_config() -> Config {
+pub(crate) fn sample_config() -> Config {
     let mut config = Config {
         version: 1,
         listen: Listen {
@@ -72,31 +72,77 @@ pub fn sample_config() -> Config {
     config
 }
 
-pub fn api_upstream_mut(config: &mut Config) -> &mut Upstream {
+pub(crate) fn sample_config_with(edit: impl FnOnce(&mut Config)) -> Config {
+    let mut config = sample_config();
+    edit(&mut config);
+    config
+}
+
+pub(crate) fn sample_config_with_api_upstream(edit: impl FnOnce(&mut Upstream)) -> Config {
+    sample_config_with(|config| edit(api_upstream_mut(config)))
+}
+
+pub(crate) fn sample_runtime_config_with_api_upstream(
+    edit: impl FnOnce(&mut Upstream),
+) -> RuntimeConfig {
+    runtime_config(&sample_config_with_api_upstream(edit))
+}
+
+pub(crate) fn api_upstream_mut(config: &mut Config) -> &mut Upstream {
     config
         .upstream
         .get_mut(API_UPSTREAM)
         .expect("shared regression fixture must include the 'api' upstream")
 }
 
-pub fn runtime_config(config: &Config) -> RuntimeConfig {
+pub(crate) fn api_backend_mut(config: &mut Config) -> &mut Backend {
+    api_upstream_mut(config)
+        .backends
+        .first_mut()
+        .expect("shared regression fixture must include an 'api' backend")
+}
+
+pub(crate) fn duplicate_api_upstream(config: &mut Config, name: &str) {
+    let duplicate = config
+        .upstream
+        .get(API_UPSTREAM)
+        .expect("shared regression fixture must include the 'api' upstream")
+        .clone();
+    config.upstream.insert(name.to_string(), duplicate);
+}
+
+pub(crate) fn runtime_config(config: &Config) -> RuntimeConfig {
     RuntimeConfig::from_config(config)
         .unwrap_or_else(|err| panic!("shared regression fixture should lower successfully: {err}"))
 }
 
-pub fn runtime_config_err(config: &Config) -> RuntimeConfigError {
+pub(crate) fn sample_runtime_config_with(edit: impl FnOnce(&mut Config)) -> RuntimeConfig {
+    runtime_config(&sample_config_with(edit))
+}
+
+pub(crate) fn runtime_config_err(config: &Config) -> RuntimeConfigError {
     RuntimeConfig::from_config(config)
         .expect_err("regression case must reject the runtime lowering input")
 }
 
-pub fn api_runtime_upstream(runtime: &RuntimeConfig) -> &RuntimeUpstream {
+pub(crate) fn sample_runtime_config_err_with(edit: impl FnOnce(&mut Config)) -> RuntimeConfigError {
+    runtime_config_err(&sample_config_with(edit))
+}
+
+pub(crate) fn api_runtime_upstream(runtime: &RuntimeConfig) -> &RuntimeUpstream {
     runtime
         .upstreams
         .get(API_UPSTREAM)
         .expect("runtime lowering output must include the 'api' upstream")
 }
 
-pub fn assert_config_error_contains(err: &RuntimeConfigError, category: &str, needle: &str) {
+pub(crate) fn primary_listener_runtime_config(runtime: &RuntimeConfig) -> ListenerRuntimeConfig {
+    runtime
+        .primary_listener_runtime_config()
+        .expect("primary listener")
+}
+
+pub(crate) fn assert_config_error_contains(err: &RuntimeConfigError, category: &str, needle: &str) {
     assert_eq!(
         err.category(),
         category,

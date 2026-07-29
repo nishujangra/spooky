@@ -1,3 +1,5 @@
+//! Local support helpers for transport facade contract tests.
+
 #![allow(dead_code)]
 
 use std::{
@@ -18,20 +20,48 @@ use spooky_config::runtime::{RuntimeBackendConnectionPolicy, RuntimeBackendTrans
 use spooky_transport::{SharedDnsResolver, UpstreamTransportPool};
 use tokio::net::TcpListener;
 
-pub struct ConcurrencyTracker {
+#[derive(Clone, Copy)]
+enum TestServerProtocol {
+    Http1,
+    H2,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum TransportTestProtocol {
+    Http1,
+    H2,
+}
+
+impl TransportTestProtocol {
+    fn server_protocol(self) -> TestServerProtocol {
+        match self {
+            Self::Http1 => TestServerProtocol::Http1,
+            Self::H2 => TestServerProtocol::H2,
+        }
+    }
+
+    pub(crate) fn runtime_kind(self) -> RuntimeBackendTransportKind {
+        match self {
+            Self::Http1 => RuntimeBackendTransportKind::Http1,
+            Self::H2 => RuntimeBackendTransportKind::H2,
+        }
+    }
+}
+
+pub(crate) struct ConcurrencyTracker {
     current: AtomicUsize,
     max: AtomicUsize,
 }
 
 impl ConcurrencyTracker {
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self {
             current: AtomicUsize::new(0),
             max: AtomicUsize::new(0),
         }
     }
 
-    pub fn enter(&self) {
+    pub(crate) fn enter(&self) {
         let now = self.current.fetch_add(1, Ordering::SeqCst) + 1;
         let mut prev = self.max.load(Ordering::SeqCst);
         while now > prev {
@@ -45,21 +75,21 @@ impl ConcurrencyTracker {
         }
     }
 
-    pub fn exit(&self) {
+    pub(crate) fn exit(&self) {
         self.current.fetch_sub(1, Ordering::SeqCst);
     }
 
-    pub fn max_observed(&self) -> usize {
+    pub(crate) fn max_observed(&self) -> usize {
         self.max.load(Ordering::SeqCst)
     }
 }
 
-pub fn loopback_bind_restricted(err: &std::io::Error) -> bool {
+pub(crate) fn loopback_bind_restricted(err: &std::io::Error) -> bool {
     err.kind() == std::io::ErrorKind::PermissionDenied
         || matches!(err.raw_os_error(), Some(1) | Some(13))
 }
 
-pub fn request(uri: &str) -> Request<BoxBody<Bytes, std::convert::Infallible>> {
+pub(crate) fn request(uri: &str) -> Request<BoxBody<Bytes, std::convert::Infallible>> {
     Request::builder()
         .method("GET")
         .uri(uri)
@@ -67,7 +97,13 @@ pub fn request(uri: &str) -> Request<BoxBody<Bytes, std::convert::Infallible>> {
         .expect("request")
 }
 
-pub fn reserve_unused_port() -> u16 {
+pub(crate) fn request_to_backend(
+    backend: &str,
+) -> Request<BoxBody<Bytes, std::convert::Infallible>> {
+    request(&format!("http://{backend}/"))
+}
+
+pub(crate) fn reserve_unused_port() -> u16 {
     StdTcpListener::bind("127.0.0.1:0")
         .expect("bind ephemeral port")
         .local_addr()
@@ -75,7 +111,7 @@ pub fn reserve_unused_port() -> u16 {
         .port()
 }
 
-pub fn connection_policy(max_inflight: usize) -> RuntimeBackendConnectionPolicy {
+pub(crate) fn connection_policy(max_inflight: usize) -> RuntimeBackendConnectionPolicy {
     RuntimeBackendConnectionPolicy {
         max_inflight,
         max_idle_per_backend: 64,
@@ -85,7 +121,7 @@ pub fn connection_policy(max_inflight: usize) -> RuntimeBackendConnectionPolicy 
     }
 }
 
-pub fn build_pool(
+pub(crate) fn build_pool(
     backends: impl IntoIterator<Item = (String, RuntimeBackendTransportKind)>,
     max_inflight: usize,
     resolver: SharedDnsResolver,
@@ -93,7 +129,7 @@ pub fn build_pool(
     build_pool_with_policy(backends, connection_policy(max_inflight), resolver)
 }
 
-pub fn build_pool_with_policy(
+pub(crate) fn build_pool_with_policy(
     backends: impl IntoIterator<Item = (String, RuntimeBackendTransportKind)>,
     connection_policy: RuntimeBackendConnectionPolicy,
     resolver: SharedDnsResolver,
@@ -107,7 +143,16 @@ pub fn build_pool_with_policy(
     .expect("transport pool")
 }
 
-pub async fn read_body(response: Response<Incoming>) -> Bytes {
+pub(crate) fn build_single_backend_pool(
+    backend: String,
+    transport_kind: RuntimeBackendTransportKind,
+    max_inflight: usize,
+    resolver: SharedDnsResolver,
+) -> UpstreamTransportPool {
+    build_pool([(backend, transport_kind)], max_inflight, resolver)
+}
+
+pub(crate) async fn read_body(response: Response<Incoming>) -> Bytes {
     response
         .into_body()
         .collect()
@@ -116,49 +161,81 @@ pub async fn read_body(response: Response<Incoming>) -> Bytes {
         .to_bytes()
 }
 
-pub async fn start_h1_server(
-    body: &'static [u8],
-    delay: Duration,
-    tracker: Option<Arc<ConcurrencyTracker>>,
-) -> std::io::Result<u16> {
-    let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let port = listener.local_addr()?.port();
-
-    tokio::spawn(async move {
-        loop {
-            let (stream, _) = match listener.accept().await {
-                Ok(v) => v,
-                Err(_) => break,
-            };
-            let tracker = tracker.clone();
-            let service = service_fn(move |_req: Request<Incoming>| {
-                let tracker = tracker.clone();
-                async move {
-                    if let Some(tracker) = &tracker {
-                        tracker.enter();
-                    }
-                    tokio::time::sleep(delay).await;
-                    if let Some(tracker) = &tracker {
-                        tracker.exit();
-                    }
-                    Ok::<_, std::convert::Infallible>(Response::new(Full::new(Bytes::from_static(
-                        body,
-                    ))))
-                }
-            });
-
-            tokio::spawn(async move {
-                let _ = hyper::server::conn::http1::Builder::new()
-                    .serve_connection(TokioIo::new(stream), service)
-                    .await;
-            });
-        }
-    });
-
-    Ok(port)
+pub(crate) fn backend_address(port: u16) -> String {
+    format!("127.0.0.1:{port}")
 }
 
-pub async fn start_h2_server(
+pub(crate) async fn start_backend_server(
+    protocol: TransportTestProtocol,
+    body: &'static [u8],
+    delay: Duration,
+    tracker: Option<Arc<ConcurrencyTracker>>,
+) -> std::io::Result<String> {
+    let port = start_server(protocol.server_protocol(), body, delay, tracker).await?;
+    Ok(backend_address(port))
+}
+
+pub(crate) async fn start_backend_pool(
+    protocol: TransportTestProtocol,
+    body: &'static [u8],
+    delay: Duration,
+    tracker: Option<Arc<ConcurrencyTracker>>,
+    max_inflight: usize,
+    resolver: SharedDnsResolver,
+) -> std::io::Result<(String, UpstreamTransportPool)> {
+    let backend = start_backend_server(protocol, body, delay, tracker).await?;
+    let pool = build_single_backend_pool(
+        backend.clone(),
+        protocol.runtime_kind(),
+        max_inflight,
+        resolver,
+    );
+    Ok((backend, pool))
+}
+
+pub(crate) async fn start_shared_backend_pool(
+    protocol: TransportTestProtocol,
+    body: &'static [u8],
+    delay: Duration,
+    tracker: Option<Arc<ConcurrencyTracker>>,
+    max_inflight: usize,
+    resolver: SharedDnsResolver,
+) -> std::io::Result<(String, Arc<UpstreamTransportPool>)> {
+    let (backend, pool) =
+        start_backend_pool(protocol, body, delay, tracker, max_inflight, resolver).await?;
+    Ok((backend, Arc::new(pool)))
+}
+
+pub(crate) async fn start_h1_server(
+    body: &'static [u8],
+    delay: Duration,
+    tracker: Option<Arc<ConcurrencyTracker>>,
+) -> std::io::Result<u16> {
+    start_server(
+        TransportTestProtocol::Http1.server_protocol(),
+        body,
+        delay,
+        tracker,
+    )
+    .await
+}
+
+pub(crate) async fn start_h2_server(
+    body: &'static [u8],
+    delay: Duration,
+    tracker: Option<Arc<ConcurrencyTracker>>,
+) -> std::io::Result<u16> {
+    start_server(
+        TransportTestProtocol::H2.server_protocol(),
+        body,
+        delay,
+        tracker,
+    )
+    .await
+}
+
+async fn start_server(
+    protocol: TestServerProtocol,
     body: &'static [u8],
     delay: Duration,
     tracker: Option<Arc<ConcurrencyTracker>>,
@@ -190,9 +267,19 @@ pub async fn start_h2_server(
             });
 
             tokio::spawn(async move {
-                let _ = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
-                    .serve_connection(TokioIo::new(stream), service)
-                    .await;
+                let io = TokioIo::new(stream);
+                match protocol {
+                    TestServerProtocol::Http1 => {
+                        let _ = hyper::server::conn::http1::Builder::new()
+                            .serve_connection(io, service)
+                            .await;
+                    }
+                    TestServerProtocol::H2 => {
+                        let _ = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
+                            .serve_connection(io, service)
+                            .await;
+                    }
+                }
             });
         }
     });

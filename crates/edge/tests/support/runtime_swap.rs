@@ -19,10 +19,7 @@ use hyper_util::rt::TokioIo;
 use rustls_pki_types::{CertificateDer, pem::PemObject};
 use serde_json::Value as JsonValue;
 use spooky_config::{
-    config::{
-        ClientAuth, Config, ControlApi, Listen, LoadBalancing, Log, LogFormat, MetricsEndpoint,
-        Observability, Security, Tls, Upstream, UpstreamTls,
-    },
+    config::{Config, ControlApi, LogFormat, MetricsEndpoint, Observability, Upstream},
     runtime::RuntimeConfig,
     validator::validate,
 };
@@ -42,9 +39,13 @@ use tokio_rustls::{
     rustls::{ClientConfig, RootCertStore, pki_types::ServerName},
 };
 
-use super::request_path::{
-    BackendFixture, H3RequestSpec, H3Response, ListenerTaskGuard, TestTlsMaterial, run_request_to,
-    start_h1_backend, start_h1_backend_on,
+use super::{
+    base_quic_test_config,
+    request_path::{
+        BackendFixture, H3RequestSpec, H3Response, ListenerTaskGuard, TestTlsMaterial,
+        run_request_to, start_h1_backend, start_h1_backend_on,
+    },
+    static_full_response,
 };
 
 pub struct RuntimeSwapHarness {
@@ -86,62 +87,40 @@ impl RuntimeSwapHarness {
     }
 
     pub fn make_config(&self, upstreams: HashMap<String, Upstream>) -> Config {
-        Config {
-            version: 1,
-            listen: Listen {
-                protocol: "http3".to_string(),
-                port: self.listen_port,
+        let mut config = base_quic_test_config(
+            self.listen_port,
+            &self.tls.cert_path,
+            &self.tls.key_path,
+            upstreams,
+        );
+        config.observability = Observability {
+            metrics: MetricsEndpoint {
+                enabled: true,
+                required: true,
                 address: "127.0.0.1".to_string(),
-                tls: Tls {
-                    cert: self.tls.cert_path.clone(),
-                    key: self.tls.key_path.clone(),
-                    certificates: Vec::new(),
-                    client_auth: ClientAuth::default(),
-                },
+                port: self.metrics_port,
+                path: "/metrics".to_string(),
+                max_connections: 32,
+                connection_timeout_ms: 5_000,
             },
-            listeners: Vec::new(),
-            upstream: upstreams,
-            load_balancing: Some(LoadBalancing {
-                lb_type: "round-robin".to_string(),
-                key: None,
-            }),
-            upstream_tls: UpstreamTls::default(),
-            log: Log {
-                level: "info".to_string(),
-                file: Default::default(),
-                format: LogFormat::Plain,
+            control_api: ControlApi {
+                enabled: true,
+                required: true,
+                address: "127.0.0.1".to_string(),
+                port: self.control_api_port,
+                health_path: "/health".to_string(),
+                ready_path: "/ready".to_string(),
+                runtime_path: "/runtime".to_string(),
+                restart_path: "/restart".to_string(),
+                reload_path: "/reload".to_string(),
+                reload_certs_path: "/reload-certs".to_string(),
+                auth_token: Some("runtime-swap-token".to_string()),
+                max_connections: 32,
+                connection_timeout_ms: 5_000,
             },
-            performance: spooky_config::config::Performance::default(),
-            observability: Observability {
-                metrics: MetricsEndpoint {
-                    enabled: true,
-                    required: true,
-                    address: "127.0.0.1".to_string(),
-                    port: self.metrics_port,
-                    path: "/metrics".to_string(),
-                    max_connections: 32,
-                    connection_timeout_ms: 5_000,
-                },
-                control_api: ControlApi {
-                    enabled: true,
-                    required: true,
-                    address: "127.0.0.1".to_string(),
-                    port: self.control_api_port,
-                    health_path: "/health".to_string(),
-                    ready_path: "/ready".to_string(),
-                    runtime_path: "/runtime".to_string(),
-                    restart_path: "/restart".to_string(),
-                    reload_path: "/reload".to_string(),
-                    reload_certs_path: "/reload-certs".to_string(),
-                    auth_token: Some("runtime-swap-token".to_string()),
-                    max_connections: 32,
-                    connection_timeout_ms: 5_000,
-                },
-                ..Observability::default()
-            },
-            resilience: spooky_config::config::Resilience::default(),
-            security: Security::default(),
-        }
+            ..Observability::default()
+        };
+        config
     }
 
     pub fn start_h1_backend<F, Fut>(&mut self, handler: F) -> SocketAddr
@@ -171,9 +150,9 @@ impl RuntimeSwapHarness {
     }
 
     pub fn start_h1_static_backend(&mut self, body: &'static [u8]) -> SocketAddr {
-        self.start_h1_backend(move |_req| async move {
-            Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(body))))
-        })
+        self.start_h1_backend(
+            move |_req| async move { Ok::<_, Infallible>(static_full_response(body)) },
+        )
     }
 
     pub fn start_listener(&mut self, config: Config) -> Result<SocketAddr, String> {

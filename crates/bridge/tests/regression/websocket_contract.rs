@@ -2,17 +2,15 @@
 
 use http::{HeaderMap, HeaderValue, header::HOST};
 use quiche::h3::Header;
-use spooky_bridge::request::{build_h1_request, build_h2_request_for_target};
-use spooky_config::{
-    backend_endpoint::BackendEndpoint,
-    config::{ForwardedHeaderPolicy, UpstreamHostPolicy},
-};
+use spooky_config::config::{ForwardedHeaderPolicy, UpstreamHostPolicy};
 
-use crate::common::{RequestInputMeta, bridge_headers, request_input, request_target};
+use crate::common::{
+    RequestInputMeta, bridge_headers, build_h1_request_for_backend, build_h2_request_with_policy,
+    parse_backend_endpoint,
+};
 
 #[test]
 fn legacy_websocket_headers_from_bootstrap_and_forwarding_shape_identically() {
-    let endpoint = BackendEndpoint::parse("http://backend.internal:8080").expect("endpoint");
     let forwarding_headers = vec![
         Header::new(b"host", b"socket.example.com"),
         Header::new(b"connection", b"upgrade"),
@@ -31,24 +29,18 @@ fn legacy_websocket_headers_from_bootstrap_and_forwarding_shape_identically() {
     let bootstrap_headers = bridge_headers(&bootstrap_headers_map);
 
     let build = |headers: &[Header]| {
-        build_h1_request(
-            request_target(
-                &endpoint,
-                &UpstreamHostPolicy::default(),
-                &ForwardedHeaderPolicy::default(),
-            ),
-            request_input(
-                "GET",
-                "/ws",
-                headers,
-                RequestInputMeta {
-                    authority: Some("socket.example.com"),
-                    content_length: None,
-                    request_id: 601,
-                    traceparent: None,
-                    client_addr: "198.51.100.12:5555".parse().expect("client"),
-                },
-            ),
+        build_h1_request_for_backend(
+            "http://backend.internal:8080",
+            "GET",
+            "/ws",
+            headers,
+            RequestInputMeta {
+                authority: Some("socket.example.com"),
+                content_length: None,
+                request_id: 601,
+                traceparent: None,
+                client_addr: "198.51.100.12:5555".parse().expect("client"),
+            },
         )
         .expect("request")
     };
@@ -83,7 +75,7 @@ fn legacy_websocket_headers_from_bootstrap_and_forwarding_shape_identically() {
 
 #[test]
 fn incomplete_upgrade_candidates_do_not_trigger_websocket_specific_request_shaping() {
-    let endpoint = BackendEndpoint::parse("backend.internal:443").expect("endpoint");
+    let endpoint = parse_backend_endpoint("backend.internal:443").expect("endpoint");
     let headers = vec![
         Header::new(b"connection", b"keep-alive"),
         Header::new(b"upgrade", b"websocket"),
@@ -98,22 +90,16 @@ fn incomplete_upgrade_candidates_do_not_trigger_websocket_specific_request_shapi
         client_addr: "203.0.113.17:7004".parse().expect("client"),
     };
 
-    let h1 = build_h1_request(
-        request_target(
-            &endpoint,
-            &UpstreamHostPolicy::default(),
-            &ForwardedHeaderPolicy::default(),
-        ),
-        request_input("GET", "/not-ws", &headers, meta),
-    )
-    .expect("h1 request");
-    let h2 = build_h2_request_for_target(
-        request_target(
-            &endpoint,
-            &UpstreamHostPolicy::default(),
-            &ForwardedHeaderPolicy::default(),
-        ),
-        request_input("GET", "/not-ws", &headers, meta),
+    let h1 = build_h1_request_for_backend("backend.internal:443", "GET", "/not-ws", &headers, meta)
+        .expect("h1 request");
+    let h2 = build_h2_request_with_policy(
+        &endpoint,
+        &UpstreamHostPolicy::default(),
+        &ForwardedHeaderPolicy::default(),
+        "GET",
+        "/not-ws",
+        &headers,
+        meta,
     )
     .expect("h2 request");
 
@@ -137,30 +123,26 @@ fn incomplete_upgrade_candidates_do_not_trigger_websocket_specific_request_shapi
 
 #[test]
 fn connect_without_websocket_protocol_stays_on_normal_connect_path() {
-    let endpoint = BackendEndpoint::parse("proxy.internal:8443").expect("endpoint");
+    let endpoint = parse_backend_endpoint("proxy.internal:8443").expect("endpoint");
     let headers = vec![Header::new(
         b"sec-websocket-key",
         b"dGhlIHNhbXBsZSBub25jZQ==",
     )];
 
-    let request = build_h2_request_for_target(
-        request_target(
-            &endpoint,
-            &UpstreamHostPolicy::default(),
-            &ForwardedHeaderPolicy::default(),
-        ),
-        request_input(
-            "CONNECT",
-            "/ignored",
-            &headers,
-            RequestInputMeta {
-                authority: Some("target.example.com:443"),
-                content_length: None,
-                request_id: 603,
-                traceparent: None,
-                client_addr: "203.0.113.18:7005".parse().expect("client"),
-            },
-        ),
+    let request = build_h2_request_with_policy(
+        &endpoint,
+        &UpstreamHostPolicy::default(),
+        &ForwardedHeaderPolicy::default(),
+        "CONNECT",
+        "/ignored",
+        &headers,
+        RequestInputMeta {
+            authority: Some("target.example.com:443"),
+            content_length: None,
+            request_id: 603,
+            traceparent: None,
+            client_addr: "203.0.113.18:7005".parse().expect("client"),
+        },
     )
     .expect("h2 request");
 
