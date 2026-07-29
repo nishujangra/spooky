@@ -5,17 +5,14 @@ use http::{
     header::{CONTENT_LENGTH, HOST, TE},
 };
 use quiche::h3::Header;
-use spooky_bridge::request::build_h1_request;
-use spooky_config::{
-    backend_endpoint::BackendEndpoint,
-    config::{ForwardedHeaderPolicy, UpstreamHostPolicy},
-};
 
-use crate::common::{RequestInputMeta, bridge_headers, request_input, request_target};
+use crate::common::{
+    RequestInputMeta, bridge_headers, build_h1_request_for_backend, parse_backend_endpoint,
+    build_h1_request_with_policy,
+};
 
 #[test]
 fn plain_requests_strip_hop_headers_and_add_te_trailers() {
-    let endpoint = BackendEndpoint::parse("backend.internal:443").expect("endpoint");
     let headers = vec![
         Header::new(b"host", b"spoofed.example.com"),
         Header::new(b"forwarded", b"for=1.2.3.4"),
@@ -26,24 +23,18 @@ fn plain_requests_strip_hop_headers_and_add_te_trailers() {
         Header::new(b"content-length", b"999"),
     ];
 
-    let req = build_h1_request(
-        request_target(
-            &endpoint,
-            &UpstreamHostPolicy::default(),
-            &ForwardedHeaderPolicy::default(),
-        ),
-        request_input(
-            "POST",
-            "/submit",
-            &headers,
-            RequestInputMeta {
-                authority: Some("api.example.com"),
-                content_length: Some(12),
-                request_id: 42,
-                traceparent: Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
-                client_addr: "203.0.113.10:44321".parse().expect("client"),
-            },
-        ),
+    let req = build_h1_request_for_backend(
+        "backend.internal:443",
+        "POST",
+        "/submit",
+        &headers,
+        RequestInputMeta {
+            authority: Some("api.example.com"),
+            content_length: Some(12),
+            request_id: 42,
+            traceparent: Some("00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"),
+            client_addr: "203.0.113.10:44321".parse().expect("client"),
+        },
     )
     .expect("request");
 
@@ -99,7 +90,6 @@ fn plain_requests_strip_hop_headers_and_add_te_trailers() {
 
 #[test]
 fn legacy_websocket_requests_preserve_upgrade_headers() {
-    let endpoint = BackendEndpoint::parse("http://backend.internal:8080").expect("endpoint");
     let headers = vec![
         Header::new(b"host", b"socket.example.com"),
         Header::new(b"connection", b"upgrade"),
@@ -107,24 +97,18 @@ fn legacy_websocket_requests_preserve_upgrade_headers() {
         Header::new(b"sec-websocket-key", b"dGhlIHNhbXBsZSBub25jZQ=="),
     ];
 
-    let req = build_h1_request(
-        request_target(
-            &endpoint,
-            &UpstreamHostPolicy::default(),
-            &ForwardedHeaderPolicy::default(),
-        ),
-        request_input(
-            "GET",
-            "/ws",
-            &headers,
-            RequestInputMeta {
-                authority: Some("socket.example.com"),
-                content_length: None,
-                request_id: 7,
-                traceparent: None,
-                client_addr: "198.51.100.12:5555".parse().expect("client"),
-            },
-        ),
+    let req = build_h1_request_for_backend(
+        "http://backend.internal:8080",
+        "GET",
+        "/ws",
+        &headers,
+        RequestInputMeta {
+            authority: Some("socket.example.com"),
+            content_length: None,
+            request_id: 7,
+            traceparent: None,
+            client_addr: "198.51.100.12:5555".parse().expect("client"),
+        },
     )
     .expect("request");
 
@@ -154,7 +138,7 @@ fn legacy_websocket_requests_preserve_upgrade_headers() {
 
 #[test]
 fn bootstrap_and_forwarding_header_shapes_match_for_h1() {
-    let endpoint = BackendEndpoint::parse("backend.internal:443").expect("endpoint");
+    let endpoint = parse_backend_endpoint("backend.internal:443").expect("endpoint");
     let forwarding_headers = vec![
         Header::new(b"host", b"api.example.com"),
         Header::new(b"x-custom", b"ok"),
@@ -168,24 +152,20 @@ fn bootstrap_and_forwarding_header_shapes_match_for_h1() {
     let bootstrap_headers = bridge_headers(&bootstrap_headers_map);
 
     let build = |headers: &[Header]| {
-        build_h1_request(
-            request_target(
-                &endpoint,
-                &UpstreamHostPolicy::default(),
-                &ForwardedHeaderPolicy::default(),
-            ),
-            request_input(
-                "GET",
-                "/",
-                headers,
-                RequestInputMeta {
-                    authority: Some("api.example.com"),
-                    content_length: None,
-                    request_id: 99,
-                    traceparent: Some("00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01"),
-                    client_addr: "203.0.113.88:8080".parse().expect("client"),
-                },
-            ),
+        build_h1_request_with_policy(
+            &endpoint,
+            &Default::default(),
+            &Default::default(),
+            "GET",
+            "/",
+            headers,
+            RequestInputMeta {
+                authority: Some("api.example.com"),
+                content_length: None,
+                request_id: 99,
+                traceparent: Some("00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01"),
+                client_addr: "203.0.113.88:8080".parse().expect("client"),
+            },
         )
         .expect("request")
     };

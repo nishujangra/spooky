@@ -3,7 +3,6 @@
 use http::header::HOST;
 use hyper::ext::Protocol;
 use quiche::h3::Header;
-use spooky_bridge::request::{build_h1_request, build_h2_request_for_target};
 use spooky_config::{
     config::{
         ForwardedHeaderPolicy, ForwardedHeaderPolicyMode, UpstreamHostPolicy,
@@ -13,8 +12,8 @@ use spooky_config::{
 use spooky_errors::BridgeError;
 
 use crate::common::{
-    RequestInputMeta, build_h2_request_for_backend, build_h2_request_with_policy,
-    parse_backend_endpoint, request_input, request_target,
+    RequestInputMeta, build_h1_and_h2_requests, build_h2_request_for_backend,
+    build_h2_request_with_policy, parse_backend_endpoint,
 };
 
 #[test]
@@ -365,24 +364,20 @@ fn websocket_requests_are_shaped_as_extended_connect() {
         Header::new(b"sec-websocket-key", b"dGhlIHNhbXBsZSBub25jZQ=="),
     ];
 
-    let req = build_h2_request_for_target(
-        request_target(
-            &endpoint,
-            &UpstreamHostPolicy::default(),
-            &ForwardedHeaderPolicy::default(),
-        ),
-        request_input(
-            "GET",
-            "/ws",
-            &headers,
-            RequestInputMeta {
-                authority: Some("socket.example.com"),
-                content_length: None,
-                request_id: 11,
-                traceparent: None,
-                client_addr: "203.0.113.33:6000".parse().expect("client"),
-            },
-        ),
+    let req = build_h2_request_with_policy(
+        &endpoint,
+        &UpstreamHostPolicy::default(),
+        &ForwardedHeaderPolicy::default(),
+        "GET",
+        "/ws",
+        &headers,
+        RequestInputMeta {
+            authority: Some("socket.example.com"),
+            content_length: None,
+            request_id: 11,
+            traceparent: None,
+            client_addr: "203.0.113.33:6000".parse().expect("client"),
+        },
     )
     .expect("request");
 
@@ -422,38 +417,22 @@ fn h1_and_h2_share_canonical_policy_outputs() {
     let host_policy = UpstreamHostPolicy::default();
     let forwarded_policy = ForwardedHeaderPolicy::default();
 
-    let h1 = build_h1_request(
-        request_target(&endpoint, &host_policy, &forwarded_policy),
-        request_input(
-            "GET",
-            "/shared",
-            &headers,
-            RequestInputMeta {
-                authority: Some("api.example.com"),
-                content_length: None,
-                request_id: 55,
-                traceparent: Some("00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01"),
-                client_addr: "198.51.100.44:7000".parse().expect("client"),
-            },
-        ),
+    let (h1, h2) = build_h1_and_h2_requests(
+        &endpoint,
+        &host_policy,
+        &forwarded_policy,
+        "GET",
+        "/shared",
+        &headers,
+        RequestInputMeta {
+            authority: Some("api.example.com"),
+            content_length: None,
+            request_id: 55,
+            traceparent: Some("00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01"),
+            client_addr: "198.51.100.44:7000".parse().expect("client"),
+        },
     )
-    .expect("h1 request");
-    let h2 = build_h2_request_for_target(
-        request_target(&endpoint, &host_policy, &forwarded_policy),
-        request_input(
-            "GET",
-            "/shared",
-            &headers,
-            RequestInputMeta {
-                authority: Some("api.example.com"),
-                content_length: None,
-                request_id: 55,
-                traceparent: Some("00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01"),
-                client_addr: "198.51.100.44:7000".parse().expect("client"),
-            },
-        ),
-    )
-    .expect("h2 request");
+    .expect("requests");
 
     assert_eq!(h1.uri(), h2.uri());
     for name in [
