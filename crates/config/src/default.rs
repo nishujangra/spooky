@@ -1,60 +1,8 @@
-use crate::config::{CURRENT_CONFIG_VERSION, LoadBalancing, Log, LogFile, LogFormat};
+use crate::config::{CURRENT_CONFIG_VERSION, ApiKeyAuth, HealthCheck, Listen, LoadBalancing, Log, JwtAuth};
 
 // default values
 pub fn get_default_version() -> u32 {
     CURRENT_CONFIG_VERSION
-}
-
-// Listen defaults
-pub(crate) fn get_default_protocol() -> String {
-    String::from("http3")
-}
-
-pub(crate) fn get_default_port() -> u16 {
-    9889
-}
-
-pub(crate) fn get_default_address() -> String {
-    String::from("0.0.0.0")
-}
-
-// Backend defaults
-pub(crate) fn get_default_weight() -> u32 {
-    100
-}
-
-// Health-check defaults
-pub(crate) fn get_default_path() -> String {
-    String::from("/health")
-}
-
-pub(crate) fn get_default_interval() -> u64 {
-    5000
-}
-
-pub(crate) fn get_default_health_timeout() -> u64 {
-    1000
-}
-
-pub(crate) fn get_default_failure_threshold() -> u32 {
-    3
-}
-
-pub(crate) fn get_default_success_threshold() -> u32 {
-    2
-}
-
-pub(crate) fn get_default_cooldown_ms() -> u64 {
-    5_000
-}
-
-// Log and LogFile defaults
-pub(crate) fn get_default_log_level() -> String {
-    String::from("info")
-}
-
-pub(crate) fn get_default_log_file_path() -> String {
-    String::from("/var/log/spooky/spooky.log")
 }
 
 pub fn get_default_load_balancing() -> LoadBalancing {
@@ -64,31 +12,12 @@ pub fn get_default_load_balancing() -> LoadBalancing {
     }
 }
 
-pub(crate) fn get_default_log() -> Log {
-    Log {
-        level: String::from("info"),
-        file: LogFile {
-            enabled: false,
-            path: get_default_log_file_path(),
-        },
-        format: LogFormat::Plain,
-    }
-}
-
-pub fn auth_default_api_key_header_name() -> String {
-    String::from("x-api-key")
-}
-
 pub fn auth_default_external_timeout_ms() -> u64 {
     1_000
 }
 
 pub fn auth_default_external_failure_mode() -> String {
     String::from("fail_closed")
-}
-
-pub fn auth_default_jwt_clock_skew_secs() -> u64 {
-    30
 }
 
 pub fn perf_default_worker_threads() -> usize {
@@ -466,21 +395,20 @@ pub fn upstream_tls_default_strict_sni() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::LogFormat;
 
     #[test]
     fn documented_scalar_defaults_match_contract() {
         assert_eq!(get_default_version(), 1);
-        assert_eq!(get_default_protocol(), "http3");
-        assert_eq!(get_default_port(), 9889);
-        assert_eq!(get_default_address(), "0.0.0.0");
-        assert_eq!(get_default_weight(), 100);
-        assert_eq!(get_default_path(), "/health");
-        assert_eq!(get_default_interval(), 5_000);
-        assert_eq!(get_default_health_timeout(), 1_000);
-        assert_eq!(get_default_failure_threshold(), 3);
-        assert_eq!(get_default_success_threshold(), 2);
-        assert_eq!(get_default_log_level(), "info");
+        assert_eq!(Listen::default().protocol, "http3");
+        assert_eq!(Listen::default().port, 9889);
+        assert_eq!(Listen::default().address, "0.0.0.0");
+        assert_eq!(HealthCheck::default().path, "/health");
+        assert_eq!(HealthCheck::default().interval, 5_000);
+        assert_eq!(HealthCheck::default().timeout_ms, 1_000);
+        assert_eq!(HealthCheck::default().failure_threshold, 3);
+        assert_eq!(HealthCheck::default().success_threshold, 2);
+        assert_eq!(ApiKeyAuth::default().header_name, "x-api-key");
+        assert_eq!(JwtAuth::default().clock_skew_secs, 30);
     }
 
     #[test]
@@ -489,10 +417,10 @@ mod tests {
         assert_eq!(load_balancing.lb_type, "round-robin");
         assert_eq!(load_balancing.key, None);
 
-        let log = get_default_log();
+        let log = Log::default();
         assert_eq!(log.level, "info");
         assert!(!log.file.enabled);
         assert_eq!(log.file.path, "/var/log/spooky/spooky.log");
-        assert_eq!(log.format, LogFormat::Plain);
+        assert_eq!(log.format, crate::config::LogFormat::Plain);
     }
 }

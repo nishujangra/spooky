@@ -3,12 +3,8 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 
 use crate::default::{
-    auth_default_api_key_header_name, auth_default_external_timeout_ms,
-    auth_default_jwt_clock_skew_secs, get_default_address, get_default_cooldown_ms,
-    get_default_failure_threshold, get_default_health_timeout, get_default_interval,
-    get_default_load_balancing, get_default_log, get_default_log_file_path, get_default_log_level,
-    get_default_path, get_default_port, get_default_protocol, get_default_success_threshold,
-    get_default_version, get_default_weight, observe_default_address,
+    auth_default_external_timeout_ms, get_default_load_balancing, get_default_version,
+    observe_default_address,
     observe_default_control_api_address, observe_default_control_api_connection_timeout_ms,
     observe_default_control_api_health_path, observe_default_control_api_max_connections,
     observe_default_control_api_port, observe_default_control_api_ready_path,
@@ -85,7 +81,7 @@ pub struct Config {
     #[serde(default)]
     pub upstream_tls: UpstreamTls,
 
-    #[serde(default = "get_default_log")]
+    #[serde(default)]
     pub log: Log,
 
     #[serde(default)]
@@ -135,18 +131,27 @@ pub fn effective_listens(config: &Config) -> Vec<Listen> {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct Listen {
-    #[serde(default = "get_default_protocol")]
     pub protocol: String, // "http3"
 
-    #[serde(default = "get_default_port")]
     pub port: u16, // 9889
 
-    #[serde(default = "get_default_address")]
     pub address: String, // "0.0.0.0"
     pub tls: Tls,
+}
+
+impl Default for Listen {
+    fn default() -> Self {
+        Self {
+            protocol: "http3".to_string(),
+            port: 9889,
+            address: "0.0.0.0".to_string(),
+            tls: Tls::default(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
@@ -298,9 +303,9 @@ pub struct ExternalAuthRequestHeader {
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct ApiKeyAuth {
-    #[serde(default = "auth_default_api_key_header_name")]
     pub header_name: String,
     #[serde(default)]
     pub keys: Vec<String>,
@@ -309,13 +314,14 @@ pub struct ApiKeyAuth {
 impl Default for ApiKeyAuth {
     fn default() -> Self {
         Self {
-            header_name: auth_default_api_key_header_name(),
+            header_name: "x-api-key".to_string(),
             keys: Vec::new(),
         }
     }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct JwtAuth {
     pub secret: String,
@@ -323,7 +329,6 @@ pub struct JwtAuth {
     pub issuer: Option<String>,
     #[serde(default)]
     pub audience: Option<String>,
-    #[serde(default = "auth_default_jwt_clock_skew_secs")]
     pub clock_skew_secs: u64,
 }
 
@@ -333,7 +338,7 @@ impl Default for JwtAuth {
             secret: String::new(),
             issuer: None,
             audience: None,
-            clock_skew_secs: auth_default_jwt_clock_skew_secs(),
+            clock_skew_secs: 30,
         }
     }
 }
@@ -389,10 +394,16 @@ pub struct Backend {
     /// - `http://host:port` (explicit insecure opt-out)
     pub address: String,
 
-    #[serde(default = "get_default_weight")]
+    #[serde(default = "Backend::default_weight")]
     pub weight: u32, // 100
     #[serde(default)]
     pub health_check: Option<HealthCheck>,
+}
+
+impl Backend {
+    pub(crate) fn default_weight() -> u32 {
+        100
+    }
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -409,25 +420,33 @@ pub struct RouteMatch {
 }
 
 #[derive(Debug, Deserialize, Clone)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct HealthCheck {
-    #[serde(default = "get_default_path")]
     pub path: String, // "/health"
 
-    #[serde(default = "get_default_interval")]
     pub interval: u64, // "5000" (write in number of milli seconds)
 
-    #[serde(default = "get_default_health_timeout")]
     pub timeout_ms: u64,
 
-    #[serde(default = "get_default_failure_threshold")]
     pub failure_threshold: u32,
 
-    #[serde(default = "get_default_success_threshold")]
     pub success_threshold: u32,
 
-    #[serde(default = "get_default_cooldown_ms")]
     pub cooldown_ms: u64,
+}
+
+impl Default for HealthCheck {
+    fn default() -> Self {
+        Self {
+            path: "/health".to_string(),
+            interval: 5_000,
+            timeout_ms: 1_000,
+            failure_threshold: 3,
+            success_threshold: 2,
+            cooldown_ms: 5_000,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
@@ -441,7 +460,8 @@ pub struct LoadBalancing {
     pub key: Option<String>, // Examples: header:x-user-id, cookie:session_id, query:user_id
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct Log {
     // whisper -> trace
@@ -450,14 +470,21 @@ pub struct Log {
     // scream -> warn
     // poltergeist -> error
     // silence -> off
-    #[serde(default = "get_default_log_level")]
     pub level: String, // "info, warn, error"
 
-    #[serde(default)]
     pub file: LogFile,
 
-    #[serde(default)]
     pub format: LogFormat,
+}
+
+impl Default for Log {
+    fn default() -> Self {
+        Self {
+            level: "info".to_string(),
+            file: LogFile::default(),
+            format: LogFormat::Plain,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default, PartialEq, Eq)]
@@ -468,13 +495,22 @@ pub enum LogFormat {
     Json,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+#[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct LogFile {
     pub enabled: bool,
 
-    #[serde(default = "get_default_log_file_path")]
     pub path: String,
+}
+
+impl Default for LogFile {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            path: "/var/log/spooky/spooky.log".to_string(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -1292,7 +1328,7 @@ impl Default for RoutingTransparency {
 
 #[cfg(test)]
 mod tests {
-    use super::{Config, PrivilegeDrop};
+    use super::{ApiKeyAuth, Config, JwtAuth, Listen, Log, PrivilegeDrop};
 
     #[test]
     fn minimal_yaml_applies_documented_defaults() {
@@ -1372,5 +1408,30 @@ security:
         assert_eq!(config.security.privileges.enabled, PrivilegeDrop::default().enabled);
         assert_eq!(config.security.privileges.user, PrivilegeDrop::default().user);
         assert_eq!(config.security.privileges.group, PrivilegeDrop::default().group);
+    }
+
+    #[test]
+    fn serde_defaults_for_leaf_structs_match_type_defaults() {
+        let listen: Listen =
+            serde_yaml::from_str("{}").expect("empty listen should parse via type defaults");
+        assert_eq!(listen.protocol, Listen::default().protocol);
+        assert_eq!(listen.port, Listen::default().port);
+        assert_eq!(listen.address, Listen::default().address);
+
+        let log: Log = serde_yaml::from_str("{}").expect("empty log should parse via type defaults");
+        assert_eq!(log.level, Log::default().level);
+        assert_eq!(log.file, Log::default().file);
+        assert_eq!(log.format, Log::default().format);
+
+        let api_key: ApiKeyAuth =
+            serde_yaml::from_str("{}").expect("empty api key auth should parse via type defaults");
+        assert_eq!(api_key.header_name, ApiKeyAuth::default().header_name);
+        assert_eq!(api_key.keys, ApiKeyAuth::default().keys);
+
+        let jwt: JwtAuth =
+            serde_yaml::from_str(r#"secret: test-secret"#).expect("jwt auth should parse");
+        assert_eq!(jwt.issuer, JwtAuth::default().issuer);
+        assert_eq!(jwt.audience, JwtAuth::default().audience);
+        assert_eq!(jwt.clock_skew_secs, JwtAuth::default().clock_skew_secs);
     }
 }
