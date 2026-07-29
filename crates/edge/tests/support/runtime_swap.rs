@@ -38,7 +38,10 @@ use tokio_rustls::{
     rustls::{ClientConfig, RootCertStore, pki_types::ServerName},
 };
 
-use super::request_path::{BackendFixture, ListenerTaskGuard, TestTlsMaterial, start_h1_backend};
+use super::request_path::{
+    BackendFixture, H3RequestSpec, H3Response, ListenerTaskGuard, TestTlsMaterial,
+    run_request_to, start_h1_backend,
+};
 
 pub struct RuntimeSwapHarness {
     backends: Vec<BackendFixture>,
@@ -269,6 +272,13 @@ impl RuntimeSwapHarness {
             .clone();
         self.rt
             .block_on(self.poll_metrics_text(path, Duration::from_secs(5)))
+    }
+
+    pub fn run_request(&self, request: H3RequestSpec<'_>) -> Result<H3Response, String> {
+        let listen_addr = self
+            .listen_addr
+            .ok_or_else(|| "listener not started".to_string())?;
+        run_request_to(listen_addr, request)
     }
 
     fn control_api_token(&self) -> Result<String, String> {

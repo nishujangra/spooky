@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 
+use serial_test::serial;
 use spooky_config::config::{Backend, LoadBalancing, RouteMatch, Upstream};
 
 mod support;
 
 use support::{
     net::local_listener_bind_available,
+    request_path::H3RequestSpec,
     runtime_swap::RuntimeSwapHarness,
 };
 
@@ -33,6 +35,7 @@ fn single_backend_upstream(backend_addr: std::net::SocketAddr) -> Upstream {
 }
 
 #[test]
+#[serial]
 fn runtime_swap_harness_exposes_control_api_metrics_and_reload_surface() {
     if !local_listener_bind_available() {
         return;
@@ -80,5 +83,85 @@ fn runtime_swap_harness_exposes_control_api_metrics_and_reload_surface() {
     assert_eq!(
         reloaded_snapshot["runtime"]["config_path"],
         harness.config_path().to_string_lossy().to_string()
+    );
+}
+
+#[test]
+#[serial]
+fn runtime_reload_swaps_generation_owned_backend_targets_without_changing_listener_identity() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = RuntimeSwapHarness::new();
+    let old_backend = harness.start_h1_static_backend(b"backend-old");
+    let new_backend = harness.start_h1_static_backend(b"backend-new");
+    let config = harness.make_config(HashMap::from([(
+        "api".to_string(),
+        single_backend_upstream(old_backend),
+    )]));
+
+    harness
+        .start_listener(config)
+        .expect("start runtime swap listener");
+
+    let before = harness
+        .run_request(H3RequestSpec::get("localhost", "/"))
+        .expect("request before reload");
+    before.assert_status(200);
+    before.assert_body_bytes(b"backend-old");
+
+    let startup_snapshot = harness.runtime_snapshot().expect("startup runtime snapshot");
+    assert_eq!(startup_snapshot["runtime"]["generation"], 0);
+    let startup_tls = startup_snapshot["tls"]["listeners"]
+        .as_object()
+        .expect("startup tls listener object")
+        .clone();
+    assert!(
+        !startup_tls.is_empty(),
+        "startup runtime snapshot should expose listener TLS inventory"
+    );
+
+    harness
+        .rewrite_config(|config| {
+            let upstream = config
+                .upstream
+                .get_mut("api")
+                .expect("runtime swap test upstream");
+            upstream.backends[0].address = format!("http://{new_backend}");
+        })
+        .expect("rewrite backend target");
+
+    let reload = harness
+        .trigger_runtime_reload()
+        .expect("trigger runtime reload");
+    assert_eq!(reload["reloaded"], true);
+    assert_eq!(reload["generation"], 1);
+
+    let after = harness
+        .run_request(H3RequestSpec::get("localhost", "/"))
+        .expect("request after reload");
+    after.assert_status(200);
+    after.assert_body_bytes(b"backend-new");
+
+    let reloaded_snapshot = harness.runtime_snapshot().expect("reloaded runtime snapshot");
+    assert_eq!(reloaded_snapshot["runtime"]["generation"], 1);
+    assert_eq!(
+        startup_snapshot["runtime"]["generation"], 0,
+        "stale runtime snapshot values should remain stable after bundle replacement"
+    );
+    assert_eq!(
+        startup_snapshot["tls"]["listeners"]
+            .as_object()
+            .expect("stale startup tls listeners"),
+        &startup_tls,
+        "stale runtime snapshot should keep its original listener identity view"
+    );
+    assert_eq!(
+        reloaded_snapshot["tls"]["listeners"]
+            .as_object()
+            .expect("reloaded tls listener object"),
+        &startup_tls,
+        "startup-owned listener TLS identity should not change across generation-only reloads"
     );
 }
