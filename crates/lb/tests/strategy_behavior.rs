@@ -1,15 +1,11 @@
 //! Load-balancing strategy domain tests.
 
-use std::{collections::HashMap, time::Duration};
+mod common;
 
-use spooky_config::{
-    config::{
-        Backend, Config, HealthCheck, Listen, LoadBalancing as ConfigLoadBalancing, RouteMatch,
-        Tls, Upstream,
-    },
-    runtime::RuntimeConfig,
-};
-use spooky_lb::{load_balancing::LoadBalancing, upstream_pool::UpstreamPool};
+use std::time::Duration;
+
+use spooky_lb::load_balancing::LoadBalancing;
+use common::pool;
 
 #[test]
 fn supported_strategy_names_normalize_through_the_canonical_facade() {
@@ -20,72 +16,6 @@ fn supported_strategy_names_normalize_through_the_canonical_facade() {
     assert!(LoadBalancing::from_config("latency-aware").is_ok());
     assert!(LoadBalancing::from_config("sticky-cid").is_ok());
     assert!(LoadBalancing::from_config("unknown").is_err());
-}
-
-fn runtime_upstream(
-    strategy: &str,
-    backend_count: usize,
-) -> spooky_config::runtime::RuntimeUpstream {
-    let mut upstreams = HashMap::new();
-    upstreams.insert(
-        "api".to_string(),
-        Upstream {
-            tls: None,
-            load_balancing: ConfigLoadBalancing {
-                lb_type: strategy.to_string(),
-                key: None,
-            },
-            auth: Default::default(),
-            host_policy: Default::default(),
-            forwarded_headers: Default::default(),
-            route: RouteMatch::default(),
-            backends: (0..backend_count)
-                .map(|index| Backend {
-                    id: format!("backend-{index}"),
-                    address: format!("http://127.0.0.1:{}", 7001 + index),
-                    weight: 1,
-                    health_check: Some(HealthCheck {
-                        path: "/health".to_string(),
-                        interval: 1,
-                        timeout_ms: 1000,
-                        failure_threshold: 1,
-                        success_threshold: 1,
-                        cooldown_ms: 0,
-                    }),
-                })
-                .collect(),
-        },
-    );
-
-    RuntimeConfig::from_config(&Config {
-        version: 1,
-        listen: Listen {
-            protocol: "http1".to_string(),
-            tls: Tls {
-                cert: "/tmp/test-cert.pem".to_string(),
-                key: "/tmp/test-key.pem".to_string(),
-                ..Tls::default()
-            },
-            ..Listen::default()
-        },
-        listeners: Vec::new(),
-        upstream: upstreams,
-        load_balancing: None,
-        upstream_tls: Default::default(),
-        log: Default::default(),
-        performance: Default::default(),
-        observability: Default::default(),
-        resilience: Default::default(),
-        security: Default::default(),
-    })
-    .expect("runtime config")
-    .upstreams
-    .remove("api")
-    .expect("runtime upstream")
-}
-
-fn pool(strategy: &str, backend_count: usize) -> UpstreamPool {
-    UpstreamPool::from_runtime_upstream(&runtime_upstream(strategy, backend_count)).expect("pool")
 }
 
 #[test]
