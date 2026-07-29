@@ -789,12 +789,7 @@ fn partial_outage_preserves_healthy_backend_availability() {
     );
 
     assert!(
-        wait_for_backend_health_state(
-            &harness,
-            &backend_identity(backend_a_addr),
-            1,
-            |_| true,
-        ),
+        wait_for_backend_health_state(&harness, &backend_identity(backend_a_addr), 1, |_| true,),
         "failing backend should eventually be removed from the effective healthy set"
     );
 
