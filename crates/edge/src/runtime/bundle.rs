@@ -114,6 +114,17 @@ impl RuntimeGenerationRecordStatus {
     pub fn is_rollback_candidate(self) -> bool {
         matches!(self, Self::Previous | Self::RolledBack | Self::Superseded)
     }
+
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::Previous => "previous",
+            Self::FailedPrepare => "failed_prepare",
+            Self::RolledBack => "rolled_back",
+            Self::Superseded => "superseded",
+        }
+    }
 }
 
 /// Retained runtime generation metadata owned by [`RuntimeBundleHandle`].
@@ -167,6 +178,11 @@ impl RuntimeGenerationRecord {
     #[must_use]
     pub fn note(&self) -> Option<&str> {
         self.note.as_deref()
+    }
+
+    #[must_use]
+    pub fn has_bundle(&self) -> bool {
+        self.bundle.is_some()
     }
 }
 
@@ -295,6 +311,20 @@ impl RuntimeBundleHandle {
             .and_then(|entry| entry.bundle.clone())
     }
 
+    pub fn generation_record(&self, generation: u64) -> Option<RuntimeGenerationRecord> {
+        let current = self.current();
+        if current.generation == generation {
+            return Some(RuntimeGenerationRecord::active(current));
+        }
+
+        self.history
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .find(|entry| entry.generation == generation)
+            .cloned()
+    }
+
     pub(crate) fn record_failed_prepare(&self, generation: u64, note: impl Into<String>) {
         let mut history = self
             .history
@@ -337,6 +367,14 @@ impl RuntimeBundleHandle {
     /// shutdown has begun, the swap is rejected before touching the active
     /// generation, so a reload cannot race a shutdown into ambiguous state.
     pub fn replace(&self, bundle: RuntimeBundle) -> Result<u64, ProxyError> {
+        self.replace_with_archive_status(bundle, RuntimeGenerationRecordStatus::Previous)
+    }
+
+    pub(crate) fn replace_with_archive_status(
+        &self,
+        bundle: RuntimeBundle,
+        previous_status: RuntimeGenerationRecordStatus,
+    ) -> Result<u64, ProxyError> {
         let generation = bundle.generation;
         let next_tasks = Arc::clone(&bundle.shared_state.generation_state().generation_tasks);
 
@@ -372,7 +410,7 @@ impl RuntimeBundleHandle {
         };
         // Retire only the previous generation's generation-owned background tasks.
         // Startup-owned and process-shared resources are not torn down here.
-        self.archive_previous_generation(previous.clone());
+        self.archive_previous_generation(previous.clone(), previous_status);
         previous
             .shared_state
             .generation_state()
@@ -388,7 +426,11 @@ impl RuntimeBundleHandle {
         Ok(generation)
     }
 
-    fn archive_previous_generation(&self, previous: Arc<RuntimeBundle>) {
+    fn archive_previous_generation(
+        &self,
+        previous: Arc<RuntimeBundle>,
+        status: RuntimeGenerationRecordStatus,
+    ) {
         let mut history = self
             .history
             .write()
@@ -401,7 +443,7 @@ impl RuntimeBundleHandle {
         history.retain(|entry| entry.generation != previous.generation);
         history.push_front(RuntimeGenerationRecord::archived(
             previous.generation,
-            RuntimeGenerationRecordStatus::Previous,
+            status,
             Some(previous),
             None,
         ));

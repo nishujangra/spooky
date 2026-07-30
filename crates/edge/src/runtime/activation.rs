@@ -10,10 +10,14 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use spooky_config::{loader::read_config, runtime::RuntimeConfig};
+use spooky_errors::ProxyError;
 
 use crate::{
     runtime::{
-        bundle::{ActiveRuntimeGeneration, RuntimeBundle, RuntimeBundleHandle},
+        bundle::{
+            ActiveRuntimeGeneration, RuntimeBundle, RuntimeBundleHandle,
+            RuntimeGenerationRecordStatus,
+        },
         generation::CarriedProcessSharedServices,
         listener::QUICListener,
         policy::{TransitionRejection, TransitionRejectionKind, render_rejections},
@@ -512,6 +516,187 @@ impl RuntimeActivationService {
             ),
         }
     }
+
+    pub(crate) fn rollback_generation(
+        handle: &RuntimeBundleHandle,
+        request: RollbackRequest,
+    ) -> RollbackResult {
+        let current = handle.current_view();
+        let active_generation = current.generation();
+        let target_generation = request.target_generation;
+
+        if let Some(expected_active_generation) = request.expected_active_generation
+            && expected_active_generation != active_generation
+        {
+            return rejected_rollback_result(
+                request,
+                active_generation,
+                None,
+                ReloadDiff::default(),
+                vec![RejectedChange {
+                    kind: RejectedChangeKind::IllegalTransition,
+                    field_path: Some("runtime.generation".to_string()),
+                    current_value: Some(active_generation.to_string()),
+                    requested_value: Some(expected_active_generation.to_string()),
+                    operator_action:
+                        "refresh the active generation view and retry the rollback".to_string(),
+                    active_generation_changed: false,
+                    message: format!(
+                        "runtime rollback rejected: expected active generation {} but current active generation is {}",
+                        expected_active_generation, active_generation
+                    ),
+                }],
+                "rollback request targeted a stale runtime generation".to_string(),
+            );
+        }
+
+        if request.target_generation == active_generation {
+            return rejected_rollback_result(
+                request,
+                active_generation,
+                None,
+                ReloadDiff::default(),
+                vec![RejectedChange {
+                    kind: RejectedChangeKind::IllegalTransition,
+                    field_path: Some("runtime.rollback.target_generation".to_string()),
+                    current_value: Some(active_generation.to_string()),
+                    requested_value: Some(active_generation.to_string()),
+                    operator_action:
+                        "choose an older retained generation if rollback is still required"
+                            .to_string(),
+                    active_generation_changed: false,
+                    message: format!(
+                        "runtime rollback rejected: generation {} is already active",
+                        active_generation
+                    ),
+                }],
+                "rollback target is already the active generation".to_string(),
+            );
+        }
+
+        let Some(target_record) = handle.generation_record(target_generation) else {
+            return rejected_rollback_result(
+                request,
+                active_generation,
+                None,
+                ReloadDiff::default(),
+                vec![RejectedChange {
+                    kind: RejectedChangeKind::RuntimeStateUnavailable,
+                    field_path: Some("runtime.rollback.target_generation".to_string()),
+                    current_value: None,
+                    requested_value: Some(target_generation.to_string()),
+                    operator_action:
+                        "choose a retained known-good generation from runtime history".to_string(),
+                    active_generation_changed: false,
+                    message: format!(
+                        "runtime rollback rejected: generation {} is not retained as a rollback candidate",
+                        target_generation
+                    ),
+                }],
+                "rollback target is not retained in runtime history".to_string(),
+            );
+        };
+
+        if !target_record.status().is_rollback_candidate() || !target_record.has_bundle() {
+            return rejected_rollback_result(
+                request,
+                active_generation,
+                Some(target_generation),
+                ReloadDiff::default(),
+                vec![RejectedChange {
+                    kind: RejectedChangeKind::RuntimeStateUnavailable,
+                    field_path: Some("runtime.rollback.target_generation".to_string()),
+                    current_value: Some(target_record.generation().to_string()),
+                    requested_value: Some(target_record.status().as_str().to_string()),
+                    operator_action:
+                        "choose a complete retained generation with a usable runtime bundle"
+                            .to_string(),
+                    active_generation_changed: false,
+                    message: format!(
+                        "runtime rollback rejected: generation {} is incomplete or not a usable rollback candidate",
+                        target_generation
+                    ),
+                }],
+                "rollback target is incomplete or unusable".to_string(),
+            );
+        }
+
+        if let Some(rejection) = handle.lifecycle().check_reload_allowed().rejection() {
+            return rejected_rollback_result(
+                request,
+                active_generation,
+                Some(target_generation),
+                ReloadDiff::default(),
+                vec![RejectedChange::from(rejection)],
+                rejection.to_string(),
+            );
+        }
+
+        let target_bundle = target_record
+            .bundle()
+            .cloned()
+            .expect("rollback candidate record with bundle");
+        let candidate_generation = active_generation.saturating_add(1);
+        let prepared = match prepare_rollback_bundle(&current, &target_bundle, candidate_generation)
+        {
+            Ok(prepared) => prepared,
+            Err(rejected) => {
+                handle.record_failed_prepare(candidate_generation, rejected.message.clone());
+                return rejected_rollback_result(
+                    request,
+                    active_generation,
+                    Some(target_generation),
+                    ReloadDiff::default(),
+                    vec![rejected],
+                    "rollback preparation failed".to_string(),
+                );
+            }
+        };
+
+        let compatibility_rejections =
+            QUICListener::evaluate_runtime_reload_compatibility(&current, &prepared);
+        if let Err(rejections) = compatibility_rejections {
+            let rejected_changes = rejections.iter().map(RejectedChange::from).collect::<Vec<_>>();
+            let diff = build_reload_diff(
+                current.bundle(),
+                &prepared,
+                rejected_startup_owned_domains(&rejected_changes),
+            );
+            return rejected_rollback_result(
+                request,
+                active_generation,
+                Some(target_generation),
+                diff,
+                rejected_changes,
+                render_rejections(rejections.as_slice()),
+            );
+        }
+
+        let diff = build_reload_diff(
+            current.bundle(),
+            &prepared,
+            std::collections::HashSet::new(),
+        );
+        match commit_runtime_bundle_swap(
+            handle,
+            prepared,
+            RuntimeGenerationRecordStatus::RolledBack,
+        ) {
+            Ok(generation) => successful_rollback_result(
+                request,
+                generation,
+                target_generation,
+                diff,
+            ),
+            Err(err) => failed_rollback_result(
+                request,
+                handle.current_generation(),
+                target_generation,
+                diff,
+                err.to_string(),
+            ),
+        }
+    }
 }
 
 pub(crate) fn plan_runtime_reload(
@@ -713,14 +898,153 @@ fn commit_staged_runtime_reload(
         )
     })?;
 
+    commit_runtime_bundle_swap(
+        handle,
+        next_runtime,
+        RuntimeGenerationRecordStatus::Previous,
+    )
+    .map(|generation| (generation, diff.clone()))
+    .map_err(|err| (candidate_generation, diff, err.to_string()))
+}
+
+fn commit_runtime_bundle_swap(
+    handle: &RuntimeBundleHandle,
+    next_runtime: RuntimeBundle,
+    previous_status: RuntimeGenerationRecordStatus,
+) -> Result<GenerationId, ProxyError> {
     QUICListener::spawn_generation_background_tasks_for_runtime(
         &next_runtime.runtime_config,
         next_runtime.shared_state.as_ref(),
     );
     handle
-        .replace(next_runtime)
-        .map(|generation| (generation, diff.clone()))
-        .map_err(|err| (candidate_generation, diff, err.to_string()))
+        .replace_with_archive_status(next_runtime, previous_status)
+}
+
+fn prepare_rollback_bundle(
+    current: &ActiveRuntimeGeneration,
+    target: &RuntimeBundle,
+    candidate_generation: GenerationId,
+) -> Result<RuntimeBundle, RejectedChange> {
+    let carried = CarriedProcessSharedServices::from_active(current.shared_services());
+    let next_shared_state =
+        QUICListener::build_shared_state_with_carried(&target.runtime_config, Some(carried))
+            .map_err(|err| {
+                RejectedChange::resource_preparation_failed("runtime rollback", err.to_string())
+            })?;
+
+    Ok(RuntimeBundle {
+        generation: candidate_generation,
+        startup: target.startup.clone(),
+        runtime_config: target.runtime_config.clone(),
+        shared_state: Arc::new(next_shared_state),
+    })
+}
+
+fn successful_rollback_result(
+    request: RollbackRequest,
+    generation: GenerationId,
+    target_generation: GenerationId,
+    diff: ReloadDiff,
+) -> RollbackResult {
+    let completed_at_ms = crate::watchdog::time::now_millis();
+    let history_entry = GenerationHistoryEntry {
+        generation,
+        operation: GenerationOperation::Rollback,
+        status: GenerationStatus::RolledBack,
+        requested_by: request.requested_by.clone(),
+        requested_at_ms: request.requested_at_ms,
+        completed_at_ms: Some(completed_at_ms),
+        summary: format!(
+            "rolled back runtime to retained generation {} as new active generation {}",
+            target_generation, generation
+        ),
+        diff,
+        rejected_changes: Vec::new(),
+    };
+
+    RollbackResult {
+        request,
+        active_generation: generation,
+        rolled_back_to: Some(target_generation),
+        status: GenerationStatus::RolledBack,
+        rejected_changes: Vec::new(),
+        history_entry,
+    }
+}
+
+fn rejected_rollback_result(
+    request: RollbackRequest,
+    active_generation: GenerationId,
+    target_generation: Option<GenerationId>,
+    diff: ReloadDiff,
+    rejected_changes: Vec<RejectedChange>,
+    summary: String,
+) -> RollbackResult {
+    let completed_at_ms = crate::watchdog::time::now_millis();
+    let history_entry = GenerationHistoryEntry {
+        generation: target_generation.unwrap_or(active_generation.saturating_add(1)),
+        operation: GenerationOperation::Rollback,
+        status: GenerationStatus::Rejected,
+        requested_by: request.requested_by.clone(),
+        requested_at_ms: request.requested_at_ms,
+        completed_at_ms: Some(completed_at_ms),
+        summary,
+        diff,
+        rejected_changes: rejected_changes.clone(),
+    };
+
+    RollbackResult {
+        request,
+        active_generation,
+        rolled_back_to: None,
+        status: GenerationStatus::Rejected,
+        rejected_changes,
+        history_entry,
+    }
+}
+
+fn failed_rollback_result(
+    request: RollbackRequest,
+    active_generation: GenerationId,
+    target_generation: GenerationId,
+    diff: ReloadDiff,
+    error: String,
+) -> RollbackResult {
+    let rejected_changes = vec![RejectedChange {
+        kind: RejectedChangeKind::RuntimeStateUnavailable,
+        field_path: Some("runtime.rollback".to_string()),
+        current_value: Some(active_generation.to_string()),
+        requested_value: Some(target_generation.to_string()),
+        operator_action:
+            "inspect runtime state and retry the rollback once the runtime is healthy"
+                .to_string(),
+        active_generation_changed: false,
+        message: error.clone(),
+    }];
+    let completed_at_ms = crate::watchdog::time::now_millis();
+    let history_entry = GenerationHistoryEntry {
+        generation: active_generation.saturating_add(1),
+        operation: GenerationOperation::Rollback,
+        status: GenerationStatus::Failed,
+        requested_by: request.requested_by.clone(),
+        requested_at_ms: request.requested_at_ms,
+        completed_at_ms: Some(completed_at_ms),
+        summary: format!(
+            "failed to roll back runtime to retained generation {}: {}",
+            target_generation, error
+        ),
+        diff,
+        rejected_changes: rejected_changes.clone(),
+    };
+
+    RollbackResult {
+        request,
+        active_generation,
+        rolled_back_to: None,
+        status: GenerationStatus::Failed,
+        rejected_changes,
+        history_entry,
+    }
 }
 
 fn successful_activation_result(

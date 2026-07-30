@@ -17,7 +17,8 @@ use super::{state::ControlApiState, *};
 use crate::runtime::activation::{
     ActivationRequest, GenerationOperation, GenerationStatus, PlanningPhase,
     PlanningPhaseStatus, RejectedChangeKind, ReloadCompatibilityClassification,
-    ReloadConfigInput, ReloadDiffDisposition, RuntimeActivationService, plan_runtime_reload,
+    ReloadConfigInput, ReloadDiffDisposition, RollbackRequest, RuntimeActivationService,
+    plan_runtime_reload,
 };
 
 /// Render the typed startup-owned compatibility result into the flat list of
@@ -222,6 +223,16 @@ fn planner_request(expected_generation: u64) -> ActivationRequest {
         reason: Some("planner_contract".to_string()),
         expected_generation: Some(expected_generation),
         requested_at_ms: 1,
+    }
+}
+
+fn rollback_request(target_generation: u64, expected_active_generation: u64) -> RollbackRequest {
+    RollbackRequest {
+        target_generation,
+        requested_by: Some("test".to_string()),
+        reason: Some("rollback_contract".to_string()),
+        expected_active_generation: Some(expected_active_generation),
+        requested_at_ms: 2,
     }
 }
 
@@ -493,6 +504,116 @@ fn activation_service_rejects_restart_required_changes_without_mutating_active_g
         }),
         "expected a restart-required rejection without live mutation: {:?}",
         activation.rejected_changes
+    );
+}
+
+#[test]
+fn rollback_service_restores_retained_generation_by_id_and_records_rollback_status() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+
+    let mut generation_one = test_config(cert.clone(), key.clone());
+    generation_one
+        .upstream
+        .get_mut("api")
+        .expect("api upstream")
+        .backends[0]
+        .address = "http://127.0.0.1:7001".to_string();
+    let mut generation_two = test_config(cert.clone(), key.clone());
+    generation_two.log.level = "debug".to_string();
+    generation_two
+        .upstream
+        .get_mut("api")
+        .expect("api upstream")
+        .backends[0]
+        .address = "http://127.0.0.1:7002".to_string();
+    let mut generation_three = test_config(cert, key);
+    generation_three.log.level = "trace".to_string();
+    generation_three
+        .upstream
+        .get_mut("api")
+        .expect("api upstream")
+        .backends[0]
+        .address = "http://127.0.0.1:7003".to_string();
+
+    let mut bundle_one = runtime_bundle_from_config("gen-1.yaml", &generation_one);
+    bundle_one.generation = 1;
+    let mut bundle_two = runtime_bundle_from_config("gen-2.yaml", &generation_two);
+    bundle_two.generation = 2;
+    let mut bundle_three = runtime_bundle_from_config("gen-3.yaml", &generation_three);
+    bundle_three.generation = 3;
+
+    let handle = RuntimeBundleHandle::new(bundle_one);
+    handle
+        .replace(bundle_two)
+        .expect("install generation 2");
+    handle
+        .replace(bundle_three)
+        .expect("install generation 3");
+
+    let rollback = RuntimeActivationService::rollback_generation(
+        &handle,
+        rollback_request(1, handle.current_generation()),
+    );
+
+    assert!(rollback.succeeded(), "rollback should succeed: {rollback:?}");
+    assert_eq!(rollback.status, GenerationStatus::RolledBack);
+    assert_eq!(rollback.rolled_back_to, Some(1));
+    assert_eq!(rollback.active_generation, 4);
+    assert_eq!(handle.current_generation(), 4);
+    assert_eq!(rollback.history_entry.operation, GenerationOperation::Rollback);
+    assert_eq!(rollback.history_entry.status, GenerationStatus::RolledBack);
+    assert_eq!(
+        handle
+            .current_view()
+            .runtime_config()
+            .upstreams
+            .get("api")
+            .expect("active upstream")
+            .backends[0]
+            .backend
+            .address,
+        "http://127.0.0.1:7001"
+    );
+
+    let history = handle.generation_history();
+    assert_eq!(history[1].generation(), 3);
+    assert_eq!(
+        history[1].status(),
+        crate::runtime::bundle::RuntimeGenerationRecordStatus::RolledBack
+    );
+}
+
+#[test]
+fn rollback_service_rejects_incomplete_or_failed_prepare_targets_without_mutation() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let handle = RuntimeBundleHandle::new(runtime_bundle_from_config(
+        "active.yaml",
+        &test_config(cert, key),
+    ));
+    let active_generation = handle.current_generation();
+    handle.record_failed_prepare(9, "candidate generation never prepared");
+
+    let rollback =
+        RuntimeActivationService::rollback_generation(&handle, rollback_request(9, active_generation));
+
+    assert!(
+        !rollback.succeeded(),
+        "failed-prepare history entries must not be rollbackable"
+    );
+    assert_eq!(rollback.status, GenerationStatus::Rejected);
+    assert_eq!(rollback.rolled_back_to, None);
+    assert_eq!(rollback.active_generation, active_generation);
+    assert_eq!(handle.current_generation(), active_generation);
+    assert!(
+        rollback.rejected_changes.iter().any(|rejection| {
+            rejection.kind == RejectedChangeKind::RuntimeStateUnavailable
+                && rejection.field_path.as_deref()
+                    == Some("runtime.rollback.target_generation")
+        }),
+        "expected rollback rejection for incomplete target: {:?}",
+        rollback.rejected_changes
     );
 }
 
