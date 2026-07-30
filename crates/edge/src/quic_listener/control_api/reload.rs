@@ -8,7 +8,7 @@ use crate::runtime::{
     activation::{
         ActivationRequest, ActivationResult, RejectedChangeKind, ReloadConfigInput,
         ReloadPlan, RollbackRequest, RollbackResult, RuntimeActivationService,
-        RuntimeRejectionReason, plan_runtime_reload,
+        RuntimeRejectionReason,
     },
     bundle::{ActiveRuntimeGeneration, RuntimeBundleHandle},
     policy::{ReloadCompatibilityAuthority, TransitionRejection},
@@ -146,9 +146,13 @@ impl QUICListener {
             &activation_request,
             &reload_input,
         );
-        let plan = plan_runtime_reload(&current, activation_request, reload_input);
-        Self::record_control_api_plan_result(&runtime_bundle_handle, "validate", &plan.plan);
-        Self::json_response(StatusCode::OK, plan.plan)
+        let plan = RuntimeActivationService::validate_reload(
+            &runtime_bundle_handle,
+            activation_request,
+            reload_input,
+        );
+        Self::record_control_api_plan_result(&runtime_bundle_handle, "validate", &plan);
+        Self::json_response(StatusCode::OK, plan)
     }
 
     pub(super) async fn handle_control_api_runtime_preview(
@@ -177,9 +181,13 @@ impl QUICListener {
             &activation_request,
             &reload_input,
         );
-        let plan = plan_runtime_reload(&current, activation_request, reload_input);
-        Self::record_control_api_plan_result(&runtime_bundle_handle, "preview", &plan.plan);
-        Self::json_response(StatusCode::OK, plan.plan)
+        let plan = RuntimeActivationService::preview_reload(
+            &runtime_bundle_handle,
+            activation_request,
+            reload_input,
+        );
+        Self::record_control_api_plan_result(&runtime_bundle_handle, "preview", &plan);
+        Self::json_response(StatusCode::OK, plan)
     }
 
     pub(super) async fn handle_control_api_runtime_activate(

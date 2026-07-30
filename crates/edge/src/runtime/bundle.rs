@@ -414,7 +414,7 @@ impl RuntimeBundleHandle {
     /// A reload commit is only legal while the process is `Running`. If a drain or
     /// shutdown has begun, the swap is rejected before touching the active
     /// generation, so a reload cannot race a shutdown into ambiguous state.
-    pub fn replace(&self, bundle: RuntimeBundle) -> Result<u64, ProxyError> {
+    pub(crate) fn replace(&self, bundle: RuntimeBundle) -> Result<u64, ProxyError> {
         self.replace_with_archive_status(bundle, RuntimeGenerationRecordStatus::Previous)
     }
 

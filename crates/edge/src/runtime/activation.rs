@@ -638,6 +638,22 @@ impl StagedRuntimeReloadPlan {
 pub(crate) struct RuntimeActivationService;
 
 impl RuntimeActivationService {
+    pub(crate) fn validate_reload(
+        handle: &RuntimeBundleHandle,
+        request: ActivationRequest,
+        input: ReloadConfigInput,
+    ) -> ReloadPlan {
+        Self::stage_reload(handle, request, input).plan
+    }
+
+    pub(crate) fn preview_reload(
+        handle: &RuntimeBundleHandle,
+        request: ActivationRequest,
+        input: ReloadConfigInput,
+    ) -> ReloadPlan {
+        Self::stage_reload(handle, request, input).plan
+    }
+
     pub(crate) fn activate_reload(
         handle: &RuntimeBundleHandle,
         request: ActivationRequest,
@@ -678,8 +694,7 @@ impl RuntimeActivationService {
             return result;
         }
 
-        let plan = plan_runtime_reload(&current, request.clone(), input);
-        record_reload_plan_events(handle, &plan.plan);
+        let plan = Self::stage_reload(handle, request.clone(), input);
         if !plan.can_activate() {
             if plan
                 .plan
@@ -978,6 +993,17 @@ impl RuntimeActivationService {
         };
         record_rollback_result(handle, &result);
         result
+    }
+
+    fn stage_reload(
+        handle: &RuntimeBundleHandle,
+        request: ActivationRequest,
+        input: ReloadConfigInput,
+    ) -> StagedRuntimeReloadPlan {
+        let current = handle.current_view();
+        let plan = plan_runtime_reload(&current, request, input);
+        record_reload_plan_events(handle, &plan.plan);
+        plan
     }
 }
 
