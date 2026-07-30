@@ -1039,6 +1039,37 @@ mod tests {
         }
 
         #[test]
+        fn rollback_candidate_selection_prefers_active_and_excludes_failed_prepare_entries() {
+            let dir = tempdir().expect("tempdir");
+            let (current_bundle, next_bundle) = runtime_bundle_pair(
+                dir.path(),
+                "startup.yaml",
+                "http://127.0.0.1:7001",
+                2,
+                "reloaded.yaml",
+                "http://127.0.0.1:7002",
+            );
+            let handle = RuntimeBundleHandle::new(current_bundle);
+
+            let active = handle
+                .rollback_candidate(1)
+                .expect("active generation should be addressable as a rollback target");
+            assert_eq!(active.generation, 1);
+
+            handle.record_failed_prepare(9, "candidate not fully prepared");
+            assert!(
+                handle.rollback_candidate(9).is_none(),
+                "failed-prepare entries must not be exposed as rollback candidates"
+            );
+
+            handle.replace(next_bundle).expect("replace");
+            let previous = handle
+                .rollback_candidate(1)
+                .expect("previous known-good generation should stay rollbackable");
+            assert_eq!(previous.generation, 1);
+        }
+
+        #[test]
         fn runtime_observability_metrics_follow_active_generation_and_history_depth() {
             let dir = tempdir().expect("tempdir");
             let (current_bundle, next_bundle) = runtime_bundle_pair(

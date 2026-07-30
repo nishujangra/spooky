@@ -2007,4 +2007,143 @@ mod tests {
         };
         assert!(diff.is_noop());
     }
+
+    #[test]
+    fn compatibility_classification_distinguishes_reloadable_restart_required_and_rejected() {
+        assert_eq!(
+            classify_compatibility(&[]),
+            ReloadCompatibilityClassification::LiveReloadable
+        );
+
+        let restart_required = [TransitionRejection::restart_required(
+            "performance.worker_threads",
+            "1",
+            "8",
+        )];
+        assert_eq!(
+            classify_compatibility(&restart_required),
+            ReloadCompatibilityClassification::RestartRequired
+        );
+
+        let rejected = [TransitionRejection::resource_preflight_failed(
+            "metrics listener",
+            "127.0.0.1:9090",
+            "bind conflict on 127.0.0.1:9090",
+        )];
+        assert_eq!(
+            classify_compatibility(&rejected),
+            ReloadCompatibilityClassification::Rejected
+        );
+    }
+
+    #[test]
+    fn transition_rejections_map_to_stable_runtime_rejection_reasons() {
+        let startup_owned = RejectedChange::from(TransitionRejection::restart_required(
+            "performance.worker_threads",
+            "1",
+            "8",
+        ));
+        assert_eq!(
+            startup_owned.reason,
+            RuntimeRejectionReason::StartupOwnedChange
+        );
+
+        let bind_conflict = RejectedChange::from(TransitionRejection::resource_preflight_failed(
+            "metrics listener",
+            "127.0.0.1:9090",
+            "bind conflict on 127.0.0.1:9090",
+        ));
+        assert_eq!(bind_conflict.reason, RuntimeRejectionReason::BindConflict);
+
+        let incompatible = RejectedChange::from(TransitionRejection {
+            kind: crate::runtime::policy::TransitionRejectionKind::IllegalTransition,
+            field_path: None,
+            current_mode: Some("Draining".to_string()),
+            requested_mode: Some("Reload".to_string()),
+            operator_action:
+                "wait for the current lifecycle phase to complete; the requested transition is not legal now",
+            active_runtime_changed: false,
+            verbatim: None,
+        });
+        assert_eq!(
+            incompatible.reason,
+            RuntimeRejectionReason::IncompatibleReload
+        );
+    }
+
+    #[test]
+    fn activation_and_rollback_results_expose_stable_outcome_reasons() {
+        let request = ActivationRequest {
+            requested_by: Some("operator".to_string()),
+            trigger_source: Some("unit_test".to_string()),
+            reason: Some("reload".to_string()),
+            expected_generation: Some(3),
+            requested_at_ms: 10,
+        };
+        let rejected = RejectedChange {
+            reason: RuntimeRejectionReason::InvalidConfig,
+            kind: RejectedChangeKind::InvalidConfiguration,
+            field_path: Some("log.level".to_string()),
+            current_value: Some("info".to_string()),
+            requested_value: Some("".to_string()),
+            operator_action: "fix config".to_string(),
+            active_generation_changed: false,
+            message: "invalid config".to_string(),
+        };
+        let activation = ActivationResult {
+            request: request.clone(),
+            active_generation: 3,
+            activated_generation: None,
+            status: GenerationStatus::Rejected,
+            rejected_changes: vec![rejected.clone()],
+            history_entry: GenerationHistoryEntry {
+                generation: 4,
+                operation: GenerationOperation::Activate,
+                status: GenerationStatus::Rejected,
+                config_source: "runtime.yaml".to_string(),
+                config_version: Some(1),
+                requested_by: Some("operator".to_string()),
+                trigger_source: Some("unit_test".to_string()),
+                requested_at_ms: 10,
+                completed_at_ms: Some(11),
+                summary: "rejected".to_string(),
+                diff: ReloadDiff::default(),
+                rejected_changes: vec![rejected.clone()],
+            },
+        };
+        assert_eq!(
+            activation.outcome_reason(),
+            RuntimeOperationOutcomeReason::InvalidConfig
+        );
+
+        let rollback = RollbackResult {
+            request: RollbackRequest {
+                target_generation: 2,
+                requested_by: Some("operator".to_string()),
+                trigger_source: Some("unit_test".to_string()),
+                reason: Some("rollback".to_string()),
+                expected_active_generation: Some(4),
+                requested_at_ms: 12,
+            },
+            active_generation: 5,
+            rolled_back_to: Some(2),
+            status: GenerationStatus::RolledBack,
+            rejected_changes: Vec::new(),
+            history_entry: GenerationHistoryEntry {
+                generation: 5,
+                operation: GenerationOperation::Rollback,
+                status: GenerationStatus::RolledBack,
+                config_source: "generation:2".to_string(),
+                config_version: Some(1),
+                requested_by: Some("operator".to_string()),
+                trigger_source: Some("unit_test".to_string()),
+                requested_at_ms: 12,
+                completed_at_ms: Some(13),
+                summary: "rolled back".to_string(),
+                diff: ReloadDiff::default(),
+                rejected_changes: Vec::new(),
+            },
+        };
+        assert_eq!(rollback.outcome_reason(), RuntimeOperationOutcomeReason::Applied);
+    }
 }
