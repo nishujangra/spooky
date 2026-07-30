@@ -1516,9 +1516,30 @@ async fn control_api_runtime_history_renders_recorded_generation_changes() {
         },
     );
     assert!(activation.succeeded());
+    runtime_handle.record_failed_prepare(9, "candidate generation never prepared");
 
     let payload = json_body(QUICListener::render_control_api_runtime_history(&state)).await;
     assert_eq!(payload["active_generation"], 1);
+    assert_eq!(
+        payload["retained_generations"].as_array().map(Vec::len),
+        Some(3)
+    );
+    assert_eq!(payload["retained_generations"][0]["generation"], 1);
+    assert_eq!(payload["retained_generations"][0]["status"], "active");
+    assert_eq!(payload["retained_generations"][0]["rollback_candidate"], false);
+    assert_eq!(payload["retained_generations"][0]["has_bundle"], true);
+    assert_eq!(payload["retained_generations"][1]["generation"], 9);
+    assert_eq!(payload["retained_generations"][1]["status"], "failed_prepare");
+    assert_eq!(payload["retained_generations"][1]["rollback_candidate"], false);
+    assert_eq!(payload["retained_generations"][1]["has_bundle"], false);
+    assert_eq!(
+        payload["retained_generations"][1]["note"],
+        "candidate generation never prepared"
+    );
+    assert_eq!(payload["retained_generations"][2]["generation"], 0);
+    assert_eq!(payload["retained_generations"][2]["status"], "previous");
+    assert_eq!(payload["retained_generations"][2]["rollback_candidate"], true);
+    assert_eq!(payload["retained_generations"][2]["has_bundle"], true);
     assert_eq!(payload["entries"].as_array().map(Vec::len), Some(1));
     assert_eq!(payload["entries"][0]["operation"], "activate");
 }
@@ -1553,6 +1574,10 @@ async fn control_api_runtime_history_generation_filters_to_requested_generation(
     ))
     .await;
     assert_eq!(payload["generation"], 1);
+    assert_eq!(payload["retained_generation"]["generation"], 1);
+    assert_eq!(payload["retained_generation"]["status"], "active");
+    assert_eq!(payload["retained_generation"]["rollback_candidate"], false);
+    assert_eq!(payload["retained_generation"]["has_bundle"], true);
     assert_eq!(payload["entries"].as_array().map(Vec::len), Some(1));
 
     let missing = QUICListener::render_control_api_runtime_history_generation(&state, 99);

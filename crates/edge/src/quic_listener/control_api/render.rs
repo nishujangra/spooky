@@ -12,6 +12,7 @@ use crate::runtime::{
         BackendHealthState, BackendLifecycleInventorySnapshot, BackendMembershipState,
         BackendPoolPlacementSnapshot,
     },
+    bundle::RuntimeGenerationRecord,
 };
 
 /// Map a backend health-failure reason to the canonical control-plane token.
@@ -163,13 +164,25 @@ struct ControlApiRuntimeGenerationPayload {
 #[derive(Serialize)]
 struct ControlApiRuntimeHistoryPayload {
     active_generation: u64,
+    retained_generations: Vec<ControlApiRetainedGenerationPayload>,
     entries: Vec<GenerationHistoryEntry>,
 }
 
 #[derive(Serialize)]
 struct ControlApiRuntimeHistoryGenerationPayload {
     generation: u64,
+    retained_generation: ControlApiRetainedGenerationPayload,
     entries: Vec<GenerationHistoryEntry>,
+}
+
+#[derive(Serialize)]
+struct ControlApiRetainedGenerationPayload {
+    generation: u64,
+    status: &'static str,
+    rollback_candidate: bool,
+    has_bundle: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<String>,
 }
 
 impl QUICListener {
@@ -246,6 +259,11 @@ impl QUICListener {
             StatusCode::OK,
             ControlApiRuntimeHistoryPayload {
                 active_generation: runtime_bundle_handle.current_generation(),
+                retained_generations: runtime_bundle_handle
+                    .generation_history()
+                    .into_iter()
+                    .map(ControlApiRetainedGenerationPayload::from_record)
+                    .collect(),
                 entries: runtime_bundle_handle.generation_change_history(),
             },
         )
@@ -265,22 +283,35 @@ impl QUICListener {
             .into_iter()
             .filter(|entry| entry.generation == generation)
             .collect::<Vec<_>>();
-        if entries.is_empty() {
+        let Some(record) = runtime_bundle_handle.generation_record(generation) else {
             return Self::json_response(
                 StatusCode::NOT_FOUND,
                 json!({
                     "error": format!("generation {generation} not found in runtime history"),
                 }),
             );
-        }
+        };
 
         Self::json_response(
             StatusCode::OK,
             ControlApiRuntimeHistoryGenerationPayload {
                 generation,
+                retained_generation: ControlApiRetainedGenerationPayload::from_record(record),
                 entries,
             },
         )
+    }
+}
+
+impl ControlApiRetainedGenerationPayload {
+    fn from_record(record: RuntimeGenerationRecord) -> Self {
+        Self {
+            generation: record.generation(),
+            status: record.status().as_str(),
+            rollback_candidate: record.status().is_rollback_candidate(),
+            has_bundle: record.has_bundle(),
+            note: record.note().map(ToOwned::to_owned),
+        }
     }
 }
 
