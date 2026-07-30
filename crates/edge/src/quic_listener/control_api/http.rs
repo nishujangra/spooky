@@ -21,8 +21,7 @@ impl QUICListener {
             super::auth::ControlApiRoute::RuntimePreview => {
                 Self::handle_control_api_runtime_preview(req, state).await
             }
-            super::auth::ControlApiRoute::RuntimeActivate
-             => {
+            super::auth::ControlApiRoute::RuntimeActivate => {
                 Self::handle_control_api_runtime_activate(req, state).await
             }
             super::auth::ControlApiRoute::ReloadRuntime => {

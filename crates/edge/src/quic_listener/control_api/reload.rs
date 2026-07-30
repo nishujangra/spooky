@@ -6,9 +6,8 @@ use std::sync::Arc;
 use super::*;
 use crate::runtime::{
     activation::{
-        ActivationRequest, ActivationResult, RejectedChangeKind, ReloadConfigInput,
-        ReloadPlan, RollbackRequest, RollbackResult, RuntimeActivationService,
-        RuntimeRejectionReason,
+        ActivationRequest, ActivationResult, RejectedChangeKind, ReloadConfigInput, ReloadPlan,
+        RollbackRequest, RollbackResult, RuntimeActivationService, RuntimeRejectionReason,
     },
     bundle::{ActiveRuntimeGeneration, RuntimeBundleHandle},
     policy::{ReloadCompatibilityAuthority, TransitionRejection},
@@ -129,10 +128,12 @@ impl QUICListener {
             return Self::control_api_not_found_response();
         };
         let current = runtime_bundle_handle.current_view();
-        let plan_request = match Self::control_api_json_body_or_default::<ControlApiRuntimePlanRequest>(req).await {
-            Ok(payload) => payload,
-            Err(response) => return response,
-        };
+        let plan_request =
+            match Self::control_api_json_body_or_default::<ControlApiRuntimePlanRequest>(req).await
+            {
+                Ok(payload) => payload,
+                Err(response) => return response,
+            };
         let activation_request = Self::control_api_activation_request(
             &plan_request,
             current.generation(),
@@ -164,10 +165,12 @@ impl QUICListener {
             return Self::control_api_not_found_response();
         };
         let current = runtime_bundle_handle.current_view();
-        let plan_request = match Self::control_api_json_body_or_default::<ControlApiRuntimePlanRequest>(req).await {
-            Ok(payload) => payload,
-            Err(response) => return response,
-        };
+        let plan_request =
+            match Self::control_api_json_body_or_default::<ControlApiRuntimePlanRequest>(req).await
+            {
+                Ok(payload) => payload,
+                Err(response) => return response,
+            };
         let activation_request = Self::control_api_activation_request(
             &plan_request,
             current.generation(),
@@ -299,17 +302,22 @@ impl QUICListener {
         let Some(runtime_bundle_handle) = runtime_state.runtime_bundle_handle().cloned() else {
             return Self::control_api_not_found_response();
         };
-        let payload = match Self::control_api_json_body::<ControlApiRuntimeRollbackPayload>(req).await {
-            Ok(payload) => payload,
-            Err(response) => return response,
-        };
+        let payload =
+            match Self::control_api_json_body::<ControlApiRuntimeRollbackPayload>(req).await {
+                Ok(payload) => payload,
+                Err(response) => return response,
+            };
         let rollback = RuntimeActivationService::rollback_generation(
             &runtime_bundle_handle,
             RollbackRequest {
                 target_generation: payload.target_generation,
-                requested_by: payload.requested_by.or_else(|| Some("control_api".to_string())),
+                requested_by: payload
+                    .requested_by
+                    .or_else(|| Some("control_api".to_string())),
                 trigger_source: Some("control_api".to_string()),
-                reason: payload.reason.or_else(|| Some("runtime_rollback".to_string())),
+                reason: payload
+                    .reason
+                    .or_else(|| Some("runtime_rollback".to_string())),
                 expected_active_generation: payload.expected_active_generation,
                 requested_at_ms: crate::watchdog::time::now_millis(),
             },
@@ -706,9 +714,7 @@ impl QUICListener {
         } else {
             info!(
                 "runtime {} accepted candidate_generation={} summary={}",
-                operation,
-                plan.candidate_generation,
-                plan.summary
+                operation, plan.candidate_generation, plan.summary
             );
         }
     }
@@ -796,12 +802,16 @@ fn activation_result_status(activation: &ActivationResult) -> StatusCode {
             rejection.kind,
             RejectedChangeKind::ResourcePreparationFailed
         )
-    }) || matches!(activation.status, crate::runtime::activation::GenerationStatus::Failed)
-    {
+    }) || matches!(
+        activation.status,
+        crate::runtime::activation::GenerationStatus::Failed
+    ) {
         StatusCode::INTERNAL_SERVER_ERROR
-    } else if activation.rejected_changes.iter().any(|rejection| {
-        matches!(rejection.kind, RejectedChangeKind::RuntimeStateUnavailable)
-    }) {
+    } else if activation
+        .rejected_changes
+        .iter()
+        .any(|rejection| matches!(rejection.kind, RejectedChangeKind::RuntimeStateUnavailable))
+    {
         StatusCode::INTERNAL_SERVER_ERROR
     } else {
         StatusCode::CONFLICT
@@ -853,8 +863,10 @@ fn legacy_reload_result_status(activation: &ActivationResult) -> StatusCode {
                 | RejectedChangeKind::IllegalTransition
                 | RejectedChangeKind::RuntimeStateUnavailable
         )
-    }) || matches!(activation.status, crate::runtime::activation::GenerationStatus::Failed)
-    {
+    }) || matches!(
+        activation.status,
+        crate::runtime::activation::GenerationStatus::Failed
+    ) {
         StatusCode::INTERNAL_SERVER_ERROR
     } else {
         StatusCode::CONFLICT
@@ -874,8 +886,10 @@ fn rollback_result_status(rollback: &RollbackResult) -> StatusCode {
             RejectedChangeKind::ResourcePreparationFailed
                 | RejectedChangeKind::RuntimeStateUnavailable
         )
-    }) || matches!(rollback.status, crate::runtime::activation::GenerationStatus::Failed)
-    {
+    }) || matches!(
+        rollback.status,
+        crate::runtime::activation::GenerationStatus::Failed
+    ) {
         StatusCode::INTERNAL_SERVER_ERROR
     } else {
         StatusCode::CONFLICT

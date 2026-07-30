@@ -9,12 +9,12 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use crate::runtime::activation::{RuntimeOperationOutcomeReason, RuntimeRejectionReason};
 use spooky_errors::{
     HedgeOutcomeTelemetryReason, HedgeTriggerTelemetryReason, RetryAttemptTelemetryReason,
     RetryPolicyDenialReason,
 };
 use spooky_lb::health::HealthFailureReason;
-use crate::runtime::activation::{RuntimeOperationOutcomeReason, RuntimeRejectionReason};
 
 pub struct Metrics {
     pub requests_total: AtomicU64,
@@ -1295,9 +1295,9 @@ impl Metrics {
 
     pub fn runtime_rejection_reason_count(&self, reason: RuntimeRejectionReason) -> u64 {
         match reason {
-            RuntimeRejectionReason::InvalidConfig => {
-                self.runtime_rejection_invalid_config.load(Ordering::Relaxed)
-            }
+            RuntimeRejectionReason::InvalidConfig => self
+                .runtime_rejection_invalid_config
+                .load(Ordering::Relaxed),
             RuntimeRejectionReason::StartupOwnedChange => self
                 .runtime_rejection_startup_owned_change
                 .load(Ordering::Relaxed),

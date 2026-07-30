@@ -49,7 +49,9 @@ impl QUICListener {
             Method::GET if path == paths.health_path.as_str() => Some(ControlApiRoute::Health),
             Method::GET if path == paths.ready_path.as_str() => Some(ControlApiRoute::Ready),
             Method::GET if path == paths.runtime_path.as_str() => Some(ControlApiRoute::Runtime),
-            Method::GET if path == runtime_history_path.as_str() => Some(ControlApiRoute::RuntimeHistory),
+            Method::GET if path == runtime_history_path.as_str() => {
+                Some(ControlApiRoute::RuntimeHistory)
+            }
             Method::GET if path.starts_with(runtime_history_entry_prefix.as_str()) => path
                 .strip_prefix(runtime_history_entry_prefix.as_str())
                 .and_then(|raw_generation| raw_generation.parse::<u64>().ok())

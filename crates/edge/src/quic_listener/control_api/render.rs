@@ -6,11 +6,11 @@ use serde::Serialize;
 use spooky_lb::health::HealthFailureReason;
 
 use super::{state::ControlApiState, *};
+use crate::runtime::activation::GenerationHistoryEntry;
 use crate::runtime::backend::state::{
     BackendHealthState, BackendLifecycleInventorySnapshot, BackendMembershipState,
     BackendPoolPlacementSnapshot,
 };
-use crate::runtime::activation::GenerationHistoryEntry;
 
 /// Map a backend health-failure reason to the canonical control-plane token.
 ///
@@ -274,7 +274,10 @@ impl QUICListener {
 
         Self::json_response(
             StatusCode::OK,
-            ControlApiRuntimeHistoryGenerationPayload { generation, entries },
+            ControlApiRuntimeHistoryGenerationPayload {
+                generation,
+                entries,
+            },
         )
     }
 }

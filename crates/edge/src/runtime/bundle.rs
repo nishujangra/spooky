@@ -314,9 +314,7 @@ impl RuntimeBundleHandle {
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
-            .find(|entry| {
-                entry.generation == generation && entry.status.is_rollback_candidate()
-            })
+            .find(|entry| entry.generation == generation && entry.status.is_rollback_candidate())
             .and_then(|entry| entry.bundle.clone())
     }
 
@@ -414,6 +412,7 @@ impl RuntimeBundleHandle {
     /// A reload commit is only legal while the process is `Running`. If a drain or
     /// shutdown has begun, the swap is rejected before touching the active
     /// generation, so a reload cannot race a shutdown into ambiguous state.
+    #[warn(dead_code)]
     pub(crate) fn replace(&self, bundle: RuntimeBundle) -> Result<u64, ProxyError> {
         self.replace_with_archive_status(bundle, RuntimeGenerationRecordStatus::Previous)
     }
@@ -952,10 +951,7 @@ mod tests {
             assert_eq!(history[0].generation(), 2);
             assert_eq!(history[0].status(), RuntimeGenerationRecordStatus::Active);
             assert_eq!(history[1].generation(), previous_generation);
-            assert_eq!(
-                history[1].status(),
-                RuntimeGenerationRecordStatus::Previous
-            );
+            assert_eq!(history[1].status(), RuntimeGenerationRecordStatus::Previous);
             let rollback = handle
                 .rollback_candidate(previous_generation)
                 .expect("previous generation should be retained");
@@ -991,10 +987,7 @@ mod tests {
             assert_eq!(history[0].generation(), 3);
             assert_eq!(history[0].status(), RuntimeGenerationRecordStatus::Active);
             assert_eq!(history[1].generation(), 2);
-            assert_eq!(
-                history[1].status(),
-                RuntimeGenerationRecordStatus::Previous
-            );
+            assert_eq!(history[1].status(), RuntimeGenerationRecordStatus::Previous);
             assert_eq!(history[2].generation(), 1);
             assert_eq!(
                 history[2].status(),
@@ -1083,8 +1076,18 @@ mod tests {
             let handle = RuntimeBundleHandle::new(current_bundle);
 
             let initial_metrics = Arc::clone(&handle.current_view().shared_services().metrics);
-            assert_eq!(initial_metrics.runtime_active_generation.load(Ordering::Relaxed), 1);
-            assert_eq!(initial_metrics.runtime_history_depth.load(Ordering::Relaxed), 0);
+            assert_eq!(
+                initial_metrics
+                    .runtime_active_generation
+                    .load(Ordering::Relaxed),
+                1
+            );
+            assert_eq!(
+                initial_metrics
+                    .runtime_history_depth
+                    .load(Ordering::Relaxed),
+                0
+            );
 
             handle.record_generation_history_entry(GenerationHistoryEntry {
                 generation: 2,
@@ -1101,13 +1104,26 @@ mod tests {
                 rejected_changes: Vec::new(),
             });
 
-            assert_eq!(initial_metrics.runtime_history_depth.load(Ordering::Relaxed), 1);
+            assert_eq!(
+                initial_metrics
+                    .runtime_history_depth
+                    .load(Ordering::Relaxed),
+                1
+            );
 
             handle.replace(next_bundle).expect("replace");
 
             let next_metrics = Arc::clone(&handle.current_view().shared_services().metrics);
-            assert_eq!(next_metrics.runtime_active_generation.load(Ordering::Relaxed), 2);
-            assert_eq!(next_metrics.runtime_history_depth.load(Ordering::Relaxed), 1);
+            assert_eq!(
+                next_metrics
+                    .runtime_active_generation
+                    .load(Ordering::Relaxed),
+                2
+            );
+            assert_eq!(
+                next_metrics.runtime_history_depth.load(Ordering::Relaxed),
+                1
+            );
         }
     }
 }

@@ -15,10 +15,10 @@ use tempfile::tempdir;
 
 use super::{state::ControlApiState, *};
 use crate::runtime::activation::{
-    ActivationRequest, GenerationEventKind, GenerationOperation, GenerationStatus,
-    PlanningPhase, PlanningPhaseStatus, RejectedChangeKind, RuntimeRejectionReason,
-    ReloadCompatibilityClassification, ReloadConfigInput, ReloadDiffDisposition,
-    RollbackRequest, RuntimeActivationService, plan_runtime_reload,
+    ActivationRequest, GenerationEventKind, GenerationOperation, GenerationStatus, PlanningPhase,
+    PlanningPhaseStatus, RejectedChangeKind, ReloadCompatibilityClassification, ReloadConfigInput,
+    ReloadDiffDisposition, RollbackRequest, RuntimeActivationService, RuntimeRejectionReason,
+    plan_runtime_reload,
 };
 
 /// Render the typed startup-owned compatibility result into the flat list of
@@ -360,8 +360,7 @@ fn staged_reload_planner_classifies_restart_required_changes_without_mutation() 
     assert!(
         plan.plan.rejected_changes.iter().any(|rejection| {
             rejection.kind == RejectedChangeKind::RestartRequired
-                && rejection.field_path.as_deref()
-                    == Some("performance.control_plane_threads")
+                && rejection.field_path.as_deref() == Some("performance.control_plane_threads")
         }),
         "expected a startup-owned restart-required rejection"
     );
@@ -372,7 +371,10 @@ fn staged_reload_planner_classifies_restart_required_changes_without_mutation() 
             .iter()
             .any(|entry| entry.domain == "observability_control_plane"
                 && entry.disposition == ReloadDiffDisposition::RejectedStartupOwned
-                && matches!(entry.change, crate::runtime::activation::ReloadChangeKind::Modified)),
+                && matches!(
+                    entry.change,
+                    crate::runtime::activation::ReloadChangeKind::Modified
+                )),
         "expected control-plane startup-owned drift to be separated as rejected startup-owned"
     );
 }
@@ -409,7 +411,10 @@ fn staged_reload_planner_marks_log_level_change_as_reloadable_domain_diff() {
             .iter()
             .any(|entry| entry.domain == "observability_control_plane"
                 && entry.disposition == ReloadDiffDisposition::Reloadable
-                && matches!(entry.change, crate::runtime::activation::ReloadChangeKind::Modified)
+                && matches!(
+                    entry.change,
+                    crate::runtime::activation::ReloadChangeKind::Modified
+                )
                 && entry.summary.contains("log(level=info")
                 && entry.summary.contains("log(level=debug")),
         "expected log.level drift to show up as a reloadable observability/control-plane diff"
@@ -442,14 +447,23 @@ fn activation_service_commits_reloadable_candidate_and_advances_generation() {
         },
     );
 
-    assert!(activation.succeeded(), "activation should succeed: {activation:?}");
+    assert!(
+        activation.succeeded(),
+        "activation should succeed: {activation:?}"
+    );
     assert_eq!(activation.status, GenerationStatus::Active);
     assert_eq!(activation.active_generation, generation_before + 1);
     assert_eq!(activation.activated_generation, Some(generation_before + 1));
     assert_eq!(handle.current_generation(), generation_before + 1);
-    assert_eq!(activation.history_entry.operation, GenerationOperation::Activate);
+    assert_eq!(
+        activation.history_entry.operation,
+        GenerationOperation::Activate
+    );
     assert_eq!(activation.history_entry.status, GenerationStatus::Active);
-    assert_eq!(activation.history_entry.config_source, config_path.to_string_lossy());
+    assert_eq!(
+        activation.history_entry.config_source,
+        config_path.to_string_lossy()
+    );
     assert_eq!(activation.history_entry.config_version, Some(1));
     assert_eq!(
         activation.history_entry.trigger_source.as_deref(),
@@ -495,8 +509,10 @@ fn activation_service_rejects_restart_required_changes_without_mutating_active_g
     let generation_before = handle.current_generation();
 
     let mut next_config = test_config(cert, key);
-    next_config.performance.control_plane_threads =
-        current_config.performance.control_plane_threads.saturating_add(2);
+    next_config.performance.control_plane_threads = current_config
+        .performance
+        .control_plane_threads
+        .saturating_add(2);
     write_config_file(&config_path, &next_config);
 
     let activation = RuntimeActivationService::activate_reload(
@@ -515,14 +531,16 @@ fn activation_service_rejects_restart_required_changes_without_mutating_active_g
     assert_eq!(activation.active_generation, generation_before);
     assert_eq!(activation.activated_generation, None);
     assert_eq!(handle.current_generation(), generation_before);
-    assert_eq!(activation.history_entry.operation, GenerationOperation::Activate);
+    assert_eq!(
+        activation.history_entry.operation,
+        GenerationOperation::Activate
+    );
     assert_eq!(activation.history_entry.status, GenerationStatus::Rejected);
     assert!(
         activation.rejected_changes.iter().any(|rejection| {
             rejection.kind == RejectedChangeKind::RestartRequired
                 && rejection.reason == RuntimeRejectionReason::StartupOwnedChange
-                && rejection.field_path.as_deref()
-                    == Some("performance.control_plane_threads")
+                && rejection.field_path.as_deref() == Some("performance.control_plane_threads")
                 && !rejection.active_generation_changed
         }),
         "expected a restart-required rejection without live mutation: {:?}",
@@ -574,24 +592,26 @@ fn rollback_service_restores_retained_generation_by_id_and_records_rollback_stat
     bundle_three.generation = 3;
 
     let handle = RuntimeBundleHandle::new(bundle_one);
-    handle
-        .replace(bundle_two)
-        .expect("install generation 2");
-    handle
-        .replace(bundle_three)
-        .expect("install generation 3");
+    handle.replace(bundle_two).expect("install generation 2");
+    handle.replace(bundle_three).expect("install generation 3");
 
     let rollback = RuntimeActivationService::rollback_generation(
         &handle,
         rollback_request(1, handle.current_generation()),
     );
 
-    assert!(rollback.succeeded(), "rollback should succeed: {rollback:?}");
+    assert!(
+        rollback.succeeded(),
+        "rollback should succeed: {rollback:?}"
+    );
     assert_eq!(rollback.status, GenerationStatus::RolledBack);
     assert_eq!(rollback.rolled_back_to, Some(1));
     assert_eq!(rollback.active_generation, 4);
     assert_eq!(handle.current_generation(), 4);
-    assert_eq!(rollback.history_entry.operation, GenerationOperation::Rollback);
+    assert_eq!(
+        rollback.history_entry.operation,
+        GenerationOperation::Rollback
+    );
     assert_eq!(rollback.history_entry.status, GenerationStatus::RolledBack);
     assert_eq!(
         handle
@@ -617,10 +637,7 @@ fn rollback_service_restores_retained_generation_by_id_and_records_rollback_stat
     assert_eq!(events[0].kind, GenerationEventKind::RollbackSucceeded);
     assert_eq!(events[0].entry.config_source, "gen-1.yaml");
     assert_eq!(events[0].entry.config_version, Some(1));
-    assert_eq!(
-        events[0].entry.trigger_source.as_deref(),
-        Some("unit_test")
-    );
+    assert_eq!(events[0].entry.trigger_source.as_deref(), Some("unit_test"));
 }
 
 #[test]
@@ -634,8 +651,10 @@ fn rollback_service_rejects_incomplete_or_failed_prepare_targets_without_mutatio
     let active_generation = handle.current_generation();
     handle.record_failed_prepare(9, "candidate generation never prepared");
 
-    let rollback =
-        RuntimeActivationService::rollback_generation(&handle, rollback_request(9, active_generation));
+    let rollback = RuntimeActivationService::rollback_generation(
+        &handle,
+        rollback_request(9, active_generation),
+    );
 
     assert!(
         !rollback.succeeded(),
@@ -649,8 +668,7 @@ fn rollback_service_rejects_incomplete_or_failed_prepare_targets_without_mutatio
         rollback.rejected_changes.iter().any(|rejection| {
             rejection.kind == RejectedChangeKind::RuntimeStateUnavailable
                 && rejection.reason == RuntimeRejectionReason::RollbackNotAllowed
-                && rejection.field_path.as_deref()
-                    == Some("runtime.rollback.target_generation")
+                && rejection.field_path.as_deref() == Some("runtime.rollback.target_generation")
         }),
         "expected rollback rejection for incomplete target: {:?}",
         rollback.rejected_changes
@@ -693,7 +711,10 @@ fn validate_plan_does_not_mutate_the_active_generation() {
 
     assert!(!plan.can_activate());
     assert_eq!(handle.current_generation(), generation_before);
-    assert_eq!(handle.current_view().startup().log_config.level, log_level_before);
+    assert_eq!(
+        handle.current_view().startup().log_config.level,
+        log_level_before
+    );
     assert_eq!(
         handle
             .current_view()
@@ -756,11 +777,8 @@ fn invalid_activation_leaves_active_generation_unchanged() {
     let handle = RuntimeBundleHandle::new(bundle);
     let generation_before = handle.current_generation();
 
-    std::fs::write(
-        &config_path,
-        "version: 1\nlisten:\n  protocol: \"http3\"\n",
-    )
-    .expect("write invalid config");
+    std::fs::write(&config_path, "version: 1\nlisten:\n  protocol: \"http3\"\n")
+        .expect("write invalid config");
 
     let activation = RuntimeActivationService::activate_reload(
         &handle,
@@ -1434,13 +1452,14 @@ async fn control_api_runtime_history_generation_filters_to_requested_generation(
     );
     assert!(activation.succeeded());
 
-    let payload =
-        json_body(QUICListener::render_control_api_runtime_history_generation(&state, 1)).await;
+    let payload = json_body(QUICListener::render_control_api_runtime_history_generation(
+        &state, 1,
+    ))
+    .await;
     assert_eq!(payload["generation"], 1);
     assert_eq!(payload["entries"].as_array().map(Vec::len), Some(3));
 
-    let missing =
-        QUICListener::render_control_api_runtime_history_generation(&state, 99);
+    let missing = QUICListener::render_control_api_runtime_history_generation(&state, 99);
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 }
 

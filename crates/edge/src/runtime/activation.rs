@@ -12,16 +12,13 @@ use serde::{Deserialize, Serialize};
 use spooky_config::{loader::read_config, runtime::RuntimeConfig};
 use spooky_errors::ProxyError;
 
-use crate::{
-    runtime::{
-        bundle::{
-            ActiveRuntimeGeneration, RuntimeBundle, RuntimeBundleHandle,
-            RuntimeGenerationRecordStatus,
-        },
-        generation::CarriedProcessSharedServices,
-        listener::QUICListener,
-        policy::{TransitionRejection, TransitionRejectionKind, render_rejections},
+use crate::runtime::{
+    bundle::{
+        ActiveRuntimeGeneration, RuntimeBundle, RuntimeBundleHandle, RuntimeGenerationRecordStatus,
     },
+    generation::CarriedProcessSharedServices,
+    listener::QUICListener,
+    policy::{TransitionRejection, TransitionRejectionKind, render_rejections},
 };
 
 /// Stable identifier for a published or staged runtime generation.
@@ -347,9 +344,7 @@ impl From<TransitionRejectionKind> for RejectedChangeKind {
     fn from(value: TransitionRejectionKind) -> Self {
         match value {
             TransitionRejectionKind::RestartRequired => Self::RestartRequired,
-            TransitionRejectionKind::ResourcePreparationFailed => {
-                Self::ResourcePreparationFailed
-            }
+            TransitionRejectionKind::ResourcePreparationFailed => Self::ResourcePreparationFailed,
             TransitionRejectionKind::InvalidConfiguration => Self::InvalidConfiguration,
             TransitionRejectionKind::IllegalTransition => Self::IllegalTransition,
             TransitionRejectionKind::RuntimeStateUnavailable => Self::RuntimeStateUnavailable,
@@ -406,7 +401,10 @@ impl RejectedChange {
         }
     }
 
-    fn resource_preparation_failed(field_path: impl Into<String>, detail: impl Into<String>) -> Self {
+    fn resource_preparation_failed(
+        field_path: impl Into<String>,
+        detail: impl Into<String>,
+    ) -> Self {
         let field_path = field_path.into();
         let detail = detail.into();
         let message = format!(
@@ -439,7 +437,9 @@ fn runtime_rejection_reason_for_transition(
         TransitionRejectionKind::RestartRequired => RuntimeRejectionReason::StartupOwnedChange,
         TransitionRejectionKind::InvalidConfiguration => RuntimeRejectionReason::InvalidConfig,
         TransitionRejectionKind::IllegalTransition => RuntimeRejectionReason::IncompatibleReload,
-        TransitionRejectionKind::RuntimeStateUnavailable => RuntimeRejectionReason::UnknownGeneration,
+        TransitionRejectionKind::RuntimeStateUnavailable => {
+            RuntimeRejectionReason::UnknownGeneration
+        }
         TransitionRejectionKind::ResourcePreparationFailed => {
             let field_path = rejection.field_path.as_deref().unwrap_or_default();
             let detail = rejection.requested_mode.as_deref().unwrap_or_default();
@@ -525,7 +525,9 @@ impl ReloadPlan {
 
     #[must_use]
     pub fn primary_rejection_reason(&self) -> Option<RuntimeRejectionReason> {
-        self.rejected_changes.first().map(|rejection| rejection.reason)
+        self.rejected_changes
+            .first()
+            .map(|rejection| rejection.reason)
     }
 }
 
@@ -573,7 +575,9 @@ impl ActivationResult {
 
     #[must_use]
     pub fn primary_rejection_reason(&self) -> Option<RuntimeRejectionReason> {
-        self.rejected_changes.first().map(|rejection| rejection.reason)
+        self.rejected_changes
+            .first()
+            .map(|rejection| rejection.reason)
     }
 
     #[must_use]
@@ -603,7 +607,9 @@ impl RollbackResult {
 
     #[must_use]
     pub fn primary_rejection_reason(&self) -> Option<RuntimeRejectionReason> {
-        self.rejected_changes.first().map(|rejection| rejection.reason)
+        self.rejected_changes
+            .first()
+            .map(|rejection| rejection.reason)
     }
 
     #[must_use]
@@ -680,8 +686,8 @@ impl RuntimeActivationService {
                     field_path: Some("runtime.generation".to_string()),
                     current_value: Some(active_generation.to_string()),
                     requested_value: Some(expected_generation.to_string()),
-                    operator_action:
-                        "refresh the active generation view and retry the activation".to_string(),
+                    operator_action: "refresh the active generation view and retry the activation"
+                        .to_string(),
                     active_generation_changed: false,
                     message: format!(
                         "runtime reload rejected: expected active generation {} but current active generation is {}",
@@ -696,17 +702,12 @@ impl RuntimeActivationService {
 
         let plan = Self::stage_reload(handle, request.clone(), input);
         if !plan.can_activate() {
-            if plan
-                .plan
-                .rejected_changes
-                .iter()
-                .any(|rejection| {
-                    matches!(
-                        rejection.kind,
-                        RejectedChangeKind::ResourcePreparationFailed
-                    )
-                })
-            {
+            if plan.plan.rejected_changes.iter().any(|rejection| {
+                matches!(
+                    rejection.kind,
+                    RejectedChangeKind::ResourcePreparationFailed
+                )
+            }) {
                 handle.record_failed_prepare(
                     plan.plan.candidate_generation,
                     plan.plan
@@ -798,8 +799,8 @@ impl RuntimeActivationService {
                     field_path: Some("runtime.generation".to_string()),
                     current_value: Some(active_generation.to_string()),
                     requested_value: Some(expected_active_generation.to_string()),
-                    operator_action:
-                        "refresh the active generation view and retry the rollback".to_string(),
+                    operator_action: "refresh the active generation view and retry the rollback"
+                        .to_string(),
                     active_generation_changed: false,
                     message: format!(
                         "runtime rollback rejected: expected active generation {} but current active generation is {}",
@@ -855,8 +856,8 @@ impl RuntimeActivationService {
                     field_path: Some("runtime.rollback.target_generation".to_string()),
                     current_value: None,
                     requested_value: Some(target_generation.to_string()),
-                    operator_action:
-                        "choose a retained known-good generation from runtime history".to_string(),
+                    operator_action: "choose a retained known-good generation from runtime history"
+                        .to_string(),
                     active_generation_changed: false,
                     message: format!(
                         "runtime rollback rejected: generation {} is not retained as a rollback candidate",
@@ -943,7 +944,10 @@ impl RuntimeActivationService {
         let compatibility_rejections =
             QUICListener::evaluate_runtime_reload_compatibility(&current, &prepared);
         if let Err(rejections) = compatibility_rejections {
-            let rejected_changes = rejections.iter().map(RejectedChange::from).collect::<Vec<_>>();
+            let rejected_changes = rejections
+                .iter()
+                .map(RejectedChange::from)
+                .collect::<Vec<_>>();
             let diff = build_reload_diff(
                 current.bundle(),
                 &prepared,
@@ -1040,9 +1044,7 @@ pub(crate) fn plan_runtime_reload(
                     current_generation,
                     candidate_generation,
                     validation,
-                    vec![
-                        RejectedChange::invalid_configuration(err),
-                    ],
+                    vec![RejectedChange::invalid_configuration(err)],
                 );
             }
         },
@@ -1180,7 +1182,9 @@ pub(crate) fn plan_runtime_reload(
             "validated reload candidate for generation {candidate_generation}; ready for activation"
         )
     } else {
-        format!("validated reload candidate for generation {candidate_generation}; activation blocked")
+        format!(
+            "validated reload candidate for generation {candidate_generation}; activation blocked"
+        )
     };
 
     StagedRuntimeReloadPlan {
@@ -1235,8 +1239,7 @@ fn commit_runtime_bundle_swap(
         &next_runtime.runtime_config,
         next_runtime.shared_state.as_ref(),
     );
-    handle
-        .replace_with_archive_status(next_runtime, previous_status)
+    handle.replace_with_archive_status(next_runtime, previous_status)
 }
 
 fn prepare_rollback_bundle(
@@ -1389,6 +1392,7 @@ fn successful_rollback_result(
     }
 }
 
+#[warn(clippy::too_many_arguments)]
 fn rejected_rollback_result(
     request: RollbackRequest,
     active_generation: GenerationId,
@@ -1440,9 +1444,8 @@ fn failed_rollback_result(
         field_path: Some("runtime.rollback".to_string()),
         current_value: Some(active_generation.to_string()),
         requested_value: Some(target_generation.to_string()),
-        operator_action:
-            "inspect runtime state and retry the rollback once the runtime is healthy"
-                .to_string(),
+        operator_action: "inspect runtime state and retry the rollback once the runtime is healthy"
+            .to_string(),
         active_generation_changed: false,
         message: error.clone(),
     }];
@@ -1512,6 +1515,7 @@ fn successful_activation_result(
     }
 }
 
+#[warn(clippy::too_many_arguments)]
 fn rejected_activation_result(
     request: ActivationRequest,
     active_generation: GenerationId,
@@ -1564,8 +1568,7 @@ fn failed_activation_result(
         current_value: Some(active_generation.to_string()),
         requested_value: Some(candidate_generation.to_string()),
         operator_action:
-            "inspect runtime state and retry the activation once the runtime is healthy"
-                .to_string(),
+            "inspect runtime state and retry the activation once the runtime is healthy".to_string(),
         active_generation_changed: false,
         message: error.clone(),
     }];
@@ -1604,7 +1607,10 @@ fn rejected_reload_plan(
     mut validation: Vec<PlanningPhaseResult>,
     rejected_changes: Vec<RejectedChange>,
 ) -> StagedRuntimeReloadPlan {
-    if validation.iter().all(|step| step.phase != PlanningPhase::NormalizeRuntime) {
+    if validation
+        .iter()
+        .all(|step| step.phase != PlanningPhase::NormalizeRuntime)
+    {
         validation.push(PlanningPhaseResult {
             phase: PlanningPhase::NormalizeRuntime,
             status: PlanningPhaseStatus::Skipped,
@@ -1653,9 +1659,7 @@ fn render_rejected_changes(rejected_changes: &[RejectedChange]) -> String {
         .join("; ")
 }
 
-fn classify_compatibility(
-    rejections: &[TransitionRejection],
-) -> ReloadCompatibilityClassification {
+fn classify_compatibility(rejections: &[TransitionRejection]) -> ReloadCompatibilityClassification {
     if rejections.is_empty() {
         ReloadCompatibilityClassification::LiveReloadable
     } else if rejections.iter().any(TransitionRejection::requires_restart) {
@@ -1667,7 +1671,11 @@ fn classify_compatibility(
 
 fn snapshot_from_bundle(bundle: &RuntimeBundle) -> ProposedGenerationSnapshot {
     let state = bundle.shared_state.generation_state();
-    let mut listener_labels = state.listener_runtime_configs.keys().cloned().collect::<Vec<_>>();
+    let mut listener_labels = state
+        .listener_runtime_configs
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
     listener_labels.sort_unstable();
 
     ProposedGenerationSnapshot {
@@ -1832,7 +1840,10 @@ fn summarize_backend_policies(bundle: &RuntimeBundle) -> String {
                 name,
                 upstream.backend_tls_policy().verify_certificates,
                 upstream.backend_tls_policy().strict_sni,
-                bundle.runtime_config.performance.backend_dns_refresh_enabled,
+                bundle
+                    .runtime_config
+                    .performance
+                    .backend_dns_refresh_enabled,
                 bundle
                     .runtime_config
                     .performance
@@ -1952,11 +1963,8 @@ mod tests {
 
     #[test]
     fn rejected_change_preserves_transition_rejection_contract() {
-        let rejection = TransitionRejection::restart_required(
-            "performance.worker_threads",
-            "1",
-            "8",
-        );
+        let rejection =
+            TransitionRejection::restart_required("performance.worker_threads", "1", "8");
         let rejected = RejectedChange::from(rejection);
 
         assert_eq!(rejected.kind, RejectedChangeKind::RestartRequired);
@@ -1964,7 +1972,10 @@ mod tests {
             rejected.field_path.as_deref(),
             Some("performance.worker_threads")
         );
-        assert_eq!(rejected.operator_action, "restart the process to apply this change");
+        assert_eq!(
+            rejected.operator_action,
+            "restart the process to apply this change"
+        );
         assert!(!rejected.active_generation_changed);
         assert!(rejected.message.contains("restart"));
     }
@@ -2086,8 +2097,7 @@ mod tests {
             field_path: None,
             current_mode: Some("Draining".to_string()),
             requested_mode: Some("Reload".to_string()),
-            operator_action:
-                "wait for the current lifecycle phase to complete; the requested transition is not legal now",
+            operator_action: "wait for the current lifecycle phase to complete; the requested transition is not legal now",
             active_runtime_changed: false,
             verbatim: None,
         });
@@ -2170,6 +2180,9 @@ mod tests {
                 rejected_changes: Vec::new(),
             },
         };
-        assert_eq!(rollback.outcome_reason(), RuntimeOperationOutcomeReason::Applied);
+        assert_eq!(
+            rollback.outcome_reason(),
+            RuntimeOperationOutcomeReason::Applied
+        );
     }
 }
