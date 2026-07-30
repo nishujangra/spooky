@@ -16,7 +16,8 @@ use tempfile::tempdir;
 use super::{state::ControlApiState, *};
 use crate::runtime::activation::{
     ActivationRequest, PlanningPhase, PlanningPhaseStatus, RejectedChangeKind,
-    ReloadCompatibilityClassification, ReloadConfigInput, plan_runtime_reload,
+    ReloadCompatibilityClassification, ReloadConfigInput, ReloadDiffDisposition,
+    plan_runtime_reload,
 };
 
 /// Render the typed startup-owned compatibility result into the flat list of
@@ -295,6 +296,17 @@ fn staged_reload_planner_reports_reloadable_candidate_snapshot() {
     );
     assert_eq!(snapshot.upstream_count, 1);
     assert_eq!(snapshot.backend_count, 1);
+    assert!(
+        plan.plan
+            .diff
+            .entries
+            .iter()
+            .any(|entry| entry.domain == "observability_control_plane"
+                && entry.disposition == ReloadDiffDisposition::NoOp),
+        "expected identical config to produce a no-op observability/control-plane diff"
+    );
+    assert!(plan.plan.diff.reloadable_entries().is_empty());
+    assert!(plan.plan.diff.rejected_startup_owned_entries().is_empty());
 }
 
 #[test]
@@ -340,6 +352,56 @@ fn staged_reload_planner_classifies_restart_required_changes_without_mutation() 
         }),
         "expected a startup-owned restart-required rejection"
     );
+    assert!(
+        plan.plan
+            .diff
+            .entries
+            .iter()
+            .any(|entry| entry.domain == "observability_control_plane"
+                && entry.disposition == ReloadDiffDisposition::RejectedStartupOwned
+                && matches!(entry.change, crate::runtime::activation::ReloadChangeKind::Modified)),
+        "expected control-plane startup-owned drift to be separated as rejected startup-owned"
+    );
+}
+
+#[test]
+fn staged_reload_planner_marks_log_level_change_as_reloadable_domain_diff() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+    let current_config = test_config(cert.clone(), key.clone());
+    write_config_file(&config_path, &current_config);
+
+    let bundle =
+        runtime_bundle_from_config(config_path.to_string_lossy().as_ref(), &current_config);
+    let current = RuntimeBundleHandle::new(bundle).current_view();
+
+    let mut next_config = test_config(cert, key);
+    next_config.log.level = "debug".to_string();
+    write_config_file(&config_path, &next_config);
+
+    let plan = plan_runtime_reload(
+        &current,
+        planner_request(current.generation()),
+        ReloadConfigInput::Path {
+            path: config_path.to_string_lossy().to_string(),
+        },
+    );
+
+    assert!(plan.can_activate());
+    assert!(
+        plan.plan
+            .diff
+            .entries
+            .iter()
+            .any(|entry| entry.domain == "observability_control_plane"
+                && entry.disposition == ReloadDiffDisposition::Reloadable
+                && matches!(entry.change, crate::runtime::activation::ReloadChangeKind::Modified)
+                && entry.summary.contains("log(level=info")
+                && entry.summary.contains("log(level=debug")),
+        "expected log.level drift to show up as a reloadable observability/control-plane diff"
+    );
+    assert_eq!(plan.plan.diff.reloadable_entries().len(), 1);
 }
 
 // Domain: watchdog service state transitions and restart environment handling.

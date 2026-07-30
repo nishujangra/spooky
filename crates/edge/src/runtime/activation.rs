@@ -36,9 +36,6 @@ pub enum ReloadConfigInput {
     Path { path: String },
 }
 
-impl ReloadConfigInput {
-}
-
 /// Coarse kind of generation operation recorded in history.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -133,11 +130,21 @@ pub enum ReloadChangeKind {
     Unchanged,
 }
 
+/// Operator-visible disposition for a diff domain.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ReloadDiffDisposition {
+    Reloadable,
+    RejectedStartupOwned,
+    NoOp,
+}
+
 /// One operator-visible entry in a reload preview diff.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReloadDiffEntry {
     pub domain: String,
     pub change: ReloadChangeKind,
+    pub disposition: ReloadDiffDisposition,
     pub summary: String,
 }
 
@@ -154,7 +161,36 @@ impl ReloadDiff {
             || self
                 .entries
                 .iter()
-                .all(|entry| matches!(entry.change, ReloadChangeKind::Unchanged))
+                .all(|entry| matches!(entry.disposition, ReloadDiffDisposition::NoOp))
+    }
+
+    #[must_use]
+    pub fn reloadable_entries(&self) -> Vec<&ReloadDiffEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| matches!(entry.disposition, ReloadDiffDisposition::Reloadable))
+            .collect()
+    }
+
+    #[must_use]
+    pub fn rejected_startup_owned_entries(&self) -> Vec<&ReloadDiffEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry.disposition,
+                    ReloadDiffDisposition::RejectedStartupOwned
+                )
+            })
+            .collect()
+    }
+
+    #[must_use]
+    pub fn noop_entries(&self) -> Vec<&ReloadDiffEntry> {
+        self.entries
+            .iter()
+            .filter(|entry| matches!(entry.disposition, ReloadDiffDisposition::NoOp))
+            .collect()
     }
 }
 
@@ -496,7 +532,6 @@ pub(crate) fn plan_runtime_reload(
     };
     let next_log_level = next_runtime.startup.log_config.level.clone();
     let candidate_snapshot = Some(snapshot_from_bundle(&next_runtime));
-    let diff = build_reload_diff(current.bundle(), &next_runtime);
 
     let compatibility_rejections: Result<(), Vec<TransitionRejection>> =
         QUICListener::evaluate_runtime_reload_compatibility(current, &next_runtime);
@@ -528,6 +563,11 @@ pub(crate) fn plan_runtime_reload(
         },
         summary: compatibility_summary.clone(),
     });
+    let diff = build_reload_diff(
+        current.bundle(),
+        &next_runtime,
+        rejected_startup_owned_domains(&rejected_changes),
+    );
 
     let rejection_summary = (!rejected_changes.is_empty()).then(|| compatibility_summary.clone());
     let summary = if rejected_changes.is_empty() {
@@ -642,73 +682,240 @@ fn snapshot_from_bundle(bundle: &RuntimeBundle) -> ProposedGenerationSnapshot {
     }
 }
 
-fn build_reload_diff(current: &RuntimeBundle, next: &RuntimeBundle) -> ReloadDiff {
-    let mut entries = Vec::new();
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum ReloadDiffDomain {
+    Listeners,
+    RoutesUpstreams,
+    BackendPolicies,
+    AuthAdmissionResilience,
+    ObservabilityControlPlane,
+}
 
-    let current_log_level = current.startup.log_config.level.as_str();
-    let next_log_level = next.startup.log_config.level.as_str();
-    entries.push(ReloadDiffEntry {
-        domain: "log.level".to_string(),
-        change: if current_log_level == next_log_level {
-            ReloadChangeKind::Unchanged
-        } else {
-            ReloadChangeKind::Modified
-        },
-        summary: format!("log.level: {current_log_level} -> {next_log_level}"),
-    });
+impl ReloadDiffDomain {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Listeners => "listeners",
+            Self::RoutesUpstreams => "routes_upstreams",
+            Self::BackendPolicies => "backend_policies",
+            Self::AuthAdmissionResilience => "auth_admission_resilience",
+            Self::ObservabilityControlPlane => "observability_control_plane",
+        }
+    }
+}
 
-    let current_listeners = sorted_listener_labels(current);
-    let next_listeners = sorted_listener_labels(next);
-    entries.push(ReloadDiffEntry {
-        domain: "listeners".to_string(),
-        change: slice_change_kind(&current_listeners, &next_listeners),
-        summary: format!(
-            "listeners: [{}] -> [{}]",
-            current_listeners.join(", "),
-            next_listeners.join(", ")
+fn build_reload_diff(
+    current: &RuntimeBundle,
+    next: &RuntimeBundle,
+    rejected_domains: std::collections::HashSet<ReloadDiffDomain>,
+) -> ReloadDiff {
+    let specs = [
+        (
+            ReloadDiffDomain::Listeners,
+            summarize_listeners(current),
+            summarize_listeners(next),
         ),
-    });
+        (
+            ReloadDiffDomain::RoutesUpstreams,
+            summarize_routes_upstreams(current),
+            summarize_routes_upstreams(next),
+        ),
+        (
+            ReloadDiffDomain::BackendPolicies,
+            summarize_backend_policies(current),
+            summarize_backend_policies(next),
+        ),
+        (
+            ReloadDiffDomain::AuthAdmissionResilience,
+            summarize_auth_admission_resilience(current),
+            summarize_auth_admission_resilience(next),
+        ),
+        (
+            ReloadDiffDomain::ObservabilityControlPlane,
+            summarize_observability_control_plane(current),
+            summarize_observability_control_plane(next),
+        ),
+    ];
 
-    let current_upstreams = current.shared_state.generation_state().upstream_policies.len();
-    let next_upstreams = next.shared_state.generation_state().upstream_policies.len();
-    entries.push(ReloadDiffEntry {
-        domain: "upstreams".to_string(),
-        change: count_change_kind(current_upstreams, next_upstreams),
-        summary: format!("upstreams: {current_upstreams} -> {next_upstreams}"),
-    });
+    let entries = specs
+        .into_iter()
+        .map(|(domain, current_summary, next_summary)| {
+            let change = text_change_kind(&current_summary, &next_summary);
+            let disposition = if matches!(change, ReloadChangeKind::Unchanged) {
+                ReloadDiffDisposition::NoOp
+            } else if rejected_domains.contains(&domain) {
+                ReloadDiffDisposition::RejectedStartupOwned
+            } else {
+                ReloadDiffDisposition::Reloadable
+            };
 
-    let current_backends = current.shared_state.generation_state().backend_endpoints.len();
-    let next_backends = next.shared_state.generation_state().backend_endpoints.len();
-    entries.push(ReloadDiffEntry {
-        domain: "backends".to_string(),
-        change: count_change_kind(current_backends, next_backends),
-        summary: format!("backends: {current_backends} -> {next_backends}"),
-    });
+            ReloadDiffEntry {
+                domain: domain.as_str().to_string(),
+                change,
+                disposition,
+                summary: format!(
+                    "{}: [{}] -> [{}]",
+                    domain.as_str(),
+                    current_summary,
+                    next_summary
+                ),
+            }
+        })
+        .collect();
 
     ReloadDiff { entries }
 }
 
-fn sorted_listener_labels(bundle: &RuntimeBundle) -> Vec<String> {
-    let mut labels = bundle
-        .shared_state
-        .generation_state()
-        .listener_runtime_configs
-        .keys()
-        .cloned()
+fn summarize_listeners(bundle: &RuntimeBundle) -> String {
+    let mut listeners = bundle
+        .runtime_config
+        .listeners
+        .iter()
+        .map(|listener| {
+            format!(
+                "{}:{:?}:{}:{}:{}:client_auth(enabled={},required={})",
+                listener.index,
+                listener.source,
+                listener.listen.protocol,
+                listener.listen.address,
+                listener.listen.port,
+                listener.tls.client_auth.enabled,
+                listener.tls.client_auth.require_client_cert,
+            )
+        })
         .collect::<Vec<_>>();
-    labels.sort_unstable();
-    labels
+    listeners.sort_unstable();
+    listeners.join(" | ")
 }
 
-fn count_change_kind(current: usize, next: usize) -> ReloadChangeKind {
-    match next.cmp(&current) {
-        std::cmp::Ordering::Less => ReloadChangeKind::Removed,
-        std::cmp::Ordering::Equal => ReloadChangeKind::Unchanged,
-        std::cmp::Ordering::Greater => ReloadChangeKind::Added,
-    }
+fn summarize_routes_upstreams(bundle: &RuntimeBundle) -> String {
+    let mut upstreams = bundle
+        .runtime_config
+        .upstreams
+        .iter()
+        .map(|(name, upstream)| {
+            format!(
+                "{}:{}:{:?}:{:?}:{:?}:{}:{:?}",
+                name,
+                upstream.load_balancing.strategy.canonical_name(),
+                upstream.route.host,
+                upstream.route.path_prefix,
+                upstream.route.method,
+                upstream.policy.protocol.0.allow_connect,
+                upstream.load_balancing.key_spec
+            )
+        })
+        .collect::<Vec<_>>();
+    upstreams.sort_unstable();
+    upstreams.join(" | ")
 }
 
-fn slice_change_kind(current: &[String], next: &[String]) -> ReloadChangeKind {
+fn summarize_backend_policies(bundle: &RuntimeBundle) -> String {
+    let mut upstreams = bundle
+        .runtime_config
+        .upstreams
+        .iter()
+        .map(|(name, upstream)| {
+            let backend_ids = upstream
+                .backends
+                .iter()
+                .map(|backend| {
+                    format!(
+                        "{}:{:?}:{:?}:hc={}",
+                        backend.backend.id,
+                        backend.endpoint.transport_kind,
+                        backend.endpoint.address_kind,
+                        backend.health_check.is_some()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(",");
+            format!(
+                "{}:tls(v={},sni={}):dns(enabled={},refresh={}s):{}",
+                name,
+                upstream.backend_tls_policy().verify_certificates,
+                upstream.backend_tls_policy().strict_sni,
+                bundle.runtime_config.performance.backend_dns_refresh_enabled,
+                bundle
+                    .runtime_config
+                    .performance
+                    .backend_dns_refresh_interval_ms
+                    / 1000,
+                backend_ids
+            )
+        })
+        .collect::<Vec<_>>();
+    upstreams.sort_unstable();
+    upstreams.join(" | ")
+}
+
+fn summarize_auth_admission_resilience(bundle: &RuntimeBundle) -> String {
+    let mut auth = bundle
+        .runtime_config
+        .upstreams
+        .iter()
+        .map(|(name, upstream)| {
+            format!(
+                "{}:api_key={}:jwt={}:external={}:scopes={}:roles={}",
+                name,
+                upstream.policy.upstream_auth.api_key.is_some(),
+                upstream.policy.upstream_auth.jwt.is_some(),
+                upstream.policy.upstream_auth.external_auth.is_some(),
+                upstream.policy.upstream_auth.required_scopes.join(","),
+                upstream.policy.upstream_auth.required_roles.join(","),
+            )
+        })
+        .collect::<Vec<_>>();
+    auth.sort_unstable();
+
+    let admission = &bundle.runtime_config.policies.admission;
+    let rate_limits = &bundle.runtime_config.policies.rate_limits;
+    let resilience = format!(
+        "adaptive={}..{:?};route_queue={}..{};circuit={}#{};hedging={}@{:?};retry={}@{};brownout={}%;watchdog={};scoped_rate_limits={}",
+        admission.adaptive_admission.min_limit,
+        admission.adaptive_admission.max_limit,
+        admission.route_queue.default_cap,
+        admission.route_queue.global_cap,
+        admission.circuit_breaker.enabled,
+        admission.circuit_breaker.failure_threshold,
+        admission.hedging.enabled,
+        admission.hedging.delay,
+        admission.retry_budget.enabled,
+        admission.retry_budget.ratio_percent,
+        admission.brownout.trigger_inflight_percent,
+        admission.watchdog.enabled,
+        rate_limits.scoped_limits.len(),
+    );
+
+    format!("auth=[{}]; policies=[{}]", auth.join(" | "), resilience)
+}
+
+fn summarize_observability_control_plane(bundle: &RuntimeBundle) -> String {
+    let startup = bundle.startup();
+    let observability = &bundle.runtime_config.observability;
+    let performance = &bundle.runtime_config.performance;
+    format!(
+        "log(level={},format={:?},file_enabled={},file_path={});control_api(enabled={},bind={}:{},path={});metrics(enabled={},bind={}:{},path={});tracing(enabled={},service={},otlp={:?},ratio={});control_plane_threads={}",
+        startup.log_config.level,
+        startup.log_config.format,
+        startup.log_config.file.enabled,
+        startup.log_config.file.path,
+        observability.control_api.enabled,
+        observability.control_api.address,
+        observability.control_api.port,
+        observability.control_api.runtime_path,
+        observability.metrics.enabled,
+        observability.metrics.address,
+        observability.metrics.port,
+        observability.metrics.path,
+        observability.tracing.enabled,
+        observability.tracing.service_name,
+        observability.tracing.otlp_endpoint,
+        observability.tracing.sample_ratio,
+        performance.control_plane_threads,
+    )
+}
+
+fn text_change_kind(current: &str, next: &str) -> ReloadChangeKind {
     if current == next {
         ReloadChangeKind::Unchanged
     } else if current.is_empty() && !next.is_empty() {
@@ -718,6 +925,26 @@ fn slice_change_kind(current: &[String], next: &[String]) -> ReloadChangeKind {
     } else {
         ReloadChangeKind::Modified
     }
+}
+
+fn rejected_startup_owned_domains(
+    rejected_changes: &[RejectedChange],
+) -> std::collections::HashSet<ReloadDiffDomain> {
+    rejected_changes
+        .iter()
+        .filter(|rejection| rejection.kind == RejectedChangeKind::RestartRequired)
+        .filter_map(|rejection| rejection.field_path.as_deref())
+        .filter_map(|field_path| {
+            if field_path.starts_with("log.")
+                || field_path.starts_with("observability.tracing.")
+                || field_path == "performance.control_plane_threads"
+            {
+                Some(ReloadDiffDomain::ObservabilityControlPlane)
+            } else {
+                None
+            }
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -798,6 +1025,7 @@ mod tests {
             entries: vec![ReloadDiffEntry {
                 domain: "observability.metrics".to_string(),
                 change: ReloadChangeKind::Unchanged,
+                disposition: ReloadDiffDisposition::NoOp,
                 summary: "no effective change".to_string(),
             }],
         };
