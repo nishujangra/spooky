@@ -481,18 +481,14 @@ fn activation_service_commits_reloadable_candidate_and_advances_generation() {
     assert_eq!(handle.current_view().startup().log_config.level, "debug");
 
     let history = handle.generation_change_history();
-    assert_eq!(history.len(), 3);
+    assert_eq!(history.len(), 1);
     assert_eq!(history[0].operation, GenerationOperation::Activate);
-    assert_eq!(history[1].operation, GenerationOperation::Preview);
-    assert_eq!(history[2].operation, GenerationOperation::Validate);
     assert_eq!(history[0].config_source, config_path.to_string_lossy());
     assert_eq!(history[0].config_version, Some(1));
 
     let events = handle.generation_change_events();
-    assert_eq!(events.len(), 3);
+    assert_eq!(events.len(), 1);
     assert_eq!(events[0].kind, GenerationEventKind::ActivationSucceeded);
-    assert_eq!(events[1].kind, GenerationEventKind::Preview);
-    assert_eq!(events[2].kind, GenerationEventKind::Validation);
 }
 
 #[test]
@@ -605,11 +601,9 @@ fn activation_service_rejects_restart_required_changes_without_mutating_active_g
     );
 
     let events = handle.generation_change_events();
-    assert_eq!(events.len(), 3);
+    assert_eq!(events.len(), 1);
     assert_eq!(events[0].kind, GenerationEventKind::ActivationFailed);
     assert_eq!(events[0].entry.status, GenerationStatus::Rejected);
-    assert_eq!(events[1].kind, GenerationEventKind::Preview);
-    assert_eq!(events[2].kind, GenerationEventKind::Validation);
 }
 
 #[test]
@@ -784,6 +778,57 @@ fn validate_plan_does_not_mutate_the_active_generation() {
 }
 
 #[test]
+fn validate_and_preview_record_only_the_requested_history_operation() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+    let current_config = test_config(cert.clone(), key.clone());
+    write_config_file(&config_path, &current_config);
+
+    let bundle =
+        runtime_bundle_from_config(config_path.to_string_lossy().as_ref(), &current_config);
+    let handle = RuntimeBundleHandle::new(bundle);
+
+    let validate_plan = RuntimeActivationService::validate_reload(
+        &handle,
+        planner_request(handle.current_generation()),
+        ReloadConfigInput::Path {
+            path: config_path.to_string_lossy().to_string(),
+        },
+    );
+    assert_eq!(validate_plan.candidate_status, GenerationStatus::Staged);
+
+    let validate_history = handle.generation_change_history();
+    assert_eq!(validate_history.len(), 1);
+    assert_eq!(validate_history[0].operation, GenerationOperation::Validate);
+    let validate_events = handle.generation_change_events();
+    assert_eq!(validate_events.len(), 1);
+    assert_eq!(validate_events[0].kind, GenerationEventKind::Validation);
+
+    let mut next_config = test_config(cert, key);
+    next_config.log.level = "debug".to_string();
+    write_config_file(&config_path, &next_config);
+
+    let preview_plan = RuntimeActivationService::preview_reload(
+        &handle,
+        planner_request(handle.current_generation()),
+        ReloadConfigInput::Path {
+            path: config_path.to_string_lossy().to_string(),
+        },
+    );
+    assert_eq!(preview_plan.candidate_status, GenerationStatus::Staged);
+
+    let preview_history = handle.generation_change_history();
+    assert_eq!(preview_history.len(), 2);
+    assert_eq!(preview_history[0].operation, GenerationOperation::Preview);
+    assert_eq!(preview_history[1].operation, GenerationOperation::Validate);
+    let preview_events = handle.generation_change_events();
+    assert_eq!(preview_events.len(), 2);
+    assert_eq!(preview_events[0].kind, GenerationEventKind::Preview);
+    assert_eq!(preview_events[1].kind, GenerationEventKind::Validation);
+}
+
+#[test]
 fn preview_plan_returns_expected_diff_without_mutating_the_active_generation() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
@@ -915,11 +960,7 @@ fn runtime_history_records_activate_fail_and_rollback_flow() {
         vec![
             (GenerationOperation::Rollback, GenerationStatus::RolledBack),
             (GenerationOperation::Activate, GenerationStatus::Rejected),
-            (GenerationOperation::Preview, GenerationStatus::Rejected),
-            (GenerationOperation::Validate, GenerationStatus::Rejected),
             (GenerationOperation::Activate, GenerationStatus::Active),
-            (GenerationOperation::Preview, GenerationStatus::Staged),
-            (GenerationOperation::Validate, GenerationStatus::Staged),
         ]
     );
     assert_eq!(handle.current_generation(), 3);
@@ -1478,10 +1519,8 @@ async fn control_api_runtime_history_renders_recorded_generation_changes() {
 
     let payload = json_body(QUICListener::render_control_api_runtime_history(&state)).await;
     assert_eq!(payload["active_generation"], 1);
-    assert_eq!(payload["entries"].as_array().map(Vec::len), Some(3));
+    assert_eq!(payload["entries"].as_array().map(Vec::len), Some(1));
     assert_eq!(payload["entries"][0]["operation"], "activate");
-    assert_eq!(payload["entries"][1]["operation"], "preview");
-    assert_eq!(payload["entries"][2]["operation"], "validate");
 }
 
 #[tokio::test]
@@ -1514,7 +1553,7 @@ async fn control_api_runtime_history_generation_filters_to_requested_generation(
     ))
     .await;
     assert_eq!(payload["generation"], 1);
-    assert_eq!(payload["entries"].as_array().map(Vec::len), Some(3));
+    assert_eq!(payload["entries"].as_array().map(Vec::len), Some(1));
 
     let missing = QUICListener::render_control_api_runtime_history_generation(&state, 99);
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);

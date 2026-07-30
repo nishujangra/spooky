@@ -671,7 +671,9 @@ impl RuntimeActivationService {
         request: ActivationRequest,
         input: ReloadConfigInput,
     ) -> ReloadPlan {
-        Self::stage_reload(handle, request, input).plan
+        let plan = Self::stage_reload(handle, request, input);
+        record_validation_result(handle, &plan.plan);
+        plan.plan
     }
 
     pub(crate) fn preview_reload(
@@ -679,7 +681,9 @@ impl RuntimeActivationService {
         request: ActivationRequest,
         input: ReloadConfigInput,
     ) -> ReloadPlan {
-        Self::stage_reload(handle, request, input).plan
+        let plan = Self::stage_reload(handle, request, input);
+        record_preview_result(handle, &plan.plan);
+        plan.plan
     }
 
     pub(crate) fn activate_reload(
@@ -1053,9 +1057,8 @@ impl RuntimeActivationService {
         input: ReloadConfigInput,
     ) -> StagedRuntimeReloadPlan {
         let current = handle.current_view();
-        let plan = plan_runtime_reload(&current, request, input);
-        record_reload_plan_events(handle, &plan.plan);
-        plan
+        let _ = handle;
+        plan_runtime_reload(&current, request, input)
     }
 }
 
@@ -1313,10 +1316,12 @@ fn prepare_rollback_bundle(
     })
 }
 
-fn record_reload_plan_events(handle: &RuntimeBundleHandle, plan: &ReloadPlan) {
+fn record_validation_result(handle: &RuntimeBundleHandle, plan: &ReloadPlan) {
     let validation_entry = validation_history_entry(plan);
     record_history_event(handle, GenerationEventKind::Validation, validation_entry);
+}
 
+fn record_preview_result(handle: &RuntimeBundleHandle, plan: &ReloadPlan) {
     let preview_entry = preview_history_entry(plan);
     record_history_event(handle, GenerationEventKind::Preview, preview_entry);
 }
