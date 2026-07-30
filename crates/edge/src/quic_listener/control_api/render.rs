@@ -10,6 +10,7 @@ use crate::runtime::backend::state::{
     BackendHealthState, BackendLifecycleInventorySnapshot, BackendMembershipState,
     BackendPoolPlacementSnapshot,
 };
+use crate::runtime::activation::GenerationHistoryEntry;
 
 /// Map a backend health-failure reason to the canonical control-plane token.
 ///
@@ -157,6 +158,18 @@ struct ControlApiRuntimeGenerationPayload {
     config_path: String,
 }
 
+#[derive(Serialize)]
+struct ControlApiRuntimeHistoryPayload {
+    active_generation: u64,
+    entries: Vec<GenerationHistoryEntry>,
+}
+
+#[derive(Serialize)]
+struct ControlApiRuntimeHistoryGenerationPayload {
+    generation: u64,
+    entries: Vec<GenerationHistoryEntry>,
+}
+
 impl QUICListener {
     pub(super) fn json_response<T>(status: StatusCode, value: T) -> Response<Full<Bytes>>
     where
@@ -217,6 +230,52 @@ impl QUICListener {
     ) -> Response<Full<Bytes>> {
         let payload = ControlApiRuntimePayload::from_state(state);
         Self::json_response(StatusCode::OK, payload)
+    }
+
+    pub(super) fn render_control_api_runtime_history(
+        state: &ControlApiState,
+    ) -> Response<Full<Bytes>> {
+        let runtime_state = state.current_service_state();
+        let Some(runtime_bundle_handle) = runtime_state.runtime_bundle_handle().cloned() else {
+            return Self::control_api_not_found_response();
+        };
+
+        Self::json_response(
+            StatusCode::OK,
+            ControlApiRuntimeHistoryPayload {
+                active_generation: runtime_bundle_handle.current_generation(),
+                entries: runtime_bundle_handle.generation_change_history(),
+            },
+        )
+    }
+
+    pub(super) fn render_control_api_runtime_history_generation(
+        state: &ControlApiState,
+        generation: u64,
+    ) -> Response<Full<Bytes>> {
+        let runtime_state = state.current_service_state();
+        let Some(runtime_bundle_handle) = runtime_state.runtime_bundle_handle().cloned() else {
+            return Self::control_api_not_found_response();
+        };
+
+        let entries = runtime_bundle_handle
+            .generation_change_history()
+            .into_iter()
+            .filter(|entry| entry.generation == generation)
+            .collect::<Vec<_>>();
+        if entries.is_empty() {
+            return Self::json_response(
+                StatusCode::NOT_FOUND,
+                json!({
+                    "error": format!("generation {generation} not found in runtime history"),
+                }),
+            );
+        }
+
+        Self::json_response(
+            StatusCode::OK,
+            ControlApiRuntimeHistoryGenerationPayload { generation, entries },
+        )
     }
 }
 

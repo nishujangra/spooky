@@ -22,6 +22,30 @@ impl ControlApiPaths {
             reload_certs_path: endpoint.reload_certs_path.clone(),
         }
     }
+
+    pub(super) fn runtime_validate_path(&self) -> String {
+        format!("{}/validate", self.runtime_path)
+    }
+
+    pub(super) fn runtime_preview_path(&self) -> String {
+        format!("{}/preview", self.runtime_path)
+    }
+
+    pub(super) fn runtime_activate_path(&self) -> String {
+        format!("{}/activate", self.runtime_path)
+    }
+
+    pub(super) fn runtime_rollback_path(&self) -> String {
+        format!("{}/rollback", self.runtime_path)
+    }
+
+    pub(super) fn runtime_history_path(&self) -> String {
+        format!("{}/history", self.runtime_path)
+    }
+
+    pub(super) fn runtime_history_entry_prefix(&self) -> String {
+        format!("{}/", self.runtime_history_path())
+    }
 }
 
 pub(super) type ControlApiState = ControlApiServiceCtx;

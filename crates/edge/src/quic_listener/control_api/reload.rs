@@ -1,15 +1,37 @@
 use bytes::Bytes;
-use http_body_util::Full;
+use http_body_util::{BodyExt, Full};
+use serde::{Deserialize, de::DeserializeOwned};
 
 use super::*;
 use crate::runtime::{
     activation::{
         ActivationRequest, ActivationResult, RejectedChangeKind, ReloadConfigInput,
-        RuntimeActivationService,
+        RollbackRequest, RollbackResult, RuntimeActivationService, plan_runtime_reload,
     },
     bundle::ActiveRuntimeGeneration,
     policy::{ReloadCompatibilityAuthority, TransitionRejection},
 };
+
+#[derive(Default, Deserialize)]
+struct ControlApiRuntimePlanRequest {
+    config_path: Option<String>,
+    requested_by: Option<String>,
+    reason: Option<String>,
+    expected_generation: Option<u64>,
+}
+
+#[derive(Deserialize)]
+struct ControlApiRuntimeRollbackPayload {
+    target_generation: u64,
+    requested_by: Option<String>,
+    reason: Option<String>,
+    expected_active_generation: Option<u64>,
+}
+
+enum ControlApiActivationError {
+    Response(Response<Full<Bytes>>),
+    Activation(ActivationResult),
+}
 
 impl QUICListener {
     pub(super) fn apply_live_log_level_reload(
@@ -96,37 +118,118 @@ impl QUICListener {
         )
     }
 
-    pub(super) fn handle_control_api_runtime_reload(
-        req: &Request<Incoming>,
+    pub(super) async fn handle_control_api_runtime_validate(
+        req: Request<Incoming>,
         state: &crate::quic_listener::runtime_state::ControlApiServiceCtx,
     ) -> Response<Full<Bytes>> {
         let runtime_state = state.current_service_state();
         let Some(runtime_bundle_handle) = runtime_state.runtime_bundle_handle().cloned() else {
             return Self::control_api_not_found_response();
         };
+        let current = runtime_bundle_handle.current_view();
+        let plan_request = match Self::control_api_json_body_or_default::<ControlApiRuntimePlanRequest>(req).await {
+            Ok(payload) => payload,
+            Err(response) => return response,
+        };
+        let plan = plan_runtime_reload(
+            &current,
+            Self::control_api_activation_request(&plan_request, current.generation(), "runtime_validate"),
+            Self::control_api_reload_config_input(&current, plan_request.config_path),
+        );
+        Self::json_response(StatusCode::OK, plan.plan)
+    }
+
+    pub(super) async fn handle_control_api_runtime_preview(
+        req: Request<Incoming>,
+        state: &crate::quic_listener::runtime_state::ControlApiServiceCtx,
+    ) -> Response<Full<Bytes>> {
+        let runtime_state = state.current_service_state();
+        let Some(runtime_bundle_handle) = runtime_state.runtime_bundle_handle().cloned() else {
+            return Self::control_api_not_found_response();
+        };
+        let current = runtime_bundle_handle.current_view();
+        let plan_request = match Self::control_api_json_body_or_default::<ControlApiRuntimePlanRequest>(req).await {
+            Ok(payload) => payload,
+            Err(response) => return response,
+        };
+        let plan = plan_runtime_reload(
+            &current,
+            Self::control_api_activation_request(&plan_request, current.generation(), "runtime_preview"),
+            Self::control_api_reload_config_input(&current, plan_request.config_path),
+        );
+        Self::json_response(StatusCode::OK, plan.plan)
+    }
+
+    pub(super) async fn handle_control_api_runtime_activate(
+        req: Request<Incoming>,
+        state: &crate::quic_listener::runtime_state::ControlApiServiceCtx,
+    ) -> Response<Full<Bytes>> {
+        match Self::perform_control_api_runtime_activation(req, state, "runtime_activate").await {
+            Ok(activation) => Self::json_response(StatusCode::ACCEPTED, activation),
+            Err(ControlApiActivationError::Response(response)) => response,
+            Err(ControlApiActivationError::Activation(activation)) => Self::json_response(
+                activation_result_status(&activation),
+                activation_error_payload(&activation, activation_error(&activation)),
+            ),
+        }
+    }
+
+    pub(super) async fn handle_control_api_runtime_reload(
+        req: Request<Incoming>,
+        state: &crate::quic_listener::runtime_state::ControlApiServiceCtx,
+    ) -> Response<Full<Bytes>> {
+        match Self::perform_control_api_runtime_activation(req, state, "runtime_reload").await {
+            Ok(activation) => Self::json_response(
+                StatusCode::ACCEPTED,
+                json!({
+                    "reloaded": true,
+                    "generation": activation.activated_generation.expect("successful activation must set activated_generation"),
+                    "candidate_generation": activation.history_entry.generation,
+                    "status": activation.status,
+                }),
+            ),
+            Err(ControlApiActivationError::Response(response)) => response,
+            Err(ControlApiActivationError::Activation(activation)) => Self::json_response(
+                legacy_reload_result_status(&activation),
+                legacy_reload_error_payload(&activation, activation_error(&activation)),
+            ),
+        }
+    }
+
+    async fn perform_control_api_runtime_activation(
+        req: Request<Incoming>,
+        state: &crate::quic_listener::runtime_state::ControlApiServiceCtx,
+        default_reason: &str,
+    ) -> Result<ActivationResult, ControlApiActivationError> {
+        let runtime_state = state.current_service_state();
+        let Some(runtime_bundle_handle) = runtime_state.runtime_bundle_handle().cloned() else {
+            return Err(ControlApiActivationError::Response(
+                Self::control_api_not_found_response(),
+            ));
+        };
         let Some(runtime) = runtime_state.generation.clone() else {
-            return Self::json_response(
+            return Err(ControlApiActivationError::Response(Self::json_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 json!({
                     "reloaded": false,
                     "error": "runtime generation unavailable",
                 }),
-            );
+            )));
         };
 
+        let plan_request =
+            Self::control_api_json_body_or_default::<ControlApiRuntimePlanRequest>(req)
+                .await
+                .map_err(ControlApiActivationError::Response)?;
         let current_log_level = runtime.startup().log_config.level.clone();
         let activation = RuntimeActivationService::activate_reload(
             &runtime_bundle_handle,
-            ActivationRequest {
-                requested_by: Some("control_api".to_string()),
-                trigger_source: Some("control_api".to_string()),
-                reason: Some("runtime_reload".to_string()),
-                expected_generation: Some(runtime.generation()),
-                requested_at_ms: crate::watchdog::time::now_millis(),
-            },
-            ReloadConfigInput::Path {
-                path: runtime.startup().config_path.clone(),
-            },
+            Self::control_api_activation_request(
+                &plan_request,
+                runtime.generation(),
+                default_reason,
+            ),
+            Self::control_api_reload_config_input(&runtime, plan_request.config_path),
         );
         if !activation.succeeded() {
             let error = activation_error(&activation);
@@ -136,16 +239,7 @@ impl QUICListener {
                 runtime.generation(),
                 error
             );
-            return Self::json_response(
-                activation_result_status(&activation),
-                json!({
-                    "reloaded": false,
-                    "error": error,
-                    "generation": activation.active_generation,
-                    "candidate_generation": activation.history_entry.generation,
-                    "status": activation.status,
-                }),
-            );
+            return Err(ControlApiActivationError::Activation(activation));
         }
         let generation = activation
             .activated_generation
@@ -162,15 +256,45 @@ impl QUICListener {
                 generation, current_log_level, next_log_level, err
             );
         }
-        Self::json_response(
-            StatusCode::ACCEPTED,
-            json!({
-                "reloaded": true,
-                "generation": generation,
-                "candidate_generation": generation,
-                "path": req.uri().path(),
-            }),
-        )
+        Ok(activation)
+    }
+
+    pub(super) async fn handle_control_api_runtime_rollback(
+        req: Request<Incoming>,
+        state: &crate::quic_listener::runtime_state::ControlApiServiceCtx,
+    ) -> Response<Full<Bytes>> {
+        let runtime_state = state.current_service_state();
+        let Some(runtime_bundle_handle) = runtime_state.runtime_bundle_handle().cloned() else {
+            return Self::control_api_not_found_response();
+        };
+        let payload = match Self::control_api_json_body::<ControlApiRuntimeRollbackPayload>(req).await {
+            Ok(payload) => payload,
+            Err(response) => return response,
+        };
+        let rollback = RuntimeActivationService::rollback_generation(
+            &runtime_bundle_handle,
+            RollbackRequest {
+                target_generation: payload.target_generation,
+                requested_by: payload.requested_by.or_else(|| Some("control_api".to_string())),
+                trigger_source: Some("control_api".to_string()),
+                reason: payload.reason.or_else(|| Some("runtime_rollback".to_string())),
+                expected_active_generation: payload.expected_active_generation,
+                requested_at_ms: crate::watchdog::time::now_millis(),
+            },
+        );
+        if !rollback.succeeded() {
+            let error = rollback_error(&rollback);
+            warn!(
+                "runtime rollback rejected at generation {}; active runtime unchanged: {}",
+                rollback.active_generation,
+                error
+            );
+            return Self::json_response(
+                rollback_result_status(&rollback),
+                rollback_error_payload(&rollback, error),
+            );
+        }
+        Self::json_response(StatusCode::ACCEPTED, rollback)
     }
 
     pub(super) fn handle_control_api_restart(
@@ -427,6 +551,90 @@ impl QUICListener {
     }
 }
 
+impl QUICListener {
+    async fn control_api_json_body<T>(req: Request<Incoming>) -> Result<T, Response<Full<Bytes>>>
+    where
+        T: DeserializeOwned,
+    {
+        let body = match req.into_body().collect().await {
+            Ok(collected) => collected.to_bytes(),
+            Err(err) => {
+                return Err(Self::json_response(
+                    StatusCode::BAD_REQUEST,
+                    json!({ "error": format!("invalid request body: {err}") }),
+                ));
+            }
+        };
+        if body.is_empty() {
+            return Err(Self::json_response(
+                StatusCode::BAD_REQUEST,
+                json!({ "error": "request body is required" }),
+            ));
+        }
+        serde_json::from_slice(&body).map_err(|err| {
+            Self::json_response(
+                StatusCode::BAD_REQUEST,
+                json!({ "error": format!("invalid request body: {err}") }),
+            )
+        })
+    }
+
+    async fn control_api_json_body_or_default<T>(
+        req: Request<Incoming>,
+    ) -> Result<T, Response<Full<Bytes>>>
+    where
+        T: DeserializeOwned + Default,
+    {
+        let body = match req.into_body().collect().await {
+            Ok(collected) => collected.to_bytes(),
+            Err(err) => {
+                return Err(Self::json_response(
+                    StatusCode::BAD_REQUEST,
+                    json!({ "error": format!("invalid request body: {err}") }),
+                ));
+            }
+        };
+        if body.is_empty() {
+            return Ok(T::default());
+        }
+        serde_json::from_slice(&body).map_err(|err| {
+            Self::json_response(
+                StatusCode::BAD_REQUEST,
+                json!({ "error": format!("invalid request body: {err}") }),
+            )
+        })
+    }
+
+    fn control_api_reload_config_input(
+        current: &ActiveRuntimeGeneration,
+        config_path: Option<String>,
+    ) -> ReloadConfigInput {
+        ReloadConfigInput::Path {
+            path: config_path.unwrap_or_else(|| current.startup().config_path.clone()),
+        }
+    }
+
+    fn control_api_activation_request(
+        payload: &ControlApiRuntimePlanRequest,
+        current_generation: u64,
+        default_reason: &str,
+    ) -> ActivationRequest {
+        ActivationRequest {
+            requested_by: payload
+                .requested_by
+                .clone()
+                .or_else(|| Some("control_api".to_string())),
+            trigger_source: Some("control_api".to_string()),
+            reason: payload
+                .reason
+                .clone()
+                .or_else(|| Some(default_reason.to_string())),
+            expected_generation: payload.expected_generation.or(Some(current_generation)),
+            requested_at_ms: crate::watchdog::time::now_millis(),
+        }
+    }
+}
+
 fn activation_result_status(activation: &ActivationResult) -> StatusCode {
     if activation
         .rejected_changes
@@ -457,4 +665,88 @@ fn activation_error(activation: &ActivationResult) -> &str {
         .first()
         .map(|rejection| rejection.message.as_str())
         .unwrap_or(activation.history_entry.summary.as_str())
+}
+
+fn activation_error_payload(activation: &ActivationResult, error: &str) -> serde_json::Value {
+    json!({
+        "error": error,
+        "active_generation": activation.active_generation,
+        "candidate_generation": activation.history_entry.generation,
+        "status": activation.status,
+        "rejected_changes": activation.rejected_changes,
+        "history_entry": activation.history_entry,
+    })
+}
+
+fn legacy_reload_error_payload(activation: &ActivationResult, error: &str) -> serde_json::Value {
+    json!({
+        "reloaded": false,
+        "error": error,
+        "generation": activation.active_generation,
+        "candidate_generation": activation.history_entry.generation,
+        "status": activation.status,
+    })
+}
+
+fn legacy_reload_result_status(activation: &ActivationResult) -> StatusCode {
+    if activation
+        .rejected_changes
+        .iter()
+        .any(|rejection| matches!(rejection.kind, RejectedChangeKind::InvalidConfiguration))
+    {
+        StatusCode::BAD_REQUEST
+    } else if activation.rejected_changes.iter().any(|rejection| {
+        matches!(
+            rejection.kind,
+            RejectedChangeKind::ResourcePreparationFailed
+                | RejectedChangeKind::IllegalTransition
+                | RejectedChangeKind::RuntimeStateUnavailable
+        )
+    }) || matches!(activation.status, crate::runtime::activation::GenerationStatus::Failed)
+    {
+        StatusCode::INTERNAL_SERVER_ERROR
+    } else {
+        StatusCode::CONFLICT
+    }
+}
+
+fn rollback_result_status(rollback: &RollbackResult) -> StatusCode {
+    if rollback
+        .rejected_changes
+        .iter()
+        .any(|rejection| matches!(rejection.kind, RejectedChangeKind::InvalidConfiguration))
+    {
+        StatusCode::BAD_REQUEST
+    } else if rollback.rejected_changes.iter().any(|rejection| {
+        matches!(
+            rejection.kind,
+            RejectedChangeKind::ResourcePreparationFailed
+                | RejectedChangeKind::RuntimeStateUnavailable
+        )
+    }) || matches!(rollback.status, crate::runtime::activation::GenerationStatus::Failed)
+    {
+        StatusCode::INTERNAL_SERVER_ERROR
+    } else {
+        StatusCode::CONFLICT
+    }
+}
+
+fn rollback_error(rollback: &RollbackResult) -> &str {
+    rollback
+        .rejected_changes
+        .first()
+        .map(|rejection| rejection.message.as_str())
+        .unwrap_or(rollback.history_entry.summary.as_str())
+}
+
+fn rollback_error_payload(rollback: &RollbackResult, error: &str) -> serde_json::Value {
+    json!({
+        "error": error,
+        "active_generation": rollback.active_generation,
+        "target_generation": rollback.request.target_generation,
+        "rolled_back_to": rollback.rolled_back_to,
+        "status": rollback.status,
+        "rejected_changes": rollback.rejected_changes,
+        "history_entry": rollback.history_entry,
+    })
 }

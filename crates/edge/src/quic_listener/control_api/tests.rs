@@ -746,9 +746,39 @@ fn control_api_route_gating_accepts_only_canonical_method_and_path_pairs() {
             Some(super::auth::ControlApiRoute::Runtime),
         ),
         (
+            Method::GET,
+            paths.runtime_history_path(),
+            Some(super::auth::ControlApiRoute::RuntimeHistory),
+        ),
+        (
+            Method::GET,
+            format!("{}/2", paths.runtime_history_path()),
+            Some(super::auth::ControlApiRoute::RuntimeHistoryGeneration(2)),
+        ),
+        (
             Method::POST,
             paths.reload_certs_path.clone(),
             Some(super::auth::ControlApiRoute::ReloadCerts),
+        ),
+        (
+            Method::POST,
+            paths.runtime_validate_path(),
+            Some(super::auth::ControlApiRoute::RuntimeValidate),
+        ),
+        (
+            Method::POST,
+            paths.runtime_preview_path(),
+            Some(super::auth::ControlApiRoute::RuntimePreview),
+        ),
+        (
+            Method::POST,
+            paths.runtime_activate_path(),
+            Some(super::auth::ControlApiRoute::RuntimeActivate),
+        ),
+        (
+            Method::POST,
+            paths.runtime_rollback_path(),
+            Some(super::auth::ControlApiRoute::RuntimeRollback),
         ),
         (
             Method::POST,
@@ -761,6 +791,7 @@ fn control_api_route_gating_accepts_only_canonical_method_and_path_pairs() {
             Some(super::auth::ControlApiRoute::Restart),
         ),
         (Method::POST, paths.runtime_path.clone(), None),
+        (Method::POST, paths.runtime_history_path(), None),
         (Method::GET, paths.reload_path.clone(), None),
         (Method::GET, "/missing".to_string(), None),
     ];
@@ -824,6 +855,31 @@ async fn control_api_gate_returns_canonical_unauthorized_payloads_per_route() {
         (
             Method::GET,
             paths.runtime_path.clone(),
+            serde_json::json!({ "error": "unauthorized" }),
+        ),
+        (
+            Method::POST,
+            paths.runtime_validate_path(),
+            serde_json::json!({ "error": "unauthorized" }),
+        ),
+        (
+            Method::POST,
+            paths.runtime_preview_path(),
+            serde_json::json!({ "error": "unauthorized" }),
+        ),
+        (
+            Method::POST,
+            paths.runtime_activate_path(),
+            serde_json::json!({ "error": "unauthorized" }),
+        ),
+        (
+            Method::POST,
+            paths.runtime_rollback_path(),
+            serde_json::json!({ "error": "unauthorized" }),
+        ),
+        (
+            Method::GET,
+            paths.runtime_history_path(),
             serde_json::json!({ "error": "unauthorized" }),
         ),
         (
@@ -1116,6 +1172,74 @@ fn control_api_backend_inventory_and_summary_share_one_canonical_snapshot_contra
     assert!(backend.placements[0].healthy);
     assert_eq!(summary.total_backends, 1);
     assert_eq!(summary.healthy_backends, 1);
+}
+
+#[tokio::test]
+async fn control_api_runtime_history_renders_recorded_generation_changes() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+    let current_config = test_config(cert.clone(), key.clone());
+    write_config_file(&config_path, &current_config);
+
+    let bundle =
+        runtime_bundle_from_config(config_path.to_string_lossy().as_ref(), &current_config);
+    let (state, runtime_handle) = runtime_bundle_control_api_state(bundle);
+
+    let mut next_config = test_config(cert, key);
+    next_config.log.level = "debug".to_string();
+    write_config_file(&config_path, &next_config);
+
+    let activation = RuntimeActivationService::activate_reload(
+        runtime_handle.as_ref(),
+        planner_request(runtime_handle.current_generation()),
+        ReloadConfigInput::Path {
+            path: config_path.to_string_lossy().to_string(),
+        },
+    );
+    assert!(activation.succeeded());
+
+    let payload = json_body(QUICListener::render_control_api_runtime_history(&state)).await;
+    assert_eq!(payload["active_generation"], 1);
+    assert_eq!(payload["entries"].as_array().map(Vec::len), Some(3));
+    assert_eq!(payload["entries"][0]["operation"], "activate");
+    assert_eq!(payload["entries"][1]["operation"], "preview");
+    assert_eq!(payload["entries"][2]["operation"], "validate");
+}
+
+#[tokio::test]
+async fn control_api_runtime_history_generation_filters_to_requested_generation() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+    let current_config = test_config(cert.clone(), key.clone());
+    write_config_file(&config_path, &current_config);
+
+    let bundle =
+        runtime_bundle_from_config(config_path.to_string_lossy().as_ref(), &current_config);
+    let (state, runtime_handle) = runtime_bundle_control_api_state(bundle);
+
+    let mut next_config = test_config(cert, key);
+    next_config.log.level = "debug".to_string();
+    write_config_file(&config_path, &next_config);
+
+    let activation = RuntimeActivationService::activate_reload(
+        runtime_handle.as_ref(),
+        planner_request(runtime_handle.current_generation()),
+        ReloadConfigInput::Path {
+            path: config_path.to_string_lossy().to_string(),
+        },
+    );
+    assert!(activation.succeeded());
+
+    let payload =
+        json_body(QUICListener::render_control_api_runtime_history_generation(&state, 1)).await;
+    assert_eq!(payload["generation"], 1);
+    assert_eq!(payload["entries"].as_array().map(Vec::len), Some(3));
+
+    let missing =
+        QUICListener::render_control_api_runtime_history_generation(&state, 99);
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
