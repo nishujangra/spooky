@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     sync::{Arc, RwLock},
     time::Duration,
 };
@@ -92,6 +93,83 @@ impl ActiveRuntimeGeneration {
     }
 }
 
+const MAX_ARCHIVED_RUNTIME_GENERATIONS: usize = 8;
+
+/// Runtime-owned lifecycle status for retained generations.
+///
+/// This is intentionally narrower than the control-plane activation contract.
+/// It answers one ownership question only: how the runtime handle currently
+/// classifies a retained generation for rollback/history purposes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RuntimeGenerationRecordStatus {
+    Active,
+    Previous,
+    FailedPrepare,
+    RolledBack,
+    Superseded,
+}
+
+impl RuntimeGenerationRecordStatus {
+    #[must_use]
+    pub fn is_rollback_candidate(self) -> bool {
+        matches!(self, Self::Previous | Self::RolledBack | Self::Superseded)
+    }
+}
+
+/// Retained runtime generation metadata owned by [`RuntimeBundleHandle`].
+#[derive(Clone)]
+pub struct RuntimeGenerationRecord {
+    generation: u64,
+    status: RuntimeGenerationRecordStatus,
+    bundle: Option<Arc<RuntimeBundle>>,
+    note: Option<String>,
+}
+
+impl RuntimeGenerationRecord {
+    fn active(bundle: Arc<RuntimeBundle>) -> Self {
+        Self {
+            generation: bundle.generation,
+            status: RuntimeGenerationRecordStatus::Active,
+            bundle: Some(bundle),
+            note: None,
+        }
+    }
+
+    fn archived(
+        generation: u64,
+        status: RuntimeGenerationRecordStatus,
+        bundle: Option<Arc<RuntimeBundle>>,
+        note: Option<String>,
+    ) -> Self {
+        Self {
+            generation,
+            status,
+            bundle,
+            note,
+        }
+    }
+
+    #[must_use]
+    pub fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    #[must_use]
+    pub fn status(&self) -> RuntimeGenerationRecordStatus {
+        self.status
+    }
+
+    #[must_use]
+    pub fn bundle(&self) -> Option<&Arc<RuntimeBundle>> {
+        self.bundle.as_ref()
+    }
+
+    #[must_use]
+    pub fn note(&self) -> Option<&str> {
+        self.note.as_deref()
+    }
+}
+
 /// Atomic handle for publishing and reading the active runtime generation.
 ///
 /// Ownership of reload lifecycle transitions stays here. Callers that only need
@@ -99,6 +177,7 @@ impl ActiveRuntimeGeneration {
 #[derive(Clone)]
 pub struct RuntimeBundleHandle {
     inner: Arc<RwLock<Arc<RuntimeBundle>>>,
+    history: Arc<RwLock<VecDeque<RuntimeGenerationRecord>>>,
     lifecycle: Arc<RuntimeLifecycleState>,
 }
 
@@ -112,6 +191,7 @@ impl RuntimeBundleHandle {
         let _ = lifecycle.mark_running();
         Self {
             inner: Arc::new(RwLock::new(Arc::new(bundle))),
+            history: Arc::new(RwLock::new(VecDeque::new())),
             lifecycle: Arc::new(lifecycle),
         }
     }
@@ -179,6 +259,57 @@ impl RuntimeBundleHandle {
         self.with_current_generation(|current| f(current.view()))
     }
 
+    /// Snapshot the active and retained generations known to the runtime.
+    ///
+    /// The first entry is always the live active generation. Archived entries are
+    /// ordered newest-first behind it and capped in memory.
+    pub fn generation_history(&self) -> Vec<RuntimeGenerationRecord> {
+        let active = RuntimeGenerationRecord::active(self.current());
+        let archived = self
+            .history
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut history = Vec::with_capacity(archived.len() + 1);
+        history.push(active);
+        history.extend(archived);
+        history
+    }
+
+    /// Return a retained rollback candidate by generation, if still available.
+    pub fn rollback_candidate(&self, generation: u64) -> Option<Arc<RuntimeBundle>> {
+        let current = self.current();
+        if current.generation == generation {
+            return Some(current);
+        }
+
+        self.history
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .find(|entry| {
+                entry.generation == generation && entry.status.is_rollback_candidate()
+            })
+            .and_then(|entry| entry.bundle.clone())
+    }
+
+    pub(crate) fn record_failed_prepare(&self, generation: u64, note: impl Into<String>) {
+        let mut history = self
+            .history
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        history.retain(|entry| entry.generation != generation);
+        history.push_front(RuntimeGenerationRecord::archived(
+            generation,
+            RuntimeGenerationRecordStatus::FailedPrepare,
+            None,
+            Some(note.into()),
+        ));
+        trim_runtime_generation_history(&mut history);
+    }
+
     /// Atomically install `bundle` as the active generation, returning its
     /// generation number.
     ///
@@ -241,6 +372,7 @@ impl RuntimeBundleHandle {
         };
         // Retire only the previous generation's generation-owned background tasks.
         // Startup-owned and process-shared resources are not torn down here.
+        self.archive_previous_generation(previous.clone());
         previous
             .shared_state
             .generation_state()
@@ -254,6 +386,32 @@ impl RuntimeBundleHandle {
             self.lifecycle.phase()
         );
         Ok(generation)
+    }
+
+    fn archive_previous_generation(&self, previous: Arc<RuntimeBundle>) {
+        let mut history = self
+            .history
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        for entry in history.iter_mut() {
+            if entry.status == RuntimeGenerationRecordStatus::Previous {
+                entry.status = RuntimeGenerationRecordStatus::Superseded;
+            }
+        }
+        history.retain(|entry| entry.generation != previous.generation);
+        history.push_front(RuntimeGenerationRecord::archived(
+            previous.generation,
+            RuntimeGenerationRecordStatus::Previous,
+            Some(previous),
+            None,
+        ));
+        trim_runtime_generation_history(&mut history);
+    }
+}
+
+fn trim_runtime_generation_history(history: &mut VecDeque<RuntimeGenerationRecord>) {
+    while history.len() > MAX_ARCHIVED_RUNTIME_GENERATIONS {
+        history.pop_back();
     }
 }
 
@@ -659,6 +817,116 @@ mod tests {
             active_task.abort();
             tokio::time::sleep(Duration::from_millis(20)).await;
             assert!(active_completed.load(Ordering::Acquire));
+        }
+    }
+
+    mod runtime_generation_history {
+        use super::*;
+
+        #[test]
+        fn replacement_retains_previous_generation_as_rollback_candidate() {
+            let dir = tempdir().expect("tempdir");
+            let (current_bundle, next_bundle) = runtime_bundle_pair(
+                dir.path(),
+                "startup.yaml",
+                "http://127.0.0.1:7001",
+                2,
+                "reloaded.yaml",
+                "http://127.0.0.1:7002",
+            );
+            let previous_generation = current_bundle.generation;
+            let handle = RuntimeBundleHandle::new(current_bundle);
+
+            handle.replace(next_bundle).expect("replace");
+
+            let history = handle.generation_history();
+            assert_eq!(history[0].generation(), 2);
+            assert_eq!(history[0].status(), RuntimeGenerationRecordStatus::Active);
+            assert_eq!(history[1].generation(), previous_generation);
+            assert_eq!(
+                history[1].status(),
+                RuntimeGenerationRecordStatus::Previous
+            );
+            let rollback = handle
+                .rollback_candidate(previous_generation)
+                .expect("previous generation should be retained");
+            assert_eq!(rollback.generation, previous_generation);
+        }
+
+        #[test]
+        fn replacement_marks_older_retained_generations_as_superseded() {
+            let dir = tempdir().expect("tempdir");
+            let (bundle_one, bundle_two) = runtime_bundle_pair(
+                dir.path(),
+                "one.yaml",
+                "http://127.0.0.1:7001",
+                2,
+                "two.yaml",
+                "http://127.0.0.1:7002",
+            );
+            let (_, mut bundle_three) = runtime_bundle_pair(
+                dir.path(),
+                "unused.yaml",
+                "http://127.0.0.1:7003",
+                3,
+                "three.yaml",
+                "http://127.0.0.1:7004",
+            );
+            bundle_three.generation = 3;
+            let handle = RuntimeBundleHandle::new(bundle_one);
+
+            handle.replace(bundle_two).expect("first replace");
+            handle.replace(bundle_three).expect("second replace");
+
+            let history = handle.generation_history();
+            assert_eq!(history[0].generation(), 3);
+            assert_eq!(history[0].status(), RuntimeGenerationRecordStatus::Active);
+            assert_eq!(history[1].generation(), 2);
+            assert_eq!(
+                history[1].status(),
+                RuntimeGenerationRecordStatus::Previous
+            );
+            assert_eq!(history[2].generation(), 1);
+            assert_eq!(
+                history[2].status(),
+                RuntimeGenerationRecordStatus::Superseded
+            );
+            assert!(
+                handle.rollback_candidate(1).is_some(),
+                "superseded known-good generations should remain rollback candidates"
+            );
+        }
+
+        #[test]
+        fn failed_prepare_history_is_retained_without_mutating_active_generation() {
+            let dir = tempdir().expect("tempdir");
+            let (current_bundle, _) = runtime_bundle_pair(
+                dir.path(),
+                "runtime.yaml",
+                "http://127.0.0.1:7001",
+                2,
+                "unused.yaml",
+                "http://127.0.0.1:7002",
+            );
+            let handle = RuntimeBundleHandle::new(current_bundle);
+
+            handle.record_failed_prepare(2, "could not prepare runtime generation");
+
+            let history = handle.generation_history();
+            assert_eq!(history[0].generation(), 1);
+            assert_eq!(history[0].status(), RuntimeGenerationRecordStatus::Active);
+            assert_eq!(history[1].generation(), 2);
+            assert_eq!(
+                history[1].status(),
+                RuntimeGenerationRecordStatus::FailedPrepare
+            );
+            assert_eq!(
+                history[1].note(),
+                Some("could not prepare runtime generation")
+            );
+            assert!(history[1].bundle().is_none());
+            assert_eq!(handle.current_generation(), 1);
+            assert!(handle.rollback_candidate(2).is_none());
         }
     }
 }

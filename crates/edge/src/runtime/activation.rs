@@ -452,6 +452,25 @@ impl RuntimeActivationService {
 
         let plan = plan_runtime_reload(&current, request.clone(), input);
         if !plan.can_activate() {
+            if plan
+                .plan
+                .rejected_changes
+                .iter()
+                .any(|rejection| {
+                    matches!(
+                        rejection.kind,
+                        RejectedChangeKind::ResourcePreparationFailed
+                    )
+                })
+            {
+                handle.record_failed_prepare(
+                    plan.plan.candidate_generation,
+                    plan.plan
+                        .rejection_summary
+                        .clone()
+                        .unwrap_or_else(|| plan.plan.summary.clone()),
+                );
+            }
             return rejected_activation_result(
                 request,
                 active_generation,
