@@ -816,7 +816,10 @@ fn activation_result_status(activation: &ActivationResult) -> StatusCode {
     {
         StatusCode::BAD_REQUEST
     } else if activation.rejected_changes.iter().any(|rejection| {
-        matches!(rejection.kind, RejectedChangeKind::ResourcePreparationFailed)
+        matches!(
+            rejection.kind,
+            RejectedChangeKind::ResourcePreparationFailed
+        )
     }) || matches!(
         activation.status,
         crate::runtime::activation::GenerationStatus::Failed
@@ -889,7 +892,10 @@ fn rollback_result_status(rollback: &RollbackResult) -> StatusCode {
     {
         StatusCode::BAD_REQUEST
     } else if rollback.rejected_changes.iter().any(|rejection| {
-        matches!(rejection.kind, RejectedChangeKind::ResourcePreparationFailed)
+        matches!(
+            rejection.kind,
+            RejectedChangeKind::ResourcePreparationFailed
+        )
     }) || matches!(
         rollback.status,
         crate::runtime::activation::GenerationStatus::Failed
@@ -931,7 +937,7 @@ mod tests {
     use super::*;
     use crate::runtime::activation::{
         ActivationRequest, GenerationHistoryEntry, GenerationOperation, GenerationStatus,
-        ReloadDiff, RejectedChange, RejectedChangeKind, RollbackRequest,
+        RejectedChange, RejectedChangeKind, ReloadDiff, RollbackRequest,
     };
 
     fn rejected_change(reason: RuntimeRejectionReason, kind: RejectedChangeKind) -> RejectedChange {
@@ -947,7 +953,10 @@ mod tests {
         }
     }
 
-    fn history_entry(operation: GenerationOperation, status: GenerationStatus) -> GenerationHistoryEntry {
+    fn history_entry(
+        operation: GenerationOperation,
+        status: GenerationStatus,
+    ) -> GenerationHistoryEntry {
         GenerationHistoryEntry {
             generation: 2,
             operation,
@@ -985,7 +994,10 @@ mod tests {
         };
 
         assert_eq!(activation_result_status(&activation), StatusCode::CONFLICT);
-        assert_eq!(legacy_reload_result_status(&activation), StatusCode::CONFLICT);
+        assert_eq!(
+            legacy_reload_result_status(&activation),
+            StatusCode::CONFLICT
+        );
     }
 
     #[test]
