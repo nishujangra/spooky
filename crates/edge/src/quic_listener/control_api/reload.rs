@@ -1,7 +1,8 @@
+use std::sync::Arc;
+
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use serde::{Deserialize, de::DeserializeOwned};
-use std::sync::Arc;
 
 use super::*;
 use crate::runtime::{
@@ -212,15 +213,26 @@ impl QUICListener {
         state: &crate::quic_listener::runtime_state::ControlApiServiceCtx,
     ) -> Response<Full<Bytes>> {
         match Self::perform_control_api_runtime_activation(req, state, "runtime_reload").await {
-            Ok(activation) => Self::json_response(
-                StatusCode::ACCEPTED,
-                json!({
-                    "reloaded": true,
-                    "generation": activation.activated_generation.expect("successful activation must set activated_generation"),
-                    "candidate_generation": activation.history_entry.generation,
-                    "status": activation.status,
-                }),
-            ),
+            Ok(activation) => {
+                let Some(generation) = activation.activated_generation else {
+                    return Self::json_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        json!({
+                            "reloaded": false,
+                            "error": "activation succeeded without an activated generation",
+                        }),
+                    );
+                };
+                Self::json_response(
+                    StatusCode::ACCEPTED,
+                    json!({
+                        "reloaded": true,
+                        "generation": generation,
+                        "candidate_generation": activation.history_entry.generation,
+                        "status": activation.status,
+                    }),
+                )
+            }
             Err(ControlApiActivationError::Response(response)) => response,
             Err(ControlApiActivationError::Activation(activation)) => Self::json_response(
                 legacy_reload_result_status(&activation),
@@ -276,9 +288,15 @@ impl QUICListener {
         if !activation.succeeded() {
             return Err(ControlApiActivationError::Activation(activation));
         }
-        let generation = activation
-            .activated_generation
-            .expect("successful activation must set activated_generation");
+        let Some(generation) = activation.activated_generation else {
+            return Err(ControlApiActivationError::Response(Self::json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({
+                    "reloaded": false,
+                    "error": "activation succeeded without an activated generation",
+                }),
+            )));
+        };
         let next_log_level = runtime_bundle_handle
             .current_view()
             .startup()
@@ -801,17 +819,12 @@ fn activation_result_status(activation: &ActivationResult) -> StatusCode {
         matches!(
             rejection.kind,
             RejectedChangeKind::ResourcePreparationFailed
+                | RejectedChangeKind::RuntimeStateUnavailable
         )
     }) || matches!(
         activation.status,
         crate::runtime::activation::GenerationStatus::Failed
     ) {
-        StatusCode::INTERNAL_SERVER_ERROR
-    } else if activation
-        .rejected_changes
-        .iter()
-        .any(|rejection| matches!(rejection.kind, RejectedChangeKind::RuntimeStateUnavailable))
-    {
         StatusCode::INTERNAL_SERVER_ERROR
     } else {
         StatusCode::CONFLICT

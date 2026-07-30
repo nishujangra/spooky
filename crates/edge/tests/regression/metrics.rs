@@ -2,8 +2,10 @@
 
 use std::{sync::atomic::Ordering, time::Duration};
 
-use spooky_edge::runtime::activation::{RuntimeOperationOutcomeReason, RuntimeRejectionReason};
-use spooky_edge::{Metrics, OverloadShedReason, RouteOutcome};
+use spooky_edge::{
+    Metrics, OverloadShedReason, RouteOutcome,
+    runtime::activation::{RuntimeOperationOutcomeReason, RuntimeRejectionReason},
+};
 use spooky_errors::{
     HedgeOutcomeTelemetryReason, HedgeTriggerTelemetryReason, RetryAttemptTelemetryReason,
     RetryPolicyDenialReason,

@@ -6,10 +6,12 @@ use serde::Serialize;
 use spooky_lb::health::HealthFailureReason;
 
 use super::{state::ControlApiState, *};
-use crate::runtime::activation::GenerationHistoryEntry;
-use crate::runtime::backend::state::{
-    BackendHealthState, BackendLifecycleInventorySnapshot, BackendMembershipState,
-    BackendPoolPlacementSnapshot,
+use crate::runtime::{
+    activation::GenerationHistoryEntry,
+    backend::state::{
+        BackendHealthState, BackendLifecycleInventorySnapshot, BackendMembershipState,
+        BackendPoolPlacementSnapshot,
+    },
 };
 
 /// Map a backend health-failure reason to the canonical control-plane token.
