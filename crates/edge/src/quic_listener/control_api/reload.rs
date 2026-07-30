@@ -816,11 +816,7 @@ fn activation_result_status(activation: &ActivationResult) -> StatusCode {
     {
         StatusCode::BAD_REQUEST
     } else if activation.rejected_changes.iter().any(|rejection| {
-        matches!(
-            rejection.kind,
-            RejectedChangeKind::ResourcePreparationFailed
-                | RejectedChangeKind::RuntimeStateUnavailable
-        )
+        matches!(rejection.kind, RejectedChangeKind::ResourcePreparationFailed)
     }) || matches!(
         activation.status,
         crate::runtime::activation::GenerationStatus::Failed
@@ -873,7 +869,6 @@ fn legacy_reload_result_status(activation: &ActivationResult) -> StatusCode {
         matches!(
             rejection.kind,
             RejectedChangeKind::ResourcePreparationFailed
-                | RejectedChangeKind::IllegalTransition
                 | RejectedChangeKind::RuntimeStateUnavailable
         )
     }) || matches!(
@@ -894,16 +889,17 @@ fn rollback_result_status(rollback: &RollbackResult) -> StatusCode {
     {
         StatusCode::BAD_REQUEST
     } else if rollback.rejected_changes.iter().any(|rejection| {
-        matches!(
-            rejection.kind,
-            RejectedChangeKind::ResourcePreparationFailed
-                | RejectedChangeKind::RuntimeStateUnavailable
-        )
+        matches!(rejection.kind, RejectedChangeKind::ResourcePreparationFailed)
     }) || matches!(
         rollback.status,
         crate::runtime::activation::GenerationStatus::Failed
     ) {
         StatusCode::INTERNAL_SERVER_ERROR
+    } else if rollback.rejected_changes.iter().any(|rejection| {
+        rejection.kind == RejectedChangeKind::RuntimeStateUnavailable
+            && rejection.reason == RuntimeRejectionReason::UnknownGeneration
+    }) {
+        StatusCode::NOT_FOUND
     } else {
         StatusCode::CONFLICT
     }
@@ -928,4 +924,115 @@ fn rollback_error_payload(rollback: &RollbackResult, error: &str) -> serde_json:
         "rejected_changes": rollback.rejected_changes,
         "history_entry": rollback.history_entry,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::activation::{
+        ActivationRequest, GenerationHistoryEntry, GenerationOperation, GenerationStatus,
+        ReloadDiff, RejectedChange, RejectedChangeKind, RollbackRequest,
+    };
+
+    fn rejected_change(reason: RuntimeRejectionReason, kind: RejectedChangeKind) -> RejectedChange {
+        RejectedChange {
+            reason,
+            kind,
+            field_path: None,
+            current_value: None,
+            requested_value: None,
+            operator_action: "retry".to_string(),
+            active_generation_changed: false,
+            message: "rejected".to_string(),
+        }
+    }
+
+    fn history_entry(operation: GenerationOperation, status: GenerationStatus) -> GenerationHistoryEntry {
+        GenerationHistoryEntry {
+            generation: 2,
+            operation,
+            status,
+            config_source: "config.yaml".to_string(),
+            config_version: Some(1),
+            requested_by: Some("test".to_string()),
+            trigger_source: Some("unit_test".to_string()),
+            requested_at_ms: 1,
+            completed_at_ms: Some(2),
+            summary: "summary".to_string(),
+            diff: ReloadDiff::default(),
+            rejected_changes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn activation_status_maps_stale_generation_conflicts_to_conflict() {
+        let activation = ActivationResult {
+            request: ActivationRequest {
+                requested_by: Some("test".to_string()),
+                trigger_source: Some("unit_test".to_string()),
+                reason: Some("runtime_activate".to_string()),
+                expected_generation: Some(1),
+                requested_at_ms: 1,
+            },
+            active_generation: 3,
+            activated_generation: None,
+            status: GenerationStatus::Rejected,
+            rejected_changes: vec![rejected_change(
+                RuntimeRejectionReason::UnknownGeneration,
+                RejectedChangeKind::IllegalTransition,
+            )],
+            history_entry: history_entry(GenerationOperation::Activate, GenerationStatus::Rejected),
+        };
+
+        assert_eq!(activation_result_status(&activation), StatusCode::CONFLICT);
+        assert_eq!(legacy_reload_result_status(&activation), StatusCode::CONFLICT);
+    }
+
+    #[test]
+    fn rollback_status_maps_missing_target_to_not_found() {
+        let rollback = RollbackResult {
+            request: RollbackRequest {
+                target_generation: 9,
+                requested_by: Some("test".to_string()),
+                trigger_source: Some("unit_test".to_string()),
+                reason: Some("runtime_rollback".to_string()),
+                expected_active_generation: Some(3),
+                requested_at_ms: 1,
+            },
+            active_generation: 3,
+            rolled_back_to: None,
+            status: GenerationStatus::Rejected,
+            rejected_changes: vec![rejected_change(
+                RuntimeRejectionReason::UnknownGeneration,
+                RejectedChangeKind::RuntimeStateUnavailable,
+            )],
+            history_entry: history_entry(GenerationOperation::Rollback, GenerationStatus::Rejected),
+        };
+
+        assert_eq!(rollback_result_status(&rollback), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn rollback_status_keeps_other_operator_conflicts_as_conflict() {
+        let rollback = RollbackResult {
+            request: RollbackRequest {
+                target_generation: 3,
+                requested_by: Some("test".to_string()),
+                trigger_source: Some("unit_test".to_string()),
+                reason: Some("runtime_rollback".to_string()),
+                expected_active_generation: Some(3),
+                requested_at_ms: 1,
+            },
+            active_generation: 3,
+            rolled_back_to: None,
+            status: GenerationStatus::Rejected,
+            rejected_changes: vec![rejected_change(
+                RuntimeRejectionReason::RollbackNotAllowed,
+                RejectedChangeKind::RuntimeStateUnavailable,
+            )],
+            history_entry: history_entry(GenerationOperation::Rollback, GenerationStatus::Rejected),
+        };
+
+        assert_eq!(rollback_result_status(&rollback), StatusCode::CONFLICT);
+    }
 }
