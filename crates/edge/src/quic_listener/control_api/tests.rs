@@ -1526,11 +1526,20 @@ async fn control_api_runtime_history_renders_recorded_generation_changes() {
     );
     assert_eq!(payload["retained_generations"][0]["generation"], 1);
     assert_eq!(payload["retained_generations"][0]["status"], "active");
-    assert_eq!(payload["retained_generations"][0]["rollback_candidate"], false);
+    assert_eq!(
+        payload["retained_generations"][0]["rollback_candidate"],
+        false
+    );
     assert_eq!(payload["retained_generations"][0]["has_bundle"], true);
     assert_eq!(payload["retained_generations"][1]["generation"], 9);
-    assert_eq!(payload["retained_generations"][1]["status"], "failed_prepare");
-    assert_eq!(payload["retained_generations"][1]["rollback_candidate"], false);
+    assert_eq!(
+        payload["retained_generations"][1]["status"],
+        "failed_prepare"
+    );
+    assert_eq!(
+        payload["retained_generations"][1]["rollback_candidate"],
+        false
+    );
     assert_eq!(payload["retained_generations"][1]["has_bundle"], false);
     assert_eq!(
         payload["retained_generations"][1]["note"],
@@ -1538,7 +1547,10 @@ async fn control_api_runtime_history_renders_recorded_generation_changes() {
     );
     assert_eq!(payload["retained_generations"][2]["generation"], 0);
     assert_eq!(payload["retained_generations"][2]["status"], "previous");
-    assert_eq!(payload["retained_generations"][2]["rollback_candidate"], true);
+    assert_eq!(
+        payload["retained_generations"][2]["rollback_candidate"],
+        true
+    );
     assert_eq!(payload["retained_generations"][2]["has_bundle"], true);
     assert_eq!(payload["entries"].as_array().map(Vec::len), Some(1));
     assert_eq!(payload["entries"][0]["operation"], "activate");
