@@ -1,4 +1,5 @@
 use super::*;
+use crate::runtime::activation::RuntimeRejectionReason;
 
 impl Metrics {
     pub fn render_prometheus(&self) -> String {
@@ -226,6 +227,26 @@ impl Metrics {
             "spooky_active_connections {}\n",
             self.active_connections.load(Ordering::Relaxed)
         ));
+
+        out.push_str(
+            "# HELP spooky_runtime_rejections_total Total runtime activation or rollback rejections grouped by canonical operator reason.\n",
+        );
+        out.push_str("# TYPE spooky_runtime_rejections_total counter\n");
+        for reason in [
+            RuntimeRejectionReason::InvalidConfig,
+            RuntimeRejectionReason::StartupOwnedChange,
+            RuntimeRejectionReason::BindConflict,
+            RuntimeRejectionReason::ResourcePrepareFailed,
+            RuntimeRejectionReason::IncompatibleReload,
+            RuntimeRejectionReason::UnknownGeneration,
+            RuntimeRejectionReason::RollbackNotAllowed,
+        ] {
+            out.push_str(&format!(
+                "spooky_runtime_rejections_total{{reason=\"{}\"}} {}\n",
+                reason.slug(),
+                self.runtime_rejection_reason_count(reason)
+            ));
+        }
 
         out.push_str(
             "# HELP spooky_connection_cap_rejects Total new-connection attempts rejected by max_active_connections cap.\n",

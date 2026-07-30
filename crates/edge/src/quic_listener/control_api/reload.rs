@@ -6,7 +6,8 @@ use super::*;
 use crate::runtime::{
     activation::{
         ActivationRequest, ActivationResult, RejectedChangeKind, ReloadConfigInput,
-        RollbackRequest, RollbackResult, RuntimeActivationService, plan_runtime_reload,
+        ReloadPlan, RollbackRequest, RollbackResult, RuntimeActivationService,
+        RuntimeRejectionReason, plan_runtime_reload,
     },
     bundle::ActiveRuntimeGeneration,
     policy::{ReloadCompatibilityAuthority, TransitionRejection},
@@ -136,6 +137,7 @@ impl QUICListener {
             Self::control_api_activation_request(&plan_request, current.generation(), "runtime_validate"),
             Self::control_api_reload_config_input(&current, plan_request.config_path),
         );
+        Self::record_control_api_plan_rejection(state, "validate", &plan.plan);
         Self::json_response(StatusCode::OK, plan.plan)
     }
 
@@ -157,6 +159,7 @@ impl QUICListener {
             Self::control_api_activation_request(&plan_request, current.generation(), "runtime_preview"),
             Self::control_api_reload_config_input(&current, plan_request.config_path),
         );
+        Self::record_control_api_plan_rejection(state, "preview", &plan.plan);
         Self::json_response(StatusCode::OK, plan.plan)
     }
 
@@ -167,10 +170,13 @@ impl QUICListener {
         match Self::perform_control_api_runtime_activation(req, state, "runtime_activate").await {
             Ok(activation) => Self::json_response(StatusCode::ACCEPTED, activation),
             Err(ControlApiActivationError::Response(response)) => response,
-            Err(ControlApiActivationError::Activation(activation)) => Self::json_response(
-                activation_result_status(&activation),
-                activation_error_payload(&activation, activation_error(&activation)),
-            ),
+            Err(ControlApiActivationError::Activation(activation)) => {
+                Self::record_control_api_activation_rejection(state, &activation);
+                Self::json_response(
+                    activation_result_status(&activation),
+                    activation_error_payload(&activation, activation_error(&activation)),
+                )
+            }
         }
     }
 
@@ -189,10 +195,13 @@ impl QUICListener {
                 }),
             ),
             Err(ControlApiActivationError::Response(response)) => response,
-            Err(ControlApiActivationError::Activation(activation)) => Self::json_response(
-                legacy_reload_result_status(&activation),
-                legacy_reload_error_payload(&activation, activation_error(&activation)),
-            ),
+            Err(ControlApiActivationError::Activation(activation)) => {
+                Self::record_control_api_activation_rejection(state, &activation);
+                Self::json_response(
+                    legacy_reload_result_status(&activation),
+                    legacy_reload_error_payload(&activation, activation_error(&activation)),
+                )
+            }
         }
     }
 
@@ -232,13 +241,6 @@ impl QUICListener {
             Self::control_api_reload_config_input(&runtime, plan_request.config_path),
         );
         if !activation.succeeded() {
-            let error = activation_error(&activation);
-            // Phase 8: API response and logs communicate the same core reason.
-            warn!(
-                "runtime reload rejected at generation {}; active runtime unchanged: {}",
-                runtime.generation(),
-                error
-            );
             return Err(ControlApiActivationError::Activation(activation));
         }
         let generation = activation
@@ -283,15 +285,10 @@ impl QUICListener {
             },
         );
         if !rollback.succeeded() {
-            let error = rollback_error(&rollback);
-            warn!(
-                "runtime rollback rejected at generation {}; active runtime unchanged: {}",
-                rollback.active_generation,
-                error
-            );
+            Self::record_control_api_rollback_rejection(state, &rollback);
             return Self::json_response(
                 rollback_result_status(&rollback),
-                rollback_error_payload(&rollback, error),
+                rollback_error_payload(&rollback, rollback_error(&rollback)),
             );
         }
         Self::json_response(StatusCode::ACCEPTED, rollback)
@@ -633,6 +630,63 @@ impl QUICListener {
             requested_at_ms: crate::watchdog::time::now_millis(),
         }
     }
+
+    fn record_control_api_plan_rejection(
+        state: &crate::quic_listener::runtime_state::ControlApiServiceCtx,
+        operation: &str,
+        plan: &ReloadPlan,
+    ) {
+        if let Some(reason) = plan.primary_rejection_reason() {
+            state.current_service_state()
+                .metrics()
+                .inc_runtime_rejection_reason(reason);
+            warn!(
+                "runtime {} rejected generation={} reason={} summary={}",
+                operation,
+                plan.candidate_generation,
+                reason.slug(),
+                plan.rejection_summary
+                    .as_deref()
+                    .unwrap_or(plan.summary.as_str())
+            );
+        }
+    }
+
+    fn record_control_api_activation_rejection(
+        state: &crate::quic_listener::runtime_state::ControlApiServiceCtx,
+        activation: &ActivationResult,
+    ) {
+        if let Some(reason) = activation.primary_rejection_reason() {
+            state.current_service_state()
+                .metrics()
+                .inc_runtime_rejection_reason(reason);
+            warn!(
+                "runtime activation rejected active_generation={} candidate_generation={} reason={} error={}",
+                activation.active_generation,
+                activation.history_entry.generation,
+                reason.slug(),
+                activation_error(activation)
+            );
+        }
+    }
+
+    fn record_control_api_rollback_rejection(
+        state: &crate::quic_listener::runtime_state::ControlApiServiceCtx,
+        rollback: &RollbackResult,
+    ) {
+        if let Some(reason) = rollback.primary_rejection_reason() {
+            state.current_service_state()
+                .metrics()
+                .inc_runtime_rejection_reason(reason);
+            warn!(
+                "runtime rollback rejected active_generation={} target_generation={} reason={} error={}",
+                rollback.active_generation,
+                rollback.request.target_generation,
+                reason.slug(),
+                rollback_error(rollback)
+            );
+        }
+    }
 }
 
 fn activation_result_status(activation: &ActivationResult) -> StatusCode {
@@ -670,6 +724,7 @@ fn activation_error(activation: &ActivationResult) -> &str {
 fn activation_error_payload(activation: &ActivationResult, error: &str) -> serde_json::Value {
     json!({
         "error": error,
+        "rejection_reason": activation.primary_rejection_reason().map(RuntimeRejectionReason::slug),
         "active_generation": activation.active_generation,
         "candidate_generation": activation.history_entry.generation,
         "status": activation.status,
@@ -682,6 +737,7 @@ fn legacy_reload_error_payload(activation: &ActivationResult, error: &str) -> se
     json!({
         "reloaded": false,
         "error": error,
+        "rejection_reason": activation.primary_rejection_reason().map(RuntimeRejectionReason::slug),
         "generation": activation.active_generation,
         "candidate_generation": activation.history_entry.generation,
         "status": activation.status,
@@ -742,6 +798,7 @@ fn rollback_error(rollback: &RollbackResult) -> &str {
 fn rollback_error_payload(rollback: &RollbackResult, error: &str) -> serde_json::Value {
     json!({
         "error": error,
+        "rejection_reason": rollback.primary_rejection_reason().map(RuntimeRejectionReason::slug),
         "active_generation": rollback.active_generation,
         "target_generation": rollback.request.target_generation,
         "rolled_back_to": rollback.rolled_back_to,

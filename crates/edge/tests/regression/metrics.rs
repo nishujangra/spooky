@@ -7,6 +7,7 @@ use spooky_errors::{
     HedgeOutcomeTelemetryReason, HedgeTriggerTelemetryReason, RetryAttemptTelemetryReason,
     RetryPolicyDenialReason,
 };
+use spooky_edge::runtime::activation::RuntimeRejectionReason;
 
 #[test]
 fn metrics_render_includes_route_percentiles() {
@@ -139,6 +140,31 @@ fn metrics_render_includes_overload_reasons_and_hedge_counters() {
     assert!(output.contains("spooky_control_api_connection_limit_drops 1\n"));
     assert!(output.contains("spooky_circuit_breaker_rejected_total 0\n"));
     assert!(output.contains("spooky_brownout_active 0\n"));
+}
+
+#[test]
+fn metrics_render_includes_runtime_rejection_reason_vocab() {
+    let metrics = Metrics::default();
+    metrics.inc_runtime_rejection_reason(RuntimeRejectionReason::InvalidConfig);
+    metrics.inc_runtime_rejection_reason(RuntimeRejectionReason::StartupOwnedChange);
+    metrics.inc_runtime_rejection_reason(RuntimeRejectionReason::BindConflict);
+    metrics.inc_runtime_rejection_reason(RuntimeRejectionReason::ResourcePrepareFailed);
+    metrics.inc_runtime_rejection_reason(RuntimeRejectionReason::IncompatibleReload);
+    metrics.inc_runtime_rejection_reason(RuntimeRejectionReason::UnknownGeneration);
+    metrics.inc_runtime_rejection_reason(RuntimeRejectionReason::RollbackNotAllowed);
+
+    let output = metrics.render_prometheus();
+    for expected in [
+        "spooky_runtime_rejections_total{reason=\"invalid_config\"} 1",
+        "spooky_runtime_rejections_total{reason=\"startup_owned_change\"} 1",
+        "spooky_runtime_rejections_total{reason=\"bind_conflict\"} 1",
+        "spooky_runtime_rejections_total{reason=\"resource_prepare_failed\"} 1",
+        "spooky_runtime_rejections_total{reason=\"incompatible_reload\"} 1",
+        "spooky_runtime_rejections_total{reason=\"unknown_generation\"} 1",
+        "spooky_runtime_rejections_total{reason=\"rollback_not_allowed\"} 1",
+    ] {
+        assert!(output.contains(expected), "missing metric line: {expected}");
+    }
 }
 
 #[test]

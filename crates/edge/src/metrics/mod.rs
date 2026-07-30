@@ -14,6 +14,7 @@ use spooky_errors::{
     RetryPolicyDenialReason,
 };
 use spooky_lb::health::HealthFailureReason;
+use crate::runtime::activation::RuntimeRejectionReason;
 
 pub struct Metrics {
     pub requests_total: AtomicU64,
@@ -75,6 +76,13 @@ pub struct Metrics {
     pub watchdog_restart_hooks: AtomicU64,
     pub watchdog_degraded_windows: AtomicU64,
     pub runtime_panics: AtomicU64,
+    pub runtime_rejection_invalid_config: AtomicU64,
+    pub runtime_rejection_startup_owned_change: AtomicU64,
+    pub runtime_rejection_bind_conflict: AtomicU64,
+    pub runtime_rejection_resource_prepare_failed: AtomicU64,
+    pub runtime_rejection_incompatible_reload: AtomicU64,
+    pub runtime_rejection_unknown_generation: AtomicU64,
+    pub runtime_rejection_rollback_not_allowed: AtomicU64,
     pub retries_total: AtomicU64,
     pub retry_denied_budget: AtomicU64,
     pub retry_denied_no_bodyless: AtomicU64,
@@ -504,6 +512,13 @@ impl Metrics {
             watchdog_restart_hooks: AtomicU64::new(0),
             watchdog_degraded_windows: AtomicU64::new(0),
             runtime_panics: AtomicU64::new(0),
+            runtime_rejection_invalid_config: AtomicU64::new(0),
+            runtime_rejection_startup_owned_change: AtomicU64::new(0),
+            runtime_rejection_bind_conflict: AtomicU64::new(0),
+            runtime_rejection_resource_prepare_failed: AtomicU64::new(0),
+            runtime_rejection_incompatible_reload: AtomicU64::new(0),
+            runtime_rejection_unknown_generation: AtomicU64::new(0),
+            runtime_rejection_rollback_not_allowed: AtomicU64::new(0),
             retries_total: AtomicU64::new(0),
             retry_denied_budget: AtomicU64::new(0),
             retry_denied_no_bodyless: AtomicU64::new(0),
@@ -1213,6 +1228,65 @@ impl Metrics {
     pub fn inc_control_api_connection_limit_drop(&self) {
         self.control_api_connection_limit_drops
             .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn inc_runtime_rejection_reason(&self, reason: RuntimeRejectionReason) {
+        match reason {
+            RuntimeRejectionReason::InvalidConfig => {
+                self.runtime_rejection_invalid_config
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            RuntimeRejectionReason::StartupOwnedChange => {
+                self.runtime_rejection_startup_owned_change
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            RuntimeRejectionReason::BindConflict => {
+                self.runtime_rejection_bind_conflict
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            RuntimeRejectionReason::ResourcePrepareFailed => {
+                self.runtime_rejection_resource_prepare_failed
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            RuntimeRejectionReason::IncompatibleReload => {
+                self.runtime_rejection_incompatible_reload
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            RuntimeRejectionReason::UnknownGeneration => {
+                self.runtime_rejection_unknown_generation
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            RuntimeRejectionReason::RollbackNotAllowed => {
+                self.runtime_rejection_rollback_not_allowed
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    pub fn runtime_rejection_reason_count(&self, reason: RuntimeRejectionReason) -> u64 {
+        match reason {
+            RuntimeRejectionReason::InvalidConfig => {
+                self.runtime_rejection_invalid_config.load(Ordering::Relaxed)
+            }
+            RuntimeRejectionReason::StartupOwnedChange => self
+                .runtime_rejection_startup_owned_change
+                .load(Ordering::Relaxed),
+            RuntimeRejectionReason::BindConflict => {
+                self.runtime_rejection_bind_conflict.load(Ordering::Relaxed)
+            }
+            RuntimeRejectionReason::ResourcePrepareFailed => self
+                .runtime_rejection_resource_prepare_failed
+                .load(Ordering::Relaxed),
+            RuntimeRejectionReason::IncompatibleReload => self
+                .runtime_rejection_incompatible_reload
+                .load(Ordering::Relaxed),
+            RuntimeRejectionReason::UnknownGeneration => self
+                .runtime_rejection_unknown_generation
+                .load(Ordering::Relaxed),
+            RuntimeRejectionReason::RollbackNotAllowed => self
+                .runtime_rejection_rollback_not_allowed
+                .load(Ordering::Relaxed),
+        }
     }
 
     pub fn inc_watchdog_restart_request(&self) {

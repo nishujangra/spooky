@@ -16,7 +16,7 @@ use tempfile::tempdir;
 use super::{state::ControlApiState, *};
 use crate::runtime::activation::{
     ActivationRequest, GenerationEventKind, GenerationOperation, GenerationStatus,
-    PlanningPhase, PlanningPhaseStatus, RejectedChangeKind,
+    PlanningPhase, PlanningPhaseStatus, RejectedChangeKind, RuntimeRejectionReason,
     ReloadCompatibilityClassification, ReloadConfigInput, ReloadDiffDisposition,
     RollbackRequest, RuntimeActivationService, plan_runtime_reload,
 };
@@ -520,6 +520,7 @@ fn activation_service_rejects_restart_required_changes_without_mutating_active_g
     assert!(
         activation.rejected_changes.iter().any(|rejection| {
             rejection.kind == RejectedChangeKind::RestartRequired
+                && rejection.reason == RuntimeRejectionReason::StartupOwnedChange
                 && rejection.field_path.as_deref()
                     == Some("performance.control_plane_threads")
                 && !rejection.active_generation_changed
@@ -647,6 +648,7 @@ fn rollback_service_rejects_incomplete_or_failed_prepare_targets_without_mutatio
     assert!(
         rollback.rejected_changes.iter().any(|rejection| {
             rejection.kind == RejectedChangeKind::RuntimeStateUnavailable
+                && rejection.reason == RuntimeRejectionReason::RollbackNotAllowed
                 && rejection.field_path.as_deref()
                     == Some("runtime.rollback.target_generation")
         }),

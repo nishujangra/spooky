@@ -230,6 +230,35 @@ pub enum RejectedChangeKind {
     RuntimeStateUnavailable,
 }
 
+/// Stable operator-visible rejection reason shared across logs, metrics, and
+/// control-plane responses.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum RuntimeRejectionReason {
+    InvalidConfig,
+    StartupOwnedChange,
+    BindConflict,
+    ResourcePrepareFailed,
+    IncompatibleReload,
+    UnknownGeneration,
+    RollbackNotAllowed,
+}
+
+impl RuntimeRejectionReason {
+    #[must_use]
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::InvalidConfig => "invalid_config",
+            Self::StartupOwnedChange => "startup_owned_change",
+            Self::BindConflict => "bind_conflict",
+            Self::ResourcePrepareFailed => "resource_prepare_failed",
+            Self::IncompatibleReload => "incompatible_reload",
+            Self::UnknownGeneration => "unknown_generation",
+            Self::RollbackNotAllowed => "rollback_not_allowed",
+        }
+    }
+}
+
 impl From<TransitionRejectionKind> for RejectedChangeKind {
     fn from(value: TransitionRejectionKind) -> Self {
         match value {
@@ -247,6 +276,7 @@ impl From<TransitionRejectionKind> for RejectedChangeKind {
 /// Canonical operator-visible rejection payload for a planned change.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RejectedChange {
+    pub reason: RuntimeRejectionReason,
     pub kind: RejectedChangeKind,
     pub field_path: Option<String>,
     pub current_value: Option<String>,
@@ -265,6 +295,7 @@ impl From<TransitionRejection> for RejectedChange {
 impl From<&TransitionRejection> for RejectedChange {
     fn from(value: &TransitionRejection) -> Self {
         Self {
+            reason: runtime_rejection_reason_for_transition(value),
             kind: value.kind.into(),
             field_path: value.field_path.clone(),
             current_value: value.current_mode.clone(),
@@ -280,6 +311,7 @@ impl RejectedChange {
     fn invalid_configuration(message: impl Into<String>) -> Self {
         let message = message.into();
         Self {
+            reason: RuntimeRejectionReason::InvalidConfig,
             kind: RejectedChangeKind::InvalidConfiguration,
             field_path: None,
             current_value: None,
@@ -297,6 +329,7 @@ impl RejectedChange {
             "runtime reload rejected: could not prepare {field_path}: {detail}; active runtime unchanged (no change applied)"
         );
         Self {
+            reason: runtime_rejection_reason_for_resource_failure(&field_path, &detail),
             kind: RejectedChangeKind::ResourcePreparationFailed,
             field_path: Some(field_path),
             current_value: None,
@@ -307,6 +340,42 @@ impl RejectedChange {
             active_generation_changed: false,
             message,
         }
+    }
+
+    #[must_use]
+    pub fn reason_slug(&self) -> &'static str {
+        self.reason.slug()
+    }
+}
+
+fn runtime_rejection_reason_for_transition(
+    rejection: &TransitionRejection,
+) -> RuntimeRejectionReason {
+    match rejection.kind {
+        TransitionRejectionKind::RestartRequired => RuntimeRejectionReason::StartupOwnedChange,
+        TransitionRejectionKind::InvalidConfiguration => RuntimeRejectionReason::InvalidConfig,
+        TransitionRejectionKind::IllegalTransition => RuntimeRejectionReason::IncompatibleReload,
+        TransitionRejectionKind::RuntimeStateUnavailable => RuntimeRejectionReason::UnknownGeneration,
+        TransitionRejectionKind::ResourcePreparationFailed => {
+            let field_path = rejection.field_path.as_deref().unwrap_or_default();
+            let detail = rejection.requested_mode.as_deref().unwrap_or_default();
+            runtime_rejection_reason_for_resource_failure(field_path, detail)
+        }
+    }
+}
+
+fn runtime_rejection_reason_for_resource_failure(
+    field_path: &str,
+    detail: &str,
+) -> RuntimeRejectionReason {
+    if field_path.contains("listener")
+        || field_path.contains("endpoint")
+        || detail.contains("Address already in use")
+        || detail.contains("AddrInUse")
+    {
+        RuntimeRejectionReason::BindConflict
+    } else {
+        RuntimeRejectionReason::ResourcePrepareFailed
     }
 }
 
@@ -369,6 +438,11 @@ impl ReloadPlan {
             .find(|result| result.phase == phase)
             .map(|result| result.status)
     }
+
+    #[must_use]
+    pub fn primary_rejection_reason(&self) -> Option<RuntimeRejectionReason> {
+        self.rejected_changes.first().map(|rejection| rejection.reason)
+    }
 }
 
 /// Audit/history record for validation, preview, activation, and rollback.
@@ -412,6 +486,11 @@ impl ActivationResult {
     pub fn succeeded(&self) -> bool {
         self.activated_generation.is_some() && self.rejected_changes.is_empty()
     }
+
+    #[must_use]
+    pub fn primary_rejection_reason(&self) -> Option<RuntimeRejectionReason> {
+        self.rejected_changes.first().map(|rejection| rejection.reason)
+    }
 }
 
 /// Canonical rollback result payload.
@@ -429,6 +508,11 @@ impl RollbackResult {
     #[must_use]
     pub fn succeeded(&self) -> bool {
         self.rolled_back_to.is_some() && self.rejected_changes.is_empty()
+    }
+
+    #[must_use]
+    pub fn primary_rejection_reason(&self) -> Option<RuntimeRejectionReason> {
+        self.rejected_changes.first().map(|rejection| rejection.reason)
     }
 }
 
@@ -477,6 +561,7 @@ impl RuntimeActivationService {
                 None,
                 ReloadDiff::default(),
                 vec![RejectedChange {
+                    reason: RuntimeRejectionReason::UnknownGeneration,
                     kind: RejectedChangeKind::IllegalTransition,
                     field_path: Some("runtime.generation".to_string()),
                     current_value: Some(active_generation.to_string()),
@@ -595,6 +680,7 @@ impl RuntimeActivationService {
                 None,
                 ReloadDiff::default(),
                 vec![RejectedChange {
+                    reason: RuntimeRejectionReason::UnknownGeneration,
                     kind: RejectedChangeKind::IllegalTransition,
                     field_path: Some("runtime.generation".to_string()),
                     current_value: Some(active_generation.to_string()),
@@ -622,6 +708,7 @@ impl RuntimeActivationService {
                 None,
                 ReloadDiff::default(),
                 vec![RejectedChange {
+                    reason: RuntimeRejectionReason::RollbackNotAllowed,
                     kind: RejectedChangeKind::IllegalTransition,
                     field_path: Some("runtime.rollback.target_generation".to_string()),
                     current_value: Some(active_generation.to_string()),
@@ -650,6 +737,7 @@ impl RuntimeActivationService {
                 None,
                 ReloadDiff::default(),
                 vec![RejectedChange {
+                    reason: RuntimeRejectionReason::UnknownGeneration,
                     kind: RejectedChangeKind::RuntimeStateUnavailable,
                     field_path: Some("runtime.rollback.target_generation".to_string()),
                     current_value: None,
@@ -677,6 +765,7 @@ impl RuntimeActivationService {
                 None,
                 ReloadDiff::default(),
                 vec![RejectedChange {
+                    reason: RuntimeRejectionReason::RollbackNotAllowed,
                     kind: RejectedChangeKind::RuntimeStateUnavailable,
                     field_path: Some("runtime.rollback.target_generation".to_string()),
                     current_value: Some(target_record.generation().to_string()),
@@ -1222,6 +1311,7 @@ fn failed_rollback_result(
     error: String,
 ) -> RollbackResult {
     let rejected_changes = vec![RejectedChange {
+        reason: RuntimeRejectionReason::RollbackNotAllowed,
         kind: RejectedChangeKind::RuntimeStateUnavailable,
         field_path: Some("runtime.rollback".to_string()),
         current_value: Some(active_generation.to_string()),
@@ -1344,6 +1434,7 @@ fn failed_activation_result(
     error: String,
 ) -> ActivationResult {
     let rejected_changes = vec![RejectedChange {
+        reason: RuntimeRejectionReason::IncompatibleReload,
         kind: RejectedChangeKind::RuntimeStateUnavailable,
         field_path: Some("runtime.activation".to_string()),
         current_value: Some(active_generation.to_string()),
@@ -1792,6 +1883,7 @@ mod tests {
 
         let mut rejected = plan.clone();
         rejected.rejected_changes.push(RejectedChange {
+            reason: RuntimeRejectionReason::InvalidConfig,
             kind: RejectedChangeKind::InvalidConfiguration,
             field_path: Some("resilience.watchdog".to_string()),
             current_value: None,
