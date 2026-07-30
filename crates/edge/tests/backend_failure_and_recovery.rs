@@ -101,18 +101,21 @@ fn consistent_hash_upstream(backends: Vec<Backend>) -> Upstream {
     upstream_with_policy("consistent-hash", Some("header:x-tenant-id"), backends)
 }
 
+/// Probe tenant keys until one hashes to `expected_body`'s backend.
+///
+/// The hash ring is built from backend addresses, and both test backends share a
+/// randomly reserved port. For some ports none of the first ~128 `tenant-N` keys land
+/// on a given backend, so the key space has to be wide enough to survive an unlucky
+/// port. A request error just means "not this key" — keep probing.
 fn find_consistent_hash_key_for_backend(
     harness: &BackendLifecycleHarness,
     expected_body: &str,
 ) -> Option<String> {
-    for idx in 0..128 {
+    (0..2048).find_map(|idx| {
         let key = format!("tenant-{idx}");
         let response = run_keyed_request(harness, &key).ok()?;
-        if response.status == 200 && response.body_text() == expected_body {
-            return Some(key);
-        }
-    }
-    None
+        (response.status == 200 && response.body_text() == expected_body).then_some(key)
+    })
 }
 
 fn wait_for_backend_health_state(
