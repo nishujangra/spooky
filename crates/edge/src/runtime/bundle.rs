@@ -210,13 +210,15 @@ impl RuntimeBundleHandle {
         // here (see `begin_drain`/`begin_shutdown`).
         let lifecycle = RuntimeLifecycleState::new();
         let _ = lifecycle.mark_running();
-        Self {
+        let handle = Self {
             inner: Arc::new(RwLock::new(Arc::new(bundle))),
             history: Arc::new(RwLock::new(VecDeque::new())),
             generation_history: Arc::new(RwLock::new(VecDeque::new())),
             generation_events: Arc::new(RwLock::new(VecDeque::new())),
             lifecycle: Arc::new(lifecycle),
-        }
+        };
+        handle.sync_runtime_observability_metrics();
+        handle
     }
 
     /// The shared process lifecycle state machine (Phase 6). All clones of this
@@ -351,12 +353,15 @@ impl RuntimeBundleHandle {
     }
 
     pub(crate) fn record_generation_history_entry(&self, entry: GenerationHistoryEntry) {
-        let mut history = self
-            .generation_history
-            .write()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        history.push_front(entry);
-        trim_bounded_history(&mut history, MAX_GENERATION_HISTORY_ENTRIES);
+        {
+            let mut history = self
+                .generation_history
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            history.push_front(entry);
+            trim_bounded_history(&mut history, MAX_GENERATION_HISTORY_ENTRIES);
+        }
+        self.sync_runtime_observability_metrics();
     }
 
     pub(crate) fn record_generation_change_event(&self, event: GenerationChangeEvent) {
@@ -466,7 +471,20 @@ impl RuntimeBundleHandle {
             generation,
             self.lifecycle.phase()
         );
+        self.sync_runtime_observability_metrics();
         Ok(generation)
+    }
+
+    fn sync_runtime_observability_metrics(&self) {
+        let current = self.current();
+        let history_depth = self
+            .generation_history
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len();
+        let metrics = &current.shared_state.shared_services().metrics;
+        metrics.set_runtime_active_generation(current.generation);
+        metrics.set_runtime_history_depth(history_depth);
     }
 
     fn archive_previous_generation(
@@ -1018,6 +1036,47 @@ mod tests {
             assert!(history[1].bundle().is_none());
             assert_eq!(handle.current_generation(), 1);
             assert!(handle.rollback_candidate(2).is_none());
+        }
+
+        #[test]
+        fn runtime_observability_metrics_follow_active_generation_and_history_depth() {
+            let dir = tempdir().expect("tempdir");
+            let (current_bundle, next_bundle) = runtime_bundle_pair(
+                dir.path(),
+                "startup.yaml",
+                "http://127.0.0.1:7001",
+                2,
+                "reloaded.yaml",
+                "http://127.0.0.1:7002",
+            );
+            let handle = RuntimeBundleHandle::new(current_bundle);
+
+            let initial_metrics = Arc::clone(&handle.current_view().shared_services().metrics);
+            assert_eq!(initial_metrics.runtime_active_generation.load(Ordering::Relaxed), 1);
+            assert_eq!(initial_metrics.runtime_history_depth.load(Ordering::Relaxed), 0);
+
+            handle.record_generation_history_entry(GenerationHistoryEntry {
+                generation: 2,
+                operation: crate::runtime::activation::GenerationOperation::Validate,
+                status: crate::runtime::activation::GenerationStatus::Staged,
+                config_source: "startup.yaml".to_string(),
+                config_version: Some(1),
+                requested_by: Some("test".to_string()),
+                trigger_source: Some("test".to_string()),
+                requested_at_ms: 1,
+                completed_at_ms: Some(2),
+                summary: "validated".to_string(),
+                diff: crate::runtime::activation::ReloadDiff::default(),
+                rejected_changes: Vec::new(),
+            });
+
+            assert_eq!(initial_metrics.runtime_history_depth.load(Ordering::Relaxed), 1);
+
+            handle.replace(next_bundle).expect("replace");
+
+            let next_metrics = Arc::clone(&handle.current_view().shared_services().metrics);
+            assert_eq!(next_metrics.runtime_active_generation.load(Ordering::Relaxed), 2);
+            assert_eq!(next_metrics.runtime_history_depth.load(Ordering::Relaxed), 1);
         }
     }
 }

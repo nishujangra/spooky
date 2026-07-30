@@ -7,7 +7,9 @@ use spooky_errors::{
     HedgeOutcomeTelemetryReason, HedgeTriggerTelemetryReason, RetryAttemptTelemetryReason,
     RetryPolicyDenialReason,
 };
-use spooky_edge::runtime::activation::RuntimeRejectionReason;
+use spooky_edge::runtime::activation::{
+    RuntimeOperationOutcomeReason, RuntimeRejectionReason,
+};
 
 #[test]
 fn metrics_render_includes_route_percentiles() {
@@ -162,6 +164,33 @@ fn metrics_render_includes_runtime_rejection_reason_vocab() {
         "spooky_runtime_rejections_total{reason=\"incompatible_reload\"} 1",
         "spooky_runtime_rejections_total{reason=\"unknown_generation\"} 1",
         "spooky_runtime_rejections_total{reason=\"rollback_not_allowed\"} 1",
+    ] {
+        assert!(output.contains(expected), "missing metric line: {expected}");
+    }
+}
+
+#[test]
+fn metrics_render_includes_runtime_activation_observability_contract() {
+    let metrics = Metrics::default();
+    metrics.inc_runtime_validation_attempt();
+    metrics.inc_runtime_preview_attempt();
+    metrics.record_runtime_activation_outcome(RuntimeOperationOutcomeReason::Applied);
+    metrics.record_runtime_activation_outcome(RuntimeOperationOutcomeReason::InvalidConfig);
+    metrics.record_runtime_rollback_outcome(RuntimeOperationOutcomeReason::Applied);
+    metrics.record_runtime_rollback_outcome(RuntimeOperationOutcomeReason::RollbackNotAllowed);
+    metrics.set_runtime_active_generation(12);
+    metrics.set_runtime_history_depth(3);
+
+    let output = metrics.render_prometheus();
+    for expected in [
+        "spooky_runtime_validation_attempts_total 1",
+        "spooky_runtime_preview_attempts_total 1",
+        "spooky_runtime_activation_total{result=\"success\",reason=\"applied\"} 1",
+        "spooky_runtime_activation_total{result=\"failure\",reason=\"invalid_config\"} 1",
+        "spooky_runtime_rollback_total{result=\"success\",reason=\"applied\"} 1",
+        "spooky_runtime_rollback_total{result=\"failure\",reason=\"rollback_not_allowed\"} 1",
+        "spooky_runtime_active_generation 12",
+        "spooky_runtime_history_depth 3",
     ] {
         assert!(output.contains(expected), "missing metric line: {expected}");
     }

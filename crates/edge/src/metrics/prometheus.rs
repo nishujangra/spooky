@@ -1,5 +1,5 @@
 use super::*;
-use crate::runtime::activation::RuntimeRejectionReason;
+use crate::runtime::activation::{RuntimeOperationOutcomeReason, RuntimeRejectionReason};
 
 impl Metrics {
     pub fn render_prometheus(&self) -> String {
@@ -247,6 +247,68 @@ impl Metrics {
                 self.runtime_rejection_reason_count(reason)
             ));
         }
+
+        out.push_str(
+            "# HELP spooky_runtime_validation_attempts_total Total staged runtime validation requests accepted by the control plane.\n",
+        );
+        out.push_str("# TYPE spooky_runtime_validation_attempts_total counter\n");
+        out.push_str(&format!(
+            "spooky_runtime_validation_attempts_total {}\n",
+            self.runtime_validation_attempts.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP spooky_runtime_preview_attempts_total Total staged runtime preview requests accepted by the control plane.\n",
+        );
+        out.push_str("# TYPE spooky_runtime_preview_attempts_total counter\n");
+        out.push_str(&format!(
+            "spooky_runtime_preview_attempts_total {}\n",
+            self.runtime_preview_attempts.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP spooky_runtime_activation_total Total runtime activation outcomes grouped by result and canonical reason.\n",
+        );
+        out.push_str("# TYPE spooky_runtime_activation_total counter\n");
+        for reason in RuntimeOperationOutcomeReason::ALL {
+            out.push_str(&format!(
+                "spooky_runtime_activation_total{{result=\"{}\",reason=\"{}\"}} {}\n",
+                reason.result_label(),
+                reason.slug(),
+                self.runtime_activation_outcome_count(reason)
+            ));
+        }
+
+        out.push_str(
+            "# HELP spooky_runtime_rollback_total Total runtime rollback outcomes grouped by result and canonical reason.\n",
+        );
+        out.push_str("# TYPE spooky_runtime_rollback_total counter\n");
+        for reason in RuntimeOperationOutcomeReason::ALL {
+            out.push_str(&format!(
+                "spooky_runtime_rollback_total{{result=\"{}\",reason=\"{}\"}} {}\n",
+                reason.result_label(),
+                reason.slug(),
+                self.runtime_rollback_outcome_count(reason)
+            ));
+        }
+
+        out.push_str(
+            "# HELP spooky_runtime_active_generation Current active runtime generation identifier.\n",
+        );
+        out.push_str("# TYPE spooky_runtime_active_generation gauge\n");
+        out.push_str(&format!(
+            "spooky_runtime_active_generation {}\n",
+            self.runtime_active_generation.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP spooky_runtime_history_depth Number of retained runtime history entries visible to the active generation.\n",
+        );
+        out.push_str("# TYPE spooky_runtime_history_depth gauge\n");
+        out.push_str(&format!(
+            "spooky_runtime_history_depth {}\n",
+            self.runtime_history_depth.load(Ordering::Relaxed)
+        ));
 
         out.push_str(
             "# HELP spooky_connection_cap_rejects Total new-connection attempts rejected by max_active_connections cap.\n",
