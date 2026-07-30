@@ -14,6 +14,10 @@ use spooky_config::{
 use tempfile::tempdir;
 
 use super::{state::ControlApiState, *};
+use crate::runtime::activation::{
+    ActivationRequest, PlanningPhase, PlanningPhaseStatus, RejectedChangeKind,
+    ReloadCompatibilityClassification, ReloadConfigInput, plan_runtime_reload,
+};
 
 /// Render the typed startup-owned compatibility result into the flat list of
 /// operator strings the assertions below were written against.
@@ -103,6 +107,54 @@ fn runtime_bundle_from_config(config_path: &str, config: &SpookyConfigConfig) ->
         .expect("runtime bundle")
 }
 
+fn write_config_file(path: &Path, config: &SpookyConfigConfig) {
+    let backend = config
+        .upstream
+        .get("api")
+        .and_then(|upstream| upstream.backends.first())
+        .expect("api upstream backend");
+    let upstream = config.upstream.get("api").expect("api upstream");
+    let yaml = format!(
+        r#"version: {version}
+listen:
+  protocol: "{protocol}"
+  address: "{address}"
+  port: {port}
+  tls:
+    cert: "{cert}"
+    key: "{key}"
+upstream:
+  api:
+    load_balancing:
+      type: "{lb_type}"
+    route:
+      path_prefix: "{path_prefix}"
+    backends:
+      - id: "{backend_id}"
+        address: "{backend_address}"
+        weight: {backend_weight}
+performance:
+  control_plane_threads: {control_plane_threads}
+log:
+  level: "{log_level}"
+"#,
+        version = config.version,
+        protocol = config.listen.protocol,
+        address = config.listen.address,
+        port = config.listen.port,
+        cert = config.listen.tls.cert,
+        key = config.listen.tls.key,
+        lb_type = upstream.load_balancing.lb_type,
+        path_prefix = upstream.route.path_prefix.as_deref().unwrap_or("/"),
+        backend_id = backend.id,
+        backend_address = backend.address,
+        backend_weight = backend.weight,
+        control_plane_threads = config.performance.control_plane_threads,
+        log_level = config.log.level,
+    );
+    std::fs::write(path, yaml).expect("write config file");
+}
+
 fn control_api_state_with_runtime_bundle(
     startup: &SpookyConfigConfig,
     reloaded: &SpookyConfigConfig,
@@ -163,6 +215,15 @@ fn default_control_api_state() -> ControlApiState {
     control_api_state_with_runtime_bundle(&startup, &startup)
 }
 
+fn planner_request(expected_generation: u64) -> ActivationRequest {
+    ActivationRequest {
+        requested_by: Some("test".to_string()),
+        reason: Some("planner_contract".to_string()),
+        expected_generation: Some(expected_generation),
+        requested_at_ms: 1,
+    }
+}
+
 fn assert_structured_resource_preflight_message(
     rejection: &crate::runtime::policy::TransitionRejection,
 ) {
@@ -179,6 +240,105 @@ fn assert_structured_resource_preflight_message(
         format!(
             "runtime reload rejected: could not prepare {field}: {detail}; active runtime unchanged (no change applied)"
         )
+    );
+}
+
+#[test]
+fn staged_reload_planner_reports_reloadable_candidate_snapshot() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config = test_config(cert, key);
+    let config_path = dir.path().join("runtime.yaml");
+    write_config_file(&config_path, &config);
+
+    let bundle = runtime_bundle_from_config(config_path.to_string_lossy().as_ref(), &config);
+    let current = RuntimeBundleHandle::new(bundle).current_view();
+    let plan = plan_runtime_reload(
+        &current,
+        planner_request(current.generation()),
+        ReloadConfigInput::Path {
+            path: config_path.to_string_lossy().to_string(),
+        },
+    );
+
+    assert!(plan.can_activate());
+    assert_eq!(
+        plan.plan.compatibility,
+        ReloadCompatibilityClassification::LiveReloadable
+    );
+    assert_eq!(
+        plan.plan.phase_status(PlanningPhase::ReadConfig),
+        Some(PlanningPhaseStatus::Accepted)
+    );
+    assert_eq!(
+        plan.plan.phase_status(PlanningPhase::ValidateConfig),
+        Some(PlanningPhaseStatus::Accepted)
+    );
+    assert_eq!(
+        plan.plan.phase_status(PlanningPhase::NormalizeRuntime),
+        Some(PlanningPhaseStatus::Accepted)
+    );
+    assert_eq!(
+        plan.plan.phase_status(PlanningPhase::EvaluateCompatibility),
+        Some(PlanningPhaseStatus::Accepted)
+    );
+
+    let snapshot = plan
+        .plan
+        .candidate_snapshot
+        .as_ref()
+        .expect("candidate snapshot");
+    assert_eq!(snapshot.generation, current.generation() + 1);
+    assert_eq!(
+        snapshot.config_path,
+        config_path.to_string_lossy().to_string()
+    );
+    assert_eq!(snapshot.upstream_count, 1);
+    assert_eq!(snapshot.backend_count, 1);
+}
+
+#[test]
+fn staged_reload_planner_classifies_restart_required_changes_without_mutation() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+    let current_config = test_config(cert.clone(), key.clone());
+    write_config_file(&config_path, &current_config);
+
+    let bundle =
+        runtime_bundle_from_config(config_path.to_string_lossy().as_ref(), &current_config);
+    let current = RuntimeBundleHandle::new(bundle).current_view();
+
+    let mut next_config = test_config(cert, key);
+    next_config.performance.control_plane_threads = 4;
+    write_config_file(&config_path, &next_config);
+
+    let plan = plan_runtime_reload(
+        &current,
+        planner_request(current.generation()),
+        ReloadConfigInput::Path {
+            path: config_path.to_string_lossy().to_string(),
+        },
+    );
+
+    assert!(!plan.can_activate());
+    assert_eq!(
+        plan.plan.compatibility,
+        ReloadCompatibilityClassification::RestartRequired
+    );
+    assert_eq!(
+        plan.plan.phase_status(PlanningPhase::EvaluateCompatibility),
+        Some(PlanningPhaseStatus::Rejected)
+    );
+    assert!(plan.plan.candidate_snapshot.is_some());
+    assert!(plan.plan.rejection_summary.is_some());
+    assert!(
+        plan.plan.rejected_changes.iter().any(|rejection| {
+            rejection.kind == RejectedChangeKind::RestartRequired
+                && rejection.field_path.as_deref()
+                    == Some("performance.control_plane_threads")
+        }),
+        "expected a startup-owned restart-required rejection"
     );
 }
 

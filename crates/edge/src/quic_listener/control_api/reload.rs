@@ -3,15 +3,13 @@ use http_body_util::Full;
 
 use super::*;
 use crate::runtime::{
+    activation::{
+        ActivationRequest, RejectedChangeKind, ReloadConfigInput, ReloadPlan,
+        StagedRuntimeReloadPlan, plan_runtime_reload,
+    },
     bundle::{ActiveRuntimeGeneration, RuntimeBundleHandle},
     policy::{ReloadCompatibilityAuthority, TransitionRejection},
 };
-
-pub(super) struct RuntimeReloadPlan {
-    pub(super) next_runtime: RuntimeBundle,
-    pub(super) current_log_level: String,
-    pub(super) next_log_level: String,
-}
 
 impl QUICListener {
     pub(super) fn apply_live_log_level_reload(
@@ -116,42 +114,43 @@ impl QUICListener {
             );
         };
 
-        let plan = match Self::build_runtime_reload_plan(&runtime) {
-            Ok(plan) => plan,
-            Err(err) => {
-                let status = if err.starts_with("Configuration validation failed:")
-                    || err.starts_with("Runtime configuration normalization failed:")
-                {
-                    StatusCode::BAD_REQUEST
-                } else {
-                    StatusCode::INTERNAL_SERVER_ERROR
-                };
-                return Self::json_response(
-                    status,
-                    json!({
-                        "reloaded": false,
-                        "error": err,
-                    }),
-                );
-            }
-        };
-        if let Err(err) = Self::validate_runtime_reload_plan(&runtime, &plan.next_runtime) {
+        let plan = plan_runtime_reload(
+            &runtime,
+            ActivationRequest {
+                requested_by: Some("control_api".to_string()),
+                reason: Some("runtime_reload".to_string()),
+                expected_generation: Some(runtime.generation()),
+                requested_at_ms: crate::watchdog::time::now_millis(),
+            },
+            ReloadConfigInput::Path {
+                path: runtime.startup().config_path.clone(),
+            },
+        );
+        if !plan.can_activate() {
+            let error = plan
+                .plan
+                .rejection_summary
+                .as_deref()
+                .unwrap_or("reload candidate rejected");
             // Phase 8: API response and logs communicate the same core reason.
             warn!(
                 "runtime reload rejected at generation {}; active runtime unchanged: {}",
                 runtime.generation(),
-                err
+                error
             );
             return Self::json_response(
-                StatusCode::CONFLICT,
+                plan_rejection_status(&plan.plan),
                 json!({
                     "reloaded": false,
-                    "error": err,
+                    "error": error,
+                    "generation": plan.plan.current_generation,
+                    "candidate_generation": plan.plan.candidate_generation,
+                    "compatibility": plan.plan.compatibility,
                 }),
             );
         }
         let current_log_level = plan.current_log_level.clone();
-        let next_log_level = plan.next_log_level.clone();
+        let next_log_level = plan.next_log_level.clone().unwrap_or_default();
         let generation = match Self::apply_runtime_reload_plan(&runtime_bundle_handle, plan) {
             Ok(generation) => generation,
             Err(err) => {
@@ -175,6 +174,7 @@ impl QUICListener {
             json!({
                 "reloaded": true,
                 "generation": generation,
+                "candidate_generation": generation,
                 "path": req.uri().path(),
             }),
         )
@@ -209,43 +209,6 @@ impl QUICListener {
         )
     }
 
-    pub(super) fn build_runtime_reload_plan(
-        current: &ActiveRuntimeGeneration,
-    ) -> Result<RuntimeReloadPlan, String> {
-        let config_path = current.startup().config_path.clone();
-        let config = read_config(&config_path)?;
-        spooky_config::validator::validate(&config)
-            .map_err(|err| format!("Configuration validation failed: {err}"))?;
-        let runtime_config = RuntimeConfig::from_config(&config)
-            .map_err(|err| format!("Runtime configuration normalization failed: {err}"))?;
-        // Carry the process-scoped services (watchdog, DNS resolver) forward from
-        // the active generation so their runtime state survives the swap; all other
-        // config-derived services are rebuilt from the new config.
-        let carried = crate::runtime::generation::CarriedProcessSharedServices::from_active(
-            current.shared_services(),
-        );
-        let next_shared_state =
-            QUICListener::build_shared_state_with_carried(&runtime_config, Some(carried))
-                .map(Arc::new)
-                .map_err(|err| err.to_string())?;
-        let current_log_level = current.startup().log_config.level.clone();
-        let next_log_level = config.log.level.clone();
-
-        Ok(RuntimeReloadPlan {
-            next_runtime: RuntimeBundle {
-                generation: current.generation().saturating_add(1),
-                startup: crate::runtime::generation::StartupOwnedRuntimeState {
-                    config_path,
-                    log_config: config.log.clone(),
-                },
-                runtime_config,
-                shared_state: next_shared_state,
-            },
-            current_log_level,
-            next_log_level,
-        })
-    }
-
     /// Evaluate reload compatibility, returning typed rejections.
     ///
     /// The check order and short-circuit behavior are preserved from the pre-Phase-2
@@ -253,7 +216,7 @@ impl QUICListener {
     /// first rejection they find; only if all three are compatible are the
     /// startup-owned field changes collected together. The per-domain *rules* and
     /// *wording* now come from the central [`ReloadCompatibilityAuthority`].
-    pub(super) fn evaluate_runtime_reload_compatibility(
+    pub(crate) fn evaluate_runtime_reload_compatibility(
         current: &ActiveRuntimeGeneration,
         next: &RuntimeBundle,
     ) -> Result<(), Vec<TransitionRejection>> {
@@ -273,26 +236,18 @@ impl QUICListener {
         Self::validate_startup_owned_reload_compatibility(current.bundle(), next)
     }
 
-    /// String-rendering adapter over [`Self::evaluate_runtime_reload_compatibility`]
-    /// for the current handler boundary. The rendered wording is byte-identical to
-    /// the pre-Phase-2 behavior.
-    pub(super) fn validate_runtime_reload_plan(
-        current: &ActiveRuntimeGeneration,
-        next: &RuntimeBundle,
-    ) -> Result<(), String> {
-        Self::evaluate_runtime_reload_compatibility(current, next)
-            .map_err(|rejections| crate::runtime::policy::render_rejections(&rejections))
-    }
-
     pub(super) fn apply_runtime_reload_plan(
         runtime_bundle_handle: &RuntimeBundleHandle,
-        plan: RuntimeReloadPlan,
+        plan: StagedRuntimeReloadPlan,
     ) -> Result<u64, ProxyError> {
+        let next_runtime = plan.next_runtime.ok_or_else(|| {
+            ProxyError::Transport("staged reload plan missing next runtime".to_string())
+        })?;
         QUICListener::spawn_generation_background_tasks_for_runtime(
-            &plan.next_runtime.runtime_config,
-            plan.next_runtime.shared_state.as_ref(),
+            &next_runtime.runtime_config,
+            next_runtime.shared_state.as_ref(),
         );
-        runtime_bundle_handle.replace(plan.next_runtime)
+        runtime_bundle_handle.replace(next_runtime)
     }
 
     pub(super) fn validate_runtime_reload_compatibility(
@@ -490,5 +445,24 @@ impl QUICListener {
         );
 
         authority.into_result()
+    }
+}
+
+fn plan_rejection_status(plan: &ReloadPlan) -> StatusCode {
+    if plan
+        .rejected_changes
+        .iter()
+        .any(|rejection| matches!(rejection.kind, RejectedChangeKind::InvalidConfiguration))
+    {
+        StatusCode::BAD_REQUEST
+    } else if plan.rejected_changes.iter().any(|rejection| {
+        matches!(
+            rejection.kind,
+            RejectedChangeKind::ResourcePreparationFailed
+        )
+    }) {
+        StatusCode::INTERNAL_SERVER_ERROR
+    } else {
+        StatusCode::CONFLICT
     }
 }
