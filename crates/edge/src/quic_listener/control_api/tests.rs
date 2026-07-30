@@ -15,10 +15,10 @@ use tempfile::tempdir;
 
 use super::{state::ControlApiState, *};
 use crate::runtime::activation::{
-    ActivationRequest, GenerationOperation, GenerationStatus, PlanningPhase,
-    PlanningPhaseStatus, RejectedChangeKind, ReloadCompatibilityClassification,
-    ReloadConfigInput, ReloadDiffDisposition, RollbackRequest, RuntimeActivationService,
-    plan_runtime_reload,
+    ActivationRequest, GenerationEventKind, GenerationOperation, GenerationStatus,
+    PlanningPhase, PlanningPhaseStatus, RejectedChangeKind,
+    ReloadCompatibilityClassification, ReloadConfigInput, ReloadDiffDisposition,
+    RollbackRequest, RuntimeActivationService, plan_runtime_reload,
 };
 
 /// Render the typed startup-owned compatibility result into the flat list of
@@ -220,6 +220,7 @@ fn default_control_api_state() -> ControlApiState {
 fn planner_request(expected_generation: u64) -> ActivationRequest {
     ActivationRequest {
         requested_by: Some("test".to_string()),
+        trigger_source: Some("unit_test".to_string()),
         reason: Some("planner_contract".to_string()),
         expected_generation: Some(expected_generation),
         requested_at_ms: 1,
@@ -230,6 +231,7 @@ fn rollback_request(target_generation: u64, expected_active_generation: u64) -> 
     RollbackRequest {
         target_generation,
         requested_by: Some("test".to_string()),
+        trigger_source: Some("unit_test".to_string()),
         reason: Some("rollback_contract".to_string()),
         expected_active_generation: Some(expected_active_generation),
         requested_at_ms: 2,
@@ -447,6 +449,12 @@ fn activation_service_commits_reloadable_candidate_and_advances_generation() {
     assert_eq!(handle.current_generation(), generation_before + 1);
     assert_eq!(activation.history_entry.operation, GenerationOperation::Activate);
     assert_eq!(activation.history_entry.status, GenerationStatus::Active);
+    assert_eq!(activation.history_entry.config_source, config_path.to_string_lossy());
+    assert_eq!(activation.history_entry.config_version, Some(1));
+    assert_eq!(
+        activation.history_entry.trigger_source.as_deref(),
+        Some("unit_test")
+    );
     assert!(
         activation
             .history_entry
@@ -457,6 +465,20 @@ fn activation_service_commits_reloadable_candidate_and_advances_generation() {
         "expected activation history to preserve the planned reloadable diff"
     );
     assert_eq!(handle.current_view().startup().log_config.level, "debug");
+
+    let history = handle.generation_change_history();
+    assert_eq!(history.len(), 3);
+    assert_eq!(history[0].operation, GenerationOperation::Activate);
+    assert_eq!(history[1].operation, GenerationOperation::Preview);
+    assert_eq!(history[2].operation, GenerationOperation::Validate);
+    assert_eq!(history[0].config_source, config_path.to_string_lossy());
+    assert_eq!(history[0].config_version, Some(1));
+
+    let events = handle.generation_change_events();
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0].kind, GenerationEventKind::ActivationSucceeded);
+    assert_eq!(events[1].kind, GenerationEventKind::Preview);
+    assert_eq!(events[2].kind, GenerationEventKind::Validation);
 }
 
 #[test]
@@ -505,6 +527,13 @@ fn activation_service_rejects_restart_required_changes_without_mutating_active_g
         "expected a restart-required rejection without live mutation: {:?}",
         activation.rejected_changes
     );
+
+    let events = handle.generation_change_events();
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0].kind, GenerationEventKind::ActivationFailed);
+    assert_eq!(events[0].entry.status, GenerationStatus::Rejected);
+    assert_eq!(events[1].kind, GenerationEventKind::Preview);
+    assert_eq!(events[2].kind, GenerationEventKind::Validation);
 }
 
 #[test]
@@ -582,6 +611,15 @@ fn rollback_service_restores_retained_generation_by_id_and_records_rollback_stat
         history[1].status(),
         crate::runtime::bundle::RuntimeGenerationRecordStatus::RolledBack
     );
+
+    let events = handle.generation_change_events();
+    assert_eq!(events[0].kind, GenerationEventKind::RollbackSucceeded);
+    assert_eq!(events[0].entry.config_source, "gen-1.yaml");
+    assert_eq!(events[0].entry.config_version, Some(1));
+    assert_eq!(
+        events[0].entry.trigger_source.as_deref(),
+        Some("unit_test")
+    );
 }
 
 #[test]
@@ -615,6 +653,11 @@ fn rollback_service_rejects_incomplete_or_failed_prepare_targets_without_mutatio
         "expected rollback rejection for incomplete target: {:?}",
         rollback.rejected_changes
     );
+
+    let events = handle.generation_change_events();
+    assert_eq!(events[0].kind, GenerationEventKind::RollbackFailed);
+    assert_eq!(events[0].entry.status, GenerationStatus::Rejected);
+    assert_eq!(events[0].entry.config_source, "generation:9");
 }
 
 // Domain: watchdog service state transitions and restart environment handling.

@@ -9,6 +9,7 @@ use spooky_config::runtime::{ListenerRuntimeConfig, RuntimeConfig};
 use spooky_errors::ProxyError;
 
 use crate::runtime::{
+    activation::{GenerationChangeEvent, GenerationHistoryEntry},
     generation::{
         RuntimeGenerationState, RuntimeGenerationView, RuntimeSharedServices,
         StartupOwnedRuntimeState,
@@ -94,6 +95,8 @@ impl ActiveRuntimeGeneration {
 }
 
 const MAX_ARCHIVED_RUNTIME_GENERATIONS: usize = 8;
+const MAX_GENERATION_HISTORY_ENTRIES: usize = 32;
+const MAX_GENERATION_CHANGE_EVENTS: usize = 64;
 
 /// Runtime-owned lifecycle status for retained generations.
 ///
@@ -194,6 +197,8 @@ impl RuntimeGenerationRecord {
 pub struct RuntimeBundleHandle {
     inner: Arc<RwLock<Arc<RuntimeBundle>>>,
     history: Arc<RwLock<VecDeque<RuntimeGenerationRecord>>>,
+    generation_history: Arc<RwLock<VecDeque<GenerationHistoryEntry>>>,
+    generation_events: Arc<RwLock<VecDeque<GenerationChangeEvent>>>,
     lifecycle: Arc<RuntimeLifecycleState>,
 }
 
@@ -208,6 +213,8 @@ impl RuntimeBundleHandle {
         Self {
             inner: Arc::new(RwLock::new(Arc::new(bundle))),
             history: Arc::new(RwLock::new(VecDeque::new())),
+            generation_history: Arc::new(RwLock::new(VecDeque::new())),
+            generation_events: Arc::new(RwLock::new(VecDeque::new())),
             lifecycle: Arc::new(lifecycle),
         }
     }
@@ -323,6 +330,42 @@ impl RuntimeBundleHandle {
             .iter()
             .find(|entry| entry.generation == generation)
             .cloned()
+    }
+
+    pub fn generation_change_history(&self) -> Vec<GenerationHistoryEntry> {
+        self.generation_history
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    pub fn generation_change_events(&self) -> Vec<GenerationChangeEvent> {
+        self.generation_events
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    pub(crate) fn record_generation_history_entry(&self, entry: GenerationHistoryEntry) {
+        let mut history = self
+            .generation_history
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        history.push_front(entry);
+        trim_bounded_history(&mut history, MAX_GENERATION_HISTORY_ENTRIES);
+    }
+
+    pub(crate) fn record_generation_change_event(&self, event: GenerationChangeEvent) {
+        let mut events = self
+            .generation_events
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        events.push_front(event);
+        trim_bounded_history(&mut events, MAX_GENERATION_CHANGE_EVENTS);
     }
 
     pub(crate) fn record_failed_prepare(&self, generation: u64, note: impl Into<String>) {
@@ -453,6 +496,12 @@ impl RuntimeBundleHandle {
 
 fn trim_runtime_generation_history(history: &mut VecDeque<RuntimeGenerationRecord>) {
     while history.len() > MAX_ARCHIVED_RUNTIME_GENERATIONS {
+        history.pop_back();
+    }
+}
+
+fn trim_bounded_history<T>(history: &mut VecDeque<T>, max_len: usize) {
+    while history.len() > max_len {
         history.pop_back();
     }
 }

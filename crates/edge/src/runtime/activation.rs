@@ -40,6 +40,15 @@ pub enum ReloadConfigInput {
     Path { path: String },
 }
 
+impl ReloadConfigInput {
+    #[must_use]
+    pub fn source_label(&self) -> String {
+        match self {
+            Self::Path { path } => path.clone(),
+        }
+    }
+}
+
 /// Coarse kind of generation operation recorded in history.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -48,6 +57,18 @@ pub enum GenerationOperation {
     Preview,
     Activate,
     Rollback,
+}
+
+/// Structured runtime generation event kinds.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum GenerationEventKind {
+    Validation,
+    Preview,
+    ActivationSucceeded,
+    ActivationFailed,
+    RollbackSucceeded,
+    RollbackFailed,
 }
 
 /// Lifecycle status for a runtime generation or staged candidate.
@@ -297,6 +318,7 @@ impl RejectedChange {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ActivationRequest {
     pub requested_by: Option<String>,
+    pub trigger_source: Option<String>,
     pub reason: Option<String>,
     pub expected_generation: Option<GenerationId>,
     pub requested_at_ms: TimestampMillis,
@@ -307,6 +329,7 @@ pub struct ActivationRequest {
 pub struct RollbackRequest {
     pub target_generation: GenerationId,
     pub requested_by: Option<String>,
+    pub trigger_source: Option<String>,
     pub reason: Option<String>,
     pub expected_active_generation: Option<GenerationId>,
     pub requested_at_ms: TimestampMillis,
@@ -316,6 +339,8 @@ pub struct RollbackRequest {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ReloadPlan {
     pub request: ActivationRequest,
+    pub config_source: String,
+    pub config_version: Option<u32>,
     pub current_generation: Option<GenerationId>,
     pub candidate_generation: GenerationId,
     pub candidate_status: GenerationStatus,
@@ -352,12 +377,23 @@ pub struct GenerationHistoryEntry {
     pub generation: GenerationId,
     pub operation: GenerationOperation,
     pub status: GenerationStatus,
+    pub config_source: String,
+    pub config_version: Option<u32>,
     pub requested_by: Option<String>,
+    pub trigger_source: Option<String>,
     pub requested_at_ms: TimestampMillis,
     pub completed_at_ms: Option<TimestampMillis>,
     pub summary: String,
     pub diff: ReloadDiff,
     pub rejected_changes: Vec<RejectedChange>,
+}
+
+/// Structured change event emitted for runtime generation activity.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct GenerationChangeEvent {
+    pub kind: GenerationEventKind,
+    pub emitted_at_ms: TimestampMillis,
+    pub entry: GenerationHistoryEntry,
 }
 
 /// Canonical activation result payload.
@@ -428,14 +464,17 @@ impl RuntimeActivationService {
         let current = handle.current_view();
         let active_generation = current.generation();
         let current_log_level = current.startup().log_config.level.clone();
+        let config_source = input.source_label();
 
         if let Some(expected_generation) = request.expected_generation
             && expected_generation != active_generation
         {
-            return rejected_activation_result(
+            let result = rejected_activation_result(
                 request,
                 active_generation,
                 active_generation.saturating_add(1),
+                config_source,
+                None,
                 ReloadDiff::default(),
                 vec![RejectedChange {
                     kind: RejectedChangeKind::IllegalTransition,
@@ -452,9 +491,12 @@ impl RuntimeActivationService {
                 }],
                 "activation request targeted a stale runtime generation".to_string(),
             );
+            record_activation_result(handle, &result);
+            return result;
         }
 
         let plan = plan_runtime_reload(&current, request.clone(), input);
+        record_reload_plan_events(handle, &plan.plan);
         if !plan.can_activate() {
             if plan
                 .plan
@@ -475,10 +517,12 @@ impl RuntimeActivationService {
                         .unwrap_or_else(|| plan.plan.summary.clone()),
                 );
             }
-            return rejected_activation_result(
+            let result = rejected_activation_result(
                 request,
                 active_generation,
                 plan.plan.candidate_generation,
+                plan.plan.config_source.clone(),
+                plan.plan.config_version,
                 plan.plan.diff.clone(),
                 plan.plan.rejected_changes.clone(),
                 plan.plan
@@ -486,23 +530,33 @@ impl RuntimeActivationService {
                     .clone()
                     .unwrap_or_else(|| plan.plan.summary.clone()),
             );
+            record_activation_result(handle, &result);
+            return result;
         }
 
         if let Some(rejection) = handle.lifecycle().check_reload_allowed().rejection() {
-            return rejected_activation_result(
+            let result = rejected_activation_result(
                 request,
                 active_generation,
                 plan.plan.candidate_generation,
+                plan.plan.config_source.clone(),
+                plan.plan.config_version,
                 plan.plan.diff.clone(),
                 vec![RejectedChange::from(rejection)],
                 rejection.to_string(),
             );
+            record_activation_result(handle, &result);
+            return result;
         }
 
-        match commit_staged_runtime_reload(handle, plan) {
+        let config_source = plan.plan.config_source.clone();
+        let config_version = plan.plan.config_version;
+        let result = match commit_staged_runtime_reload(handle, plan) {
             Ok((generation, diff)) => successful_activation_result(
                 request,
                 generation,
+                config_source,
+                config_version,
                 diff,
                 current_log_level,
                 handle.current_view().startup().log_config.level.clone(),
@@ -511,10 +565,14 @@ impl RuntimeActivationService {
                 request,
                 handle.current_generation(),
                 candidate_generation,
+                config_source,
+                config_version,
                 diff,
                 err,
             ),
-        }
+        };
+        record_activation_result(handle, &result);
+        result
     }
 
     pub(crate) fn rollback_generation(
@@ -524,13 +582,16 @@ impl RuntimeActivationService {
         let current = handle.current_view();
         let active_generation = current.generation();
         let target_generation = request.target_generation;
+        let fallback_config_source = format!("generation:{target_generation}");
 
         if let Some(expected_active_generation) = request.expected_active_generation
             && expected_active_generation != active_generation
         {
-            return rejected_rollback_result(
+            let result = rejected_rollback_result(
                 request,
                 active_generation,
+                None,
+                fallback_config_source.clone(),
                 None,
                 ReloadDiff::default(),
                 vec![RejectedChange {
@@ -548,12 +609,16 @@ impl RuntimeActivationService {
                 }],
                 "rollback request targeted a stale runtime generation".to_string(),
             );
+            record_rollback_result(handle, &result);
+            return result;
         }
 
         if request.target_generation == active_generation {
-            return rejected_rollback_result(
+            let result = rejected_rollback_result(
                 request,
                 active_generation,
+                None,
+                fallback_config_source.clone(),
                 None,
                 ReloadDiff::default(),
                 vec![RejectedChange {
@@ -572,12 +637,16 @@ impl RuntimeActivationService {
                 }],
                 "rollback target is already the active generation".to_string(),
             );
+            record_rollback_result(handle, &result);
+            return result;
         }
 
         let Some(target_record) = handle.generation_record(target_generation) else {
-            return rejected_rollback_result(
+            let result = rejected_rollback_result(
                 request,
                 active_generation,
+                None,
+                fallback_config_source.clone(),
                 None,
                 ReloadDiff::default(),
                 vec![RejectedChange {
@@ -595,13 +664,17 @@ impl RuntimeActivationService {
                 }],
                 "rollback target is not retained in runtime history".to_string(),
             );
+            record_rollback_result(handle, &result);
+            return result;
         };
 
         if !target_record.status().is_rollback_candidate() || !target_record.has_bundle() {
-            return rejected_rollback_result(
+            let result = rejected_rollback_result(
                 request,
                 active_generation,
                 Some(target_generation),
+                fallback_config_source.clone(),
+                None,
                 ReloadDiff::default(),
                 vec![RejectedChange {
                     kind: RejectedChangeKind::RuntimeStateUnavailable,
@@ -619,37 +692,49 @@ impl RuntimeActivationService {
                 }],
                 "rollback target is incomplete or unusable".to_string(),
             );
+            record_rollback_result(handle, &result);
+            return result;
         }
 
         if let Some(rejection) = handle.lifecycle().check_reload_allowed().rejection() {
-            return rejected_rollback_result(
+            let result = rejected_rollback_result(
                 request,
                 active_generation,
                 Some(target_generation),
+                fallback_config_source.clone(),
+                None,
                 ReloadDiff::default(),
                 vec![RejectedChange::from(rejection)],
                 rejection.to_string(),
             );
+            record_rollback_result(handle, &result);
+            return result;
         }
 
         let target_bundle = target_record
             .bundle()
             .cloned()
             .expect("rollback candidate record with bundle");
+        let rollback_config_source = target_bundle.startup.config_path.clone();
+        let rollback_config_version = Some(target_bundle.runtime_config.version);
         let candidate_generation = active_generation.saturating_add(1);
         let prepared = match prepare_rollback_bundle(&current, &target_bundle, candidate_generation)
         {
             Ok(prepared) => prepared,
             Err(rejected) => {
                 handle.record_failed_prepare(candidate_generation, rejected.message.clone());
-                return rejected_rollback_result(
+                let result = rejected_rollback_result(
                     request,
                     active_generation,
                     Some(target_generation),
+                    rollback_config_source.clone(),
+                    rollback_config_version,
                     ReloadDiff::default(),
                     vec![rejected],
                     "rollback preparation failed".to_string(),
                 );
+                record_rollback_result(handle, &result);
+                return result;
             }
         };
 
@@ -662,14 +747,18 @@ impl RuntimeActivationService {
                 &prepared,
                 rejected_startup_owned_domains(&rejected_changes),
             );
-            return rejected_rollback_result(
+            let result = rejected_rollback_result(
                 request,
                 active_generation,
                 Some(target_generation),
+                rollback_config_source.clone(),
+                rollback_config_version,
                 diff,
                 rejected_changes,
                 render_rejections(rejections.as_slice()),
             );
+            record_rollback_result(handle, &result);
+            return result;
         }
 
         let diff = build_reload_diff(
@@ -677,7 +766,7 @@ impl RuntimeActivationService {
             &prepared,
             std::collections::HashSet::new(),
         );
-        match commit_runtime_bundle_swap(
+        let result = match commit_runtime_bundle_swap(
             handle,
             prepared,
             RuntimeGenerationRecordStatus::RolledBack,
@@ -686,16 +775,22 @@ impl RuntimeActivationService {
                 request,
                 generation,
                 target_generation,
+                rollback_config_source,
+                rollback_config_version,
                 diff,
             ),
             Err(err) => failed_rollback_result(
                 request,
                 handle.current_generation(),
                 target_generation,
+                rollback_config_source,
+                rollback_config_version,
                 diff,
                 err.to_string(),
             ),
-        }
+        };
+        record_rollback_result(handle, &result);
+        result
     }
 }
 
@@ -704,6 +799,7 @@ pub(crate) fn plan_runtime_reload(
     request: ActivationRequest,
     input: ReloadConfigInput,
 ) -> StagedRuntimeReloadPlan {
+    let config_source = input.source_label();
     let current_generation = Some(current.generation());
     let candidate_generation = current.generation().saturating_add(1);
     let mut validation = Vec::with_capacity(4);
@@ -726,6 +822,8 @@ pub(crate) fn plan_runtime_reload(
                 });
                 return rejected_reload_plan(
                     request,
+                    config_source,
+                    None,
                     current_generation,
                     candidate_generation,
                     validation,
@@ -752,6 +850,8 @@ pub(crate) fn plan_runtime_reload(
             });
             return rejected_reload_plan(
                 request,
+                config_source,
+                Some(config.version),
                 current_generation,
                 candidate_generation,
                 validation,
@@ -771,6 +871,8 @@ pub(crate) fn plan_runtime_reload(
             });
             return rejected_reload_plan(
                 request,
+                config_source,
+                Some(config.version),
                 current_generation,
                 candidate_generation,
                 validation,
@@ -802,6 +904,8 @@ pub(crate) fn plan_runtime_reload(
                 });
                 return rejected_reload_plan(
                     request,
+                    config_source,
+                    Some(config.version),
                     current_generation,
                     candidate_generation,
                     validation,
@@ -869,6 +973,8 @@ pub(crate) fn plan_runtime_reload(
     StagedRuntimeReloadPlan {
         plan: ReloadPlan {
             request,
+            config_source,
+            config_version: Some(config.version),
             current_generation,
             candidate_generation,
             candidate_status,
@@ -940,10 +1046,105 @@ fn prepare_rollback_bundle(
     })
 }
 
+fn record_reload_plan_events(handle: &RuntimeBundleHandle, plan: &ReloadPlan) {
+    let validation_entry = validation_history_entry(plan);
+    record_history_event(handle, GenerationEventKind::Validation, validation_entry);
+
+    let preview_entry = preview_history_entry(plan);
+    record_history_event(handle, GenerationEventKind::Preview, preview_entry);
+}
+
+fn record_activation_result(handle: &RuntimeBundleHandle, result: &ActivationResult) {
+    let kind = if result.succeeded() {
+        GenerationEventKind::ActivationSucceeded
+    } else {
+        GenerationEventKind::ActivationFailed
+    };
+    record_history_event(handle, kind, result.history_entry.clone());
+}
+
+fn record_rollback_result(handle: &RuntimeBundleHandle, result: &RollbackResult) {
+    let kind = if result.succeeded() {
+        GenerationEventKind::RollbackSucceeded
+    } else {
+        GenerationEventKind::RollbackFailed
+    };
+    record_history_event(handle, kind, result.history_entry.clone());
+}
+
+fn record_history_event(
+    handle: &RuntimeBundleHandle,
+    kind: GenerationEventKind,
+    entry: GenerationHistoryEntry,
+) {
+    let emitted_at_ms = entry.completed_at_ms.unwrap_or(entry.requested_at_ms);
+    handle.record_generation_history_entry(entry.clone());
+    handle.record_generation_change_event(GenerationChangeEvent {
+        kind,
+        emitted_at_ms,
+        entry,
+    });
+}
+
+fn validation_history_entry(plan: &ReloadPlan) -> GenerationHistoryEntry {
+    let completed_at_ms = crate::watchdog::time::now_millis();
+    let status = if plan
+        .validation
+        .iter()
+        .any(|result| matches!(result.status, PlanningPhaseStatus::Rejected))
+    {
+        GenerationStatus::Rejected
+    } else {
+        GenerationStatus::Staged
+    };
+    GenerationHistoryEntry {
+        generation: plan.candidate_generation,
+        operation: GenerationOperation::Validate,
+        status,
+        config_source: plan.config_source.clone(),
+        config_version: plan.config_version,
+        requested_by: plan.request.requested_by.clone(),
+        trigger_source: plan.request.trigger_source.clone(),
+        requested_at_ms: plan.request.requested_at_ms,
+        completed_at_ms: Some(completed_at_ms),
+        summary: summarize_validation_results(plan),
+        diff: ReloadDiff::default(),
+        rejected_changes: plan.rejected_changes.clone(),
+    }
+}
+
+fn preview_history_entry(plan: &ReloadPlan) -> GenerationHistoryEntry {
+    let completed_at_ms = crate::watchdog::time::now_millis();
+    GenerationHistoryEntry {
+        generation: plan.candidate_generation,
+        operation: GenerationOperation::Preview,
+        status: plan.candidate_status,
+        config_source: plan.config_source.clone(),
+        config_version: plan.config_version,
+        requested_by: plan.request.requested_by.clone(),
+        trigger_source: plan.request.trigger_source.clone(),
+        requested_at_ms: plan.request.requested_at_ms,
+        completed_at_ms: Some(completed_at_ms),
+        summary: plan.summary.clone(),
+        diff: plan.diff.clone(),
+        rejected_changes: plan.rejected_changes.clone(),
+    }
+}
+
+fn summarize_validation_results(plan: &ReloadPlan) -> String {
+    plan.validation
+        .iter()
+        .map(|result| format!("{:?}: {}", result.phase, result.summary))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 fn successful_rollback_result(
     request: RollbackRequest,
     generation: GenerationId,
     target_generation: GenerationId,
+    config_source: String,
+    config_version: Option<u32>,
     diff: ReloadDiff,
 ) -> RollbackResult {
     let completed_at_ms = crate::watchdog::time::now_millis();
@@ -951,7 +1152,10 @@ fn successful_rollback_result(
         generation,
         operation: GenerationOperation::Rollback,
         status: GenerationStatus::RolledBack,
+        config_source,
+        config_version,
         requested_by: request.requested_by.clone(),
+        trigger_source: request.trigger_source.clone(),
         requested_at_ms: request.requested_at_ms,
         completed_at_ms: Some(completed_at_ms),
         summary: format!(
@@ -976,6 +1180,8 @@ fn rejected_rollback_result(
     request: RollbackRequest,
     active_generation: GenerationId,
     target_generation: Option<GenerationId>,
+    config_source: String,
+    config_version: Option<u32>,
     diff: ReloadDiff,
     rejected_changes: Vec<RejectedChange>,
     summary: String,
@@ -985,7 +1191,10 @@ fn rejected_rollback_result(
         generation: target_generation.unwrap_or(active_generation.saturating_add(1)),
         operation: GenerationOperation::Rollback,
         status: GenerationStatus::Rejected,
+        config_source,
+        config_version,
         requested_by: request.requested_by.clone(),
+        trigger_source: request.trigger_source.clone(),
         requested_at_ms: request.requested_at_ms,
         completed_at_ms: Some(completed_at_ms),
         summary,
@@ -1007,6 +1216,8 @@ fn failed_rollback_result(
     request: RollbackRequest,
     active_generation: GenerationId,
     target_generation: GenerationId,
+    config_source: String,
+    config_version: Option<u32>,
     diff: ReloadDiff,
     error: String,
 ) -> RollbackResult {
@@ -1026,7 +1237,10 @@ fn failed_rollback_result(
         generation: active_generation.saturating_add(1),
         operation: GenerationOperation::Rollback,
         status: GenerationStatus::Failed,
+        config_source,
+        config_version,
         requested_by: request.requested_by.clone(),
+        trigger_source: request.trigger_source.clone(),
         requested_at_ms: request.requested_at_ms,
         completed_at_ms: Some(completed_at_ms),
         summary: format!(
@@ -1050,6 +1264,8 @@ fn failed_rollback_result(
 fn successful_activation_result(
     request: ActivationRequest,
     generation: GenerationId,
+    config_source: String,
+    config_version: Option<u32>,
     diff: ReloadDiff,
     previous_log_level: String,
     active_log_level: String,
@@ -1059,7 +1275,10 @@ fn successful_activation_result(
         generation,
         operation: GenerationOperation::Activate,
         status: GenerationStatus::Active,
+        config_source,
+        config_version,
         requested_by: request.requested_by.clone(),
+        trigger_source: request.trigger_source.clone(),
         requested_at_ms: request.requested_at_ms,
         completed_at_ms: Some(completed_at_ms),
         summary: format!(
@@ -1083,6 +1302,8 @@ fn rejected_activation_result(
     request: ActivationRequest,
     active_generation: GenerationId,
     candidate_generation: GenerationId,
+    config_source: String,
+    config_version: Option<u32>,
     diff: ReloadDiff,
     rejected_changes: Vec<RejectedChange>,
     summary: String,
@@ -1092,7 +1313,10 @@ fn rejected_activation_result(
         generation: candidate_generation,
         operation: GenerationOperation::Activate,
         status: GenerationStatus::Rejected,
+        config_source,
+        config_version,
         requested_by: request.requested_by.clone(),
+        trigger_source: request.trigger_source.clone(),
         requested_at_ms: request.requested_at_ms,
         completed_at_ms: Some(completed_at_ms),
         summary,
@@ -1114,6 +1338,8 @@ fn failed_activation_result(
     request: ActivationRequest,
     active_generation: GenerationId,
     candidate_generation: GenerationId,
+    config_source: String,
+    config_version: Option<u32>,
     diff: ReloadDiff,
     error: String,
 ) -> ActivationResult {
@@ -1133,7 +1359,10 @@ fn failed_activation_result(
         generation: candidate_generation,
         operation: GenerationOperation::Activate,
         status: GenerationStatus::Failed,
+        config_source,
+        config_version,
         requested_by: request.requested_by.clone(),
+        trigger_source: request.trigger_source.clone(),
         requested_at_ms: request.requested_at_ms,
         completed_at_ms: Some(completed_at_ms),
         summary: format!("failed to activate runtime generation {candidate_generation}: {error}"),
@@ -1153,6 +1382,8 @@ fn failed_activation_result(
 
 fn rejected_reload_plan(
     request: ActivationRequest,
+    config_source: String,
+    config_version: Option<u32>,
     current_generation: Option<GenerationId>,
     candidate_generation: GenerationId,
     mut validation: Vec<PlanningPhaseResult>,
@@ -1180,6 +1411,8 @@ fn rejected_reload_plan(
     StagedRuntimeReloadPlan {
         plan: ReloadPlan {
             request,
+            config_source,
+            config_version,
             current_generation,
             candidate_generation,
             candidate_status: GenerationStatus::Rejected,
@@ -1526,10 +1759,13 @@ mod tests {
         let plan = ReloadPlan {
             request: ActivationRequest {
                 requested_by: Some("operator".to_string()),
+                trigger_source: Some("unit_test".to_string()),
                 reason: Some("rotate routes".to_string()),
                 expected_generation: Some(7),
                 requested_at_ms: 1_720_000_000_000,
             },
+            config_source: "config.yaml".to_string(),
+            config_version: Some(1),
             current_generation: Some(7),
             candidate_generation: 8,
             candidate_status: GenerationStatus::Staged,

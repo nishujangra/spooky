@@ -119,6 +119,7 @@ impl QUICListener {
             &runtime_bundle_handle,
             ActivationRequest {
                 requested_by: Some("control_api".to_string()),
+                trigger_source: Some("control_api".to_string()),
                 reason: Some("runtime_reload".to_string()),
                 expected_generation: Some(runtime.generation()),
                 requested_at_ms: crate::watchdog::time::now_millis(),
