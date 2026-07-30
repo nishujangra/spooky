@@ -13,7 +13,7 @@ use spooky_config::{loader::read_config, runtime::RuntimeConfig};
 
 use crate::{
     runtime::{
-        bundle::{ActiveRuntimeGeneration, RuntimeBundle},
+        bundle::{ActiveRuntimeGeneration, RuntimeBundle, RuntimeBundleHandle},
         generation::CarriedProcessSharedServices,
         listener::QUICListener,
         policy::{TransitionRejection, TransitionRejectionKind, render_rejections},
@@ -233,15 +233,20 @@ pub struct RejectedChange {
 
 impl From<TransitionRejection> for RejectedChange {
     fn from(value: TransitionRejection) -> Self {
-        let message = value.to_string();
+        Self::from(&value)
+    }
+}
+
+impl From<&TransitionRejection> for RejectedChange {
+    fn from(value: &TransitionRejection) -> Self {
         Self {
             kind: value.kind.into(),
-            field_path: value.field_path,
-            current_value: value.current_mode,
-            requested_value: value.requested_mode,
+            field_path: value.field_path.clone(),
+            current_value: value.current_mode.clone(),
+            requested_value: value.requested_mode.clone(),
             operator_action: value.operator_action.to_string(),
             active_generation_changed: value.active_runtime_changed,
-            message,
+            message: value.to_string(),
         }
     }
 }
@@ -394,14 +399,99 @@ impl RollbackResult {
 pub(crate) struct StagedRuntimeReloadPlan {
     pub(crate) plan: ReloadPlan,
     pub(crate) next_runtime: Option<RuntimeBundle>,
-    pub(crate) current_log_level: String,
-    pub(crate) next_log_level: Option<String>,
 }
 
 impl StagedRuntimeReloadPlan {
     #[must_use]
     pub(crate) fn can_activate(&self) -> bool {
         self.plan.can_activate() && self.next_runtime.is_some()
+    }
+}
+
+/// Canonical runtime activation service.
+///
+/// This owns the activation transaction for runtime reloads:
+/// staged validation/planning, final lifecycle gate, generation swap, and the
+/// explicit result object returned to control-plane callers.
+pub(crate) struct RuntimeActivationService;
+
+impl RuntimeActivationService {
+    pub(crate) fn activate_reload(
+        handle: &RuntimeBundleHandle,
+        request: ActivationRequest,
+        input: ReloadConfigInput,
+    ) -> ActivationResult {
+        let current = handle.current_view();
+        let active_generation = current.generation();
+        let current_log_level = current.startup().log_config.level.clone();
+
+        if let Some(expected_generation) = request.expected_generation
+            && expected_generation != active_generation
+        {
+            return rejected_activation_result(
+                request,
+                active_generation,
+                active_generation.saturating_add(1),
+                ReloadDiff::default(),
+                vec![RejectedChange {
+                    kind: RejectedChangeKind::IllegalTransition,
+                    field_path: Some("runtime.generation".to_string()),
+                    current_value: Some(active_generation.to_string()),
+                    requested_value: Some(expected_generation.to_string()),
+                    operator_action:
+                        "refresh the active generation view and retry the activation".to_string(),
+                    active_generation_changed: false,
+                    message: format!(
+                        "runtime reload rejected: expected active generation {} but current active generation is {}",
+                        expected_generation, active_generation
+                    ),
+                }],
+                "activation request targeted a stale runtime generation".to_string(),
+            );
+        }
+
+        let plan = plan_runtime_reload(&current, request.clone(), input);
+        if !plan.can_activate() {
+            return rejected_activation_result(
+                request,
+                active_generation,
+                plan.plan.candidate_generation,
+                plan.plan.diff.clone(),
+                plan.plan.rejected_changes.clone(),
+                plan.plan
+                    .rejection_summary
+                    .clone()
+                    .unwrap_or_else(|| plan.plan.summary.clone()),
+            );
+        }
+
+        if let Some(rejection) = handle.lifecycle().check_reload_allowed().rejection() {
+            return rejected_activation_result(
+                request,
+                active_generation,
+                plan.plan.candidate_generation,
+                plan.plan.diff.clone(),
+                vec![RejectedChange::from(rejection)],
+                rejection.to_string(),
+            );
+        }
+
+        match commit_staged_runtime_reload(handle, plan) {
+            Ok((generation, diff)) => successful_activation_result(
+                request,
+                generation,
+                diff,
+                current_log_level,
+                handle.current_view().startup().log_config.level.clone(),
+            ),
+            Err((candidate_generation, diff, err)) => failed_activation_result(
+                request,
+                handle.current_generation(),
+                candidate_generation,
+                diff,
+                err,
+            ),
+        }
     }
 }
 
@@ -412,7 +502,6 @@ pub(crate) fn plan_runtime_reload(
 ) -> StagedRuntimeReloadPlan {
     let current_generation = Some(current.generation());
     let candidate_generation = current.generation().saturating_add(1);
-    let current_log_level = current.startup().log_config.level.clone();
     let mut validation = Vec::with_capacity(4);
 
     let config = match input {
@@ -435,7 +524,6 @@ pub(crate) fn plan_runtime_reload(
                     request,
                     current_generation,
                     candidate_generation,
-                    current_log_level,
                     validation,
                     vec![
                         RejectedChange::invalid_configuration(err),
@@ -462,7 +550,6 @@ pub(crate) fn plan_runtime_reload(
                 request,
                 current_generation,
                 candidate_generation,
-                current_log_level,
                 validation,
                 vec![RejectedChange::invalid_configuration(message)],
             );
@@ -482,7 +569,6 @@ pub(crate) fn plan_runtime_reload(
                 request,
                 current_generation,
                 candidate_generation,
-                current_log_level,
                 validation,
                 vec![RejectedChange::invalid_configuration(message)],
             );
@@ -514,7 +600,6 @@ pub(crate) fn plan_runtime_reload(
                     request,
                     current_generation,
                     candidate_generation,
-                    current_log_level,
                     validation,
                     vec![rejected],
                 );
@@ -530,7 +615,6 @@ pub(crate) fn plan_runtime_reload(
         runtime_config,
         shared_state: next_shared_state,
     };
-    let next_log_level = next_runtime.startup.log_config.level.clone();
     let candidate_snapshot = Some(snapshot_from_bundle(&next_runtime));
 
     let compatibility_rejections: Result<(), Vec<TransitionRejection>> =
@@ -593,8 +677,134 @@ pub(crate) fn plan_runtime_reload(
             rejected_changes,
         },
         next_runtime: Some(next_runtime),
-        current_log_level,
-        next_log_level: Some(next_log_level),
+    }
+}
+
+fn commit_staged_runtime_reload(
+    handle: &RuntimeBundleHandle,
+    plan: StagedRuntimeReloadPlan,
+) -> Result<(GenerationId, ReloadDiff), (GenerationId, ReloadDiff, String)> {
+    let candidate_generation = plan.plan.candidate_generation;
+    let diff = plan.plan.diff.clone();
+    let next_runtime = plan.next_runtime.ok_or_else(|| {
+        (
+            candidate_generation,
+            diff.clone(),
+            "staged reload plan missing next runtime".to_string(),
+        )
+    })?;
+
+    QUICListener::spawn_generation_background_tasks_for_runtime(
+        &next_runtime.runtime_config,
+        next_runtime.shared_state.as_ref(),
+    );
+    handle
+        .replace(next_runtime)
+        .map(|generation| (generation, diff.clone()))
+        .map_err(|err| (candidate_generation, diff, err.to_string()))
+}
+
+fn successful_activation_result(
+    request: ActivationRequest,
+    generation: GenerationId,
+    diff: ReloadDiff,
+    previous_log_level: String,
+    active_log_level: String,
+) -> ActivationResult {
+    let completed_at_ms = crate::watchdog::time::now_millis();
+    let history_entry = GenerationHistoryEntry {
+        generation,
+        operation: GenerationOperation::Activate,
+        status: GenerationStatus::Active,
+        requested_by: request.requested_by.clone(),
+        requested_at_ms: request.requested_at_ms,
+        completed_at_ms: Some(completed_at_ms),
+        summary: format!(
+            "activated runtime generation {generation} (log.level: {previous_log_level} -> {active_log_level})"
+        ),
+        diff,
+        rejected_changes: Vec::new(),
+    };
+
+    ActivationResult {
+        request,
+        active_generation: generation,
+        activated_generation: Some(generation),
+        status: GenerationStatus::Active,
+        rejected_changes: Vec::new(),
+        history_entry,
+    }
+}
+
+fn rejected_activation_result(
+    request: ActivationRequest,
+    active_generation: GenerationId,
+    candidate_generation: GenerationId,
+    diff: ReloadDiff,
+    rejected_changes: Vec<RejectedChange>,
+    summary: String,
+) -> ActivationResult {
+    let completed_at_ms = crate::watchdog::time::now_millis();
+    let history_entry = GenerationHistoryEntry {
+        generation: candidate_generation,
+        operation: GenerationOperation::Activate,
+        status: GenerationStatus::Rejected,
+        requested_by: request.requested_by.clone(),
+        requested_at_ms: request.requested_at_ms,
+        completed_at_ms: Some(completed_at_ms),
+        summary,
+        diff,
+        rejected_changes: rejected_changes.clone(),
+    };
+
+    ActivationResult {
+        request,
+        active_generation,
+        activated_generation: None,
+        status: GenerationStatus::Rejected,
+        rejected_changes,
+        history_entry,
+    }
+}
+
+fn failed_activation_result(
+    request: ActivationRequest,
+    active_generation: GenerationId,
+    candidate_generation: GenerationId,
+    diff: ReloadDiff,
+    error: String,
+) -> ActivationResult {
+    let rejected_changes = vec![RejectedChange {
+        kind: RejectedChangeKind::RuntimeStateUnavailable,
+        field_path: Some("runtime.activation".to_string()),
+        current_value: Some(active_generation.to_string()),
+        requested_value: Some(candidate_generation.to_string()),
+        operator_action:
+            "inspect runtime state and retry the activation once the runtime is healthy"
+                .to_string(),
+        active_generation_changed: false,
+        message: error.clone(),
+    }];
+    let completed_at_ms = crate::watchdog::time::now_millis();
+    let history_entry = GenerationHistoryEntry {
+        generation: candidate_generation,
+        operation: GenerationOperation::Activate,
+        status: GenerationStatus::Failed,
+        requested_by: request.requested_by.clone(),
+        requested_at_ms: request.requested_at_ms,
+        completed_at_ms: Some(completed_at_ms),
+        summary: format!("failed to activate runtime generation {candidate_generation}: {error}"),
+        diff,
+        rejected_changes: rejected_changes.clone(),
+    };
+
+    ActivationResult {
+        request,
+        active_generation,
+        activated_generation: None,
+        status: GenerationStatus::Failed,
+        rejected_changes,
+        history_entry,
     }
 }
 
@@ -602,7 +812,6 @@ fn rejected_reload_plan(
     request: ActivationRequest,
     current_generation: Option<GenerationId>,
     candidate_generation: GenerationId,
-    current_log_level: String,
     mut validation: Vec<PlanningPhaseResult>,
     rejected_changes: Vec<RejectedChange>,
 ) -> StagedRuntimeReloadPlan {
@@ -642,8 +851,6 @@ fn rejected_reload_plan(
             rejected_changes,
         },
         next_runtime: None,
-        current_log_level,
-        next_log_level: None,
     }
 }
 

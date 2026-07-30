@@ -86,7 +86,7 @@ impl QUICListener {
         });
     }
 
-    pub(super) fn spawn_generation_background_tasks_for_runtime(
+    pub(crate) fn spawn_generation_background_tasks_for_runtime(
         config: &RuntimeConfig,
         shared_state: &SharedRuntimeState,
     ) {

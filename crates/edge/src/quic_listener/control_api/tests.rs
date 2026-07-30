@@ -15,9 +15,9 @@ use tempfile::tempdir;
 
 use super::{state::ControlApiState, *};
 use crate::runtime::activation::{
-    ActivationRequest, PlanningPhase, PlanningPhaseStatus, RejectedChangeKind,
-    ReloadCompatibilityClassification, ReloadConfigInput, ReloadDiffDisposition,
-    plan_runtime_reload,
+    ActivationRequest, GenerationOperation, GenerationStatus, PlanningPhase,
+    PlanningPhaseStatus, RejectedChangeKind, ReloadCompatibilityClassification,
+    ReloadConfigInput, ReloadDiffDisposition, RuntimeActivationService, plan_runtime_reload,
 };
 
 /// Render the typed startup-owned compatibility result into the flat list of
@@ -402,6 +402,98 @@ fn staged_reload_planner_marks_log_level_change_as_reloadable_domain_diff() {
         "expected log.level drift to show up as a reloadable observability/control-plane diff"
     );
     assert_eq!(plan.plan.diff.reloadable_entries().len(), 1);
+}
+
+#[test]
+fn activation_service_commits_reloadable_candidate_and_advances_generation() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+    let current_config = test_config(cert.clone(), key.clone());
+    write_config_file(&config_path, &current_config);
+
+    let bundle =
+        runtime_bundle_from_config(config_path.to_string_lossy().as_ref(), &current_config);
+    let handle = RuntimeBundleHandle::new(bundle);
+    let generation_before = handle.current_generation();
+
+    let mut next_config = test_config(cert, key);
+    next_config.log.level = "debug".to_string();
+    write_config_file(&config_path, &next_config);
+
+    let activation = RuntimeActivationService::activate_reload(
+        &handle,
+        planner_request(generation_before),
+        ReloadConfigInput::Path {
+            path: config_path.to_string_lossy().to_string(),
+        },
+    );
+
+    assert!(activation.succeeded(), "activation should succeed: {activation:?}");
+    assert_eq!(activation.status, GenerationStatus::Active);
+    assert_eq!(activation.active_generation, generation_before + 1);
+    assert_eq!(activation.activated_generation, Some(generation_before + 1));
+    assert_eq!(handle.current_generation(), generation_before + 1);
+    assert_eq!(activation.history_entry.operation, GenerationOperation::Activate);
+    assert_eq!(activation.history_entry.status, GenerationStatus::Active);
+    assert!(
+        activation
+            .history_entry
+            .diff
+            .reloadable_entries()
+            .iter()
+            .any(|entry| entry.domain == "observability_control_plane"),
+        "expected activation history to preserve the planned reloadable diff"
+    );
+    assert_eq!(handle.current_view().startup().log_config.level, "debug");
+}
+
+#[test]
+fn activation_service_rejects_restart_required_changes_without_mutating_active_generation() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+    let current_config = test_config(cert.clone(), key.clone());
+    write_config_file(&config_path, &current_config);
+
+    let bundle =
+        runtime_bundle_from_config(config_path.to_string_lossy().as_ref(), &current_config);
+    let handle = RuntimeBundleHandle::new(bundle);
+    let generation_before = handle.current_generation();
+
+    let mut next_config = test_config(cert, key);
+    next_config.performance.control_plane_threads =
+        current_config.performance.control_plane_threads.saturating_add(2);
+    write_config_file(&config_path, &next_config);
+
+    let activation = RuntimeActivationService::activate_reload(
+        &handle,
+        planner_request(generation_before),
+        ReloadConfigInput::Path {
+            path: config_path.to_string_lossy().to_string(),
+        },
+    );
+
+    assert!(
+        !activation.succeeded(),
+        "restart-required activation must be rejected"
+    );
+    assert_eq!(activation.status, GenerationStatus::Rejected);
+    assert_eq!(activation.active_generation, generation_before);
+    assert_eq!(activation.activated_generation, None);
+    assert_eq!(handle.current_generation(), generation_before);
+    assert_eq!(activation.history_entry.operation, GenerationOperation::Activate);
+    assert_eq!(activation.history_entry.status, GenerationStatus::Rejected);
+    assert!(
+        activation.rejected_changes.iter().any(|rejection| {
+            rejection.kind == RejectedChangeKind::RestartRequired
+                && rejection.field_path.as_deref()
+                    == Some("performance.control_plane_threads")
+                && !rejection.active_generation_changed
+        }),
+        "expected a restart-required rejection without live mutation: {:?}",
+        activation.rejected_changes
+    );
 }
 
 // Domain: watchdog service state transitions and restart environment handling.

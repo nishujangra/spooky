@@ -4,10 +4,10 @@ use http_body_util::Full;
 use super::*;
 use crate::runtime::{
     activation::{
-        ActivationRequest, RejectedChangeKind, ReloadConfigInput, ReloadPlan,
-        StagedRuntimeReloadPlan, plan_runtime_reload,
+        ActivationRequest, ActivationResult, RejectedChangeKind, ReloadConfigInput,
+        RuntimeActivationService,
     },
-    bundle::{ActiveRuntimeGeneration, RuntimeBundleHandle},
+    bundle::ActiveRuntimeGeneration,
     policy::{ReloadCompatibilityAuthority, TransitionRejection},
 };
 
@@ -114,8 +114,9 @@ impl QUICListener {
             );
         };
 
-        let plan = plan_runtime_reload(
-            &runtime,
+        let current_log_level = runtime.startup().log_config.level.clone();
+        let activation = RuntimeActivationService::activate_reload(
+            &runtime_bundle_handle,
             ActivationRequest {
                 requested_by: Some("control_api".to_string()),
                 reason: Some("runtime_reload".to_string()),
@@ -126,12 +127,8 @@ impl QUICListener {
                 path: runtime.startup().config_path.clone(),
             },
         );
-        if !plan.can_activate() {
-            let error = plan
-                .plan
-                .rejection_summary
-                .as_deref()
-                .unwrap_or("reload candidate rejected");
+        if !activation.succeeded() {
+            let error = activation_error(&activation);
             // Phase 8: API response and logs communicate the same core reason.
             warn!(
                 "runtime reload rejected at generation {}; active runtime unchanged: {}",
@@ -139,30 +136,25 @@ impl QUICListener {
                 error
             );
             return Self::json_response(
-                plan_rejection_status(&plan.plan),
+                activation_result_status(&activation),
                 json!({
                     "reloaded": false,
                     "error": error,
-                    "generation": plan.plan.current_generation,
-                    "candidate_generation": plan.plan.candidate_generation,
-                    "compatibility": plan.plan.compatibility,
+                    "generation": activation.active_generation,
+                    "candidate_generation": activation.history_entry.generation,
+                    "status": activation.status,
                 }),
             );
         }
-        let current_log_level = plan.current_log_level.clone();
-        let next_log_level = plan.next_log_level.clone().unwrap_or_default();
-        let generation = match Self::apply_runtime_reload_plan(&runtime_bundle_handle, plan) {
-            Ok(generation) => generation,
-            Err(err) => {
-                return Self::json_response(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    json!({
-                        "reloaded": false,
-                        "error": err.to_string(),
-                    }),
-                );
-            }
-        };
+        let generation = activation
+            .activated_generation
+            .expect("successful activation must set activated_generation");
+        let next_log_level = runtime_bundle_handle
+            .current_view()
+            .startup()
+            .log_config
+            .level
+            .clone();
         if let Err(err) = Self::apply_live_log_level_reload(&current_log_level, &next_log_level) {
             error!(
                 "Runtime reload applied generation={} but failed to update live log.level from '{}' to '{}': {}",
@@ -234,20 +226,6 @@ impl QUICListener {
             return Err(vec![rejection]);
         }
         Self::validate_startup_owned_reload_compatibility(current.bundle(), next)
-    }
-
-    pub(super) fn apply_runtime_reload_plan(
-        runtime_bundle_handle: &RuntimeBundleHandle,
-        plan: StagedRuntimeReloadPlan,
-    ) -> Result<u64, ProxyError> {
-        let next_runtime = plan.next_runtime.ok_or_else(|| {
-            ProxyError::Transport("staged reload plan missing next runtime".to_string())
-        })?;
-        QUICListener::spawn_generation_background_tasks_for_runtime(
-            &next_runtime.runtime_config,
-            next_runtime.shared_state.as_ref(),
-        );
-        runtime_bundle_handle.replace(next_runtime)
     }
 
     pub(super) fn validate_runtime_reload_compatibility(
@@ -448,21 +426,34 @@ impl QUICListener {
     }
 }
 
-fn plan_rejection_status(plan: &ReloadPlan) -> StatusCode {
-    if plan
+fn activation_result_status(activation: &ActivationResult) -> StatusCode {
+    if activation
         .rejected_changes
         .iter()
         .any(|rejection| matches!(rejection.kind, RejectedChangeKind::InvalidConfiguration))
     {
         StatusCode::BAD_REQUEST
-    } else if plan.rejected_changes.iter().any(|rejection| {
+    } else if activation.rejected_changes.iter().any(|rejection| {
         matches!(
             rejection.kind,
             RejectedChangeKind::ResourcePreparationFailed
         )
+    }) || matches!(activation.status, crate::runtime::activation::GenerationStatus::Failed)
+    {
+        StatusCode::INTERNAL_SERVER_ERROR
+    } else if activation.rejected_changes.iter().any(|rejection| {
+        matches!(rejection.kind, RejectedChangeKind::RuntimeStateUnavailable)
     }) {
         StatusCode::INTERNAL_SERVER_ERROR
     } else {
         StatusCode::CONFLICT
     }
+}
+
+fn activation_error(activation: &ActivationResult) -> &str {
+    activation
+        .rejected_changes
+        .first()
+        .map(|rejection| rejection.message.as_str())
+        .unwrap_or(activation.history_entry.summary.as_str())
 }
