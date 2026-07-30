@@ -496,6 +496,63 @@ fn activation_service_commits_reloadable_candidate_and_advances_generation() {
 }
 
 #[test]
+fn activation_from_alternate_config_path_updates_default_runtime_source() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let primary_path = dir.path().join("primary.yaml");
+    let canary_path = dir.path().join("canary.yaml");
+
+    let current_config = test_config(cert.clone(), key.clone());
+    write_config_file(&primary_path, &current_config);
+
+    let bundle =
+        runtime_bundle_from_config(primary_path.to_string_lossy().as_ref(), &current_config);
+    let handle = RuntimeBundleHandle::new(bundle);
+    let generation_before = handle.current_generation();
+
+    let mut canary_config = test_config(cert, key);
+    canary_config.log.level = "debug".to_string();
+    write_config_file(&canary_path, &canary_config);
+
+    let activation = RuntimeActivationService::activate_reload(
+        &handle,
+        planner_request(generation_before),
+        ReloadConfigInput::Path {
+            path: canary_path.to_string_lossy().to_string(),
+        },
+    );
+
+    assert!(activation.succeeded(), "canary activation should succeed");
+    assert_eq!(
+        handle.current_view().startup().config_path,
+        canary_path.to_string_lossy()
+    );
+    assert_eq!(
+        activation.history_entry.config_source,
+        canary_path.to_string_lossy()
+    );
+
+    let mut followup_config = canary_config.clone();
+    followup_config.log.level = "warn".to_string();
+    write_config_file(&canary_path, &followup_config);
+
+    let followup = RuntimeActivationService::activate_reload(
+        &handle,
+        planner_request(handle.current_generation()),
+        ReloadConfigInput::Path {
+            path: handle.current_view().startup().config_path.clone(),
+        },
+    );
+
+    assert!(followup.succeeded(), "follow-up activation should succeed");
+    assert_eq!(handle.current_view().startup().log_config.level, "warn");
+    assert_eq!(
+        handle.current_view().startup().config_path,
+        canary_path.to_string_lossy()
+    );
+}
+
+#[test]
 fn activation_service_rejects_restart_required_changes_without_mutating_active_generation() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");

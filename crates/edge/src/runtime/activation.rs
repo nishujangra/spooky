@@ -1180,7 +1180,7 @@ pub(crate) fn plan_runtime_reload(
     let next_runtime = RuntimeBundle {
         generation: candidate_generation,
         startup: crate::runtime::generation::StartupOwnedRuntimeState {
-            config_path: current.startup().config_path.clone(),
+            config_path: config_source.clone(),
             log_config: config.log.clone(),
         },
         runtime_config,
