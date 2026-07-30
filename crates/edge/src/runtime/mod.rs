@@ -4,6 +4,7 @@
 //! state types. Connection plumbing, generation swaps, and TLS/task internals
 //! remain crate-private implementation details.
 
+pub mod activation;
 pub mod backend;
 pub mod bundle;
 pub(crate) mod connection;
