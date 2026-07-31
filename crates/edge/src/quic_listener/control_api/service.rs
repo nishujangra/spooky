@@ -242,7 +242,7 @@ impl QUICListener {
         let io = TokioIo::new(tls_stream);
         let service = service_fn(move |req: Request<Incoming>| {
             let state = state.clone();
-            async move { Ok::<_, hyper::Error>(Self::handle_control_api_request(req, &state)) }
+            async move { Ok::<_, hyper::Error>(Self::handle_control_api_request(req, &state).await) }
         });
 
         let serve = http1::Builder::new().serve_connection(io, service);

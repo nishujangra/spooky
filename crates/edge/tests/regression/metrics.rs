@@ -2,7 +2,10 @@
 
 use std::{sync::atomic::Ordering, time::Duration};
 
-use spooky_edge::{Metrics, OverloadShedReason, RouteOutcome};
+use spooky_edge::{
+    Metrics, OverloadShedReason, RouteOutcome,
+    runtime::activation::{RuntimeOperationOutcomeReason, RuntimeRejectionReason},
+};
 use spooky_errors::{
     HedgeOutcomeTelemetryReason, HedgeTriggerTelemetryReason, RetryAttemptTelemetryReason,
     RetryPolicyDenialReason,
@@ -139,6 +142,58 @@ fn metrics_render_includes_overload_reasons_and_hedge_counters() {
     assert!(output.contains("spooky_control_api_connection_limit_drops 1\n"));
     assert!(output.contains("spooky_circuit_breaker_rejected_total 0\n"));
     assert!(output.contains("spooky_brownout_active 0\n"));
+}
+
+#[test]
+fn metrics_render_includes_runtime_rejection_reason_vocab() {
+    let metrics = Metrics::default();
+    metrics.inc_runtime_rejection_reason(RuntimeRejectionReason::InvalidConfig);
+    metrics.inc_runtime_rejection_reason(RuntimeRejectionReason::StartupOwnedChange);
+    metrics.inc_runtime_rejection_reason(RuntimeRejectionReason::BindConflict);
+    metrics.inc_runtime_rejection_reason(RuntimeRejectionReason::ResourcePrepareFailed);
+    metrics.inc_runtime_rejection_reason(RuntimeRejectionReason::IncompatibleReload);
+    metrics.inc_runtime_rejection_reason(RuntimeRejectionReason::UnknownGeneration);
+    metrics.inc_runtime_rejection_reason(RuntimeRejectionReason::RollbackNotAllowed);
+
+    let output = metrics.render_prometheus();
+    for expected in [
+        "spooky_runtime_rejections_total{reason=\"invalid_config\"} 1",
+        "spooky_runtime_rejections_total{reason=\"startup_owned_change\"} 1",
+        "spooky_runtime_rejections_total{reason=\"bind_conflict\"} 1",
+        "spooky_runtime_rejections_total{reason=\"resource_prepare_failed\"} 1",
+        "spooky_runtime_rejections_total{reason=\"incompatible_reload\"} 1",
+        "spooky_runtime_rejections_total{reason=\"unknown_generation\"} 1",
+        "spooky_runtime_rejections_total{reason=\"rollback_not_allowed\"} 1",
+    ] {
+        assert!(output.contains(expected), "missing metric line: {expected}");
+    }
+}
+
+#[test]
+fn metrics_render_includes_runtime_activation_observability_contract() {
+    let metrics = Metrics::default();
+    metrics.inc_runtime_validation_attempt();
+    metrics.inc_runtime_preview_attempt();
+    metrics.record_runtime_activation_outcome(RuntimeOperationOutcomeReason::Applied);
+    metrics.record_runtime_activation_outcome(RuntimeOperationOutcomeReason::InvalidConfig);
+    metrics.record_runtime_rollback_outcome(RuntimeOperationOutcomeReason::Applied);
+    metrics.record_runtime_rollback_outcome(RuntimeOperationOutcomeReason::RollbackNotAllowed);
+    metrics.set_runtime_active_generation(12);
+    metrics.set_runtime_history_depth(3);
+
+    let output = metrics.render_prometheus();
+    for expected in [
+        "spooky_runtime_validation_attempts_total 1",
+        "spooky_runtime_preview_attempts_total 1",
+        "spooky_runtime_activation_total{result=\"success\",reason=\"applied\"} 1",
+        "spooky_runtime_activation_total{result=\"failure\",reason=\"invalid_config\"} 1",
+        "spooky_runtime_rollback_total{result=\"success\",reason=\"applied\"} 1",
+        "spooky_runtime_rollback_total{result=\"failure\",reason=\"rollback_not_allowed\"} 1",
+        "spooky_runtime_active_generation 12",
+        "spooky_runtime_history_depth 3",
+    ] {
+        assert!(output.contains(expected), "missing metric line: {expected}");
+    }
 }
 
 #[test]

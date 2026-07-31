@@ -6,9 +6,13 @@ use serde::Serialize;
 use spooky_lb::health::HealthFailureReason;
 
 use super::{state::ControlApiState, *};
-use crate::runtime::backend::state::{
-    BackendHealthState, BackendLifecycleInventorySnapshot, BackendMembershipState,
-    BackendPoolPlacementSnapshot,
+use crate::runtime::{
+    activation::GenerationHistoryEntry,
+    backend::state::{
+        BackendHealthState, BackendLifecycleInventorySnapshot, BackendMembershipState,
+        BackendPoolPlacementSnapshot,
+    },
+    bundle::RuntimeGenerationRecord,
 };
 
 /// Map a backend health-failure reason to the canonical control-plane token.
@@ -157,6 +161,30 @@ struct ControlApiRuntimeGenerationPayload {
     config_path: String,
 }
 
+#[derive(Serialize)]
+struct ControlApiRuntimeHistoryPayload {
+    active_generation: u64,
+    retained_generations: Vec<ControlApiRetainedGenerationPayload>,
+    entries: Vec<GenerationHistoryEntry>,
+}
+
+#[derive(Serialize)]
+struct ControlApiRuntimeHistoryGenerationPayload {
+    generation: u64,
+    retained_generation: ControlApiRetainedGenerationPayload,
+    entries: Vec<GenerationHistoryEntry>,
+}
+
+#[derive(Serialize)]
+struct ControlApiRetainedGenerationPayload {
+    generation: u64,
+    status: &'static str,
+    rollback_candidate: bool,
+    has_bundle: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    note: Option<String>,
+}
+
 impl QUICListener {
     pub(super) fn json_response<T>(status: StatusCode, value: T) -> Response<Full<Bytes>>
     where
@@ -217,6 +245,73 @@ impl QUICListener {
     ) -> Response<Full<Bytes>> {
         let payload = ControlApiRuntimePayload::from_state(state);
         Self::json_response(StatusCode::OK, payload)
+    }
+
+    pub(super) fn render_control_api_runtime_history(
+        state: &ControlApiState,
+    ) -> Response<Full<Bytes>> {
+        let runtime_state = state.current_service_state();
+        let Some(runtime_bundle_handle) = runtime_state.runtime_bundle_handle().cloned() else {
+            return Self::control_api_not_found_response();
+        };
+
+        Self::json_response(
+            StatusCode::OK,
+            ControlApiRuntimeHistoryPayload {
+                active_generation: runtime_bundle_handle.current_generation(),
+                retained_generations: runtime_bundle_handle
+                    .generation_history()
+                    .into_iter()
+                    .map(ControlApiRetainedGenerationPayload::from_record)
+                    .collect(),
+                entries: runtime_bundle_handle.generation_change_history(),
+            },
+        )
+    }
+
+    pub(super) fn render_control_api_runtime_history_generation(
+        state: &ControlApiState,
+        generation: u64,
+    ) -> Response<Full<Bytes>> {
+        let runtime_state = state.current_service_state();
+        let Some(runtime_bundle_handle) = runtime_state.runtime_bundle_handle().cloned() else {
+            return Self::control_api_not_found_response();
+        };
+
+        let entries = runtime_bundle_handle
+            .generation_change_history()
+            .into_iter()
+            .filter(|entry| entry.generation == generation)
+            .collect::<Vec<_>>();
+        let Some(record) = runtime_bundle_handle.generation_record(generation) else {
+            return Self::json_response(
+                StatusCode::NOT_FOUND,
+                json!({
+                    "error": format!("generation {generation} not found in runtime history"),
+                }),
+            );
+        };
+
+        Self::json_response(
+            StatusCode::OK,
+            ControlApiRuntimeHistoryGenerationPayload {
+                generation,
+                retained_generation: ControlApiRetainedGenerationPayload::from_record(record),
+                entries,
+            },
+        )
+    }
+}
+
+impl ControlApiRetainedGenerationPayload {
+    fn from_record(record: RuntimeGenerationRecord) -> Self {
+        Self {
+            generation: record.generation(),
+            status: record.status().as_str(),
+            rollback_candidate: record.status().is_rollback_candidate(),
+            has_bundle: record.has_bundle(),
+            note: record.note().map(ToOwned::to_owned),
+        }
     }
 }
 

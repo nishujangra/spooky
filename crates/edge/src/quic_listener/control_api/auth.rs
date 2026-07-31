@@ -15,6 +15,12 @@ pub(super) enum ControlApiRoute {
     Health,
     Ready,
     Runtime,
+    RuntimeValidate,
+    RuntimePreview,
+    RuntimeActivate,
+    RuntimeRollback,
+    RuntimeHistory,
+    RuntimeHistoryGeneration(u64),
     ReloadCerts,
     ReloadRuntime,
     Restart,
@@ -32,13 +38,38 @@ impl QUICListener {
         paths: &ControlApiPaths,
     ) -> Option<ControlApiRoute> {
         let path = req.uri().path();
+        let runtime_validate_path = paths.runtime_validate_path();
+        let runtime_preview_path = paths.runtime_preview_path();
+        let runtime_activate_path = paths.runtime_activate_path();
+        let runtime_rollback_path = paths.runtime_rollback_path();
+        let runtime_history_path = paths.runtime_history_path();
+        let runtime_history_entry_prefix = paths.runtime_history_entry_prefix();
 
         match *req.method() {
             Method::GET if path == paths.health_path.as_str() => Some(ControlApiRoute::Health),
             Method::GET if path == paths.ready_path.as_str() => Some(ControlApiRoute::Ready),
             Method::GET if path == paths.runtime_path.as_str() => Some(ControlApiRoute::Runtime),
+            Method::GET if path == runtime_history_path.as_str() => {
+                Some(ControlApiRoute::RuntimeHistory)
+            }
+            Method::GET if path.starts_with(runtime_history_entry_prefix.as_str()) => path
+                .strip_prefix(runtime_history_entry_prefix.as_str())
+                .and_then(|raw_generation| raw_generation.parse::<u64>().ok())
+                .map(ControlApiRoute::RuntimeHistoryGeneration),
             Method::POST if path == paths.reload_certs_path.as_str() => {
                 Some(ControlApiRoute::ReloadCerts)
+            }
+            Method::POST if path == runtime_validate_path.as_str() => {
+                Some(ControlApiRoute::RuntimeValidate)
+            }
+            Method::POST if path == runtime_preview_path.as_str() => {
+                Some(ControlApiRoute::RuntimePreview)
+            }
+            Method::POST if path == runtime_activate_path.as_str() => {
+                Some(ControlApiRoute::RuntimeActivate)
+            }
+            Method::POST if path == runtime_rollback_path.as_str() => {
+                Some(ControlApiRoute::RuntimeRollback)
             }
             Method::POST if path == paths.reload_path.as_str() => {
                 Some(ControlApiRoute::ReloadRuntime)
@@ -94,7 +125,13 @@ impl QUICListener {
         }
 
         let response = match route {
-            ControlApiRoute::Runtime => json!({
+            ControlApiRoute::Runtime
+            | ControlApiRoute::RuntimeValidate
+            | ControlApiRoute::RuntimePreview
+            | ControlApiRoute::RuntimeActivate
+            | ControlApiRoute::RuntimeRollback
+            | ControlApiRoute::RuntimeHistory
+            | ControlApiRoute::RuntimeHistoryGeneration(_) => json!({
                 "error": "unauthorized",
             }),
             ControlApiRoute::ReloadCerts | ControlApiRoute::ReloadRuntime => json!({

@@ -14,6 +14,12 @@ use spooky_config::{
 use tempfile::tempdir;
 
 use super::{state::ControlApiState, *};
+use crate::runtime::activation::{
+    ActivationRequest, GenerationEventKind, GenerationOperation, GenerationStatus, PlanningPhase,
+    PlanningPhaseStatus, RejectedChangeKind, ReloadCompatibilityClassification, ReloadConfigInput,
+    ReloadDiffDisposition, RollbackRequest, RuntimeActivationService, RuntimeRejectionReason,
+    plan_runtime_reload,
+};
 
 /// Render the typed startup-owned compatibility result into the flat list of
 /// operator strings the assertions below were written against.
@@ -103,6 +109,54 @@ fn runtime_bundle_from_config(config_path: &str, config: &SpookyConfigConfig) ->
         .expect("runtime bundle")
 }
 
+fn write_config_file(path: &Path, config: &SpookyConfigConfig) {
+    let backend = config
+        .upstream
+        .get("api")
+        .and_then(|upstream| upstream.backends.first())
+        .expect("api upstream backend");
+    let upstream = config.upstream.get("api").expect("api upstream");
+    let yaml = format!(
+        r#"version: {version}
+listen:
+  protocol: "{protocol}"
+  address: "{address}"
+  port: {port}
+  tls:
+    cert: "{cert}"
+    key: "{key}"
+upstream:
+  api:
+    load_balancing:
+      type: "{lb_type}"
+    route:
+      path_prefix: "{path_prefix}"
+    backends:
+      - id: "{backend_id}"
+        address: "{backend_address}"
+        weight: {backend_weight}
+performance:
+  control_plane_threads: {control_plane_threads}
+log:
+  level: "{log_level}"
+"#,
+        version = config.version,
+        protocol = config.listen.protocol,
+        address = config.listen.address,
+        port = config.listen.port,
+        cert = config.listen.tls.cert,
+        key = config.listen.tls.key,
+        lb_type = upstream.load_balancing.lb_type,
+        path_prefix = upstream.route.path_prefix.as_deref().unwrap_or("/"),
+        backend_id = backend.id,
+        backend_address = backend.address,
+        backend_weight = backend.weight,
+        control_plane_threads = config.performance.control_plane_threads,
+        log_level = config.log.level,
+    );
+    std::fs::write(path, yaml).expect("write config file");
+}
+
 fn control_api_state_with_runtime_bundle(
     startup: &SpookyConfigConfig,
     reloaded: &SpookyConfigConfig,
@@ -163,6 +217,27 @@ fn default_control_api_state() -> ControlApiState {
     control_api_state_with_runtime_bundle(&startup, &startup)
 }
 
+fn planner_request(expected_generation: u64) -> ActivationRequest {
+    ActivationRequest {
+        requested_by: Some("test".to_string()),
+        trigger_source: Some("unit_test".to_string()),
+        reason: Some("planner_contract".to_string()),
+        expected_generation: Some(expected_generation),
+        requested_at_ms: 1,
+    }
+}
+
+fn rollback_request(target_generation: u64, expected_active_generation: u64) -> RollbackRequest {
+    RollbackRequest {
+        target_generation,
+        requested_by: Some("test".to_string()),
+        trigger_source: Some("unit_test".to_string()),
+        reason: Some("rollback_contract".to_string()),
+        expected_active_generation: Some(expected_active_generation),
+        requested_at_ms: 2,
+    }
+}
+
 fn assert_structured_resource_preflight_message(
     rejection: &crate::runtime::policy::TransitionRejection,
 ) {
@@ -179,6 +254,727 @@ fn assert_structured_resource_preflight_message(
         format!(
             "runtime reload rejected: could not prepare {field}: {detail}; active runtime unchanged (no change applied)"
         )
+    );
+}
+
+#[test]
+fn staged_reload_planner_reports_reloadable_candidate_snapshot() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config = test_config(cert, key);
+    let config_path = dir.path().join("runtime.yaml");
+    write_config_file(&config_path, &config);
+
+    let bundle = runtime_bundle_from_config(config_path.to_string_lossy().as_ref(), &config);
+    let current = RuntimeBundleHandle::new(bundle).current_view();
+    let plan = plan_runtime_reload(
+        &current,
+        planner_request(current.generation()),
+        ReloadConfigInput::Path {
+            path: config_path.to_string_lossy().to_string(),
+        },
+    );
+
+    assert!(plan.can_activate());
+    assert_eq!(
+        plan.plan.compatibility,
+        ReloadCompatibilityClassification::LiveReloadable
+    );
+    assert_eq!(
+        plan.plan.phase_status(PlanningPhase::ReadConfig),
+        Some(PlanningPhaseStatus::Accepted)
+    );
+    assert_eq!(
+        plan.plan.phase_status(PlanningPhase::ValidateConfig),
+        Some(PlanningPhaseStatus::Accepted)
+    );
+    assert_eq!(
+        plan.plan.phase_status(PlanningPhase::NormalizeRuntime),
+        Some(PlanningPhaseStatus::Accepted)
+    );
+    assert_eq!(
+        plan.plan.phase_status(PlanningPhase::EvaluateCompatibility),
+        Some(PlanningPhaseStatus::Accepted)
+    );
+
+    let snapshot = plan
+        .plan
+        .candidate_snapshot
+        .as_ref()
+        .expect("candidate snapshot");
+    assert_eq!(snapshot.generation, current.generation() + 1);
+    assert_eq!(
+        snapshot.config_path,
+        config_path.to_string_lossy().to_string()
+    );
+    assert_eq!(snapshot.upstream_count, 1);
+    assert_eq!(snapshot.backend_count, 1);
+    assert!(
+        plan.plan
+            .diff
+            .entries
+            .iter()
+            .any(|entry| entry.domain == "observability_control_plane"
+                && entry.disposition == ReloadDiffDisposition::NoOp),
+        "expected identical config to produce a no-op observability/control-plane diff"
+    );
+    assert!(plan.plan.diff.reloadable_entries().is_empty());
+    assert!(plan.plan.diff.rejected_startup_owned_entries().is_empty());
+}
+
+#[test]
+fn staged_reload_planner_classifies_restart_required_changes_without_mutation() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+    let current_config = test_config(cert.clone(), key.clone());
+    write_config_file(&config_path, &current_config);
+
+    let bundle =
+        runtime_bundle_from_config(config_path.to_string_lossy().as_ref(), &current_config);
+    let current = RuntimeBundleHandle::new(bundle).current_view();
+
+    let mut next_config = test_config(cert, key);
+    next_config.performance.control_plane_threads = 4;
+    write_config_file(&config_path, &next_config);
+
+    let plan = plan_runtime_reload(
+        &current,
+        planner_request(current.generation()),
+        ReloadConfigInput::Path {
+            path: config_path.to_string_lossy().to_string(),
+        },
+    );
+
+    assert!(!plan.can_activate());
+    assert_eq!(
+        plan.plan.compatibility,
+        ReloadCompatibilityClassification::RestartRequired
+    );
+    assert_eq!(
+        plan.plan.phase_status(PlanningPhase::EvaluateCompatibility),
+        Some(PlanningPhaseStatus::Rejected)
+    );
+    assert!(plan.plan.candidate_snapshot.is_some());
+    assert!(plan.plan.rejection_summary.is_some());
+    assert!(
+        plan.plan.rejected_changes.iter().any(|rejection| {
+            rejection.kind == RejectedChangeKind::RestartRequired
+                && rejection.field_path.as_deref() == Some("performance.control_plane_threads")
+        }),
+        "expected a startup-owned restart-required rejection"
+    );
+    assert!(
+        plan.plan
+            .diff
+            .entries
+            .iter()
+            .any(|entry| entry.domain == "observability_control_plane"
+                && entry.disposition == ReloadDiffDisposition::RejectedStartupOwned
+                && matches!(
+                    entry.change,
+                    crate::runtime::activation::ReloadChangeKind::Modified
+                )),
+        "expected control-plane startup-owned drift to be separated as rejected startup-owned"
+    );
+}
+
+#[test]
+fn staged_reload_planner_marks_log_level_change_as_reloadable_domain_diff() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+    let current_config = test_config(cert.clone(), key.clone());
+    write_config_file(&config_path, &current_config);
+
+    let bundle =
+        runtime_bundle_from_config(config_path.to_string_lossy().as_ref(), &current_config);
+    let current = RuntimeBundleHandle::new(bundle).current_view();
+
+    let mut next_config = test_config(cert, key);
+    next_config.log.level = "debug".to_string();
+    write_config_file(&config_path, &next_config);
+
+    let plan = plan_runtime_reload(
+        &current,
+        planner_request(current.generation()),
+        ReloadConfigInput::Path {
+            path: config_path.to_string_lossy().to_string(),
+        },
+    );
+
+    assert!(plan.can_activate());
+    assert!(
+        plan.plan
+            .diff
+            .entries
+            .iter()
+            .any(|entry| entry.domain == "observability_control_plane"
+                && entry.disposition == ReloadDiffDisposition::Reloadable
+                && matches!(
+                    entry.change,
+                    crate::runtime::activation::ReloadChangeKind::Modified
+                )
+                && entry.summary.contains("log(level=info")
+                && entry.summary.contains("log(level=debug")),
+        "expected log.level drift to show up as a reloadable observability/control-plane diff"
+    );
+    assert_eq!(plan.plan.diff.reloadable_entries().len(), 1);
+}
+
+#[test]
+fn activation_service_commits_reloadable_candidate_and_advances_generation() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+    let current_config = test_config(cert.clone(), key.clone());
+    write_config_file(&config_path, &current_config);
+
+    let bundle =
+        runtime_bundle_from_config(config_path.to_string_lossy().as_ref(), &current_config);
+    let handle = RuntimeBundleHandle::new(bundle);
+    let generation_before = handle.current_generation();
+
+    let mut next_config = test_config(cert, key);
+    next_config.log.level = "debug".to_string();
+    write_config_file(&config_path, &next_config);
+
+    let activation = RuntimeActivationService::activate_reload(
+        &handle,
+        planner_request(generation_before),
+        ReloadConfigInput::Path {
+            path: config_path.to_string_lossy().to_string(),
+        },
+    );
+
+    assert!(
+        activation.succeeded(),
+        "activation should succeed: {activation:?}"
+    );
+    assert_eq!(activation.status, GenerationStatus::Active);
+    assert_eq!(activation.active_generation, generation_before + 1);
+    assert_eq!(activation.activated_generation, Some(generation_before + 1));
+    assert_eq!(handle.current_generation(), generation_before + 1);
+    assert_eq!(
+        activation.history_entry.operation,
+        GenerationOperation::Activate
+    );
+    assert_eq!(activation.history_entry.status, GenerationStatus::Active);
+    assert_eq!(
+        activation.history_entry.config_source,
+        config_path.to_string_lossy()
+    );
+    assert_eq!(activation.history_entry.config_version, Some(1));
+    assert_eq!(
+        activation.history_entry.trigger_source.as_deref(),
+        Some("unit_test")
+    );
+    assert!(
+        activation
+            .history_entry
+            .diff
+            .reloadable_entries()
+            .iter()
+            .any(|entry| entry.domain == "observability_control_plane"),
+        "expected activation history to preserve the planned reloadable diff"
+    );
+    assert_eq!(handle.current_view().startup().log_config.level, "debug");
+
+    let history = handle.generation_change_history();
+    assert_eq!(history.len(), 1);
+    assert_eq!(history[0].operation, GenerationOperation::Activate);
+    assert_eq!(history[0].config_source, config_path.to_string_lossy());
+    assert_eq!(history[0].config_version, Some(1));
+
+    let events = handle.generation_change_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, GenerationEventKind::ActivationSucceeded);
+}
+
+#[test]
+fn activation_from_alternate_config_path_updates_default_runtime_source() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let primary_path = dir.path().join("primary.yaml");
+    let canary_path = dir.path().join("canary.yaml");
+
+    let current_config = test_config(cert.clone(), key.clone());
+    write_config_file(&primary_path, &current_config);
+
+    let bundle =
+        runtime_bundle_from_config(primary_path.to_string_lossy().as_ref(), &current_config);
+    let handle = RuntimeBundleHandle::new(bundle);
+    let generation_before = handle.current_generation();
+
+    let mut canary_config = test_config(cert, key);
+    canary_config.log.level = "debug".to_string();
+    write_config_file(&canary_path, &canary_config);
+
+    let activation = RuntimeActivationService::activate_reload(
+        &handle,
+        planner_request(generation_before),
+        ReloadConfigInput::Path {
+            path: canary_path.to_string_lossy().to_string(),
+        },
+    );
+
+    assert!(activation.succeeded(), "canary activation should succeed");
+    assert_eq!(
+        handle.current_view().startup().config_path,
+        canary_path.to_string_lossy()
+    );
+    assert_eq!(
+        activation.history_entry.config_source,
+        canary_path.to_string_lossy()
+    );
+
+    let mut followup_config = canary_config.clone();
+    followup_config.log.level = "warn".to_string();
+    write_config_file(&canary_path, &followup_config);
+
+    let followup = RuntimeActivationService::activate_reload(
+        &handle,
+        planner_request(handle.current_generation()),
+        ReloadConfigInput::Path {
+            path: handle.current_view().startup().config_path.clone(),
+        },
+    );
+
+    assert!(followup.succeeded(), "follow-up activation should succeed");
+    assert_eq!(handle.current_view().startup().log_config.level, "warn");
+    assert_eq!(
+        handle.current_view().startup().config_path,
+        canary_path.to_string_lossy()
+    );
+}
+
+#[test]
+fn activation_service_rejects_restart_required_changes_without_mutating_active_generation() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+    let current_config = test_config(cert.clone(), key.clone());
+    write_config_file(&config_path, &current_config);
+
+    let bundle =
+        runtime_bundle_from_config(config_path.to_string_lossy().as_ref(), &current_config);
+    let handle = RuntimeBundleHandle::new(bundle);
+    let generation_before = handle.current_generation();
+
+    let mut next_config = test_config(cert, key);
+    next_config.performance.control_plane_threads = current_config
+        .performance
+        .control_plane_threads
+        .saturating_add(2);
+    write_config_file(&config_path, &next_config);
+
+    let activation = RuntimeActivationService::activate_reload(
+        &handle,
+        planner_request(generation_before),
+        ReloadConfigInput::Path {
+            path: config_path.to_string_lossy().to_string(),
+        },
+    );
+
+    assert!(
+        !activation.succeeded(),
+        "restart-required activation must be rejected"
+    );
+    assert_eq!(activation.status, GenerationStatus::Rejected);
+    assert_eq!(activation.active_generation, generation_before);
+    assert_eq!(activation.activated_generation, None);
+    assert_eq!(handle.current_generation(), generation_before);
+    assert_eq!(
+        activation.history_entry.operation,
+        GenerationOperation::Activate
+    );
+    assert_eq!(activation.history_entry.status, GenerationStatus::Rejected);
+    assert!(
+        activation.rejected_changes.iter().any(|rejection| {
+            rejection.kind == RejectedChangeKind::RestartRequired
+                && rejection.reason == RuntimeRejectionReason::StartupOwnedChange
+                && rejection.field_path.as_deref() == Some("performance.control_plane_threads")
+                && !rejection.active_generation_changed
+        }),
+        "expected a restart-required rejection without live mutation: {:?}",
+        activation.rejected_changes
+    );
+
+    let events = handle.generation_change_events();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, GenerationEventKind::ActivationFailed);
+    assert_eq!(events[0].entry.status, GenerationStatus::Rejected);
+}
+
+#[test]
+fn rollback_service_restores_retained_generation_by_id_and_records_rollback_status() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+
+    let mut generation_one = test_config(cert.clone(), key.clone());
+    generation_one
+        .upstream
+        .get_mut("api")
+        .expect("api upstream")
+        .backends[0]
+        .address = "http://127.0.0.1:7001".to_string();
+    let mut generation_two = test_config(cert.clone(), key.clone());
+    generation_two.log.level = "debug".to_string();
+    generation_two
+        .upstream
+        .get_mut("api")
+        .expect("api upstream")
+        .backends[0]
+        .address = "http://127.0.0.1:7002".to_string();
+    let mut generation_three = test_config(cert, key);
+    generation_three.log.level = "trace".to_string();
+    generation_three
+        .upstream
+        .get_mut("api")
+        .expect("api upstream")
+        .backends[0]
+        .address = "http://127.0.0.1:7003".to_string();
+
+    let mut bundle_one = runtime_bundle_from_config("gen-1.yaml", &generation_one);
+    bundle_one.generation = 1;
+    let mut bundle_two = runtime_bundle_from_config("gen-2.yaml", &generation_two);
+    bundle_two.generation = 2;
+    let mut bundle_three = runtime_bundle_from_config("gen-3.yaml", &generation_three);
+    bundle_three.generation = 3;
+
+    let handle = RuntimeBundleHandle::new(bundle_one);
+    handle.replace(bundle_two).expect("install generation 2");
+    handle.replace(bundle_three).expect("install generation 3");
+
+    let rollback = RuntimeActivationService::rollback_generation(
+        &handle,
+        rollback_request(1, handle.current_generation()),
+    );
+
+    assert!(
+        rollback.succeeded(),
+        "rollback should succeed: {rollback:?}"
+    );
+    assert_eq!(rollback.status, GenerationStatus::RolledBack);
+    assert_eq!(rollback.rolled_back_to, Some(1));
+    assert_eq!(rollback.active_generation, 4);
+    assert_eq!(handle.current_generation(), 4);
+    assert_eq!(
+        rollback.history_entry.operation,
+        GenerationOperation::Rollback
+    );
+    assert_eq!(rollback.history_entry.status, GenerationStatus::RolledBack);
+    assert_eq!(
+        handle
+            .current_view()
+            .runtime_config()
+            .upstreams
+            .get("api")
+            .expect("active upstream")
+            .backends[0]
+            .backend
+            .address,
+        "http://127.0.0.1:7001"
+    );
+
+    let history = handle.generation_history();
+    assert_eq!(history[1].generation(), 3);
+    assert_eq!(
+        history[1].status(),
+        crate::runtime::bundle::RuntimeGenerationRecordStatus::RolledBack
+    );
+
+    let events = handle.generation_change_events();
+    assert_eq!(events[0].kind, GenerationEventKind::RollbackSucceeded);
+    assert_eq!(events[0].entry.config_source, "gen-1.yaml");
+    assert_eq!(events[0].entry.config_version, Some(1));
+    assert_eq!(events[0].entry.trigger_source.as_deref(), Some("unit_test"));
+}
+
+#[test]
+fn rollback_service_rejects_incomplete_or_failed_prepare_targets_without_mutation() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let handle = RuntimeBundleHandle::new(runtime_bundle_from_config(
+        "active.yaml",
+        &test_config(cert, key),
+    ));
+    let active_generation = handle.current_generation();
+    handle.record_failed_prepare(9, "candidate generation never prepared");
+
+    let rollback = RuntimeActivationService::rollback_generation(
+        &handle,
+        rollback_request(9, active_generation),
+    );
+
+    assert!(
+        !rollback.succeeded(),
+        "failed-prepare history entries must not be rollbackable"
+    );
+    assert_eq!(rollback.status, GenerationStatus::Rejected);
+    assert_eq!(rollback.rolled_back_to, None);
+    assert_eq!(rollback.active_generation, active_generation);
+    assert_eq!(handle.current_generation(), active_generation);
+    assert!(
+        rollback.rejected_changes.iter().any(|rejection| {
+            rejection.kind == RejectedChangeKind::RuntimeStateUnavailable
+                && rejection.reason == RuntimeRejectionReason::RollbackNotAllowed
+                && rejection.field_path.as_deref() == Some("runtime.rollback.target_generation")
+        }),
+        "expected rollback rejection for incomplete target: {:?}",
+        rollback.rejected_changes
+    );
+
+    let events = handle.generation_change_events();
+    assert_eq!(events[0].kind, GenerationEventKind::RollbackFailed);
+    assert_eq!(events[0].entry.status, GenerationStatus::Rejected);
+    assert_eq!(events[0].entry.config_source, "generation:9");
+}
+
+#[test]
+fn validate_plan_does_not_mutate_the_active_generation() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+    let current_config = test_config(cert.clone(), key.clone());
+    write_config_file(&config_path, &current_config);
+
+    let bundle =
+        runtime_bundle_from_config(config_path.to_string_lossy().as_ref(), &current_config);
+    let handle = RuntimeBundleHandle::new(bundle);
+    let generation_before = handle.current_generation();
+    let log_level_before = handle.current_view().startup().log_config.level.clone();
+
+    let mut restart_required = test_config(cert, key);
+    restart_required.performance.control_plane_threads = current_config
+        .performance
+        .control_plane_threads
+        .saturating_add(1);
+    write_config_file(&config_path, &restart_required);
+
+    let plan = plan_runtime_reload(
+        &handle.current_view(),
+        planner_request(generation_before),
+        ReloadConfigInput::Path {
+            path: config_path.to_string_lossy().to_string(),
+        },
+    );
+
+    assert!(!plan.can_activate());
+    assert_eq!(handle.current_generation(), generation_before);
+    assert_eq!(
+        handle.current_view().startup().log_config.level,
+        log_level_before
+    );
+    assert_eq!(
+        handle
+            .current_view()
+            .runtime_config()
+            .policies
+            .transport
+            .control_plane_threads,
+        current_config.performance.control_plane_threads.max(1)
+    );
+}
+
+#[test]
+fn validate_and_preview_record_only_the_requested_history_operation() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+    let current_config = test_config(cert.clone(), key.clone());
+    write_config_file(&config_path, &current_config);
+
+    let bundle =
+        runtime_bundle_from_config(config_path.to_string_lossy().as_ref(), &current_config);
+    let handle = RuntimeBundleHandle::new(bundle);
+
+    let validate_plan = RuntimeActivationService::validate_reload(
+        &handle,
+        planner_request(handle.current_generation()),
+        ReloadConfigInput::Path {
+            path: config_path.to_string_lossy().to_string(),
+        },
+    );
+    assert_eq!(validate_plan.candidate_status, GenerationStatus::Staged);
+
+    let validate_history = handle.generation_change_history();
+    assert_eq!(validate_history.len(), 1);
+    assert_eq!(validate_history[0].operation, GenerationOperation::Validate);
+    let validate_events = handle.generation_change_events();
+    assert_eq!(validate_events.len(), 1);
+    assert_eq!(validate_events[0].kind, GenerationEventKind::Validation);
+
+    let mut next_config = test_config(cert, key);
+    next_config.log.level = "debug".to_string();
+    write_config_file(&config_path, &next_config);
+
+    let preview_plan = RuntimeActivationService::preview_reload(
+        &handle,
+        planner_request(handle.current_generation()),
+        ReloadConfigInput::Path {
+            path: config_path.to_string_lossy().to_string(),
+        },
+    );
+    assert_eq!(preview_plan.candidate_status, GenerationStatus::Staged);
+
+    let preview_history = handle.generation_change_history();
+    assert_eq!(preview_history.len(), 2);
+    assert_eq!(preview_history[0].operation, GenerationOperation::Preview);
+    assert_eq!(preview_history[1].operation, GenerationOperation::Validate);
+    let preview_events = handle.generation_change_events();
+    assert_eq!(preview_events.len(), 2);
+    assert_eq!(preview_events[0].kind, GenerationEventKind::Preview);
+    assert_eq!(preview_events[1].kind, GenerationEventKind::Validation);
+}
+
+#[test]
+fn preview_plan_returns_expected_diff_without_mutating_the_active_generation() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+    let current_config = test_config(cert.clone(), key.clone());
+    write_config_file(&config_path, &current_config);
+
+    let bundle =
+        runtime_bundle_from_config(config_path.to_string_lossy().as_ref(), &current_config);
+    let handle = RuntimeBundleHandle::new(bundle);
+    let generation_before = handle.current_generation();
+
+    let mut next_config = test_config(cert, key);
+    next_config.log.level = "debug".to_string();
+    write_config_file(&config_path, &next_config);
+
+    let plan = plan_runtime_reload(
+        &handle.current_view(),
+        planner_request(generation_before),
+        ReloadConfigInput::Path {
+            path: config_path.to_string_lossy().to_string(),
+        },
+    );
+
+    assert!(plan.can_activate());
+    assert_eq!(handle.current_generation(), generation_before);
+    let reloadable = plan
+        .plan
+        .diff
+        .reloadable_entries()
+        .into_iter()
+        .find(|entry| entry.domain == "observability_control_plane")
+        .expect("reloadable observability diff");
+    assert!(reloadable.summary.contains("log(level=info"));
+    assert!(reloadable.summary.contains("log(level=debug"));
+}
+
+#[test]
+fn invalid_activation_leaves_active_generation_unchanged() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+    let current_config = test_config(cert, key);
+    write_config_file(&config_path, &current_config);
+
+    let bundle =
+        runtime_bundle_from_config(config_path.to_string_lossy().as_ref(), &current_config);
+    let handle = RuntimeBundleHandle::new(bundle);
+    let generation_before = handle.current_generation();
+
+    std::fs::write(&config_path, "version: 1\nlisten:\n  protocol: \"http3\"\n")
+        .expect("write invalid config");
+
+    let activation = RuntimeActivationService::activate_reload(
+        &handle,
+        planner_request(generation_before),
+        ReloadConfigInput::Path {
+            path: config_path.to_string_lossy().to_string(),
+        },
+    );
+
+    assert!(!activation.succeeded());
+    assert_eq!(activation.activated_generation, None);
+    assert_eq!(activation.status, GenerationStatus::Rejected);
+    assert_eq!(handle.current_generation(), generation_before);
+    assert!(
+        activation.rejected_changes.iter().any(|rejection| {
+            rejection.kind == RejectedChangeKind::InvalidConfiguration
+                && rejection.reason == RuntimeRejectionReason::InvalidConfig
+        }),
+        "expected invalid config rejection: {:?}",
+        activation.rejected_changes
+    );
+}
+
+#[test]
+fn runtime_history_records_activate_fail_and_rollback_flow() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+
+    let generation_one = test_config(cert.clone(), key.clone());
+    write_config_file(&config_path, &generation_one);
+    let mut bundle_one = runtime_bundle_from_config("gen-1.yaml", &generation_one);
+    bundle_one.generation = 1;
+    let handle = RuntimeBundleHandle::new(bundle_one);
+
+    let mut generation_two = test_config(cert.clone(), key.clone());
+    generation_two.log.level = "debug".to_string();
+    write_config_file(&config_path, &generation_two);
+    let activation = RuntimeActivationService::activate_reload(
+        &handle,
+        planner_request(handle.current_generation()),
+        ReloadConfigInput::Path {
+            path: config_path.to_string_lossy().to_string(),
+        },
+    );
+    assert!(activation.succeeded());
+
+    let mut rejected = test_config(cert, key);
+    rejected.performance.control_plane_threads = generation_two
+        .performance
+        .control_plane_threads
+        .saturating_add(1);
+    write_config_file(&config_path, &rejected);
+    let failed = RuntimeActivationService::activate_reload(
+        &handle,
+        planner_request(handle.current_generation()),
+        ReloadConfigInput::Path {
+            path: config_path.to_string_lossy().to_string(),
+        },
+    );
+    assert!(!failed.succeeded());
+
+    let rollback = RuntimeActivationService::rollback_generation(
+        &handle,
+        rollback_request(1, handle.current_generation()),
+    );
+    assert!(rollback.succeeded());
+
+    let history = handle.generation_change_history();
+    let operations = history
+        .iter()
+        .map(|entry| (entry.operation, entry.status))
+        .take(8)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        operations,
+        vec![
+            (GenerationOperation::Rollback, GenerationStatus::RolledBack),
+            (GenerationOperation::Activate, GenerationStatus::Rejected),
+            (GenerationOperation::Activate, GenerationStatus::Active),
+        ]
+    );
+    assert_eq!(handle.current_generation(), 3);
+    assert_eq!(
+        handle
+            .current_view()
+            .runtime_config()
+            .upstreams
+            .get("api")
+            .expect("active upstream")
+            .backends[0]
+            .backend
+            .address,
+        "http://127.0.0.1:7001"
     );
 }
 
@@ -268,9 +1064,39 @@ fn control_api_route_gating_accepts_only_canonical_method_and_path_pairs() {
             Some(super::auth::ControlApiRoute::Runtime),
         ),
         (
+            Method::GET,
+            paths.runtime_history_path(),
+            Some(super::auth::ControlApiRoute::RuntimeHistory),
+        ),
+        (
+            Method::GET,
+            format!("{}/2", paths.runtime_history_path()),
+            Some(super::auth::ControlApiRoute::RuntimeHistoryGeneration(2)),
+        ),
+        (
             Method::POST,
             paths.reload_certs_path.clone(),
             Some(super::auth::ControlApiRoute::ReloadCerts),
+        ),
+        (
+            Method::POST,
+            paths.runtime_validate_path(),
+            Some(super::auth::ControlApiRoute::RuntimeValidate),
+        ),
+        (
+            Method::POST,
+            paths.runtime_preview_path(),
+            Some(super::auth::ControlApiRoute::RuntimePreview),
+        ),
+        (
+            Method::POST,
+            paths.runtime_activate_path(),
+            Some(super::auth::ControlApiRoute::RuntimeActivate),
+        ),
+        (
+            Method::POST,
+            paths.runtime_rollback_path(),
+            Some(super::auth::ControlApiRoute::RuntimeRollback),
         ),
         (
             Method::POST,
@@ -283,6 +1109,7 @@ fn control_api_route_gating_accepts_only_canonical_method_and_path_pairs() {
             Some(super::auth::ControlApiRoute::Restart),
         ),
         (Method::POST, paths.runtime_path.clone(), None),
+        (Method::POST, paths.runtime_history_path(), None),
         (Method::GET, paths.reload_path.clone(), None),
         (Method::GET, "/missing".to_string(), None),
     ];
@@ -346,6 +1173,31 @@ async fn control_api_gate_returns_canonical_unauthorized_payloads_per_route() {
         (
             Method::GET,
             paths.runtime_path.clone(),
+            serde_json::json!({ "error": "unauthorized" }),
+        ),
+        (
+            Method::POST,
+            paths.runtime_validate_path(),
+            serde_json::json!({ "error": "unauthorized" }),
+        ),
+        (
+            Method::POST,
+            paths.runtime_preview_path(),
+            serde_json::json!({ "error": "unauthorized" }),
+        ),
+        (
+            Method::POST,
+            paths.runtime_activate_path(),
+            serde_json::json!({ "error": "unauthorized" }),
+        ),
+        (
+            Method::POST,
+            paths.runtime_rollback_path(),
+            serde_json::json!({ "error": "unauthorized" }),
+        ),
+        (
+            Method::GET,
+            paths.runtime_history_path(),
             serde_json::json!({ "error": "unauthorized" }),
         ),
         (
@@ -638,6 +1490,110 @@ fn control_api_backend_inventory_and_summary_share_one_canonical_snapshot_contra
     assert!(backend.placements[0].healthy);
     assert_eq!(summary.total_backends, 1);
     assert_eq!(summary.healthy_backends, 1);
+}
+
+#[tokio::test]
+async fn control_api_runtime_history_renders_recorded_generation_changes() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+    let current_config = test_config(cert.clone(), key.clone());
+    write_config_file(&config_path, &current_config);
+
+    let bundle =
+        runtime_bundle_from_config(config_path.to_string_lossy().as_ref(), &current_config);
+    let (state, runtime_handle) = runtime_bundle_control_api_state(bundle);
+
+    let mut next_config = test_config(cert, key);
+    next_config.log.level = "debug".to_string();
+    write_config_file(&config_path, &next_config);
+
+    let activation = RuntimeActivationService::activate_reload(
+        runtime_handle.as_ref(),
+        planner_request(runtime_handle.current_generation()),
+        ReloadConfigInput::Path {
+            path: config_path.to_string_lossy().to_string(),
+        },
+    );
+    assert!(activation.succeeded());
+    runtime_handle.record_failed_prepare(9, "candidate generation never prepared");
+
+    let payload = json_body(QUICListener::render_control_api_runtime_history(&state)).await;
+    assert_eq!(payload["active_generation"], 1);
+    assert_eq!(
+        payload["retained_generations"].as_array().map(Vec::len),
+        Some(3)
+    );
+    assert_eq!(payload["retained_generations"][0]["generation"], 1);
+    assert_eq!(payload["retained_generations"][0]["status"], "active");
+    assert_eq!(
+        payload["retained_generations"][0]["rollback_candidate"],
+        false
+    );
+    assert_eq!(payload["retained_generations"][0]["has_bundle"], true);
+    assert_eq!(payload["retained_generations"][1]["generation"], 9);
+    assert_eq!(
+        payload["retained_generations"][1]["status"],
+        "failed_prepare"
+    );
+    assert_eq!(
+        payload["retained_generations"][1]["rollback_candidate"],
+        false
+    );
+    assert_eq!(payload["retained_generations"][1]["has_bundle"], false);
+    assert_eq!(
+        payload["retained_generations"][1]["note"],
+        "candidate generation never prepared"
+    );
+    assert_eq!(payload["retained_generations"][2]["generation"], 0);
+    assert_eq!(payload["retained_generations"][2]["status"], "previous");
+    assert_eq!(
+        payload["retained_generations"][2]["rollback_candidate"],
+        true
+    );
+    assert_eq!(payload["retained_generations"][2]["has_bundle"], true);
+    assert_eq!(payload["entries"].as_array().map(Vec::len), Some(1));
+    assert_eq!(payload["entries"][0]["operation"], "activate");
+}
+
+#[tokio::test]
+async fn control_api_runtime_history_generation_filters_to_requested_generation() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+    let current_config = test_config(cert.clone(), key.clone());
+    write_config_file(&config_path, &current_config);
+
+    let bundle =
+        runtime_bundle_from_config(config_path.to_string_lossy().as_ref(), &current_config);
+    let (state, runtime_handle) = runtime_bundle_control_api_state(bundle);
+
+    let mut next_config = test_config(cert, key);
+    next_config.log.level = "debug".to_string();
+    write_config_file(&config_path, &next_config);
+
+    let activation = RuntimeActivationService::activate_reload(
+        runtime_handle.as_ref(),
+        planner_request(runtime_handle.current_generation()),
+        ReloadConfigInput::Path {
+            path: config_path.to_string_lossy().to_string(),
+        },
+    );
+    assert!(activation.succeeded());
+
+    let payload = json_body(QUICListener::render_control_api_runtime_history_generation(
+        &state, 1,
+    ))
+    .await;
+    assert_eq!(payload["generation"], 1);
+    assert_eq!(payload["retained_generation"]["generation"], 1);
+    assert_eq!(payload["retained_generation"]["status"], "active");
+    assert_eq!(payload["retained_generation"]["rollback_candidate"], false);
+    assert_eq!(payload["retained_generation"]["has_bundle"], true);
+    assert_eq!(payload["entries"].as_array().map(Vec::len), Some(1));
+
+    let missing = QUICListener::render_control_api_runtime_history_generation(&state, 99);
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
