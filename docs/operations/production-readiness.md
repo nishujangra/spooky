@@ -37,7 +37,9 @@ The following areas are considered strong enough for controlled production use:
 
 The following capabilities exist, but operators should treat them as features that still need careful rollout discipline:
 
-- full configuration hot reload via `POST /admin/runtime/reload` (atomic runtime swap of routes, upstreams, backends, timeouts, limits, and resilience policies), and certificate-only reload for new handshakes — both without a full process restart
+- full configuration hot reload (atomic runtime swap of routes, upstreams, backends, timeouts, limits, and resilience policies), and certificate-only reload for new handshakes — both without a full process restart
+- staged activation — `POST /admin/runtime/validate` and `/preview` plan a config change and return its diff without touching the running runtime, and `/activate` commits it; prefer this over the legacy `POST /admin/runtime/reload` shortcut, which applies the change without surfacing the diff
+- rollback to a retained generation via `POST /admin/runtime/rollback`; use `GET /admin/runtime/history` to pick a target whose `rollback_candidate` is `true`, and note that retained generations are capped at a fixed bound rather than kept indefinitely
 - watchdog-driven recovery hooks
 - DNS-based backend refresh and backend client rotation
 - retry budget, circuit breaker, and hedging controls

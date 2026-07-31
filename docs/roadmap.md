@@ -23,9 +23,10 @@ These are the highest-value areas for the next phase of maturity.
 
 ### 1. Complete Configuration Hot Reload
 
-Full config hot reload is **shipped** (`POST /admin/runtime/reload`): routes, upstreams, backends,
-timeouts and limits, resilience policies, and observability endpoint changes apply live via an
-atomic runtime swap. The remaining work is to close the restart-only gaps:
+Full config hot reload is **shipped** (`POST /admin/runtime/activate`, or the legacy
+`POST /admin/runtime/reload` shortcut): routes, upstreams, backends, timeouts and limits,
+resilience policies, and observability endpoint changes apply live via an atomic runtime swap.
+The remaining work is to close the restart-only gaps:
 
 - listener removal and bind-address changes (listener *addition* is already live)
 - startup-owned settings: log file/format, tracing config, control-plane thread counts
@@ -33,13 +34,18 @@ atomic runtime swap. The remaining work is to close the restart-only gaps:
 
 ### 2. Dynamic Config Safety
 
-Add a stronger control-plane model with:
+The staged control-plane model is **shipped**:
 
-- validation before apply
-- dry-run support
-- config diff visibility
-- atomic activation
-- rollback to a known-good generation
+- validation before apply (`POST /admin/runtime/validate`)
+- dry-run support (`POST /admin/runtime/preview`)
+- config diff visibility (returned by validate, preview, and activate)
+- atomic activation (`POST /admin/runtime/activate`)
+- rollback to a known-good generation (`POST /admin/runtime/rollback`, with retained
+  rollback-eligible generations listed by `GET /admin/runtime/history`)
+
+Retained generations are capped at a fixed bound, so rollback reaches recent generations rather
+than arbitrarily old ones. Remaining work is operational hardening rather than new surface:
+configurable retention, and automatic rollback on post-activation health regression.
 
 ### 3. Edge Runtime Refactor
 
