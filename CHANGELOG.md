@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1-beta] - 2026-07-31
+
+### Added
+
+- Staged runtime activation — `POST /admin/runtime/validate`, `/preview`, and `/activate` plan a config change (read, validate, compatibility-gate, per-domain diff) and commit it as an explicit transaction, returning the diff and structured rejections instead of a bare success flag.
+- Rollback by generation id via `POST /admin/runtime/rollback`, backed by retained rollback-candidate generations.
+- Runtime generation history — `GET /admin/runtime/history` and `/history/{generation}` expose the operation log plus retained-generation records (`status`, `rollback_candidate`, `has_bundle`, and a `note` explaining failed staged prepares) so operators can pick a safe rollback target.
+- Runtime activation observability and canonical rejection reasons normalized across operator surfaces.
+
+### Changed
+
+- Operator-conflict responses are now classified instead of collapsing into `500`: stale-generation and restart-required conflicts return `409`, and an unknown rollback target returns `404`. **Breaking for automation that matches on `500`** — genuine runtime faults still return `500`.
+- `POST /admin/runtime/reload` now defaults to the currently active runtime config source rather than always re-reading the startup path, and accepts an optional `config_path` body field to activate an alternate file. It remains a shortcut over the same staged pipeline as `/activate`.
+- Config defaults co-located with the types they belong to, and serde default patterns normalized.
+- Test suite restructured by behavioral domain, with shared integration harnesses for the request path, bootstrap/QUIC parity, runtime swap, and backend lifecycle.
+
+### Fixed
+
+- Activating an alternate `config_path` now makes that file the active runtime source, so later reloads read the activated file instead of silently falling back to the startup path.
+- Generation history records only the operation actually requested — `validate` and `activate` no longer write synthetic `preview` entries, which previously consumed three history slots per activation and made the audit trail misleading.
+
 ## [0.4.0-beta] - 2026-07-27
 
 ### Added

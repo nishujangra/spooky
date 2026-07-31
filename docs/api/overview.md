@@ -42,12 +42,16 @@ The canonical configuration docs live in:
 
 The control API applies configuration through a file-reload model, not a granular per-object API.
 
-- it provides health, readiness, runtime inspection, restart actions, certificate reload, and full
-  config reload (`POST /admin/runtime/reload`)
+- it provides health, readiness, runtime inspection, restart actions, certificate reload, staged
+  activation (`POST /admin/runtime/validate`, `/preview`, `/activate`), rollback
+  (`POST /admin/runtime/rollback`), generation history (`GET /admin/runtime/history`), and the
+  legacy full config reload shortcut (`POST /admin/runtime/reload`)
 - config reload re-reads the config file and applies it live via an atomic runtime swap, including
   route, upstream, and backend changes — it is not a per-object mutation API (you edit the file and
   reload). `log.level` applies live; log format/file settings, tracing config, control-plane thread
   counts, and listener bind/removal changes still require a restart
+- reloads default to the currently active runtime config source, which is the startup path until an
+  alternate `config_path` is activated; a successful activation makes that file the new active source
 
 ## Related Pages
 
