@@ -1440,23 +1440,28 @@
 <h2 id="near-term-priorities">Near-Term Priorities</h2>
 <p>These are the highest-value areas for the next phase of maturity.</p>
 <h3 id="1-complete-configuration-hot-reload">1. Complete Configuration Hot Reload</h3>
-<p>Full config hot reload is <strong>shipped</strong> (<code>POST /admin/runtime/reload</code>): routes, upstreams, backends,
-timeouts and limits, resilience policies, and observability endpoint changes apply live via an
-atomic runtime swap. The remaining work is to close the restart-only gaps:</p>
+<p>Full config hot reload is <strong>shipped</strong> (<code>POST /admin/runtime/activate</code>, or the legacy
+<code>POST /admin/runtime/reload</code> shortcut): routes, upstreams, backends, timeouts and limits,
+resilience policies, and observability endpoint changes apply live via an atomic runtime swap.
+The remaining work is to close the restart-only gaps:</p>
 <ul>
 <li>listener removal and bind-address changes (listener <em>addition</em> is already live)</li>
 <li>startup-owned settings: log file/format, tracing config, control-plane thread counts
   (<code>log.level</code> already reloads live)</li>
 </ul>
 <h3 id="2-dynamic-config-safety">2. Dynamic Config Safety</h3>
-<p>Add a stronger control-plane model with:</p>
+<p>The staged control-plane model is <strong>shipped</strong>:</p>
 <ul>
-<li>validation before apply</li>
-<li>dry-run support</li>
-<li>config diff visibility</li>
-<li>atomic activation</li>
-<li>rollback to a known-good generation</li>
+<li>validation before apply (<code>POST /admin/runtime/validate</code>)</li>
+<li>dry-run support (<code>POST /admin/runtime/preview</code>)</li>
+<li>config diff visibility (returned by validate, preview, and activate)</li>
+<li>atomic activation (<code>POST /admin/runtime/activate</code>)</li>
+<li>rollback to a known-good generation (<code>POST /admin/runtime/rollback</code>, with retained
+  rollback-eligible generations listed by <code>GET /admin/runtime/history</code>)</li>
 </ul>
+<p>Retained generations are capped at a fixed bound, so rollback reaches recent generations rather
+than arbitrarily old ones. Remaining work is operational hardening rather than new surface:
+configurable retention, and automatic rollback on post-activation health regression.</p>
 <h3 id="3-edge-runtime-refactor">3. Edge Runtime Refactor</h3>
 <p>Break the large edge runtime into smaller subsystems so future work is safer:</p>
 <ul>

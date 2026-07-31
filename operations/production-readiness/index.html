@@ -1467,7 +1467,9 @@
 <h2 id="production-capable-with-caveats">Production-Capable With Caveats</h2>
 <p>The following capabilities exist, but operators should treat them as features that still need careful rollout discipline:</p>
 <ul>
-<li>full configuration hot reload via <code>POST /admin/runtime/reload</code> (atomic runtime swap of routes, upstreams, backends, timeouts, limits, and resilience policies), and certificate-only reload for new handshakes — both without a full process restart</li>
+<li>full configuration hot reload (atomic runtime swap of routes, upstreams, backends, timeouts, limits, and resilience policies), and certificate-only reload for new handshakes — both without a full process restart</li>
+<li>staged activation — <code>POST /admin/runtime/validate</code> and <code>/preview</code> plan a config change and return its diff without touching the running runtime, and <code>/activate</code> commits it; prefer this over the legacy <code>POST /admin/runtime/reload</code> shortcut, which applies the change without surfacing the diff</li>
+<li>rollback to a retained generation via <code>POST /admin/runtime/rollback</code>; use <code>GET /admin/runtime/history</code> to pick a target whose <code>rollback_candidate</code> is <code>true</code>, and note that retained generations are capped at a fixed bound rather than kept indefinitely</li>
 <li>watchdog-driven recovery hooks</li>
 <li>DNS-based backend refresh and backend client rotation</li>
 <li>retry budget, circuit breaker, and hedging controls</li>
