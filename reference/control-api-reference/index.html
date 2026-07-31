@@ -1443,6 +1443,9 @@
 <li>health</li>
 <li>readiness</li>
 <li>runtime snapshot</li>
+<li>staged activation: validate, preview, activate</li>
+<li>rollback</li>
+<li>generation history</li>
 <li>certificate reload</li>
 <li>full config reload</li>
 <li>restart request</li>
@@ -1504,10 +1507,221 @@
 <li>rollout validation</li>
 <li>incident response</li>
 </ul>
+<h3 id="post-adminruntimevalidate"><code>POST /admin/runtime/validate</code></h3>
+<p>Purpose:</p>
+<ul>
+<li>parse and validate a candidate config, and report whether it could be activated — without touching the running runtime</li>
+</ul>
+<p>Returns <code>200</code> with a plan describing the candidate generation, a per-domain diff, and any rejected changes. A config that cannot be activated still returns <code>200</code>; inspect <code>rejected_changes</code> and <code>candidate_status</code> rather than relying on the status code.</p>
+<p>Accepts the same optional body fields as <code>/admin/runtime/reload</code>.</p>
+<p>Expected use:</p>
+<ul>
+<li>CI gating on config changes before a deploy</li>
+<li>confirming a config is loadable before scheduling a maintenance window</li>
+</ul>
+<h3 id="post-adminruntimepreview"><code>POST /admin/runtime/preview</code></h3>
+<p>Purpose:</p>
+<ul>
+<li>same planning work as validate, recorded in generation history as an operator preview</li>
+</ul>
+<p>Returns <code>200</code> with the same plan shape as validate. Neither endpoint mutates the active generation.</p>
+<p>Expected use:</p>
+<ul>
+<li>operator dry-run immediately before an activation, when you want the attempt in the audit trail</li>
+</ul>
+<h3 id="post-adminruntimeactivate"><code>POST /admin/runtime/activate</code></h3>
+<p>Purpose:</p>
+<ul>
+<li>stage and commit a config change, returning the structured activation result</li>
+</ul>
+<p>Returns <code>202</code> on success. Failures are classified rather than collapsed into <code>500</code>:</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>400</code></td>
+<td>the candidate config is invalid</td>
+</tr>
+<tr>
+<td><code>409</code></td>
+<td>conflict — a stale <code>expected_generation</code>, or changes that require a restart</td>
+</tr>
+<tr>
+<td><code>500</code></td>
+<td>resource preparation failed, or the runtime swap itself failed</td>
+</tr>
+</tbody>
+</table></div>
+<p>Accepts the same optional body fields as <code>/admin/runtime/reload</code>.</p>
+<p>Expected use:</p>
+<ul>
+<li>the preferred activation path — prefer this over the legacy <code>/reload</code> shortcut, since it returns the full diff, rejection detail, and generation history entry</li>
+</ul>
+<h3 id="post-adminruntimerollback"><code>POST /admin/runtime/rollback</code></h3>
+<p>Purpose:</p>
+<ul>
+<li>restore a previously retained runtime generation</li>
+</ul>
+<p>Required request body:</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>target_generation</code></td>
+<td>integer</td>
+<td>The retained generation to restore. Required.</td>
+</tr>
+<tr>
+<td><code>expected_active_generation</code></td>
+<td>integer</td>
+<td>Reject with <code>409</code> unless this matches the active generation.</td>
+</tr>
+<tr>
+<td><code>requested_by</code></td>
+<td>string</td>
+<td>Recorded in generation history for audit.</td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td>string</td>
+<td>Recorded in generation history for audit.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Returns <code>202</code> on success. Failures:</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>404</code></td>
+<td>the target generation is not retained (unknown generation)</td>
+</tr>
+<tr>
+<td><code>409</code></td>
+<td>the target is retained but not rollback-eligible, or the active generation moved</td>
+</tr>
+<tr>
+<td><code>500</code></td>
+<td>resource preparation failed, or the rollback swap itself failed</td>
+</tr>
+</tbody>
+</table></div>
+<p>Use <code>GET /admin/runtime/history</code> first to pick a target whose <code>rollback_candidate</code> is <code>true</code>.</p>
+<p>Example:</p>
+<pre><code class="language-bash">curl -k --http1.1 -X POST https://127.0.0.1:9890/admin/runtime/rollback \
+  -H &quot;Authorization: Bearer &lt;token&gt;&quot; \
+  -H &quot;content-type: application/json&quot; \
+  -d '{&quot;target_generation&quot;: 3}'
+</code></pre>
+<h3 id="get-adminruntimehistory"><code>GET /admin/runtime/history</code></h3>
+<p>Purpose:</p>
+<ul>
+<li>list retained runtime generations and the recorded history of control-plane operations</li>
+</ul>
+<p>Response shape:</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>active_generation</code></td>
+<td>integer</td>
+<td>The generation currently serving traffic.</td>
+</tr>
+<tr>
+<td><code>retained_generations</code></td>
+<td>array</td>
+<td>Retained generation records — the state needed to choose a rollback target.</td>
+</tr>
+<tr>
+<td><code>entries</code></td>
+<td>array</td>
+<td>Operation log (validate, preview, activate, rollback), newest first.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Each entry in <code>retained_generations</code>:</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>generation</code></td>
+<td>integer</td>
+<td>The generation number.</td>
+</tr>
+<tr>
+<td><code>status</code></td>
+<td>string</td>
+<td>One of <code>active</code>, <code>previous</code>, <code>failed_prepare</code>, <code>rolled_back</code>, <code>superseded</code>.</td>
+</tr>
+<tr>
+<td><code>rollback_candidate</code></td>
+<td>bool</td>
+<td>Whether <code>/admin/runtime/rollback</code> will accept this generation as a target.</td>
+</tr>
+<tr>
+<td><code>has_bundle</code></td>
+<td>bool</td>
+<td>Whether the runtime bundle is still retained. A rollback target needs <code>true</code>.</td>
+</tr>
+<tr>
+<td><code>note</code></td>
+<td>string</td>
+<td>Present only when there is explanatory detail, e.g. why a staged prepare failed.</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>status: failed_prepare</code> records a candidate generation that was never successfully prepared; it has <code>has_bundle: false</code> and carries the failure reason in <code>note</code>.</p>
+<p>Expected use:</p>
+<ul>
+<li>choosing a safe rollback target</li>
+<li>auditing who changed runtime config, when, and from which config source</li>
+<li>diagnosing why a staged activation never committed</li>
+</ul>
+<h3 id="get-adminruntimehistorygeneration"><code>GET /admin/runtime/history/{generation}</code></h3>
+<p>Purpose:</p>
+<ul>
+<li>the retained-generation record and operation entries for a single generation</li>
+</ul>
+<p>Returns <code>200</code> with <code>generation</code>, a single <code>retained_generation</code> object (same shape as above), and the <code>entries</code> recorded against it. Returns <code>404</code> if that generation is not retained.</p>
 <h3 id="post-adminruntimereload"><code>POST /admin/runtime/reload</code></h3>
+<p>Legacy shortcut. Prefer <code>POST /admin/runtime/activate</code>, which returns the full diff and rejection detail.</p>
 <p>Purpose:</p>
 <ul>
 <li>reload the full config from disk and apply changes to upstreams, backends, policies, timeouts, and <code>log.level</code></li>
+</ul>
+<p>Config source:</p>
+<ul>
+<li>with no request body, the reload re-reads the <strong>currently active runtime config source</strong></li>
+<li>on a freshly started process that source is the path passed at startup, but activating an alternate <code>config_path</code> makes that file the active source for every later reload</li>
+<li>pass <code>config_path</code> in the body to read a different file; a successful activation makes that path the new active source</li>
 </ul>
 <p>Important scope note:</p>
 <ul>
@@ -1520,9 +1734,47 @@
 <li>adding or removing backends</li>
 <li>changing load balancing, timeouts, resilience, or routing policy at runtime</li>
 </ul>
+<p>Optional request body:</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>config_path</code></td>
+<td>string</td>
+<td>Read this config file instead of the active source. On success it becomes the new active source.</td>
+</tr>
+<tr>
+<td><code>expected_generation</code></td>
+<td>integer</td>
+<td>Reject with <code>409</code> unless this matches the active generation (optimistic concurrency).</td>
+</tr>
+<tr>
+<td><code>requested_by</code></td>
+<td>string</td>
+<td>Recorded in generation history for audit.</td>
+</tr>
+<tr>
+<td><code>reason</code></td>
+<td>string</td>
+<td>Recorded in generation history for audit.</td>
+</tr>
+</tbody>
+</table></div>
 <p>Example:</p>
 <pre><code class="language-bash">curl -k --http1.1 -X POST https://127.0.0.1:9890/admin/runtime/reload \
   -H &quot;Authorization: Bearer &lt;token&gt;&quot;
+</code></pre>
+<p>Activating an alternate config file:</p>
+<pre><code class="language-bash">curl -k --http1.1 -X POST https://127.0.0.1:9890/admin/runtime/reload \
+  -H &quot;Authorization: Bearer &lt;token&gt;&quot; \
+  -H &quot;content-type: application/json&quot; \
+  -d '{&quot;config_path&quot;: &quot;/etc/spooky/canary.yaml&quot;}'
 </code></pre>
 <h3 id="post-adminruntimereload-certs"><code>POST /admin/runtime/reload-certs</code></h3>
 <p>Purpose:</p>
@@ -1552,7 +1804,9 @@
 <h2 id="operator-notes">Operator Notes</h2>
 <ul>
 <li>use cert reload for cert-only changes</li>
-<li>use full config reload for backend, policy, timeout, or routing changes that don't require rebinding listeners</li>
+<li>use <code>validate</code> (or <code>preview</code>) then <code>activate</code> for backend, policy, timeout, or routing changes that don't require rebinding listeners — <code>activate</code> reports the diff and classifies failures, unlike the legacy <code>/reload</code></li>
+<li>pass <code>expected_generation</code> on <code>activate</code> and <code>rollback</code> so a concurrent change fails with <code>409</code> instead of silently overwriting</li>
+<li>check <code>GET /admin/runtime/history</code> for a target with <code>rollback_candidate: true</code> before calling <code>rollback</code></li>
 <li>use drain-and-restart when listener addresses or control API/metrics bind must change</li>
 <li>keep rollback available before using restart-triggering control-plane actions in production</li>
 <li>all curl invocations must use <code>--http1.1</code> — the control API does not support HTTP/2</li>
@@ -2068,6 +2322,42 @@
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#get-adminruntime');">
             GET /admin/runtime
+        </a>
+        
+        <a href="#post-adminruntimevalidate"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#post-adminruntimevalidate');">
+            POST /admin/runtime/validate
+        </a>
+        
+        <a href="#post-adminruntimepreview"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#post-adminruntimepreview');">
+            POST /admin/runtime/preview
+        </a>
+        
+        <a href="#post-adminruntimeactivate"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#post-adminruntimeactivate');">
+            POST /admin/runtime/activate
+        </a>
+        
+        <a href="#post-adminruntimerollback"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#post-adminruntimerollback');">
+            POST /admin/runtime/rollback
+        </a>
+        
+        <a href="#get-adminruntimehistory"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#get-adminruntimehistory');">
+            GET /admin/runtime/history
+        </a>
+        
+        <a href="#get-adminruntimehistorygeneration"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#get-adminruntimehistorygeneration');">
+            GET /admin/runtime/history/{generation}
         </a>
         
         <a href="#post-adminruntimereload"
