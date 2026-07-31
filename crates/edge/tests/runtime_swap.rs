@@ -388,7 +388,7 @@ fn runtime_reload_is_rejected_after_listener_lifecycle_leaves_running() {
         .expect("rewrite live-reloadable config");
 
     let rejection = harness
-        .trigger_runtime_reload_expect(http::StatusCode::INTERNAL_SERVER_ERROR)
+        .trigger_runtime_reload_expect(http::StatusCode::CONFLICT)
         .expect("reload rejection after drain");
     assert_eq!(rejection["reloaded"], false);
     let error = rejection["error"]
