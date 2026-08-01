@@ -83,9 +83,41 @@ Route-to-role matrix:
 Implementation rules:
 
 - authentication failure must be distinct from authorization failure
+- source-address policy must run before bearer-token validation when IP allowlisting is configured
 - read-only runtime visibility is a `viewer` capability, not an implicit side effect of having any token
 - restart is reserved for `admin`, even if other runtime mutation routes are granted to `operator`
 - this admin-plane contract is separate from upstream/request-path auth policy and must stay in control-plane code
+
+### Failure semantics
+
+Control API authn/authz failures are intentionally split:
+
+- `401 Unauthorized`: missing authentication or invalid authentication material
+- `403 Forbidden`: authenticated but insufficient role, or denied by pre-auth source-address policy
+
+Control API mTLS failure is separate:
+
+- when `observability.control_api.tls.client_auth.mode: required`, missing or invalid client certificates fail the TLS handshake
+- that failure happens before HTTP routing, so there is no HTTP `401` or `403` payload
+- operators should rely on control-plane TLS handshake logs and audit events for diagnosis
+
+### Admin-plane configuration guidance
+
+Preferred rollout order:
+
+1. Start with loopback-bound bearer-token auth for local development only.
+2. Move to `auth.bearer_tokens[]` with explicit `viewer` / `operator` / `admin` roles.
+3. Add IP allowlisting for the admin network.
+4. Require control API mTLS in production.
+5. Enable audit output and retain it separately from request-path logs.
+
+Recommended production posture:
+
+- `tls.client_auth.mode: required`
+- `auth.bearer_tokens[]` or role-bearing mTLS identity mapping
+- `ip_allowlist.cidrs` restricted to the admin network
+- audit enabled with JSON output
+- health and readiness protected explicitly if deployment policy requires it
 
 ### Route families
 
@@ -189,6 +221,12 @@ Minimum role requirements are:
 - `viewer` for runtime snapshot and generation history reads
 - `operator` for validate, preview, activate, rollback, reload, and cert reload
 - `admin` for restart
+
+Example postures:
+
+- local dev: bearer token only on loopback
+- transitional admin network: mTLS optional plus `viewer` token for read-only automation
+- production: mTLS required plus `operator` / `admin` identities, IP allowlisting, and audit enabled
 
 ### Metrics endpoint
 

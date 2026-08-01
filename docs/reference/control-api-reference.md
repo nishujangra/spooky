@@ -35,6 +35,8 @@ The `-k` flag skips certificate verification for self-signed certs.
 - bind to loopback or a strongly isolated admin network whenever possible
 - prefer `mTLS required` plus either a bearer token or an mTLS-derived role-bearing identity in production
 - avoid broad public exposure even when authentication is enabled
+- if IP allowlisting is configured, source address policy is enforced before bearer-token validation
+- do not trust `X-Forwarded-For` or similar proxy headers unless a future deployment-specific policy layer explicitly enables that behavior
 
 ## Authentication
 
@@ -61,7 +63,10 @@ Bearer-token form:
 Authorization: Bearer <token>
 ```
 
-The current token is configured with `observability.control_api.auth_token`.
+Compatibility note:
+
+- `observability.control_api.auth_token` remains supported as the legacy single-token admin credential
+- new deployments should prefer `observability.control_api.auth.bearer_tokens[]` with explicit roles
 
 Role model:
 
@@ -103,6 +108,93 @@ Contract rules:
 - `admin` is required for restart
 - health and readiness may remain unauthenticated, but deployments may choose to protect them separately
 - implementation should distinguish invalid authentication from insufficient role
+
+## Response Contract
+
+Privileged routes distinguish authentication failure from authorization failure:
+
+- `401 Unauthorized`: missing authentication or invalid authentication
+- `403 Forbidden`: authenticated caller is under-scoped, or the source-address policy rejected the request
+
+Representative reasons returned in JSON payloads:
+
+- `missing_authentication`
+- `invalid_bearer_token`
+- `insufficient_role`
+- `source_ip_not_allowed`
+
+When control API mTLS is configured as `required`, missing or invalid client certificates are rejected during the TLS handshake before HTTP routing. That failure does not produce an HTTP `401` or `403` response; the connection is terminated during handshake, and the server emits a control-plane TLS failure log with a stable client-auth reason code.
+
+## Configuration Patterns
+
+### Bearer-Only Local Dev
+
+Use this for loopback-only development or local automation:
+
+```yaml
+observability:
+  control_api:
+    enabled: true
+    address: "127.0.0.1"
+    port: 9890
+    auth_token: "change-me-local-dev"
+```
+
+### mTLS Optional With Viewer Token
+
+Use this when you want to start accepting client certificates without making them mandatory yet:
+
+```yaml
+observability:
+  control_api:
+    enabled: true
+    address: "127.0.0.1"
+    port: 9902
+    tls:
+      client_auth:
+        mode: optional
+        ca_file: "/etc/spooky/pki/admin-ca.pem"
+    auth:
+      bearer_tokens:
+        - token: "viewer-token"
+          role: viewer
+          actor_id: "ops-readonly"
+```
+
+### mTLS Required With Operator/Admin Identities
+
+Recommended production posture:
+
+```yaml
+observability:
+  control_api:
+    enabled: true
+    required: true
+    address: "10.0.10.5"
+    port: 9902
+    tls:
+      client_auth:
+        mode: required
+        ca_file: "/etc/spooky/pki/admin-ca.pem"
+    auth:
+      bearer_tokens:
+        - token: "operator-token"
+          role: operator
+          actor_id: "ops-automation"
+        - token: "admin-token"
+          role: admin
+          actor_id: "platform-admin"
+      identity_source:
+        kind: "mtls_subject_cn"
+        role_attribute: "OU"
+    ip_allowlist:
+      cidrs:
+        - "10.0.10.0/24"
+    audit:
+      enabled: true
+      format: json
+      sink: log
+```
 
 ## Endpoints
 

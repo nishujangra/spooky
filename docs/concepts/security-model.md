@@ -48,6 +48,19 @@ The control API is privileged.
 - It can trigger certificate reload.
 - It must be treated as an admin surface, not a public endpoint.
 
+Admin-plane authentication factors supported today:
+
+- bearer token only
+- mTLS only
+- mTLS + bearer token
+
+Recommended production posture:
+
+- `observability.control_api.tls.client_auth.mode: required`
+- bearer token or role-bearing mTLS identity
+- admin-network IP allowlisting
+- dedicated audit stream enabled
+
 ## Downstream TLS Model
 
 Spooky supports:
@@ -60,6 +73,46 @@ Important scope note:
 
 - current client-auth coverage is centered on the bootstrap TLS listener path
 - operators should verify whether their exact ingress shape requires stronger mTLS guarantees on every downstream path before broad rollout
+
+## Admin-Plane Authentication And Authorization Model
+
+The control API admin plane is separate from request-path auth.
+
+Authentication and authorization are evaluated in this order:
+
+1. source-address policy, if `observability.control_api.ip_allowlist` is configured
+2. authentication using bearer token, mTLS identity, or both
+3. authorization against the route-to-role contract
+
+Role model:
+
+- `viewer`: runtime snapshot and generation history reads
+- `operator`: `viewer` plus validate, preview, activate, rollback, reload, and cert reload
+- `admin`: `operator` plus restart and future destructive admin actions
+
+Response and failure contract:
+
+- `401 Unauthorized`: missing or invalid authentication
+- `403 Forbidden`: authenticated but under-scoped, or denied by source-address policy
+- TLS handshake rejection: client certificate missing or invalid when control API mTLS is required
+
+Handshake rejection is not an HTTP response. It terminates the TLS connection before routing and should be diagnosed through control-plane TLS logs and audit output.
+
+Admin-plane route contract:
+
+| Route family | Minimum role |
+| --- | --- |
+| `/health`, `/ready` | unauthenticated or separately configurable |
+| `/admin/runtime` | `viewer` |
+| `/admin/runtime/history` | `viewer` |
+| `/admin/runtime/history/{generation}` | `viewer` |
+| `/admin/runtime/validate` | `operator` |
+| `/admin/runtime/preview` | `operator` |
+| `/admin/runtime/activate` | `operator` |
+| `/admin/runtime/rollback` | `operator` |
+| `/admin/runtime/reload` | `operator` |
+| `/admin/runtime/reload-certs` | `operator` |
+| `/admin/runtime/restart` | `admin` |
 
 ## Upstream TLS Model
 
@@ -106,6 +159,12 @@ External auth details:
 - Failure mode (fail-open or fail-closed) is configured per provider. The default is fail-closed: a timeout or transport error denies the request rather than silently admitting it.
 - OIDC mode uses discovery and token introspection to validate bearer tokens. It does not fetch or validate against JWKS, does not cache the discovery document (refetched per request), and does not implement interactive login or session-cookie flows.
 
+Boundary rule:
+
+- request-path auth lives under upstream routing / forwarding policy
+- admin-plane auth lives only under control-plane modules
+- credentials, failures, and audit events from one plane must not be confused with the other
+
 ## What Spooky Does Not Currently Provide
 
 Spooky does not currently provide first-class:
@@ -120,7 +179,11 @@ Spooky does not currently provide first-class:
 ## Recommended Deployment Security Posture
 
 - keep the control API bound to loopback or a strongly isolated admin network
-- use a strong control API token and rotate it as an administrative secret
+- use explicit admin roles rather than a single all-powerful token when possible
+- require control API mTLS in production
+- use a strong control API token and rotate it as an administrative secret when bearer auth is enabled
+- restrict control API source addresses with `ip_allowlist.cidrs`
+- enable the dedicated admin audit stream
 - keep upstream certificate verification enabled in production
 - run with least privilege after bind
 - restrict filesystem write access to the minimum required paths

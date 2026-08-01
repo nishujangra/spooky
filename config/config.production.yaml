@@ -58,9 +58,39 @@ log:
 observability:
   control_api:
     enabled: true
+    required: true
     address: "127.0.0.1"
     port: 9890
-    auth_token: "change-me"
+    # Recommended production posture: mTLS required plus explicit operator/admin identities.
+    tls:
+      client_auth:
+        mode: required
+        ca_file: "/etc/spooky/pki/admin-ca.pem"
+    auth:
+      bearer_tokens:
+        - token: "replace-with-operator-token"
+          role: operator
+          actor_id: "ops-automation"
+        - token: "replace-with-admin-token"
+          role: admin
+          actor_id: "platform-admin"
+      identity_source:
+        kind: "mtls_subject_cn"
+        role_attribute: "OU"
+    authorization:
+      protect_health: true
+      protect_ready: true
+      runtime_read_role: viewer
+      runtime_mutate_role: operator
+      restart_role: admin
+    ip_allowlist:
+      cidrs:
+        - "10.0.10.0/24"
+      trust_proxy_headers: false
+    audit:
+      enabled: true
+      format: json
+      sink: log
 
 security:
   privileges:
