@@ -15,6 +15,7 @@ use super::{
     *,
 };
 use crate::REQUEST_ID_COUNTER;
+use spooky_utils::logger::CONTROL_API_AUDIT_LOG_TARGET;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(in crate::quic_listener) struct ControlApiAdminAuditEmitter {
@@ -381,7 +382,9 @@ impl ControlApiAdminAuditEmitter {
         };
 
         match &self.sink {
-            ControlApiAdminAuditTarget::Log => info!("control_api_admin_audit {}", serialized),
+            ControlApiAdminAuditTarget::Log => {
+                info!(target: CONTROL_API_AUDIT_LOG_TARGET, "{}", serialized)
+            }
             ControlApiAdminAuditTarget::File(Some(path)) => {
                 match OpenOptions::new().create(true).append(true).open(path) {
                     Ok(mut file) => {
@@ -402,7 +405,7 @@ impl ControlApiAdminAuditEmitter {
                 warn!(
                     "control API admin audit sink configured as file without file_path; falling back to log"
                 );
-                info!("control_api_admin_audit {}", serialized);
+                info!(target: CONTROL_API_AUDIT_LOG_TARGET, "{}", serialized);
             }
         }
     }

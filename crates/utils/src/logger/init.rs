@@ -14,7 +14,7 @@ use log::LevelFilter;
 
 use crate::logger::{
     errors::{build_create_log_dir_error, build_open_log_file_error},
-    formatter::build_json_payload,
+    formatter::{build_json_payload, should_passthrough_raw_json_target},
 };
 
 static LOGGER_INIT_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
@@ -90,8 +90,12 @@ fn configure_and_init_logger(
     // as the single effective runtime gate so live level raises work too.
     builder.filter_level(LevelFilter::Trace);
 
-    if json {
-        builder.format(|buf, record| {
+    builder.format(move |buf, record| {
+        if should_passthrough_raw_json_target(record.target()) {
+            return writeln!(buf, "{}", record.args());
+        }
+
+        if json {
             let message = record.args().to_string();
             let payload = build_json_payload(
                 &buf.timestamp_seconds().to_string(),
@@ -101,10 +105,17 @@ fn configure_and_init_logger(
             );
 
             writeln!(buf, "{payload}")
-        });
-    } else {
-        builder.format_timestamp_secs();
-    }
+        } else {
+            writeln!(
+                buf,
+                "{} {} [{}] {}",
+                buf.timestamp_seconds(),
+                record.level(),
+                record.target(),
+                record.args()
+            )
+        }
+    });
 
     // only write to file if enabled
     if log_enabled {
