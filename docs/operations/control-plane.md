@@ -28,7 +28,64 @@ Its responsibilities are:
 
 - protocol: HTTP/1.1 over TLS
 - audience: operators and automation only
-- security model: bearer-token protected for privileged routes
+- security model: a dedicated admin-plane authn/authz layer, separate from request-path auth
+
+### Admin-plane security contract
+
+This section is the implementation contract for control API authn/authz. Later control-plane security work should follow this matrix rather than inventing route-by-route behavior ad hoc.
+
+Authentication factors supported by the admin plane:
+
+- bearer token only
+- mTLS only
+- mTLS + bearer token
+
+Recommended production posture:
+
+- require mTLS on the control API
+- require either a bearer token or an mTLS-derived role-bearing identity
+- keep the control API bound to loopback or a strongly isolated admin network even when auth is enabled
+
+Role model:
+
+- `viewer`: read-only operator visibility
+- `operator`: read/write runtime operations that do not intentionally restart the process
+- `admin`: destructive or high-impact operational control, including restart
+
+Role inheritance:
+
+- `operator` includes all `viewer` permissions
+- `admin` includes all `operator` permissions
+
+Route classification:
+
+- unauthenticated or separately configurable: `/health`, `/ready`
+- read-only privileged: `/admin/runtime`, `/admin/runtime/history`, `/admin/runtime/history/{generation}`
+- mutating privileged: `/admin/runtime/validate`, `/admin/runtime/preview`, `/admin/runtime/activate`, `/admin/runtime/rollback`, `/admin/runtime/reload`, `/admin/runtime/reload-certs`, `/admin/runtime/restart`
+
+Route-to-role matrix:
+
+| Route family | Access level | Minimum role |
+| --- | --- | --- |
+| `/health` | unauthenticated or separately configurable | none |
+| `/ready` | unauthenticated or separately configurable | none |
+| `/admin/runtime` | read-only privileged | `viewer` |
+| `/admin/runtime/history` | read-only privileged | `viewer` |
+| `/admin/runtime/history/{generation}` | read-only privileged | `viewer` |
+| `/admin/runtime/validate` | mutating privileged | `operator` |
+| `/admin/runtime/preview` | mutating privileged | `operator` |
+| `/admin/runtime/activate` | mutating privileged | `operator` |
+| `/admin/runtime/rollback` | mutating privileged | `operator` |
+| `/admin/runtime/reload` | mutating privileged | `operator` |
+| `/admin/runtime/reload-certs` | mutating privileged | `operator` |
+| `/admin/runtime/restart` | mutating privileged | `admin` |
+
+Implementation rules:
+
+- authentication failure must be distinct from authorization failure
+- read-only runtime visibility is a `viewer` capability, not an implicit side effect of having any token
+- restart is reserved for `admin`, even if other runtime mutation routes are granted to `operator`
+- this admin-plane contract is separate from upstream/request-path auth policy and must stay in control-plane code
 
 ### Route families
 
@@ -37,6 +94,8 @@ The current route family includes:
 - health
 - ready
 - runtime
+- runtime history
+- staged runtime operations: validate, preview, activate, rollback
 - reload-certs
 - reload
 - restart
@@ -115,9 +174,21 @@ This ensures:
 
 ### Control API
 
-Privileged control API routes require bearer-token authorization.
+Privileged control API routes must be authorized through the admin-plane security contract above.
+
+Supported authentication shapes are:
+
+- bearer token only
+- mTLS only
+- mTLS + bearer token
 
 Health and readiness routes are intentionally treated differently from privileged administration routes and may be left unauthenticated depending on configuration and deployment pattern.
+
+Minimum role requirements are:
+
+- `viewer` for runtime snapshot and generation history reads
+- `operator` for validate, preview, activate, rollback, reload, and cert reload
+- `admin` for restart
 
 ### Metrics endpoint
 

@@ -33,18 +33,76 @@ The `-k` flag skips certificate verification for self-signed certs.
 ## Security Expectations
 
 - bind to loopback or a strongly isolated admin network whenever possible
-- require a strong bearer token for privileged endpoints
+- prefer `mTLS required` plus either a bearer token or an mTLS-derived role-bearing identity in production
 - avoid broad public exposure even when authentication is enabled
 
 ## Authentication
 
-Privileged endpoints use bearer-token authentication via:
+The admin plane supports these authentication shapes:
+
+- bearer token only
+- mTLS only
+- mTLS + bearer token
+
+Recommended production posture:
+
+- `mTLS required`
+- bearer token or another role-bearing admin identity
+- isolated admin network exposure
+
+Authentication and authorization are separate concerns:
+
+- authentication proves who the caller is
+- authorization decides whether the caller has `viewer`, `operator`, or `admin`
+
+Bearer-token form:
 
 ```http
 Authorization: Bearer <token>
 ```
 
-The token is configured with `observability.control_api.auth_token`.
+The current token is configured with `observability.control_api.auth_token`.
+
+Role model:
+
+- `viewer`: runtime snapshot and history reads
+- `operator`: `viewer` plus validate, preview, activate, rollback, reload, and cert reload
+- `admin`: `operator` plus restart and future destructive admin actions
+
+This role matrix is the intended contract for control-plane implementation.
+
+## Route Classification And Role Matrix
+
+The admin plane classifies routes in three groups:
+
+- unauthenticated or separately configurable: `/health`, `/ready`
+- read-only privileged: `/admin/runtime`, `/admin/runtime/history`, `/admin/runtime/history/{generation}`
+- mutating privileged: `/admin/runtime/validate`, `/admin/runtime/preview`, `/admin/runtime/activate`, `/admin/runtime/rollback`, `/admin/runtime/reload`, `/admin/runtime/reload-certs`, `/admin/runtime/restart`
+
+Minimum role requirements:
+
+| Route | Method | Classification | Minimum role |
+| --- | --- | --- | --- |
+| `/health` | `GET` | unauthenticated or separately configurable | none |
+| `/ready` | `GET` | unauthenticated or separately configurable | none |
+| `/admin/runtime` | `GET` | read-only privileged | `viewer` |
+| `/admin/runtime/history` | `GET` | read-only privileged | `viewer` |
+| `/admin/runtime/history/{generation}` | `GET` | read-only privileged | `viewer` |
+| `/admin/runtime/validate` | `POST` | mutating privileged | `operator` |
+| `/admin/runtime/preview` | `POST` | mutating privileged | `operator` |
+| `/admin/runtime/activate` | `POST` | mutating privileged | `operator` |
+| `/admin/runtime/rollback` | `POST` | mutating privileged | `operator` |
+| `/admin/runtime/reload` | `POST` | mutating privileged | `operator` |
+| `/admin/runtime/reload-certs` | `POST` | mutating privileged | `operator` |
+| `/admin/runtime/restart` | `POST` | mutating privileged | `admin` |
+
+Contract rules:
+
+- `viewer` is the minimum privileged read role
+- `operator` is the minimum non-restart mutation role
+- `admin` is required for restart
+- health and readiness may remain unauthenticated, but deployments may choose to protect them separately
+- implementation should distinguish invalid authentication from insufficient role
 
 ## Endpoints
 
@@ -77,6 +135,10 @@ Purpose:
 
 - runtime snapshot for operators
 
+Minimum role:
+
+- `viewer`
+
 Typical contents include:
 
 - worker and runtime state
@@ -105,6 +167,10 @@ Expected use:
 - CI gating on config changes before a deploy
 - confirming a config is loadable before scheduling a maintenance window
 
+Minimum role:
+
+- `operator`
+
 ### `POST /admin/runtime/preview`
 
 Purpose:
@@ -116,6 +182,10 @@ Returns `200` with the same plan shape as validate. Neither endpoint mutates the
 Expected use:
 
 - operator dry-run immediately before an activation, when you want the attempt in the audit trail
+
+Minimum role:
+
+- `operator`
 
 ### `POST /admin/runtime/activate`
 
@@ -136,6 +206,10 @@ Accepts the same optional body fields as `/admin/runtime/reload`.
 Expected use:
 
 - the preferred activation path — prefer this over the legacy `/reload` shortcut, since it returns the full diff, rejection detail, and generation history entry
+
+Minimum role:
+
+- `operator`
 
 ### `POST /admin/runtime/rollback`
 
@@ -161,6 +235,10 @@ Returns `202` on success. Failures:
 | `500` | resource preparation failed, or the rollback swap itself failed |
 
 Use `GET /admin/runtime/history` first to pick a target whose `rollback_candidate` is `true`.
+
+Minimum role:
+
+- `operator`
 
 Example:
 
@@ -203,6 +281,10 @@ Expected use:
 - auditing who changed runtime config, when, and from which config source
 - diagnosing why a staged activation never committed
 
+Minimum role:
+
+- `viewer`
+
 ### `GET /admin/runtime/history/{generation}`
 
 Purpose:
@@ -210,6 +292,10 @@ Purpose:
 - the retained-generation record and operation entries for a single generation
 
 Returns `200` with `generation`, a single `retained_generation` object (same shape as above), and the `entries` recorded against it. Returns `404` if that generation is not retained.
+
+Minimum role:
+
+- `viewer`
 
 ### `POST /admin/runtime/reload`
 
@@ -235,6 +321,10 @@ Expected use:
 
 - adding or removing backends
 - changing load balancing, timeouts, resilience, or routing policy at runtime
+
+Minimum role:
+
+- `operator`
 
 Optional request body:
 
@@ -277,6 +367,10 @@ Expected use:
 - listener certificate rotation
 - listener trust-material refresh
 
+Minimum role:
+
+- `operator`
+
 ### `POST /admin/runtime/restart`
 
 Purpose:
@@ -287,6 +381,10 @@ Expected use:
 
 - operational restart requests
 - orchestrated maintenance flow
+
+Minimum role:
+
+- `admin`
 
 ## Operator Notes
 
