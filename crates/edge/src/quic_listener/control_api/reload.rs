@@ -523,6 +523,9 @@ impl QUICListener {
         .await
     }
 
+    // Mirrors `perform_control_api_runtime_activation`; the extra parameters are the
+    // audit descriptor threaded through to the emitter.
+    #[allow(clippy::too_many_arguments)]
     async fn perform_control_api_runtime_activation_from_plan_request(
         plan_request: ControlApiRuntimePlanRequest,
         state: &crate::quic_listener::runtime_state::ControlApiServiceCtx,

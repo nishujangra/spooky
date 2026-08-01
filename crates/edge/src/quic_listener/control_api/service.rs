@@ -25,14 +25,14 @@ impl QUICListener {
             return Ok(());
         }
         let required = startup_state.endpoint.required;
-        if startup_state.endpoint.enabled {
-            if let Err(err) = Self::build_control_api_tls_state(&startup_state) {
-                if required {
-                    return Err(err);
-                }
-                error!("failed to initialize control API TLS config: {}", err);
-                return Ok(());
+        if startup_state.endpoint.enabled
+            && let Err(err) = Self::build_control_api_tls_state(&startup_state)
+        {
+            if required {
+                return Err(err);
             }
+            error!("failed to initialize control API TLS config: {}", err);
+            return Ok(());
         }
 
         let handle = match runtime_handle() {

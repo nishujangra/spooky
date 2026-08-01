@@ -194,14 +194,12 @@ impl QUICListener {
             .generation
             .as_ref()
             .map(|current| current.generation());
-        if let Err(response) = Self::enforce_control_api_source_policy(
+        Self::enforce_control_api_source_policy(
             req,
             &service_state.security,
             route,
             active_generation,
-        ) {
-            return Err(Box::new(response));
-        }
+        )?;
         let Some(required_role) = route.minimum_role(&service_state.security) else {
             return Ok(());
         };
@@ -303,7 +301,7 @@ impl QUICListener {
         security: &ControlApiSecurityPolicy,
         route: ControlApiRoute,
         active_generation: Option<u64>,
-    ) -> Result<(), Response<Full<Bytes>>> {
+    ) -> Result<(), ControlApiGateError> {
         if !security.has_source_policy() {
             return Ok(());
         }
@@ -318,13 +316,13 @@ impl QUICListener {
                 AdminAuditResult::Denied,
                 "missing_peer_context",
             );
-            return Err(Self::control_api_auth_error_response(
+            return Err(Box::new(Self::control_api_auth_error_response(
                 route,
                 StatusCode::FORBIDDEN,
                 "forbidden",
                 "missing_peer_context",
                 route.minimum_role(security),
-            ));
+            )));
         };
 
         let source_policy = ControlApiSourcePolicyContext {
@@ -351,13 +349,13 @@ impl QUICListener {
                     active_generation,
                     reason,
                 );
-                Err(Self::control_api_auth_error_response(
+                Err(Box::new(Self::control_api_auth_error_response(
                     route,
                     StatusCode::FORBIDDEN,
                     "forbidden",
                     reason,
                     route.minimum_role(security),
-                ))
+                )))
             }
         }
     }

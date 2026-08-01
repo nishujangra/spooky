@@ -185,6 +185,9 @@ impl AdminAuditAuthn {
 }
 
 impl QUICListener {
+    // The audit event is a flat record; passing its fields individually keeps the
+    // ~24 emission sites readable rather than forcing a builder at each one.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn emit_control_api_audit_event(
         security: &ControlApiSecurityPolicy,
         identity: Option<&AdminIdentity>,

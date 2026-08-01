@@ -139,11 +139,10 @@ impl ControlApiIpAllowlistPolicy {
         }
     }
 
-    #[allow(dead_code)]
     pub(in crate::quic_listener) fn allows(&self, ip: IpAddr) -> bool {
         self.matcher
             .as_ref()
-            .map_or(true, |matcher| matcher.contains(ip))
+            .is_none_or(|matcher| matcher.contains(ip))
     }
 }
 
