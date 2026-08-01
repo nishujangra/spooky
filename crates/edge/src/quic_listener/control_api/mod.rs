@@ -10,6 +10,7 @@ mod context;
 mod http;
 mod reload;
 mod render;
+pub(in crate::quic_listener) mod security;
 mod service;
 mod state;
 

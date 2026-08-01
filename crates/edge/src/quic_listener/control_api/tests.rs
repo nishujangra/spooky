@@ -6,8 +6,10 @@ use http_body_util::BodyExt;
 use log::LevelFilter;
 use spooky_config::{
     config::{
-        Backend, ClientAuth, Config as SpookyConfigConfig, Listen, LoadBalancing, Log, LogFormat,
-        Observability, Performance, Resilience, RouteMatch, Security, Tls, Upstream, UpstreamTls,
+        Backend, ClientAuth, Config as SpookyConfigConfig, ControlApiAuditSink,
+        ControlApiBearerToken, ControlApiClientAuthMode, ControlApiRole, Listen, LoadBalancing,
+        Log, LogFormat, Observability, Performance, Resilience, RouteMatch, Security, Tls,
+        Upstream, UpstreamTls,
     },
     runtime::RuntimeConfig,
 };
@@ -1150,17 +1152,19 @@ fn control_api_authorization_uses_token_matching_independent_of_request_body_typ
     let malformed = control_api_request(Method::GET, &runtime_path, Some("Bearer"));
     let missing = control_api_request(Method::GET, &runtime_path, None);
 
+    let security = state.current_security_policy();
+
     assert!(QUICListener::control_api_is_authorized_for(
         &authorized,
-        &state.current_control_api()
+        &security
     ));
     assert!(!QUICListener::control_api_is_authorized_for(
         &malformed,
-        &state.current_control_api()
+        &security
     ));
     assert!(!QUICListener::control_api_is_authorized_for(
         &missing,
-        &state.current_control_api()
+        &security
     ));
 }
 
@@ -1271,6 +1275,68 @@ fn control_api_state_prefers_reloaded_paths_and_auth_token() {
     assert_eq!(
         state.current_control_api().auth_token.as_deref(),
         Some("new-token")
+    );
+    assert_eq!(
+        state.current_security_policy().bearer_tokens[0].token,
+        "new-token"
+    );
+    assert_eq!(
+        state.current_security_policy().bearer_tokens[0].role,
+        ControlApiRole::Admin
+    );
+}
+
+#[test]
+fn control_api_state_builds_runtime_security_policy_from_reloaded_config() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let mut startup = test_config(cert.clone(), key.clone());
+    startup.observability.control_api.enabled = true;
+    startup.observability.control_api.auth_token = Some("startup-token".to_string());
+
+    let mut reloaded = startup.clone();
+    reloaded.observability.control_api.auth_token = None;
+    reloaded.observability.control_api.tls.client_auth.mode = ControlApiClientAuthMode::Required;
+    reloaded.observability.control_api.tls.client_auth.ca_file = Some(cert.clone());
+    reloaded.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
+        token: "operator-token".to_string(),
+        role: ControlApiRole::Operator,
+        actor_id: Some("ops".to_string()),
+    }];
+    reloaded.observability.control_api.ip_allowlist.cidrs =
+        vec!["127.0.0.0/8".to_string(), "::1/128".to_string()];
+    reloaded.observability.control_api.audit.enabled = true;
+    reloaded.observability.control_api.audit.sink = ControlApiAuditSink::File;
+    reloaded.observability.control_api.audit.file_path =
+        Some("/var/log/spooky-admin-audit.jsonl".to_string());
+
+    let state = control_api_state_with_runtime_bundle(&startup, &reloaded);
+    let security = state.current_security_policy();
+
+    assert_eq!(security.client_auth.mode, ControlApiClientAuthMode::Required);
+    assert_eq!(
+        security.client_auth.verifier,
+        super::security::ControlApiClientVerifierState::Configured(
+            super::security::ControlApiClientCaMaterial {
+                ca_file: Some(cert),
+                ca_dir: None,
+            }
+        )
+    );
+    assert_eq!(security.bearer_tokens.len(), 1);
+    assert_eq!(security.bearer_tokens[0].token, "operator-token");
+    assert_eq!(security.bearer_tokens[0].role, ControlApiRole::Operator);
+    assert!(security.ip_allowlist.allows("127.0.0.1".parse().expect("ipv4")));
+    assert!(security.ip_allowlist.allows("::1".parse().expect("ipv6")));
+    assert!(!security
+        .ip_allowlist
+        .allows("10.0.0.1".parse().expect("non-matching ipv4")));
+    assert!(security.audit.enabled);
+    assert_eq!(
+        security.audit.sink,
+        super::security::ControlApiAuditTarget::File(Some(
+            "/var/log/spooky-admin-audit.jsonl".to_string()
+        ))
     );
 }
 

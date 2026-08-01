@@ -2,6 +2,7 @@ use std::sync::atomic::AtomicUsize;
 
 use super::{state::ControlApiPaths, *};
 use crate::{
+    quic_listener::control_api::security::ControlApiSecurityPolicy,
     quic_listener::runtime_state::{ControlApiServiceCtx, ControlPlaneRuntimeView},
     runtime::{
         backend::state::{BackendLifecycleInventorySnapshot, BackendLifecycleInventorySummary},
@@ -15,6 +16,7 @@ pub(super) struct ControlApiServiceState {
     pub(super) generation: Option<ActiveRuntimeGeneration>,
     runtime_bundle_handle: Option<Arc<RuntimeBundleHandle>>,
     pub(super) endpoint: ControlApiConfig,
+    pub(super) security: Arc<ControlApiSecurityPolicy>,
     pub(super) paths: ControlApiPaths,
     pub(super) primary_listener_label: Option<String>,
 }
@@ -83,6 +85,7 @@ impl ControlApiServiceCtx {
         let generation = self.runtime.current_generation();
         let runtime_bundle_handle = self.runtime.runtime_bundle_handle().cloned();
         let endpoint = runtime.runtime_config().observability.control_api.clone();
+        let security = runtime.control_api_security();
         let paths = ControlApiPaths::from_endpoint(&endpoint);
         ControlApiServiceState {
             primary_listener_label: runtime.primary_listener_label().map(ToOwned::to_owned),
@@ -90,6 +93,7 @@ impl ControlApiServiceCtx {
             generation,
             runtime_bundle_handle,
             endpoint,
+            security,
             paths,
         }
     }

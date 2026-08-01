@@ -1,9 +1,11 @@
 use ::http::{Method, header};
 use bytes::Bytes;
 use http_body_util::Full;
+use spooky_config::config::ControlApiRole;
 use subtle::ConstantTimeEq;
 
 use super::{
+    security::ControlApiSecurityPolicy,
     state::{ControlApiPaths, ControlApiState},
     *,
 };
@@ -95,11 +97,8 @@ impl QUICListener {
 
     pub(super) fn control_api_is_authorized_for<B>(
         req: &::http::Request<B>,
-        endpoint: &ControlApiConfig,
+        security: &ControlApiSecurityPolicy,
     ) -> bool {
-        let Some(token) = endpoint.auth_token.as_ref() else {
-            return false;
-        };
         let Some(header) = req.headers().get(header::AUTHORIZATION) else {
             return false;
         };
@@ -109,7 +108,23 @@ impl QUICListener {
         let Some(provided) = Self::bearer_token_from_authorization_header(raw) else {
             return false;
         };
-        bool::from(provided.as_bytes().ct_eq(token.as_bytes()))
+        Self::control_api_role_for_bearer_token(provided, security).is_some()
+    }
+
+    pub(super) fn control_api_role_for_bearer_token(
+        provided: &str,
+        security: &ControlApiSecurityPolicy,
+    ) -> Option<ControlApiRole> {
+        let mut matched_role = None;
+        let mut matched_any = 0u8;
+        for entry in security.bearer_tokens.iter() {
+            let is_match = bool::from(provided.as_bytes().ct_eq(entry.token.as_bytes())) as u8;
+            if is_match == 1 {
+                matched_role = Some(entry.role);
+            }
+            matched_any |= is_match;
+        }
+        (matched_any == 1).then_some(matched_role).flatten()
     }
 
     pub(super) fn authorize_control_api_request_for<B>(
@@ -119,7 +134,7 @@ impl QUICListener {
     ) -> Result<(), ControlApiGateError> {
         let service_state = state.current_service_state();
         if !route.requires_authorization()
-            || Self::control_api_is_authorized_for(req, &service_state.endpoint)
+            || Self::control_api_is_authorized_for(req, &service_state.security)
         {
             return Ok(());
         }
