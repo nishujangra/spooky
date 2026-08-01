@@ -1044,6 +1044,162 @@ impl Default for MetricsEndpoint {
     }
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, Default, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlApiClientAuthMode {
+    #[default]
+    Disabled,
+    Optional,
+    Required,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, Default, Eq, PartialEq, Ord, PartialOrd)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlApiRole {
+    Viewer,
+    Operator,
+    #[default]
+    Admin,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, Default, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlApiAuditFormat {
+    #[default]
+    Json,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, Default, Eq, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlApiAuditSink {
+    #[default]
+    Log,
+    File,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default, Eq, PartialEq)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct ControlApiTls {
+    pub client_auth: ControlApiTlsClientAuth,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default, Eq, PartialEq)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct ControlApiTlsClientAuth {
+    pub mode: ControlApiClientAuthMode,
+    pub ca_file: Option<String>,
+    pub ca_dir: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, Clone, Default, Eq, PartialEq)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct ControlApiAuth {
+    pub bearer_tokens: Vec<ControlApiBearerToken>,
+    pub identity_source: Option<ControlApiIdentitySource>,
+}
+
+impl std::fmt::Debug for ControlApiAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ControlApiAuth")
+            .field("bearer_tokens", &format_args!("{} configured", self.bearer_tokens.len()))
+            .field("identity_source", &self.identity_source)
+            .finish()
+    }
+}
+
+#[derive(Deserialize, Serialize, Clone, Eq, PartialEq)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct ControlApiBearerToken {
+    #[serde(skip_serializing)]
+    pub token: String,
+    pub role: ControlApiRole,
+    pub actor_id: Option<String>,
+}
+
+impl Default for ControlApiBearerToken {
+    fn default() -> Self {
+        Self {
+            token: String::new(),
+            role: ControlApiRole::Admin,
+            actor_id: None,
+        }
+    }
+}
+
+impl std::fmt::Debug for ControlApiBearerToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ControlApiBearerToken")
+            .field("token", &"<redacted>")
+            .field("role", &self.role)
+            .field("actor_id", &self.actor_id)
+            .finish()
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default, Eq, PartialEq)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct ControlApiIdentitySource {
+    pub kind: String,
+    pub role_attribute: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct ControlApiAuthorization {
+    pub protect_health: bool,
+    pub protect_ready: bool,
+    pub runtime_read_role: ControlApiRole,
+    pub runtime_mutate_role: ControlApiRole,
+    pub restart_role: ControlApiRole,
+}
+
+impl Default for ControlApiAuthorization {
+    fn default() -> Self {
+        Self {
+            protect_health: false,
+            protect_ready: false,
+            runtime_read_role: ControlApiRole::Viewer,
+            runtime_mutate_role: ControlApiRole::Operator,
+            restart_role: ControlApiRole::Admin,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default, Eq, PartialEq)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct ControlApiIpAllowlist {
+    pub cidrs: Vec<String>,
+    pub trust_proxy_headers: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Eq, PartialEq)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct ControlApiAudit {
+    pub enabled: bool,
+    pub format: ControlApiAuditFormat,
+    pub sink: ControlApiAuditSink,
+    pub file_path: Option<String>,
+}
+
+impl Default for ControlApiAudit {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            format: ControlApiAuditFormat::Json,
+            sink: ControlApiAuditSink::Log,
+            file_path: None,
+        }
+    }
+}
+
 #[derive(Deserialize, Serialize, Clone)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
@@ -1074,6 +1230,16 @@ pub struct ControlApi {
     #[serde(skip_serializing)]
     pub auth_token: Option<String>,
 
+    pub tls: ControlApiTls,
+
+    pub auth: ControlApiAuth,
+
+    pub authorization: ControlApiAuthorization,
+
+    pub ip_allowlist: ControlApiIpAllowlist,
+
+    pub audit: ControlApiAudit,
+
     pub max_connections: usize,
 
     pub connection_timeout_ms: u64,
@@ -1093,6 +1259,11 @@ impl Default for ControlApi {
             reload_path: "/admin/runtime/reload".to_string(),
             reload_certs_path: "/admin/runtime/reload-certs".to_string(),
             auth_token: None,
+            tls: ControlApiTls::default(),
+            auth: ControlApiAuth::default(),
+            authorization: ControlApiAuthorization::default(),
+            ip_allowlist: ControlApiIpAllowlist::default(),
+            audit: ControlApiAudit::default(),
             max_connections: 256,
             connection_timeout_ms: 30_000,
         }
@@ -1117,6 +1288,11 @@ impl std::fmt::Debug for ControlApi {
                 "auth_token",
                 &self.auth_token.as_ref().map(|_| "<redacted>"),
             )
+            .field("tls", &self.tls)
+            .field("auth", &self.auth)
+            .field("authorization", &self.authorization)
+            .field("ip_allowlist", &self.ip_allowlist)
+            .field("audit", &self.audit)
             .field("max_connections", &self.max_connections)
             .field("connection_timeout_ms", &self.connection_timeout_ms)
             .finish()
@@ -1171,9 +1347,12 @@ impl Default for RoutingTransparency {
 #[cfg(test)]
 mod tests {
     use super::{
-        ApiKeyAuth, Config, ControlApi, ExternalAuth, ForwardedHeaderPolicy, JwtAuth, Listen,
-        LoadBalancing, Log, MetricsEndpoint, Performance, PrivilegeDrop, Resilience, RouteAuth,
-        RoutingTransparency, Tracing, UpstreamHostPolicy, UpstreamTls, Watchdog,
+        ApiKeyAuth, Config, ControlApi, ControlApiAudit, ControlApiAuditFormat,
+        ControlApiAuditSink, ControlApiAuth, ControlApiAuthorization, ControlApiClientAuthMode,
+        ControlApiIpAllowlist, ControlApiRole, ControlApiTls, ExternalAuth,
+        ForwardedHeaderPolicy, JwtAuth, Listen, LoadBalancing, Log, MetricsEndpoint, Performance,
+        PrivilegeDrop, Resilience, RouteAuth, RoutingTransparency, Tracing, UpstreamHostPolicy,
+        UpstreamTls, Watchdog,
     };
     use crate::config::CURRENT_CONFIG_VERSION;
 
@@ -1329,6 +1508,26 @@ security:
             control_api.reload_certs_path,
             ControlApi::default().reload_certs_path
         );
+        assert_eq!(control_api.tls.client_auth.mode, ControlApiClientAuthMode::Disabled);
+        assert!(control_api.tls.client_auth.ca_file.is_none());
+        assert!(control_api.tls.client_auth.ca_dir.is_none());
+        assert!(control_api.auth.bearer_tokens.is_empty());
+        assert!(control_api.auth.identity_source.is_none());
+        assert_eq!(
+            control_api.authorization.runtime_read_role,
+            ControlApiRole::Viewer
+        );
+        assert_eq!(
+            control_api.authorization.runtime_mutate_role,
+            ControlApiRole::Operator
+        );
+        assert_eq!(control_api.authorization.restart_role, ControlApiRole::Admin);
+        assert!(control_api.ip_allowlist.cidrs.is_empty());
+        assert!(!control_api.ip_allowlist.trust_proxy_headers);
+        assert!(!control_api.audit.enabled);
+        assert_eq!(control_api.audit.format, ControlApiAuditFormat::Json);
+        assert_eq!(control_api.audit.sink, ControlApiAuditSink::Log);
+        assert!(control_api.audit.file_path.is_none());
         assert_eq!(
             control_api.max_connections,
             ControlApi::default().max_connections
@@ -1487,6 +1686,11 @@ enabled: true
         assert!(control_api.enabled);
         assert_eq!(control_api.port, ControlApi::default().port);
         assert_eq!(control_api.auth_token, None);
+        assert_eq!(control_api.authorization, ControlApiAuthorization::default());
+        assert_eq!(control_api.tls, ControlApiTls::default());
+        assert_eq!(control_api.auth, ControlApiAuth::default());
+        assert_eq!(control_api.ip_allowlist, ControlApiIpAllowlist::default());
+        assert_eq!(control_api.audit, ControlApiAudit::default());
 
         let route_auth: RouteAuth = serde_yaml::from_str(
             r#"

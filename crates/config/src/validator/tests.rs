@@ -5,7 +5,8 @@ use tempfile::tempdir;
 
 use super::validate;
 use crate::config::{
-    ApiKeyAuth, Backend, ClientAuth, Config, ControlApi, ExternalAuth, ExternalAuthFailureMode,
+    ApiKeyAuth, Backend, ClientAuth, Config, ControlApi, ControlApiAuditSink, ControlApiBearerToken,
+    ControlApiClientAuthMode, ControlApiRole, ExternalAuth, ExternalAuthFailureMode,
     ExternalAuthRequestHeader, HealthCheck, JwtAuth, Listen, LoadBalancing, Log, LogFormat,
     MetricsEndpoint, Observability, Performance, Resilience, RouteAuth, RouteMatch,
     ScopedRateLimit, ScopedRateLimitScope, Security, Tls, TlsCertificate, Tracing, Upstream,
@@ -913,6 +914,106 @@ fn rejects_loopback_control_api_without_auth_token() {
     cfg.observability.control_api.enabled = true;
     cfg.observability.control_api.address = "127.0.0.1".to_string();
     cfg.observability.control_api.auth_token = None;
+    assert!(validate(&cfg).is_err());
+}
+
+#[test]
+fn accepts_control_api_with_bearer_tokens_and_no_legacy_auth_token() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.observability.control_api.enabled = true;
+    cfg.observability.control_api.auth_token = None;
+    cfg.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
+        token: "viewer-token".to_string(),
+        role: ControlApiRole::Viewer,
+        actor_id: Some("viewer".to_string()),
+    }];
+    assert!(validate(&cfg).is_ok());
+}
+
+#[test]
+fn accepts_control_api_with_required_mtls_and_no_tokens() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.observability.control_api.enabled = true;
+    cfg.observability.control_api.auth_token = None;
+    cfg.observability.control_api.tls.client_auth.mode = ControlApiClientAuthMode::Required;
+    cfg.observability.control_api.tls.client_auth.ca_file =
+        Some(cert.to_string_lossy().to_string());
+    assert!(validate(&cfg).is_ok());
+}
+
+#[test]
+fn rejects_control_api_with_optional_mtls_as_only_auth_mechanism() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.observability.control_api.enabled = true;
+    cfg.observability.control_api.auth_token = None;
+    cfg.observability.control_api.tls.client_auth.mode = ControlApiClientAuthMode::Optional;
+    cfg.observability.control_api.tls.client_auth.ca_file =
+        Some(cert.to_string_lossy().to_string());
+    assert!(validate(&cfg).is_err());
+}
+
+#[test]
+fn rejects_control_api_mtls_without_ca_material() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.observability.control_api.enabled = true;
+    cfg.observability.control_api.tls.client_auth.mode = ControlApiClientAuthMode::Required;
+    assert!(validate(&cfg).is_err());
+}
+
+#[test]
+fn rejects_control_api_invalid_role_ordering() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.observability.control_api.enabled = true;
+    cfg.observability.control_api.authorization.runtime_read_role = ControlApiRole::Operator;
+    cfg.observability.control_api.authorization.runtime_mutate_role = ControlApiRole::Viewer;
+    cfg.observability.control_api.auth_token = Some("token".to_string());
+    assert!(validate(&cfg).is_err());
+}
+
+#[test]
+fn rejects_control_api_invalid_ip_allowlist_cidr() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.observability.control_api.enabled = true;
+    cfg.observability.control_api.ip_allowlist.cidrs = vec!["10.0.0.0/33".to_string()];
+    cfg.observability.control_api.auth_token = Some("token".to_string());
+    assert!(validate(&cfg).is_err());
+}
+
+#[test]
+fn rejects_control_api_file_audit_sink_without_path() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.observability.control_api.enabled = true;
+    cfg.observability.control_api.audit.sink = ControlApiAuditSink::File;
+    cfg.observability.control_api.auth_token = Some("token".to_string());
+    assert!(validate(&cfg).is_err());
+}
+
+#[test]
+fn rejects_control_api_identity_source_without_mtls() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.observability.control_api.enabled = true;
+    cfg.observability.control_api.auth.identity_source =
+        Some(crate::config::ControlApiIdentitySource {
+            kind: "mtls_subject".to_string(),
+            role_attribute: Some("ou".to_string()),
+        });
+    cfg.observability.control_api.auth_token = Some("token".to_string());
     assert!(validate(&cfg).is_err());
 }
 
