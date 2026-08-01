@@ -1053,62 +1053,62 @@ fn control_api_route_gating_accepts_only_canonical_method_and_path_pairs() {
         (
             Method::GET,
             paths.health_path.clone(),
-            Some(super::auth::ControlApiRoute::Health),
+            Some(super::admin_auth::ControlApiRoute::Health),
         ),
         (
             Method::GET,
             paths.ready_path.clone(),
-            Some(super::auth::ControlApiRoute::Ready),
+            Some(super::admin_auth::ControlApiRoute::Ready),
         ),
         (
             Method::GET,
             paths.runtime_path.clone(),
-            Some(super::auth::ControlApiRoute::Runtime),
+            Some(super::admin_auth::ControlApiRoute::Runtime),
         ),
         (
             Method::GET,
             paths.runtime_history_path(),
-            Some(super::auth::ControlApiRoute::RuntimeHistory),
+            Some(super::admin_auth::ControlApiRoute::RuntimeHistory),
         ),
         (
             Method::GET,
             format!("{}/2", paths.runtime_history_path()),
-            Some(super::auth::ControlApiRoute::RuntimeHistoryGeneration(2)),
+            Some(super::admin_auth::ControlApiRoute::RuntimeHistoryGeneration(2)),
         ),
         (
             Method::POST,
             paths.reload_certs_path.clone(),
-            Some(super::auth::ControlApiRoute::ReloadCerts),
+            Some(super::admin_auth::ControlApiRoute::ReloadCerts),
         ),
         (
             Method::POST,
             paths.runtime_validate_path(),
-            Some(super::auth::ControlApiRoute::RuntimeValidate),
+            Some(super::admin_auth::ControlApiRoute::RuntimeValidate),
         ),
         (
             Method::POST,
             paths.runtime_preview_path(),
-            Some(super::auth::ControlApiRoute::RuntimePreview),
+            Some(super::admin_auth::ControlApiRoute::RuntimePreview),
         ),
         (
             Method::POST,
             paths.runtime_activate_path(),
-            Some(super::auth::ControlApiRoute::RuntimeActivate),
+            Some(super::admin_auth::ControlApiRoute::RuntimeActivate),
         ),
         (
             Method::POST,
             paths.runtime_rollback_path(),
-            Some(super::auth::ControlApiRoute::RuntimeRollback),
+            Some(super::admin_auth::ControlApiRoute::RuntimeRollback),
         ),
         (
             Method::POST,
             paths.reload_path.clone(),
-            Some(super::auth::ControlApiRoute::ReloadRuntime),
+            Some(super::admin_auth::ControlApiRoute::ReloadRuntime),
         ),
         (
             Method::POST,
             paths.restart_path.clone(),
-            Some(super::auth::ControlApiRoute::Restart),
+            Some(super::admin_auth::ControlApiRoute::Restart),
         ),
         (Method::POST, paths.runtime_path.clone(), None),
         (Method::POST, paths.runtime_history_path(), None),
@@ -1139,7 +1139,7 @@ fn control_api_route_gating_leaves_health_and_ready_ungated_by_auth() {
             .expect("health and ready routes should bypass auth");
         assert!(matches!(
             route,
-            super::auth::ControlApiRoute::Health | super::auth::ControlApiRoute::Ready
+            super::admin_auth::ControlApiRoute::Health | super::admin_auth::ControlApiRoute::Ready
         ));
     }
 }
@@ -1408,7 +1408,7 @@ fn control_api_state_builds_runtime_security_policy_from_reloaded_config() {
     assert!(security.audit.enabled);
     assert_eq!(
         security.audit.sink,
-        super::security::ControlApiAuditTarget::File(Some(
+        super::admin_audit::ControlApiAdminAuditTarget::File(Some(
             "/var/log/spooky-admin-audit.jsonl".to_string()
         ))
     );
@@ -1634,7 +1634,7 @@ fn control_api_gating_uses_live_generation_paths_and_auth_after_bundle_replace()
     );
     let route = QUICListener::gate_control_api_request_for(&mut live, &state)
         .expect("live control api path and auth should be accepted");
-    assert!(matches!(route, super::auth::ControlApiRoute::Runtime));
+    assert!(matches!(route, super::admin_auth::ControlApiRoute::Runtime));
 }
 
 #[test]

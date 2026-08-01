@@ -1,8 +1,9 @@
 use std::{net::IpAddr, sync::Arc};
 
+use super::admin_audit::ControlApiAdminAuditEmitter;
 use spooky_config::config::{
-    ControlApi as ControlApiConfig, ControlApiAuditFormat, ControlApiAuditSink,
-    ControlApiBearerToken, ControlApiClientAuthMode, ControlApiIdentitySource, ControlApiRole,
+    ControlApi as ControlApiConfig, ControlApiBearerToken, ControlApiClientAuthMode,
+    ControlApiIdentitySource, ControlApiRole,
 };
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -12,7 +13,7 @@ pub(in crate::quic_listener) struct ControlApiSecurityPolicy {
     pub(in crate::quic_listener) identity_source: Option<ControlApiIdentitySourcePolicy>,
     pub(in crate::quic_listener) authorization: ControlApiAuthorizationPolicy,
     pub(in crate::quic_listener) ip_allowlist: ControlApiIpAllowlistPolicy,
-    pub(in crate::quic_listener) audit: ControlApiAuditEmitter,
+    pub(in crate::quic_listener) audit: ControlApiAdminAuditEmitter,
 }
 
 impl ControlApiSecurityPolicy {
@@ -27,7 +28,7 @@ impl ControlApiSecurityPolicy {
                 .map(ControlApiIdentitySourcePolicy::from_config),
             authorization: ControlApiAuthorizationPolicy::from_config(config),
             ip_allowlist: ControlApiIpAllowlistPolicy::from_config(config),
-            audit: ControlApiAuditEmitter::from_config(config),
+            audit: ControlApiAdminAuditEmitter::from_config(config),
         }
     }
 }
@@ -219,34 +220,6 @@ impl ControlApiIpNetwork {
             _ => false,
         }
     }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub(in crate::quic_listener) struct ControlApiAuditEmitter {
-    pub(in crate::quic_listener) enabled: bool,
-    pub(in crate::quic_listener) format: ControlApiAuditFormat,
-    pub(in crate::quic_listener) sink: ControlApiAuditTarget,
-}
-
-impl ControlApiAuditEmitter {
-    fn from_config(config: &ControlApiConfig) -> Self {
-        Self {
-            enabled: config.audit.enabled,
-            format: config.audit.format,
-            sink: match config.audit.sink {
-                ControlApiAuditSink::Log => ControlApiAuditTarget::Log,
-                ControlApiAuditSink::File => {
-                    ControlApiAuditTarget::File(config.audit.file_path.clone())
-                }
-            },
-        }
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub(in crate::quic_listener) enum ControlApiAuditTarget {
-    Log,
-    File(Option<String>),
 }
 
 fn runtime_bearer_tokens(config: &ControlApiConfig) -> Vec<ControlApiBearerTokenEntry> {
