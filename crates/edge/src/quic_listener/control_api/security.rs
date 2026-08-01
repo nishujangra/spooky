@@ -1,6 +1,6 @@
 use std::{net::IpAddr, sync::Arc};
 
-use super::admin_audit::ControlApiAdminAuditEmitter;
+use super::audit::ControlApiAdminAuditEmitter;
 use spooky_config::config::{
     ControlApi as ControlApiConfig, ControlApiBearerToken, ControlApiClientAuthMode,
     ControlApiIdentitySource, ControlApiRole,

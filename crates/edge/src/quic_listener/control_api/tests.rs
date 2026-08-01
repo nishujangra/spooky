@@ -1408,7 +1408,7 @@ fn control_api_state_builds_runtime_security_policy_from_reloaded_config() {
     assert!(security.audit.enabled);
     assert_eq!(
         security.audit.sink,
-        super::admin_audit::ControlApiAdminAuditTarget::File(Some(
+        super::audit::ControlApiAdminAuditTarget::File(Some(
             "/var/log/spooky-admin-audit.jsonl".to_string()
         ))
     );
