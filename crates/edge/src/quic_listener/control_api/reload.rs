@@ -419,6 +419,53 @@ impl QUICListener {
         }
     }
 
+    #[cfg(test)]
+    pub(super) async fn handle_control_api_runtime_reload_without_body_for_tests(
+        state: &crate::quic_listener::runtime_state::ControlApiServiceCtx,
+        identity: Option<AdminIdentity>,
+        request_context: Option<ControlApiRequestContext>,
+    ) -> Response<Full<Bytes>> {
+        match Self::perform_control_api_runtime_activation_from_plan_request(
+            ControlApiRuntimePlanRequest::default(),
+            state,
+            identity,
+            request_context,
+            ControlApiRoute::ReloadRuntime,
+            AdminAuditEventType::RuntimeReload,
+            AdminAuditAction::RuntimeReloadAttempt,
+            AdminAuditAction::RuntimeReloadResult,
+            "runtime_reload",
+        )
+        .await
+        {
+            Ok(activation) => {
+                let Some(generation) = activation.activated_generation else {
+                    return Self::json_response(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        json!({
+                            "reloaded": false,
+                            "error": "activation succeeded without an activated generation",
+                        }),
+                    );
+                };
+                Self::json_response(
+                    StatusCode::ACCEPTED,
+                    json!({
+                        "reloaded": true,
+                        "generation": generation,
+                        "candidate_generation": activation.history_entry.generation,
+                        "status": activation.status,
+                    }),
+                )
+            }
+            Err(ControlApiActivationError::Response(response)) => response,
+            Err(ControlApiActivationError::Activation(activation)) => Self::json_response(
+                legacy_reload_result_status(&activation),
+                legacy_reload_error_payload(&activation, activation_error(&activation)),
+            ),
+        }
+    }
+
     async fn perform_control_api_runtime_activation(
         req: Request<Incoming>,
         state: &crate::quic_listener::runtime_state::ControlApiServiceCtx,
@@ -431,6 +478,55 @@ impl QUICListener {
         let runtime_state = state.current_service_state();
         let identity = req.extensions().get::<AdminIdentity>().cloned();
         let request_context = req.extensions().get::<ControlApiRequestContext>().cloned();
+        let plan_request =
+            Self::control_api_json_body_or_default::<ControlApiRuntimePlanRequest>(req)
+                .await
+                .map_err(|response| {
+                    Self::emit_control_api_audit_event(
+                        &runtime_state.security,
+                        identity.as_ref(),
+                        request_context.as_ref(),
+                        event_type,
+                        result_action,
+                        Self::control_api_audit_target_for_route(route, None),
+                        AdminAuditGeneration {
+                            active_generation: runtime_state
+                                .generation
+                                .as_ref()
+                                .map(|current| current.generation()),
+                            ..Default::default()
+                        },
+                        AdminAuditResult::Failed,
+                        Some("invalid_request_body".to_string()),
+                    );
+                    ControlApiActivationError::Response(response)
+                })?;
+        Self::perform_control_api_runtime_activation_from_plan_request(
+            plan_request,
+            state,
+            identity,
+            request_context,
+            route,
+            event_type,
+            attempt_action,
+            result_action,
+            default_reason,
+        )
+        .await
+    }
+
+    async fn perform_control_api_runtime_activation_from_plan_request(
+        plan_request: ControlApiRuntimePlanRequest,
+        state: &crate::quic_listener::runtime_state::ControlApiServiceCtx,
+        identity: Option<AdminIdentity>,
+        request_context: Option<ControlApiRequestContext>,
+        route: ControlApiRoute,
+        event_type: AdminAuditEventType,
+        attempt_action: AdminAuditAction,
+        result_action: AdminAuditAction,
+        default_reason: &str,
+    ) -> Result<ActivationResult, ControlApiActivationError> {
+        let runtime_state = state.current_service_state();
         let Some(runtime_bundle_handle) = runtime_state.runtime_bundle_handle().cloned() else {
             return Err(ControlApiActivationError::Response(
                 Self::control_api_not_found_response(),
@@ -445,27 +541,6 @@ impl QUICListener {
                 }),
             )));
         };
-
-        let plan_request =
-            Self::control_api_json_body_or_default::<ControlApiRuntimePlanRequest>(req)
-                .await
-                .map_err(|response| {
-                    Self::emit_control_api_audit_event(
-                        &runtime_state.security,
-                        identity.as_ref(),
-                        request_context.as_ref(),
-                        event_type,
-                        result_action,
-                        Self::control_api_audit_target_for_route(route, None),
-                        AdminAuditGeneration {
-                            active_generation: Some(runtime.generation()),
-                            ..Default::default()
-                        },
-                        AdminAuditResult::Failed,
-                        Some("invalid_request_body".to_string()),
-                    );
-                    ControlApiActivationError::Response(response)
-                })?;
         let activation_request = Self::control_api_activation_request(
             &plan_request,
             runtime.generation(),

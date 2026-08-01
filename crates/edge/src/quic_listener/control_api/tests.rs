@@ -197,11 +197,44 @@ fn control_api_request(method: Method, path: &str, authorization: Option<&str>) 
     builder.body(()).expect("control api request")
 }
 
-fn attach_control_api_peer_addr(req: &mut Request<()>, peer_addr: &str) {
+fn attach_control_api_request_context<B>(
+    req: &mut Request<B>,
+    peer_addr: &str,
+    mtls_identity: Option<super::admin_identity::AdminMtlsIdentity>,
+) {
     req.extensions_mut().insert(super::admin_identity::ControlApiRequestContext {
         peer_addr: peer_addr.parse().expect("peer socket addr"),
-        mtls_identity: None,
+        mtls_identity,
     });
+}
+
+fn attach_control_api_peer_addr<B>(req: &mut Request<B>, peer_addr: &str) {
+    attach_control_api_request_context(req, peer_addr, None);
+}
+
+fn read_audit_events(path: &Path) -> Vec<serde_json::Value> {
+    let contents = std::fs::read_to_string(path).expect("read audit file");
+    contents
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str(line).expect("parse audit event"))
+        .collect()
+}
+
+fn audit_enabled_control_api_state(
+    config: SpookyConfigConfig,
+    config_path: &Path,
+    audit_path: &Path,
+) -> ControlApiState {
+    let mut config = config;
+    config.observability.control_api.enabled = true;
+    config.observability.control_api.audit.enabled = true;
+    config.observability.control_api.audit.sink = ControlApiAuditSink::File;
+    config.observability.control_api.audit.file_path =
+        Some(audit_path.to_string_lossy().to_string());
+    write_config_file(config_path, &config);
+    let bundle = runtime_bundle_from_config(config_path.to_string_lossy().as_ref(), &config);
+    runtime_bundle_control_api_state(bundle).0
 }
 
 async fn full_body_bytes(response: Response<http_body_util::Full<Bytes>>) -> Bytes {
@@ -1315,6 +1348,106 @@ async fn control_api_gate_returns_forbidden_for_under_scoped_identity() {
 }
 
 #[tokio::test]
+async fn control_api_gate_rejects_invalid_bearer_token() {
+    let state = default_control_api_state();
+    let mut req = control_api_request(
+        Method::GET,
+        &state.current_paths().runtime_path,
+        Some("Bearer wrong-token"),
+    );
+
+    let response = QUICListener::gate_control_api_request_for(&mut req, &state)
+        .expect_err("invalid token should be rejected");
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    let payload: serde_json::Value =
+        serde_json::from_slice(&full_body_bytes(*response).await).expect("unauthorized payload");
+    assert_eq!(
+        payload,
+        serde_json::json!({
+            "error": "unauthorized",
+            "reason": "invalid_bearer_token",
+            "required_role": "viewer"
+        })
+    );
+}
+
+#[tokio::test]
+async fn control_api_gate_returns_forbidden_for_operator_hitting_restart() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let mut startup = test_config(cert, key);
+    startup.observability.control_api.enabled = true;
+    startup.observability.control_api.auth_token = None;
+    startup.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
+        token: "operator-token".to_string(),
+        role: ControlApiRole::Operator,
+        actor_id: Some("operator".to_string()),
+    }];
+    let state = control_api_state_with_runtime_bundle(&startup, &startup);
+
+    let mut req = control_api_request(
+        Method::POST,
+        &state.current_paths().restart_path,
+        Some("Bearer operator-token"),
+    );
+    let response = QUICListener::gate_control_api_request_for(&mut req, &state)
+        .expect_err("operator should not be allowed to restart");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let payload: serde_json::Value =
+        serde_json::from_slice(&full_body_bytes(*response).await).expect("forbidden payload");
+    assert_eq!(
+        payload,
+        serde_json::json!({
+            "accepted": false,
+            "error": "forbidden",
+            "reason": "insufficient_role",
+            "required_role": "admin"
+        })
+    );
+}
+
+#[test]
+fn control_api_builds_mtls_identity_from_subject_role_mapping() {
+    use rcgen::{Certificate, CertificateParams, DistinguishedName, DnType, SanType};
+    use rustls::pki_types::CertificateDer;
+
+    let mut params = CertificateParams::new(vec!["admin.example.com".to_string()]);
+    params
+        .subject_alt_names
+        .push(SanType::DnsName("admin.example.com".to_string()));
+    let mut dn = DistinguishedName::new();
+    dn.push(DnType::CommonName, "alice");
+    dn.push(DnType::OrganizationalUnitName, "operator");
+    params.distinguished_name = dn;
+    let cert = Certificate::from_params(params).expect("build cert");
+    let cert_der = CertificateDer::from(cert.serialize_der().expect("serialize cert"));
+
+    let identity_source = super::security::ControlApiIdentitySourcePolicy {
+        kind: "mtls_subject_cn".to_string(),
+        role_attribute: Some("ou".to_string()),
+    };
+    let request_context = QUICListener::build_control_api_request_context(
+        "127.0.0.1:9443".parse().expect("peer addr"),
+        Some(std::slice::from_ref(&cert_der)),
+        Some(&identity_source),
+    );
+    let identity = QUICListener::build_admin_identity(
+        Some(request_context),
+        None,
+        Some(&identity_source),
+    )
+    .expect("mtls identity");
+
+    assert_eq!(identity.actor_id.as_deref(), Some("alice"));
+    assert_eq!(identity.roles, vec![super::admin_identity::AdminRole::Operator]);
+    assert_eq!(
+        identity.authn_mechanisms,
+        vec![super::admin_identity::AdminAuthnMechanism::MutualTls]
+    );
+    assert_eq!(identity.peer_addr.expect("peer addr").ip().to_string(), "127.0.0.1");
+}
+
+#[tokio::test]
 async fn control_api_gate_rejects_source_ip_before_authentication() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
@@ -1385,6 +1518,268 @@ async fn control_api_gate_returns_not_found_for_invalid_routes_without_transport
         full_body_bytes(*response).await,
         Bytes::from_static(b"not found\n")
     );
+}
+
+#[tokio::test]
+async fn control_api_runtime_snapshot_endpoint_allows_viewer() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let mut startup = test_config(cert, key);
+    startup.observability.control_api.enabled = true;
+    startup.observability.control_api.auth_token = None;
+    startup.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
+        token: "viewer-token".to_string(),
+        role: ControlApiRole::Viewer,
+        actor_id: Some("viewer".to_string()),
+    }];
+    let state = control_api_state_with_runtime_bundle(&startup, &startup);
+
+    let mut req = control_api_request(
+        Method::GET,
+        &state.current_paths().runtime_path,
+        Some("Bearer viewer-token"),
+    );
+    let route = QUICListener::gate_control_api_request_for(&mut req, &state)
+        .expect("viewer should be allowed to read runtime snapshot");
+    assert_eq!(route, super::admin_auth::ControlApiRoute::Runtime);
+    let response = QUICListener::render_control_api_runtime_snapshot(&state);
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn control_api_reload_endpoint_denies_viewer() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let mut startup = test_config(cert, key);
+    startup.observability.control_api.enabled = true;
+    startup.observability.control_api.auth_token = None;
+    startup.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
+        token: "viewer-token".to_string(),
+        role: ControlApiRole::Viewer,
+        actor_id: Some("viewer".to_string()),
+    }];
+    let state = control_api_state_with_runtime_bundle(&startup, &startup);
+
+    let mut req = control_api_request(
+        Method::POST,
+        &state.current_paths().reload_path,
+        Some("Bearer viewer-token"),
+    );
+    let response = QUICListener::gate_control_api_request_for(&mut req, &state)
+        .expect_err("viewer should be denied reload");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn control_api_restart_endpoint_denies_operator() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let mut startup = test_config(cert, key);
+    startup.observability.control_api.enabled = true;
+    startup.observability.control_api.auth_token = None;
+    startup.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
+        token: "operator-token".to_string(),
+        role: ControlApiRole::Operator,
+        actor_id: Some("operator".to_string()),
+    }];
+    startup.resilience.watchdog.enabled = true;
+    let state = control_api_state_with_runtime_bundle(&startup, &startup);
+
+    let mut req = control_api_request(
+        Method::POST,
+        &state.current_paths().restart_path,
+        Some("Bearer operator-token"),
+    );
+    let response = QUICListener::gate_control_api_request_for(&mut req, &state)
+        .expect_err("operator should be denied restart");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn control_api_restart_endpoint_allows_admin() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let mut startup = test_config(cert, key);
+    startup.observability.control_api.enabled = true;
+    startup.observability.control_api.auth_token = None;
+    startup.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
+        token: "admin-token".to_string(),
+        role: ControlApiRole::Admin,
+        actor_id: Some("admin".to_string()),
+    }];
+    startup.resilience.watchdog.enabled = true;
+    let state = control_api_state_with_runtime_bundle(&startup, &startup);
+
+    let mut req = control_api_request(
+        Method::POST,
+        &state.current_paths().restart_path,
+        Some("Bearer admin-token"),
+    );
+    let route = QUICListener::gate_control_api_request_for(&mut req, &state)
+        .expect("admin should be allowed to hit restart route");
+    assert_eq!(route, super::admin_auth::ControlApiRoute::Restart);
+    let response = QUICListener::handle_control_api_restart(
+        &state,
+        req.extensions().get::<super::admin_identity::AdminIdentity>().cloned(),
+        req.extensions()
+            .get::<super::admin_identity::ControlApiRequestContext>()
+            .cloned(),
+    );
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+}
+
+#[tokio::test]
+async fn control_api_auth_failure_emits_audit_event() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+    let audit_path = dir.path().join("admin-audit.jsonl");
+    let mut config = test_config(cert, key);
+    config.observability.control_api.auth_token = Some("secret-token".to_string());
+    let state = audit_enabled_control_api_state(config, &config_path, &audit_path);
+
+    let mut req = control_api_request(
+        Method::GET,
+        &state.current_paths().runtime_path,
+        Some("Bearer wrong-token"),
+    );
+    let _ = QUICListener::gate_control_api_request_for(&mut req, &state)
+        .expect_err("invalid token should be rejected");
+
+    let events = read_audit_events(&audit_path);
+    assert!(events.iter().any(|event| {
+        event["event_type"] == "auth"
+            && event["action"] == "auth"
+            && event["result"] == "denied"
+            && event["reason"] == "invalid_bearer_token"
+    }));
+}
+
+#[tokio::test]
+async fn control_api_snapshot_read_emits_audit_event() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+    let audit_path = dir.path().join("admin-audit.jsonl");
+    let mut config = test_config(cert, key);
+    config.observability.control_api.auth_token = None;
+    config.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
+        token: "viewer-token".to_string(),
+        role: ControlApiRole::Viewer,
+        actor_id: Some("viewer".to_string()),
+    }];
+    let state = audit_enabled_control_api_state(config, &config_path, &audit_path);
+
+    let mut req = control_api_request(
+        Method::GET,
+        &state.current_paths().runtime_path,
+        Some("Bearer viewer-token"),
+    );
+    let route = QUICListener::gate_control_api_request_for(&mut req, &state)
+        .expect("viewer should be authorized");
+    let service_state = state.current_service_state();
+    let response = QUICListener::render_control_api_runtime_snapshot(&state);
+    assert_eq!(response.status(), StatusCode::OK);
+    QUICListener::emit_control_api_audit_event(
+        &service_state.security,
+        req.extensions()
+            .get::<super::admin_identity::AdminIdentity>(),
+        req.extensions()
+            .get::<super::admin_identity::ControlApiRequestContext>(),
+        super::audit::AdminAuditEventType::RuntimeSnapshot,
+        super::audit::AdminAuditAction::RuntimeSnapshotRead,
+        QUICListener::control_api_audit_target_for_route(route, None),
+        super::audit::AdminAuditGeneration {
+            active_generation: service_state.generation.as_ref().map(|current| current.generation()),
+            ..Default::default()
+        },
+        super::audit::AdminAuditResult::Success,
+        None,
+    );
+
+    let events = read_audit_events(&audit_path);
+    assert!(events.iter().any(|event| {
+        event["event_type"] == "runtime_snapshot"
+            && event["action"] == "runtime_snapshot.read"
+            && event["result"] == "success"
+    }));
+}
+
+#[tokio::test]
+async fn control_api_reload_emits_attempt_and_result_audit_events() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+    let audit_path = dir.path().join("admin-audit.jsonl");
+    let mut config = test_config(cert, key);
+    config.observability.control_api.auth_token = None;
+    config.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
+        token: "operator-token".to_string(),
+        role: ControlApiRole::Operator,
+        actor_id: Some("operator".to_string()),
+    }];
+    let state = audit_enabled_control_api_state(config, &config_path, &audit_path);
+
+    let _response = QUICListener::handle_control_api_runtime_reload_without_body_for_tests(
+        &state,
+        Some(super::admin_identity::AdminIdentity {
+            actor_id: Some("operator".to_string()),
+            authn_mechanisms: vec![super::admin_identity::AdminAuthnMechanism::BearerToken],
+            roles: vec![super::admin_identity::AdminRole::Operator],
+            peer_addr: None,
+            mtls_subject: None,
+            mtls_san: Vec::new(),
+        }),
+        None,
+    )
+    .await;
+
+    let events = read_audit_events(&audit_path);
+    assert!(events
+        .iter()
+        .any(|event| event["action"] == "runtime_reload.attempt"));
+    assert!(events
+        .iter()
+        .any(|event| event["action"] == "runtime_reload.result"));
+}
+
+#[tokio::test]
+async fn control_api_restart_emits_attempt_and_result_audit_events() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+    let audit_path = dir.path().join("admin-audit.jsonl");
+    let mut config = test_config(cert, key);
+    config.observability.control_api.auth_token = None;
+    config.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
+        token: "admin-token".to_string(),
+        role: ControlApiRole::Admin,
+        actor_id: Some("admin".to_string()),
+    }];
+    config.resilience.watchdog.enabled = true;
+    let state = audit_enabled_control_api_state(config, &config_path, &audit_path);
+
+    let response = QUICListener::handle_control_api_restart(
+        &state,
+        Some(super::admin_identity::AdminIdentity {
+            actor_id: Some("admin".to_string()),
+            authn_mechanisms: vec![super::admin_identity::AdminAuthnMechanism::BearerToken],
+            roles: vec![super::admin_identity::AdminRole::Admin],
+            peer_addr: None,
+            mtls_subject: None,
+            mtls_san: Vec::new(),
+        }),
+        None,
+    );
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+
+    let events = read_audit_events(&audit_path);
+    assert!(events
+        .iter()
+        .any(|event| event["action"] == "runtime_restart.attempt"));
+    assert!(events
+        .iter()
+        .any(|event| event["action"] == "runtime_restart.result"));
 }
 
 // Domain: runtime snapshot rendering and live runtime-view selection.

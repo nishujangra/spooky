@@ -96,6 +96,88 @@ fn base_config(cert: &str, key: &str) -> Config {
 }
 
 #[test]
+fn yaml_parse_rejects_invalid_control_api_mtls_mode() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+
+    let yaml = format!(
+        r#"
+version: 1
+listen:
+  protocol: http3
+  address: "127.0.0.1"
+  port: 9889
+  tls:
+    cert: "{}"
+    key: "{}"
+upstream:
+  test_upstream:
+    load_balancing:
+      type: round-robin
+    route:
+      path_prefix: "/"
+    backends:
+      - id: "b1"
+        address: "127.0.0.1:8080"
+        weight: 1
+observability:
+  control_api:
+    enabled: true
+    auth_token: "token"
+    tls:
+      client_auth:
+        mode: "not_a_real_mode"
+        ca_file: "{}"
+"#,
+        cert.to_string_lossy(),
+        key.to_string_lossy(),
+        cert.to_string_lossy(),
+    );
+
+    assert!(serde_yaml::from_str::<Config>(&yaml).is_err());
+}
+
+#[test]
+fn yaml_parse_rejects_invalid_control_api_role_name() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+
+    let yaml = format!(
+        r#"
+version: 1
+listen:
+  protocol: http3
+  address: "127.0.0.1"
+  port: 9889
+  tls:
+    cert: "{}"
+    key: "{}"
+upstream:
+  test_upstream:
+    load_balancing:
+      type: round-robin
+    route:
+      path_prefix: "/"
+    backends:
+      - id: "b1"
+        address: "127.0.0.1:8080"
+        weight: 1
+observability:
+  control_api:
+    enabled: true
+    auth:
+      bearer_tokens:
+        - token: "viewer-token"
+          role: "super_admin"
+"#,
+        cert.to_string_lossy(),
+        key.to_string_lossy(),
+    );
+
+    assert!(serde_yaml::from_str::<Config>(&yaml).is_err());
+}
+
+#[test]
 fn yaml_parse_applies_performance_and_observability_defaults() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_certs(dir.path());
