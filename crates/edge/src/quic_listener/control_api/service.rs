@@ -1,11 +1,19 @@
 use std::sync::atomic::AtomicUsize;
 
 use super::{
+    security::ControlApiSecurityPolicy,
     context::{ConnectionSlotGuard, ControlApiListenerBinding},
     state::ControlApiState,
     *,
 };
 use crate::quic_listener::runtime_state::ControlPlaneBootstrap;
+
+struct ControlApiTlsState {
+    primary_listener_label: String,
+    listener_tls_generation: u64,
+    security: Arc<ControlApiSecurityPolicy>,
+    server_config: Arc<RustlsServerConfig>,
+}
 
 impl QUICListener {
     pub(in crate::quic_listener) fn spawn_control_api_endpoint(
@@ -17,29 +25,14 @@ impl QUICListener {
             return Ok(());
         }
         let required = startup_state.endpoint.required;
-        let listener_config = startup_state
-            .runtime
-            .runtime_config()
-            .primary_listener_runtime_config()
-            .ok_or_else(|| {
-                ProxyError::Transport("no effective listeners configured".to_string())
-            })?;
-        let primary_listener_label = Self::listener_label(&listener_config);
-        if startup_state.endpoint.enabled
-            && startup_state
-                .listener_tls_store()
-                .bootstrap_server_config(&primary_listener_label)
-                .is_none()
-        {
-            let msg = format!(
-                "failed to initialize control API TLS config: missing reload state for listener '{}'",
-                primary_listener_label
-            );
-            if required {
-                return Err(ProxyError::Tls(msg));
+        if startup_state.endpoint.enabled {
+            if let Err(err) = Self::build_control_api_tls_state(&startup_state) {
+                if required {
+                    return Err(err);
+                }
+                error!("failed to initialize control API TLS config: {}", err);
+                return Ok(());
             }
-            error!("{}", msg);
-            return Ok(());
         }
 
         let handle = match runtime_handle() {
@@ -83,6 +76,17 @@ impl QUICListener {
             Some(startup_state.metrics()),
             async move {
                 let mut listener_binding = initial_binding;
+                let mut tls_state = if startup_state.endpoint.enabled {
+                    match Self::build_control_api_tls_state(&startup_state) {
+                        Ok(state) => Some(state),
+                        Err(err) => {
+                            error!("failed to initialize control API TLS state: {}", err);
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
 
                 loop {
                     let runtime_state = state.current_service_state();
@@ -96,6 +100,7 @@ impl QUICListener {
                                 binding.bind
                             );
                         }
+                        tls_state = None;
                         tokio::time::sleep(Duration::from_millis(200)).await;
                         continue;
                     }
@@ -136,6 +141,15 @@ impl QUICListener {
                         }
                     }
 
+                    match Self::refresh_control_api_tls_state(&runtime_state, &mut tls_state) {
+                        Ok(()) => {}
+                        Err(err) => {
+                            error!("failed to refresh control API TLS config: {}", err);
+                            tokio::time::sleep(Duration::from_millis(200)).await;
+                            continue;
+                        }
+                    }
+
                     let Some(binding) = listener_binding.as_mut() else {
                         tokio::time::sleep(Duration::from_millis(200)).await;
                         continue;
@@ -158,6 +172,8 @@ impl QUICListener {
                     let state = state.clone();
                     let active_connections = Arc::clone(&binding.active_connections);
                     let max_connections = endpoint.max_connections.max(1);
+                    let server_config =
+                        tls_state.as_ref().map(|state| Arc::clone(&state.server_config));
                     if !Self::try_claim_control_api_connection_slot(
                         &active_connections,
                         max_connections,
@@ -173,8 +189,14 @@ impl QUICListener {
                     }
 
                     tokio::spawn(async move {
-                        Self::serve_control_api_connection(state, active_connections, stream, peer)
-                            .await;
+                        Self::serve_control_api_connection(
+                            state,
+                            active_connections,
+                            stream,
+                            peer,
+                            server_config,
+                        )
+                        .await;
                     });
                 }
             },
@@ -210,31 +232,24 @@ impl QUICListener {
         active_connections: Arc<AtomicUsize>,
         stream: tokio::net::TcpStream,
         peer: SocketAddr,
+        server_config: Option<Arc<RustlsServerConfig>>,
     ) {
         let _connection_guard = ConnectionSlotGuard::new(active_connections);
         let runtime_state = state.current_service_state();
         let timeout = Duration::from_millis(runtime_state.endpoint.connection_timeout_ms.max(1));
-        let listener_tls_store = runtime_state.listener_tls_store();
-        let Some(primary_listener_label) = runtime_state.primary_listener_label else {
-            error!("Control API endpoint missing live primary listener label for TLS selection");
-            return;
-        };
-        let Some(server_config) =
-            listener_tls_store.bootstrap_server_config(&primary_listener_label)
-        else {
-            error!(
-                "Control API endpoint missing live TLS config for listener {}",
-                primary_listener_label
-            );
+        let Some(server_config) = server_config else {
+            error!("Control API endpoint missing live TLS config");
             return;
         };
         let acceptor = TlsAcceptor::from(server_config);
         let tls_stream = match acceptor.accept(stream).await {
             Ok(stream) => stream,
             Err(err) => {
+                let detail = err.to_string();
+                let reason = Self::classify_downstream_tls_failure_reason(&detail);
                 error!(
-                    "Control API endpoint TLS handshake failed from {}: {}",
-                    peer, err
+                    "Control API endpoint TLS handshake failed from {}: reason={} detail={}",
+                    peer, reason, detail
                 );
                 return;
             }
@@ -255,5 +270,63 @@ impl QUICListener {
                 debug!("Control API endpoint connection timed out");
             }
         }
+    }
+
+    fn build_control_api_tls_state(
+        runtime_state: &super::context::ControlApiServiceState,
+    ) -> Result<ControlApiTlsState, ProxyError> {
+        let listener_config = runtime_state
+            .runtime
+            .runtime_config()
+            .primary_listener_runtime_config()
+            .ok_or_else(|| ProxyError::Transport("no effective listeners configured".to_string()))?;
+        let primary_listener_label = runtime_state
+            .primary_listener_label
+            .clone()
+            .ok_or_else(|| {
+                ProxyError::Transport(
+                    "control API endpoint missing live primary listener label for TLS selection"
+                        .to_string(),
+                )
+            })?;
+        let listener_tls_generation = runtime_state
+            .listener_tls_store()
+            .generation(&primary_listener_label)
+            .unwrap_or(0);
+        let security = Arc::clone(&runtime_state.security);
+        let server_config =
+            Self::build_control_api_server_tls_config(&listener_config, &security.client_auth)?;
+
+        Ok(ControlApiTlsState {
+            primary_listener_label,
+            listener_tls_generation,
+            security,
+            server_config,
+        })
+    }
+
+    fn refresh_control_api_tls_state(
+        runtime_state: &super::context::ControlApiServiceState,
+        tls_state: &mut Option<ControlApiTlsState>,
+    ) -> Result<(), ProxyError> {
+        let Some(primary_listener_label) = runtime_state.primary_listener_label.as_ref() else {
+            return Err(ProxyError::Transport(
+                "control API endpoint missing live primary listener label for TLS selection"
+                    .to_string(),
+            ));
+        };
+        let listener_tls_generation = runtime_state
+            .listener_tls_store()
+            .generation(primary_listener_label)
+            .unwrap_or(0);
+        let needs_refresh = tls_state.as_ref().is_none_or(|state| {
+            state.primary_listener_label != *primary_listener_label
+                || state.listener_tls_generation != listener_tls_generation
+                || state.security.as_ref() != runtime_state.security.as_ref()
+        });
+        if needs_refresh {
+            *tls_state = Some(Self::build_control_api_tls_state(runtime_state)?);
+        }
+        Ok(())
     }
 }

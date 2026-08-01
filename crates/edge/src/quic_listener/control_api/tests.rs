@@ -1341,6 +1341,46 @@ fn control_api_state_builds_runtime_security_policy_from_reloaded_config() {
 }
 
 #[test]
+fn control_api_tls_builder_supports_disabled_optional_and_required_client_auth() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let mut config = test_config(cert.clone(), key.clone());
+    config.observability.control_api.enabled = true;
+    let runtime_config = RuntimeConfig::from_config(&config).expect("runtime config");
+    let listener_config = runtime_config
+        .primary_listener_runtime_config()
+        .expect("primary listener runtime config");
+
+    let disabled = super::security::ControlApiClientAuthPolicy {
+        mode: ControlApiClientAuthMode::Disabled,
+        verifier: super::security::ControlApiClientVerifierState::Disabled,
+    };
+    assert!(QUICListener::build_control_api_server_tls_config(&listener_config, &disabled).is_ok());
+
+    let optional = super::security::ControlApiClientAuthPolicy {
+        mode: ControlApiClientAuthMode::Optional,
+        verifier: super::security::ControlApiClientVerifierState::Configured(
+            super::security::ControlApiClientCaMaterial {
+                ca_file: Some(cert.clone()),
+                ca_dir: None,
+            },
+        ),
+    };
+    assert!(QUICListener::build_control_api_server_tls_config(&listener_config, &optional).is_ok());
+
+    let required = super::security::ControlApiClientAuthPolicy {
+        mode: ControlApiClientAuthMode::Required,
+        verifier: super::security::ControlApiClientVerifierState::Configured(
+            super::security::ControlApiClientCaMaterial {
+                ca_file: Some(cert),
+                ca_dir: None,
+            },
+        ),
+    };
+    assert!(QUICListener::build_control_api_server_tls_config(&listener_config, &required).is_ok());
+}
+
+#[test]
 fn control_api_state_uses_live_primary_listener_label_after_runtime_swap() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
