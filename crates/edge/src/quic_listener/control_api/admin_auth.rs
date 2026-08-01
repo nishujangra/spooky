@@ -5,7 +5,9 @@ use http_body_util::Full;
 use super::{
     audit::AdminAuditResult,
     admin_identity::{AdminIdentity, AdminRole, ControlApiRequestContext},
-    security::ControlApiSecurityPolicy,
+    security::{
+        ControlApiSecurityPolicy, ControlApiSourcePolicyContext, ControlApiSourcePolicyDecision,
+    },
     state::{ControlApiPaths, ControlApiState},
     *,
 };
@@ -189,6 +191,11 @@ impl QUICListener {
         let service_state = state.current_service_state();
         let request_context = req.extensions().get::<ControlApiRequestContext>().cloned();
         let active_generation = service_state.generation.as_ref().map(|current| current.generation());
+        if let Err(response) =
+            Self::enforce_control_api_source_policy(req, &service_state.security, route, active_generation)
+        {
+            return Err(Box::new(response));
+        }
         let Some(required_role) = route.minimum_role(&service_state.security) else {
             return Ok(());
         };
@@ -281,6 +288,70 @@ impl QUICListener {
                     reason,
                     required_role,
                 )))
+            }
+        }
+    }
+
+    fn enforce_control_api_source_policy<B>(
+        req: &::http::Request<B>,
+        security: &ControlApiSecurityPolicy,
+        route: ControlApiRoute,
+        active_generation: Option<u64>,
+    ) -> Result<(), Response<Full<Bytes>>> {
+        if !security.has_source_policy() {
+            return Ok(());
+        }
+        let request_context = req.extensions().get::<ControlApiRequestContext>().cloned();
+        let Some(request_context) = request_context else {
+            Self::emit_control_api_auth_audit_event(
+                security,
+                None,
+                None,
+                route,
+                active_generation,
+                AdminAuditResult::Denied,
+                "missing_peer_context",
+            );
+            return Err(Self::control_api_auth_error_response(
+                route,
+                StatusCode::FORBIDDEN,
+                "forbidden",
+                "missing_peer_context",
+                route.minimum_role(security),
+            ));
+        };
+
+        let source_policy = ControlApiSourcePolicyContext {
+            source_ip: request_context.peer_addr.ip(),
+            trust_proxy_headers: security.ip_allowlist.trust_proxy_headers,
+        };
+        match security.evaluate_source_policy(&source_policy) {
+            ControlApiSourcePolicyDecision::Allow => Ok(()),
+            ControlApiSourcePolicyDecision::Deny { reason } => {
+                Self::emit_control_api_auth_audit_event(
+                    security,
+                    None,
+                    Some(&request_context),
+                    route,
+                    active_generation,
+                    AdminAuditResult::Denied,
+                    reason,
+                );
+                Self::emit_control_api_route_denial_audit_event(
+                    security,
+                    None,
+                    Some(&request_context),
+                    route,
+                    active_generation,
+                    reason,
+                );
+                Err(Self::control_api_auth_error_response(
+                    route,
+                    StatusCode::FORBIDDEN,
+                    "forbidden",
+                    reason,
+                    route.minimum_role(security),
+                ))
             }
         }
     }

@@ -197,6 +197,13 @@ fn control_api_request(method: Method, path: &str, authorization: Option<&str>) 
     builder.body(()).expect("control api request")
 }
 
+fn attach_control_api_peer_addr(req: &mut Request<()>, peer_addr: &str) {
+    req.extensions_mut().insert(super::admin_identity::ControlApiRequestContext {
+        peer_addr: peer_addr.parse().expect("peer socket addr"),
+        mtls_identity: None,
+    });
+}
+
 async fn full_body_bytes(response: Response<http_body_util::Full<Bytes>>) -> Bytes {
     response
         .into_body()
@@ -1305,6 +1312,61 @@ async fn control_api_gate_returns_forbidden_for_under_scoped_identity() {
             "required_role": "operator"
         })
     );
+}
+
+#[tokio::test]
+async fn control_api_gate_rejects_source_ip_before_authentication() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let mut startup = test_config(cert, key);
+    startup.observability.control_api.enabled = true;
+    startup.observability.control_api.auth_token = Some("secret-token".to_string());
+    startup.observability.control_api.ip_allowlist.cidrs = vec!["127.0.0.0/8".to_string()];
+    let state = control_api_state_with_runtime_bundle(&startup, &startup);
+
+    let mut req = control_api_request(
+        Method::POST,
+        &state.current_paths().reload_path,
+        Some("Bearer definitely-not-secret-token"),
+    );
+    attach_control_api_peer_addr(&mut req, "10.0.0.10:9443");
+
+    let response = QUICListener::gate_control_api_request_for(&mut req, &state)
+        .expect_err("non-allowlisted source should be rejected before auth");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let payload: serde_json::Value =
+        serde_json::from_slice(&full_body_bytes(*response).await).expect("forbidden payload");
+    assert_eq!(
+        payload,
+        serde_json::json!({
+            "reloaded": false,
+            "error": "forbidden",
+            "reason": "source_ip_not_allowed",
+            "required_role": "operator"
+        })
+    );
+}
+
+#[tokio::test]
+async fn control_api_gate_allows_allowlisted_source_and_continues_authentication() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let mut startup = test_config(cert, key);
+    startup.observability.control_api.enabled = true;
+    startup.observability.control_api.auth_token = Some("secret-token".to_string());
+    startup.observability.control_api.ip_allowlist.cidrs = vec!["127.0.0.0/8".to_string()];
+    let state = control_api_state_with_runtime_bundle(&startup, &startup);
+
+    let mut req = control_api_request(
+        Method::POST,
+        &state.current_paths().reload_path,
+        Some("Bearer secret-token"),
+    );
+    attach_control_api_peer_addr(&mut req, "127.0.0.1:9443");
+
+    let route = QUICListener::gate_control_api_request_for(&mut req, &state)
+        .expect("allowlisted source with valid auth should pass");
+    assert_eq!(route, super::admin_auth::ControlApiRoute::ReloadRuntime);
 }
 
 #[tokio::test]
