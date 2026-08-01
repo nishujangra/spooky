@@ -1134,8 +1134,8 @@ fn control_api_route_gating_leaves_health_and_ready_ungated_by_auth() {
     let paths = state.current_paths();
 
     for path in [&paths.health_path, &paths.ready_path] {
-        let req = control_api_request(Method::GET, path, None);
-        let route = QUICListener::gate_control_api_request_for(&req, &state)
+        let mut req = control_api_request(Method::GET, path, None);
+        let route = QUICListener::gate_control_api_request_for(&mut req, &state)
             .expect("health and ready routes should bypass auth");
         assert!(matches!(
             route,
@@ -1177,53 +1177,92 @@ async fn control_api_gate_returns_canonical_unauthorized_payloads_per_route() {
         (
             Method::GET,
             paths.runtime_path.clone(),
-            serde_json::json!({ "error": "unauthorized" }),
+            serde_json::json!({
+                "error": "unauthorized",
+                "reason": "missing_authentication",
+                "required_role": "viewer"
+            }),
         ),
         (
             Method::POST,
             paths.runtime_validate_path(),
-            serde_json::json!({ "error": "unauthorized" }),
+            serde_json::json!({
+                "error": "unauthorized",
+                "reason": "missing_authentication",
+                "required_role": "operator"
+            }),
         ),
         (
             Method::POST,
             paths.runtime_preview_path(),
-            serde_json::json!({ "error": "unauthorized" }),
+            serde_json::json!({
+                "error": "unauthorized",
+                "reason": "missing_authentication",
+                "required_role": "operator"
+            }),
         ),
         (
             Method::POST,
             paths.runtime_activate_path(),
-            serde_json::json!({ "error": "unauthorized" }),
+            serde_json::json!({
+                "error": "unauthorized",
+                "reason": "missing_authentication",
+                "required_role": "operator"
+            }),
         ),
         (
             Method::POST,
             paths.runtime_rollback_path(),
-            serde_json::json!({ "error": "unauthorized" }),
+            serde_json::json!({
+                "error": "unauthorized",
+                "reason": "missing_authentication",
+                "required_role": "operator"
+            }),
         ),
         (
             Method::GET,
             paths.runtime_history_path(),
-            serde_json::json!({ "error": "unauthorized" }),
+            serde_json::json!({
+                "error": "unauthorized",
+                "reason": "missing_authentication",
+                "required_role": "viewer"
+            }),
         ),
         (
             Method::POST,
             paths.reload_certs_path.clone(),
-            serde_json::json!({ "reloaded": false, "error": "unauthorized" }),
+            serde_json::json!({
+                "reloaded": false,
+                "error": "unauthorized",
+                "reason": "missing_authentication",
+                "required_role": "operator"
+            }),
         ),
         (
             Method::POST,
             paths.reload_path.clone(),
-            serde_json::json!({ "reloaded": false, "error": "unauthorized" }),
+            serde_json::json!({
+                "reloaded": false,
+                "error": "unauthorized",
+                "reason": "missing_authentication",
+                "required_role": "operator"
+            }),
         ),
         (
             Method::POST,
             paths.restart_path.clone(),
-            serde_json::json!({ "accepted": false, "error": "unauthorized" }),
+            serde_json::json!({
+                "accepted": false,
+                "error": "unauthorized",
+                "reason": "missing_authentication",
+                "required_role": "admin"
+            }),
         ),
     ];
 
     for (method, path, expected_body) in cases {
-        let req = control_api_request(method, &path, None);
-        let response = QUICListener::gate_control_api_request_for(&req, &state)
+        let mut req = control_api_request(method, &path, None);
+        let response = QUICListener::gate_control_api_request_for(&mut req, &state)
             .expect_err("protected route should reject missing auth");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
         let body = full_body_bytes(*response).await;
@@ -1234,15 +1273,50 @@ async fn control_api_gate_returns_canonical_unauthorized_payloads_per_route() {
 }
 
 #[tokio::test]
+async fn control_api_gate_returns_forbidden_for_under_scoped_identity() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let mut startup = test_config(cert, key);
+    startup.observability.control_api.enabled = true;
+    startup.observability.control_api.auth_token = None;
+    startup.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
+        token: "viewer-token".to_string(),
+        role: ControlApiRole::Viewer,
+        actor_id: Some("viewer".to_string()),
+    }];
+    let state = control_api_state_with_runtime_bundle(&startup, &startup);
+
+    let mut req = control_api_request(
+        Method::POST,
+        &state.current_paths().reload_path,
+        Some("Bearer viewer-token"),
+    );
+    let response = QUICListener::gate_control_api_request_for(&mut req, &state)
+        .expect_err("viewer should not be allowed to call operator route");
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let payload: serde_json::Value =
+        serde_json::from_slice(&full_body_bytes(*response).await).expect("forbidden payload");
+    assert_eq!(
+        payload,
+        serde_json::json!({
+            "reloaded": false,
+            "error": "forbidden",
+            "reason": "insufficient_role",
+            "required_role": "operator"
+        })
+    );
+}
+
+#[tokio::test]
 async fn control_api_gate_returns_not_found_for_invalid_routes_without_transport_coupling() {
     let state = default_control_api_state();
-    let req = control_api_request(
+    let mut req = control_api_request(
         Method::DELETE,
         &state.current_paths().runtime_path,
         Some("Bearer secret-token"),
     );
 
-    let response = QUICListener::gate_control_api_request_for(&req, &state)
+    let response = QUICListener::gate_control_api_request_for(&mut req, &state)
         .expect_err("invalid route should map to not found");
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
     assert_eq!(
@@ -1535,30 +1609,30 @@ fn control_api_gating_uses_live_generation_paths_and_auth_after_bundle_replace()
         .replace(reloaded_bundle)
         .expect("replace runtime bundle");
 
-    let startup_path = control_api_request(
+    let mut startup_path = control_api_request(
         Method::GET,
         "/runtime-startup",
         Some("Bearer startup-token"),
     );
-    let startup_err = QUICListener::gate_control_api_request_for(&startup_path, &state)
+    let startup_err = QUICListener::gate_control_api_request_for(&mut startup_path, &state)
         .expect_err("stale runtime path should be rejected after replacement");
     assert_eq!(startup_err.status(), StatusCode::NOT_FOUND);
 
-    let stale_token = control_api_request(
+    let mut stale_token = control_api_request(
         Method::GET,
         "/runtime-reloaded",
         Some("Bearer startup-token"),
     );
-    let stale_token_err = QUICListener::gate_control_api_request_for(&stale_token, &state)
+    let stale_token_err = QUICListener::gate_control_api_request_for(&mut stale_token, &state)
         .expect_err("stale token should be rejected after replacement");
     assert_eq!(stale_token_err.status(), StatusCode::UNAUTHORIZED);
 
-    let live = control_api_request(
+    let mut live = control_api_request(
         Method::GET,
         "/runtime-reloaded",
         Some("Bearer reloaded-token"),
     );
-    let route = QUICListener::gate_control_api_request_for(&live, &state)
+    let route = QUICListener::gate_control_api_request_for(&mut live, &state)
         .expect("live control api path and auth should be accepted");
     assert!(matches!(route, super::auth::ControlApiRoute::Runtime));
 }

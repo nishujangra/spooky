@@ -2,13 +2,14 @@ use std::{net::IpAddr, sync::Arc};
 
 use spooky_config::config::{
     ControlApi as ControlApiConfig, ControlApiAuditFormat, ControlApiAuditSink,
-    ControlApiBearerToken, ControlApiClientAuthMode, ControlApiRole,
+    ControlApiBearerToken, ControlApiClientAuthMode, ControlApiIdentitySource, ControlApiRole,
 };
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(in crate::quic_listener) struct ControlApiSecurityPolicy {
     pub(in crate::quic_listener) client_auth: ControlApiClientAuthPolicy,
     pub(in crate::quic_listener) bearer_tokens: Arc<Vec<ControlApiBearerTokenEntry>>,
+    pub(in crate::quic_listener) identity_source: Option<ControlApiIdentitySourcePolicy>,
     pub(in crate::quic_listener) authorization: ControlApiAuthorizationPolicy,
     pub(in crate::quic_listener) ip_allowlist: ControlApiIpAllowlistPolicy,
     pub(in crate::quic_listener) audit: ControlApiAuditEmitter,
@@ -19,6 +20,11 @@ impl ControlApiSecurityPolicy {
         Self {
             client_auth: ControlApiClientAuthPolicy::from_config(config),
             bearer_tokens: Arc::new(runtime_bearer_tokens(config)),
+            identity_source: config
+                .auth
+                .identity_source
+                .as_ref()
+                .map(ControlApiIdentitySourcePolicy::from_config),
             authorization: ControlApiAuthorizationPolicy::from_config(config),
             ip_allowlist: ControlApiIpAllowlistPolicy::from_config(config),
             audit: ControlApiAuditEmitter::from_config(config),
@@ -82,6 +88,21 @@ pub(in crate::quic_listener) struct ControlApiAuthorizationPolicy {
     pub(in crate::quic_listener) runtime_read_role: ControlApiRole,
     pub(in crate::quic_listener) runtime_mutate_role: ControlApiRole,
     pub(in crate::quic_listener) restart_role: ControlApiRole,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub(in crate::quic_listener) struct ControlApiIdentitySourcePolicy {
+    pub(in crate::quic_listener) kind: String,
+    pub(in crate::quic_listener) role_attribute: Option<String>,
+}
+
+impl ControlApiIdentitySourcePolicy {
+    fn from_config(config: &ControlApiIdentitySource) -> Self {
+        Self {
+            kind: config.kind.clone(),
+            role_attribute: config.role_attribute.clone(),
+        }
+    }
 }
 
 impl ControlApiAuthorizationPolicy {

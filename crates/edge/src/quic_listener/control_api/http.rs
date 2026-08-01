@@ -2,10 +2,10 @@ use super::{state::ControlApiState, *};
 
 impl QUICListener {
     pub(super) async fn handle_control_api_request(
-        req: Request<Incoming>,
+        mut req: Request<Incoming>,
         state: &ControlApiState,
     ) -> Response<http_body_util::Full<bytes::Bytes>> {
-        let route = match Self::gate_control_api_request(&req, state) {
+        let route = match Self::gate_control_api_request(&mut req, state) {
             Ok(route) => route,
             Err(response) => return *response,
         };

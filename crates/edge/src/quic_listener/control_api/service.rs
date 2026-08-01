@@ -254,10 +254,19 @@ impl QUICListener {
                 return;
             }
         };
+        let request_context = Self::build_control_api_request_context(
+            peer,
+            tls_stream.get_ref().1.peer_certificates(),
+            runtime_state.security.identity_source.as_ref(),
+        );
         let io = TokioIo::new(tls_stream);
-        let service = service_fn(move |req: Request<Incoming>| {
+        let service = service_fn(move |mut req: Request<Incoming>| {
             let state = state.clone();
-            async move { Ok::<_, hyper::Error>(Self::handle_control_api_request(req, &state).await) }
+            let request_context = request_context.clone();
+            async move {
+                req.extensions_mut().insert(request_context);
+                Ok::<_, hyper::Error>(Self::handle_control_api_request(req, &state).await)
+            }
         });
 
         let serve = http1::Builder::new().serve_connection(io, service);
