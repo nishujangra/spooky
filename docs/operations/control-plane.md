@@ -105,11 +105,18 @@ Control API mTLS failure is separate:
 
 Preferred rollout order:
 
-1. Start with loopback-bound bearer-token auth for local development only.
+1. Start with loopback-bound `auth_token` only for local development or migration compatibility.
 2. Move to `auth.bearer_tokens[]` with explicit `viewer` / `operator` / `admin` roles.
 3. Add IP allowlisting for the admin network.
 4. Require control API mTLS in production.
 5. Enable audit output and retain it separately from request-path logs.
+
+Compatibility guidance:
+
+- `observability.control_api.auth_token` remains supported intentionally to avoid operator lockout during migration
+- the legacy token is treated as an `admin` identity so existing reload/restart automation keeps current behavior
+- this is compatibility mode, not the target production design
+- one-way boundary: a newer Spooky binary accepts legacy control API config, but older binaries reject configs that use the newer nested admin-plane fields because the config schema uses `deny_unknown_fields`
 
 Recommended production posture:
 

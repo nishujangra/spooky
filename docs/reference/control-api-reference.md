@@ -66,7 +66,10 @@ Authorization: Bearer <token>
 Compatibility note:
 
 - `observability.control_api.auth_token` remains supported as the legacy single-token admin credential
+- the legacy token is mapped internally to a static admin identity so existing operators keep current restart/reload privileges during migration
+- the legacy token runs in compatibility mode; it preserves behavior, but it is not the recommended production posture
 - new deployments should prefer `observability.control_api.auth.bearer_tokens[]` with explicit roles
+- compatibility boundary: a new Spooky binary accepts legacy `auth_token` configs, but an older binary will reject configs that use the newer nested control-plane fields because `ControlApi` uses strict `deny_unknown_fields`
 
 Role model:
 
@@ -131,6 +134,8 @@ When control API mTLS is configured as `required`, missing or invalid client cer
 
 Use this for loopback-only development or local automation:
 
+This is compatibility-friendly and intentionally simple, but it is not the recommended long-term production posture.
+
 ```yaml
 observability:
   control_api:
@@ -143,6 +148,8 @@ observability:
 ### mTLS Optional With Viewer Token
 
 Use this when you want to start accepting client certificates without making them mandatory yet:
+
+This is a transitional posture for gradual hardening. It is safer than legacy single-token mode, but still weaker than required mTLS.
 
 ```yaml
 observability:

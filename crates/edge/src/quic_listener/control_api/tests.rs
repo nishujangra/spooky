@@ -1815,6 +1815,14 @@ fn control_api_state_prefers_reloaded_paths_and_auth_token() {
         state.current_security_policy().bearer_tokens[0].role,
         ControlApiRole::Admin
     );
+    assert_eq!(
+        state.current_security_policy().bearer_tokens[0].actor_id.as_deref(),
+        Some("legacy_auth_token")
+    );
+    assert_eq!(
+        state.current_security_policy().bearer_tokens[0].source,
+        super::security::ControlApiBearerTokenSource::LegacyAuthToken
+    );
 }
 
 #[test]

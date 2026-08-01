@@ -54,6 +54,13 @@ Admin-plane authentication factors supported today:
 - mTLS only
 - mTLS + bearer token
 
+Compatibility mode:
+
+- the legacy `observability.control_api.auth_token` is still accepted
+- it is mapped to an admin-scoped static identity to preserve existing behavior during migration
+- this is deliberate backward compatibility, not the recommended steady-state production posture
+- because the config schema uses `deny_unknown_fields`, compatibility is one-way: newer binaries accept legacy configs, but older binaries reject configs that use the newer nested admin-plane fields
+
 Recommended production posture:
 
 - `observability.control_api.tls.client_auth.mode: required`
