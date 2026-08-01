@@ -3,6 +3,7 @@ use bytes::Bytes;
 use http_body_util::Full;
 
 use super::{
+    audit::AdminAuditResult,
     admin_identity::{AdminIdentity, AdminRole, ControlApiRequestContext},
     security::ControlApiSecurityPolicy,
     state::{ControlApiPaths, ControlApiState},
@@ -186,6 +187,8 @@ impl QUICListener {
         route: ControlApiRoute,
     ) -> Result<(), ControlApiGateError> {
         let service_state = state.current_service_state();
+        let request_context = req.extensions().get::<ControlApiRequestContext>().cloned();
+        let active_generation = service_state.generation.as_ref().map(|current| current.generation());
         let Some(required_role) = route.minimum_role(&service_state.security) else {
             return Ok(());
         };
@@ -208,6 +211,15 @@ impl QUICListener {
                 route,
             },
             AuthenticationOutcome::Authenticated(identity) => {
+                Self::emit_control_api_auth_audit_event(
+                    &service_state.security,
+                    Some(&identity),
+                    request_context.as_ref(),
+                    route,
+                    active_generation,
+                    AdminAuditResult::Success,
+                    "authenticated",
+                );
                 let authorized = identity.roles.iter().any(|role| *role >= required_role);
                 if authorized {
                     AuthorizationDecision::Allow {
@@ -238,16 +250,38 @@ impl QUICListener {
                 status,
                 error,
                 reason,
+                identity,
                 required_role,
                 route,
-                ..
-            } => Err(Box::new(Self::control_api_auth_error_response(
-                route,
-                status,
-                error,
-                reason,
-                required_role,
-            ))),
+            } => {
+                if status == StatusCode::UNAUTHORIZED {
+                    Self::emit_control_api_auth_audit_event(
+                        &service_state.security,
+                        identity.as_ref(),
+                        request_context.as_ref(),
+                        route,
+                        active_generation,
+                        AdminAuditResult::Denied,
+                        reason,
+                    );
+                } else {
+                    Self::emit_control_api_route_denial_audit_event(
+                        &service_state.security,
+                        identity.as_ref(),
+                        request_context.as_ref(),
+                        route,
+                        active_generation,
+                        reason,
+                    );
+                }
+                Err(Box::new(Self::control_api_auth_error_response(
+                    route,
+                    status,
+                    error,
+                    reason,
+                    required_role,
+                )))
+            }
         }
     }
 

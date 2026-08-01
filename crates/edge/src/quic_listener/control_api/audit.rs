@@ -1,7 +1,20 @@
+use std::{
+    fs::OpenOptions,
+    io::Write,
+    sync::atomic::Ordering,
+};
+
+use log::{error, info, warn};
 use serde::Serialize;
 use spooky_config::config::{ControlApi as ControlApiConfig, ControlApiAuditFormat, ControlApiAuditSink};
 
-use super::admin_identity::{AdminAuthnMechanism, AdminIdentity, AdminRole};
+use super::{
+    admin_auth::ControlApiRoute,
+    admin_identity::{AdminAuthnMechanism, AdminIdentity, AdminRole, ControlApiRequestContext},
+    security::ControlApiSecurityPolicy,
+    *,
+};
+use crate::REQUEST_ID_COUNTER;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(in crate::quic_listener) struct ControlApiAdminAuditEmitter {
@@ -54,6 +67,8 @@ pub(in crate::quic_listener) struct AdminAuditEvent {
 pub(in crate::quic_listener) enum AdminAuditEventType {
     Auth,
     RuntimeSnapshot,
+    RuntimeValidate,
+    RuntimePreview,
     RuntimeReload,
     RuntimeActivate,
     RuntimeRollback,
@@ -91,6 +106,14 @@ pub(in crate::quic_listener) enum AdminAuditAction {
     Auth,
     #[serde(rename = "runtime_snapshot.read")]
     RuntimeSnapshotRead,
+    #[serde(rename = "runtime_validate.attempt")]
+    RuntimeValidateAttempt,
+    #[serde(rename = "runtime_validate.result")]
+    RuntimeValidateResult,
+    #[serde(rename = "runtime_preview.attempt")]
+    RuntimePreviewAttempt,
+    #[serde(rename = "runtime_preview.result")]
+    RuntimePreviewResult,
     #[serde(rename = "runtime_reload.attempt")]
     RuntimeReloadAttempt,
     #[serde(rename = "runtime_reload.result")]
@@ -156,6 +179,231 @@ impl AdminAuditAuthn {
                 .map(|identity| identity.authn_mechanisms.clone())
                 .unwrap_or_default(),
             mtls_subject: identity.and_then(|identity| identity.mtls_subject.clone()),
+        }
+    }
+}
+
+impl QUICListener {
+    pub(super) fn emit_control_api_audit_event(
+        security: &ControlApiSecurityPolicy,
+        identity: Option<&AdminIdentity>,
+        request_context: Option<&ControlApiRequestContext>,
+        event_type: AdminAuditEventType,
+        action: AdminAuditAction,
+        target: AdminAuditTarget,
+        generation: AdminAuditGeneration,
+        result: AdminAuditResult,
+        reason: Option<String>,
+    ) {
+        let emitter = &security.audit;
+        if !emitter.enabled {
+            return;
+        }
+
+        let event = AdminAuditEvent {
+            event_type,
+            time_unix_ms: crate::watchdog::time::now_millis(),
+            actor: AdminAuditActor::from_identity(identity),
+            action,
+            target,
+            generation,
+            result,
+            reason,
+            event_id: format!(
+                "control-api-audit-{}",
+                REQUEST_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
+            ),
+            peer_addr: Self::control_api_audit_peer_addr(identity, request_context),
+            authn: AdminAuditAuthn::from_identity(identity),
+        };
+
+        emitter.emit(&event);
+    }
+
+    pub(super) fn emit_control_api_auth_audit_event(
+        security: &ControlApiSecurityPolicy,
+        identity: Option<&AdminIdentity>,
+        request_context: Option<&ControlApiRequestContext>,
+        route: ControlApiRoute,
+        active_generation: Option<u64>,
+        result: AdminAuditResult,
+        reason: impl Into<String>,
+    ) {
+        Self::emit_control_api_audit_event(
+            security,
+            identity,
+            request_context,
+            AdminAuditEventType::Auth,
+            AdminAuditAction::Auth,
+            Self::control_api_audit_target_for_route(route, None),
+            AdminAuditGeneration {
+                active_generation,
+                ..Default::default()
+            },
+            result,
+            Some(reason.into()),
+        );
+    }
+
+    pub(super) fn emit_control_api_route_denial_audit_event(
+        security: &ControlApiSecurityPolicy,
+        identity: Option<&AdminIdentity>,
+        request_context: Option<&ControlApiRequestContext>,
+        route: ControlApiRoute,
+        active_generation: Option<u64>,
+        reason: impl Into<String>,
+    ) {
+        let Some((event_type, action)) = Self::control_api_denied_action_for_route(route) else {
+            return;
+        };
+
+        Self::emit_control_api_audit_event(
+            security,
+            identity,
+            request_context,
+            event_type,
+            action,
+            Self::control_api_audit_target_for_route(route, None),
+            AdminAuditGeneration {
+                active_generation,
+                ..Default::default()
+            },
+            AdminAuditResult::Denied,
+            Some(reason.into()),
+        );
+    }
+
+    pub(super) fn control_api_audit_target_for_route(
+        route: ControlApiRoute,
+        config_path: Option<String>,
+    ) -> AdminAuditTarget {
+        let resource = match route {
+            ControlApiRoute::Health | ControlApiRoute::Ready => Some("control_api_status".to_string()),
+            ControlApiRoute::Runtime
+            | ControlApiRoute::RuntimeHistory
+            | ControlApiRoute::RuntimeHistoryGeneration(_) => Some("runtime_state".to_string()),
+            ControlApiRoute::RuntimeValidate
+            | ControlApiRoute::RuntimePreview
+            | ControlApiRoute::RuntimeActivate
+            | ControlApiRoute::RuntimeRollback
+            | ControlApiRoute::ReloadRuntime => Some("runtime_generation".to_string()),
+            ControlApiRoute::ReloadCerts => Some("listener_tls".to_string()),
+            ControlApiRoute::Restart => Some("watchdog".to_string()),
+        };
+
+        AdminAuditTarget {
+            route: Some(Self::control_api_route_name(route).to_string()),
+            resource,
+            config_path,
+        }
+    }
+
+    pub(super) fn control_api_route_name(route: ControlApiRoute) -> &'static str {
+        match route {
+            ControlApiRoute::Health => "/health",
+            ControlApiRoute::Ready => "/ready",
+            ControlApiRoute::Runtime => "/admin/runtime",
+            ControlApiRoute::RuntimeValidate => "/admin/runtime/validate",
+            ControlApiRoute::RuntimePreview => "/admin/runtime/preview",
+            ControlApiRoute::RuntimeActivate => "/admin/runtime/activate",
+            ControlApiRoute::RuntimeRollback => "/admin/runtime/rollback",
+            ControlApiRoute::RuntimeHistory => "/admin/runtime/history",
+            ControlApiRoute::RuntimeHistoryGeneration(_) => "/admin/runtime/history/{generation}",
+            ControlApiRoute::ReloadCerts => "/admin/reload-certs",
+            ControlApiRoute::ReloadRuntime => "/admin/reload",
+            ControlApiRoute::Restart => "/admin/restart",
+        }
+    }
+
+    fn control_api_denied_action_for_route(
+        route: ControlApiRoute,
+    ) -> Option<(AdminAuditEventType, AdminAuditAction)> {
+        match route {
+            ControlApiRoute::Runtime
+            | ControlApiRoute::RuntimeHistory
+            | ControlApiRoute::RuntimeHistoryGeneration(_) => Some((
+                AdminAuditEventType::RuntimeSnapshot,
+                AdminAuditAction::RuntimeSnapshotRead,
+            )),
+            ControlApiRoute::RuntimeValidate => Some((
+                AdminAuditEventType::RuntimeValidate,
+                AdminAuditAction::RuntimeValidateAttempt,
+            )),
+            ControlApiRoute::RuntimePreview => Some((
+                AdminAuditEventType::RuntimePreview,
+                AdminAuditAction::RuntimePreviewAttempt,
+            )),
+            ControlApiRoute::RuntimeActivate => Some((
+                AdminAuditEventType::RuntimeActivate,
+                AdminAuditAction::RuntimeActivateAttempt,
+            )),
+            ControlApiRoute::RuntimeRollback => Some((
+                AdminAuditEventType::RuntimeRollback,
+                AdminAuditAction::RuntimeRollbackAttempt,
+            )),
+            ControlApiRoute::ReloadCerts => Some((
+                AdminAuditEventType::CertReload,
+                AdminAuditAction::CertReloadAttempt,
+            )),
+            ControlApiRoute::ReloadRuntime => Some((
+                AdminAuditEventType::RuntimeReload,
+                AdminAuditAction::RuntimeReloadAttempt,
+            )),
+            ControlApiRoute::Restart => Some((
+                AdminAuditEventType::RuntimeRestart,
+                AdminAuditAction::RuntimeRestartAttempt,
+            )),
+            ControlApiRoute::Health | ControlApiRoute::Ready => None,
+        }
+    }
+
+    fn control_api_audit_peer_addr(
+        identity: Option<&AdminIdentity>,
+        request_context: Option<&ControlApiRequestContext>,
+    ) -> Option<String> {
+        identity
+            .and_then(|identity| identity.peer_addr)
+            .or_else(|| request_context.map(|context| context.peer_addr))
+            .map(|addr| addr.to_string())
+    }
+}
+
+impl ControlApiAdminAuditEmitter {
+    fn emit(&self, event: &AdminAuditEvent) {
+        let serialized = match self.format {
+            ControlApiAuditFormat::Json => match serde_json::to_string(event) {
+                Ok(serialized) => serialized,
+                Err(err) => {
+                    error!("failed to serialize control API admin audit event: {}", err);
+                    return;
+                }
+            },
+        };
+
+        match &self.sink {
+            ControlApiAdminAuditTarget::Log => info!("control_api_admin_audit {}", serialized),
+            ControlApiAdminAuditTarget::File(Some(path)) => {
+                match OpenOptions::new().create(true).append(true).open(path) {
+                    Ok(mut file) => {
+                        if let Err(err) = writeln!(file, "{}", serialized) {
+                            error!(
+                                "failed to write control API admin audit event to {}: {}",
+                                path, err
+                            );
+                        }
+                    }
+                    Err(err) => error!(
+                        "failed to open control API admin audit sink {}: {}",
+                        path, err
+                    ),
+                }
+            }
+            ControlApiAdminAuditTarget::File(None) => {
+                warn!(
+                    "control API admin audit sink configured as file without file_path; falling back to log"
+                );
+                info!("control_api_admin_audit {}", serialized);
+            }
         }
     }
 }

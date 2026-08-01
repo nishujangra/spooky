@@ -1,4 +1,10 @@
-use super::{state::ControlApiState, *};
+use super::{
+    admin_auth::ControlApiRoute,
+    admin_identity::{AdminIdentity, ControlApiRequestContext},
+    audit::{AdminAuditAction, AdminAuditEventType, AdminAuditGeneration, AdminAuditResult},
+    state::ControlApiState,
+    *,
+};
 
 impl QUICListener {
     pub(super) async fn handle_control_api_request(
@@ -9,37 +15,86 @@ impl QUICListener {
             Ok(route) => route,
             Err(response) => return *response,
         };
+        let identity = req.extensions().get::<AdminIdentity>().cloned();
+        let request_context = req.extensions().get::<ControlApiRequestContext>().cloned();
+        let service_state = state.current_service_state();
+        let active_generation = service_state.generation.as_ref().map(|current| current.generation());
         match route {
-            super::admin_auth::ControlApiRoute::Health => Self::render_control_api_health(state),
-            super::admin_auth::ControlApiRoute::Ready => Self::render_control_api_ready(state),
-            super::admin_auth::ControlApiRoute::Runtime => {
+            ControlApiRoute::Health => Self::render_control_api_health(state),
+            ControlApiRoute::Ready => Self::render_control_api_ready(state),
+            ControlApiRoute::Runtime => {
+                Self::emit_control_api_audit_event(
+                    &service_state.security,
+                    identity.as_ref(),
+                    request_context.as_ref(),
+                    AdminAuditEventType::RuntimeSnapshot,
+                    AdminAuditAction::RuntimeSnapshotRead,
+                    Self::control_api_audit_target_for_route(route, None),
+                    AdminAuditGeneration {
+                        active_generation,
+                        ..Default::default()
+                    },
+                    AdminAuditResult::Success,
+                    None,
+                );
                 Self::render_control_api_runtime_snapshot(state)
             }
-            super::admin_auth::ControlApiRoute::RuntimeValidate => {
+            ControlApiRoute::RuntimeValidate => {
                 Self::handle_control_api_runtime_validate(req, state).await
             }
-            super::admin_auth::ControlApiRoute::RuntimePreview => {
+            ControlApiRoute::RuntimePreview => {
                 Self::handle_control_api_runtime_preview(req, state).await
             }
-            super::admin_auth::ControlApiRoute::RuntimeActivate => {
+            ControlApiRoute::RuntimeActivate => {
                 Self::handle_control_api_runtime_activate(req, state).await
             }
-            super::admin_auth::ControlApiRoute::ReloadRuntime => {
+            ControlApiRoute::ReloadRuntime => {
                 Self::handle_control_api_runtime_reload(req, state).await
             }
-            super::admin_auth::ControlApiRoute::RuntimeRollback => {
+            ControlApiRoute::RuntimeRollback => {
                 Self::handle_control_api_runtime_rollback(req, state).await
             }
-            super::admin_auth::ControlApiRoute::RuntimeHistory => {
+            ControlApiRoute::RuntimeHistory => {
+                Self::emit_control_api_audit_event(
+                    &service_state.security,
+                    identity.as_ref(),
+                    request_context.as_ref(),
+                    AdminAuditEventType::RuntimeSnapshot,
+                    AdminAuditAction::RuntimeSnapshotRead,
+                    Self::control_api_audit_target_for_route(route, None),
+                    AdminAuditGeneration {
+                        active_generation,
+                        ..Default::default()
+                    },
+                    AdminAuditResult::Success,
+                    None,
+                );
                 Self::render_control_api_runtime_history(state)
             }
-            super::admin_auth::ControlApiRoute::RuntimeHistoryGeneration(generation) => {
+            ControlApiRoute::RuntimeHistoryGeneration(generation) => {
+                Self::emit_control_api_audit_event(
+                    &service_state.security,
+                    identity.as_ref(),
+                    request_context.as_ref(),
+                    AdminAuditEventType::RuntimeSnapshot,
+                    AdminAuditAction::RuntimeSnapshotRead,
+                    Self::control_api_audit_target_for_route(route, None),
+                    AdminAuditGeneration {
+                        active_generation,
+                        target_generation: Some(generation),
+                        ..Default::default()
+                    },
+                    AdminAuditResult::Success,
+                    None,
+                );
                 Self::render_control_api_runtime_history_generation(state, generation)
             }
-            super::admin_auth::ControlApiRoute::ReloadCerts => {
-                Self::handle_control_api_reload_certs(state)
+            ControlApiRoute::ReloadCerts => {
+                Self::handle_control_api_reload_certs(state, identity, request_context)
             }
-            super::admin_auth::ControlApiRoute::Restart => Self::handle_control_api_restart(state),
+            ControlApiRoute::Restart => {
+                Self::handle_control_api_restart(state, identity, request_context)
+            }
         }
     }
 }
