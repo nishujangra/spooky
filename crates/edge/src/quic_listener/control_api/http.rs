@@ -18,7 +18,10 @@ impl QUICListener {
         let identity = req.extensions().get::<AdminIdentity>().cloned();
         let request_context = req.extensions().get::<ControlApiRequestContext>().cloned();
         let service_state = state.current_service_state();
-        let active_generation = service_state.generation.as_ref().map(|current| current.generation());
+        let active_generation = service_state
+            .generation
+            .as_ref()
+            .map(|current| current.generation());
         match route {
             ControlApiRoute::Health => Self::render_control_api_health(state),
             ControlApiRoute::Ready => Self::render_control_api_ready(state),

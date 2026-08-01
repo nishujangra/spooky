@@ -1,8 +1,8 @@
 use std::sync::atomic::AtomicUsize;
 
 use super::{
-    security::ControlApiSecurityPolicy,
     context::{ConnectionSlotGuard, ControlApiListenerBinding},
+    security::ControlApiSecurityPolicy,
     state::ControlApiState,
     *,
 };
@@ -172,8 +172,9 @@ impl QUICListener {
                     let state = state.clone();
                     let active_connections = Arc::clone(&binding.active_connections);
                     let max_connections = endpoint.max_connections.max(1);
-                    let server_config =
-                        tls_state.as_ref().map(|state| Arc::clone(&state.server_config));
+                    let server_config = tls_state
+                        .as_ref()
+                        .map(|state| Arc::clone(&state.server_config));
                     if !Self::try_claim_control_api_connection_slot(
                         &active_connections,
                         max_connections,
@@ -288,16 +289,19 @@ impl QUICListener {
             .runtime
             .runtime_config()
             .primary_listener_runtime_config()
-            .ok_or_else(|| ProxyError::Transport("no effective listeners configured".to_string()))?;
-        let primary_listener_label = runtime_state
-            .primary_listener_label
-            .clone()
             .ok_or_else(|| {
-                ProxyError::Transport(
+                ProxyError::Transport("no effective listeners configured".to_string())
+            })?;
+        let primary_listener_label =
+            runtime_state
+                .primary_listener_label
+                .clone()
+                .ok_or_else(|| {
+                    ProxyError::Transport(
                     "control API endpoint missing live primary listener label for TLS selection"
                         .to_string(),
                 )
-            })?;
+                })?;
         let listener_tls_generation = runtime_state
             .listener_tls_store()
             .generation(&primary_listener_label)

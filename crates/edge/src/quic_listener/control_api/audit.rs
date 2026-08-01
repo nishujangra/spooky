@@ -1,12 +1,10 @@
-use std::{
-    fs::OpenOptions,
-    io::Write,
-    sync::atomic::Ordering,
-};
+use std::{fs::OpenOptions, io::Write, sync::atomic::Ordering};
 
 use log::{error, info, warn};
 use serde::Serialize;
-use spooky_config::config::{ControlApi as ControlApiConfig, ControlApiAuditFormat, ControlApiAuditSink};
+use spooky_config::config::{
+    ControlApi as ControlApiConfig, ControlApiAuditFormat, ControlApiAuditSink,
+};
 
 use super::{
     admin_auth::ControlApiRoute,
@@ -91,7 +89,9 @@ impl AdminAuditActor {
     pub(in crate::quic_listener) fn from_identity(identity: Option<&AdminIdentity>) -> Self {
         Self {
             id: identity.and_then(|identity| identity.actor_id.clone()),
-            roles: identity.map(|identity| identity.roles.clone()).unwrap_or_default(),
+            roles: identity
+                .map(|identity| identity.roles.clone())
+                .unwrap_or_default(),
             authn_mechanisms: identity
                 .map(|identity| identity.authn_mechanisms.clone())
                 .unwrap_or_default(),
@@ -279,7 +279,9 @@ impl QUICListener {
         config_path: Option<String>,
     ) -> AdminAuditTarget {
         let resource = match route {
-            ControlApiRoute::Health | ControlApiRoute::Ready => Some("control_api_status".to_string()),
+            ControlApiRoute::Health | ControlApiRoute::Ready => {
+                Some("control_api_status".to_string())
+            }
             ControlApiRoute::Runtime
             | ControlApiRoute::RuntimeHistory
             | ControlApiRoute::RuntimeHistoryGeneration(_) => Some("runtime_state".to_string()),

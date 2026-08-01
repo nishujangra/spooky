@@ -202,10 +202,11 @@ fn attach_control_api_request_context<B>(
     peer_addr: &str,
     mtls_identity: Option<super::admin_identity::AdminMtlsIdentity>,
 ) {
-    req.extensions_mut().insert(super::admin_identity::ControlApiRequestContext {
-        peer_addr: peer_addr.parse().expect("peer socket addr"),
-        mtls_identity,
-    });
+    req.extensions_mut()
+        .insert(super::admin_identity::ControlApiRequestContext {
+            peer_addr: peer_addr.parse().expect("peer socket addr"),
+            mtls_identity,
+        });
 }
 
 fn attach_control_api_peer_addr<B>(req: &mut Request<B>, peer_addr: &str) {
@@ -1199,12 +1200,10 @@ fn control_api_authorization_uses_token_matching_independent_of_request_body_typ
         &security
     ));
     assert!(!QUICListener::control_api_is_authorized_for(
-        &malformed,
-        &security
+        &malformed, &security
     ));
     assert!(!QUICListener::control_api_is_authorized_for(
-        &missing,
-        &security
+        &missing, &security
     ));
 }
 
@@ -1431,20 +1430,23 @@ fn control_api_builds_mtls_identity_from_subject_role_mapping() {
         Some(std::slice::from_ref(&cert_der)),
         Some(&identity_source),
     );
-    let identity = QUICListener::build_admin_identity(
-        Some(request_context),
-        None,
-        Some(&identity_source),
-    )
-    .expect("mtls identity");
+    let identity =
+        QUICListener::build_admin_identity(Some(request_context), None, Some(&identity_source))
+            .expect("mtls identity");
 
     assert_eq!(identity.actor_id.as_deref(), Some("alice"));
-    assert_eq!(identity.roles, vec![super::admin_identity::AdminRole::Operator]);
+    assert_eq!(
+        identity.roles,
+        vec![super::admin_identity::AdminRole::Operator]
+    );
     assert_eq!(
         identity.authn_mechanisms,
         vec![super::admin_identity::AdminAuthnMechanism::MutualTls]
     );
-    assert_eq!(identity.peer_addr.expect("peer addr").ip().to_string(), "127.0.0.1");
+    assert_eq!(
+        identity.peer_addr.expect("peer addr").ip().to_string(),
+        "127.0.0.1"
+    );
 }
 
 #[tokio::test]
@@ -1620,7 +1622,9 @@ async fn control_api_restart_endpoint_allows_admin() {
     assert_eq!(route, super::admin_auth::ControlApiRoute::Restart);
     let response = QUICListener::handle_control_api_restart(
         &state,
-        req.extensions().get::<super::admin_identity::AdminIdentity>().cloned(),
+        req.extensions()
+            .get::<super::admin_identity::AdminIdentity>()
+            .cloned(),
         req.extensions()
             .get::<super::admin_identity::ControlApiRequestContext>()
             .cloned(),
@@ -1690,7 +1694,10 @@ async fn control_api_snapshot_read_emits_audit_event() {
         super::audit::AdminAuditAction::RuntimeSnapshotRead,
         QUICListener::control_api_audit_target_for_route(route, None),
         super::audit::AdminAuditGeneration {
-            active_generation: service_state.generation.as_ref().map(|current| current.generation()),
+            active_generation: service_state
+                .generation
+                .as_ref()
+                .map(|current| current.generation()),
             ..Default::default()
         },
         super::audit::AdminAuditResult::Success,
@@ -1735,12 +1742,16 @@ async fn control_api_reload_emits_attempt_and_result_audit_events() {
     .await;
 
     let events = read_audit_events(&audit_path);
-    assert!(events
-        .iter()
-        .any(|event| event["action"] == "runtime_reload.attempt"));
-    assert!(events
-        .iter()
-        .any(|event| event["action"] == "runtime_reload.result"));
+    assert!(
+        events
+            .iter()
+            .any(|event| event["action"] == "runtime_reload.attempt")
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event["action"] == "runtime_reload.result")
+    );
 }
 
 #[tokio::test]
@@ -1774,12 +1785,16 @@ async fn control_api_restart_emits_attempt_and_result_audit_events() {
     assert_eq!(response.status(), StatusCode::ACCEPTED);
 
     let events = read_audit_events(&audit_path);
-    assert!(events
-        .iter()
-        .any(|event| event["action"] == "runtime_restart.attempt"));
-    assert!(events
-        .iter()
-        .any(|event| event["action"] == "runtime_restart.result"));
+    assert!(
+        events
+            .iter()
+            .any(|event| event["action"] == "runtime_restart.attempt")
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event["action"] == "runtime_restart.result")
+    );
 }
 
 // Domain: runtime snapshot rendering and live runtime-view selection.
@@ -1816,7 +1831,9 @@ fn control_api_state_prefers_reloaded_paths_and_auth_token() {
         ControlApiRole::Admin
     );
     assert_eq!(
-        state.current_security_policy().bearer_tokens[0].actor_id.as_deref(),
+        state.current_security_policy().bearer_tokens[0]
+            .actor_id
+            .as_deref(),
         Some("legacy_auth_token")
     );
     assert_eq!(
@@ -1852,7 +1869,10 @@ fn control_api_state_builds_runtime_security_policy_from_reloaded_config() {
     let state = control_api_state_with_runtime_bundle(&startup, &reloaded);
     let security = state.current_security_policy();
 
-    assert_eq!(security.client_auth.mode, ControlApiClientAuthMode::Required);
+    assert_eq!(
+        security.client_auth.mode,
+        ControlApiClientAuthMode::Required
+    );
     assert_eq!(
         security.client_auth.verifier,
         super::security::ControlApiClientVerifierState::Configured(
@@ -1865,11 +1885,17 @@ fn control_api_state_builds_runtime_security_policy_from_reloaded_config() {
     assert_eq!(security.bearer_tokens.len(), 1);
     assert_eq!(security.bearer_tokens[0].token, "operator-token");
     assert_eq!(security.bearer_tokens[0].role, ControlApiRole::Operator);
-    assert!(security.ip_allowlist.allows("127.0.0.1".parse().expect("ipv4")));
+    assert!(
+        security
+            .ip_allowlist
+            .allows("127.0.0.1".parse().expect("ipv4"))
+    );
     assert!(security.ip_allowlist.allows("::1".parse().expect("ipv6")));
-    assert!(!security
-        .ip_allowlist
-        .allows("10.0.0.1".parse().expect("non-matching ipv4")));
+    assert!(
+        !security
+            .ip_allowlist
+            .allows("10.0.0.1".parse().expect("non-matching ipv4"))
+    );
     assert!(security.audit.enabled);
     assert_eq!(
         security.audit.sink,

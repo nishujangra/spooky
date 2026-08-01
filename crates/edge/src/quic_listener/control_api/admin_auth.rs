@@ -3,8 +3,8 @@ use bytes::Bytes;
 use http_body_util::Full;
 
 use super::{
-    audit::AdminAuditResult,
     admin_identity::{AdminIdentity, AdminRole, ControlApiRequestContext},
+    audit::AdminAuditResult,
     security::{
         ControlApiSecurityPolicy, ControlApiSourcePolicyContext, ControlApiSourcePolicyDecision,
     },
@@ -49,9 +49,9 @@ impl ControlApiRoute {
             | Self::RuntimeActivate
             | Self::RuntimeRollback
             | Self::ReloadCerts
-            | Self::ReloadRuntime => Some(AdminRole::from(
-                security.authorization.runtime_mutate_role,
-            )),
+            | Self::ReloadRuntime => {
+                Some(AdminRole::from(security.authorization.runtime_mutate_role))
+            }
             Self::Restart => Some(AdminRole::from(security.authorization.restart_role)),
         }
     }
@@ -190,10 +190,16 @@ impl QUICListener {
     ) -> Result<(), ControlApiGateError> {
         let service_state = state.current_service_state();
         let request_context = req.extensions().get::<ControlApiRequestContext>().cloned();
-        let active_generation = service_state.generation.as_ref().map(|current| current.generation());
-        if let Err(response) =
-            Self::enforce_control_api_source_policy(req, &service_state.security, route, active_generation)
-        {
+        let active_generation = service_state
+            .generation
+            .as_ref()
+            .map(|current| current.generation());
+        if let Err(response) = Self::enforce_control_api_source_policy(
+            req,
+            &service_state.security,
+            route,
+            active_generation,
+        ) {
             return Err(Box::new(response));
         }
         let Some(required_role) = route.minimum_role(&service_state.security) else {

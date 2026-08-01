@@ -6,9 +6,9 @@ use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use crate::{
     backend_endpoint::{BackendEndpoint, BackendScheme},
     config::{
-        CURRENT_CONFIG_VERSION, Config, ControlApi, ControlApiAuditSink,
-        ControlApiClientAuthMode, ExternalAuth, Listen, SUPPORTED_CONFIG_VERSIONS,
-        ScopedRateLimitScope, UpstreamHostPolicyMode, UpstreamTls,
+        CURRENT_CONFIG_VERSION, Config, ControlApi, ControlApiAuditSink, ControlApiClientAuthMode,
+        ExternalAuth, Listen, SUPPORTED_CONFIG_VERSIONS, ScopedRateLimitScope,
+        UpstreamHostPolicyMode, UpstreamTls,
     },
 };
 

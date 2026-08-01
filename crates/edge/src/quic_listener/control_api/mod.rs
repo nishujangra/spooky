@@ -5,9 +5,9 @@ use tokio_rustls::TlsAcceptor;
 
 use super::*;
 
-mod audit;
 mod admin_auth;
 mod admin_identity;
+mod audit;
 mod context;
 mod http;
 mod reload;

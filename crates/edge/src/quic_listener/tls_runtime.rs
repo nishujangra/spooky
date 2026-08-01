@@ -606,8 +606,7 @@ impl QUICListener {
 
         if !loaded_any {
             return Err(ProxyError::Tls(
-                "control API client-auth is enabled but no CA certificates were loaded"
-                    .to_string(),
+                "control API client-auth is enabled but no CA certificates were loaded".to_string(),
             ));
         }
 
@@ -744,14 +743,13 @@ impl QUICListener {
             }
             spooky_config::config::ControlApiClientAuthMode::Optional
             | spooky_config::config::ControlApiClientAuthMode::Required => {
-                let roots = Self::load_control_api_client_auth_roots(client_auth)?.ok_or_else(
-                    || {
+                let roots =
+                    Self::load_control_api_client_auth_roots(client_auth)?.ok_or_else(|| {
                         ProxyError::Tls(
                             "control API client-auth roots unavailable while mTLS is enabled"
                                 .to_string(),
                         )
-                    },
-                )?;
+                    })?;
                 let verifier_builder = WebPkiClientVerifier::builder(roots);
                 let verifier = if matches!(
                     client_auth.mode,

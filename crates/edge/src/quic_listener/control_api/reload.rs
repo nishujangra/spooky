@@ -5,6 +5,11 @@ use http_body_util::{BodyExt, Full};
 use serde::{Deserialize, de::DeserializeOwned};
 
 use super::*;
+use super::{
+    admin_auth::ControlApiRoute,
+    admin_identity::{AdminIdentity, ControlApiRequestContext},
+    audit::{AdminAuditAction, AdminAuditEventType, AdminAuditGeneration, AdminAuditResult},
+};
 use crate::runtime::{
     activation::{
         ActivationRequest, ActivationResult, RejectedChangeKind, ReloadConfigInput, ReloadPlan,
@@ -12,11 +17,6 @@ use crate::runtime::{
     },
     bundle::{ActiveRuntimeGeneration, RuntimeBundleHandle},
     policy::{ReloadCompatibilityAuthority, TransitionRejection},
-};
-use super::{
-    admin_auth::ControlApiRoute,
-    admin_identity::{AdminIdentity, ControlApiRequestContext},
-    audit::{AdminAuditAction, AdminAuditEventType, AdminAuditGeneration, AdminAuditResult},
 };
 
 #[derive(Default, Deserialize)]
@@ -117,7 +117,10 @@ impl QUICListener {
         request_context: Option<ControlApiRequestContext>,
     ) -> Response<Full<Bytes>> {
         let runtime_state = state.current_service_state();
-        let active_generation = runtime_state.generation.as_ref().map(|current| current.generation());
+        let active_generation = runtime_state
+            .generation
+            .as_ref()
+            .map(|current| current.generation());
         Self::emit_control_api_audit_event(
             &runtime_state.security,
             identity.as_ref(),
@@ -216,7 +219,10 @@ impl QUICListener {
             request_context.as_ref(),
             AdminAuditEventType::RuntimeValidate,
             AdminAuditAction::RuntimeValidateAttempt,
-            Self::control_api_audit_target_for_route(ControlApiRoute::RuntimeValidate, config_path.clone()),
+            Self::control_api_audit_target_for_route(
+                ControlApiRoute::RuntimeValidate,
+                config_path.clone(),
+            ),
             AdminAuditGeneration {
                 active_generation: Some(current.generation()),
                 ..Default::default()
@@ -270,31 +276,30 @@ impl QUICListener {
             return Self::control_api_not_found_response();
         };
         let current = runtime_bundle_handle.current_view();
-        let plan_request =
-            match Self::control_api_json_body_or_default::<ControlApiRuntimePlanRequest>(req).await
-            {
-                Ok(payload) => payload,
-                Err(response) => {
-                    Self::emit_control_api_audit_event(
-                        &runtime_state.security,
-                        identity.as_ref(),
-                        request_context.as_ref(),
-                        AdminAuditEventType::RuntimePreview,
-                        AdminAuditAction::RuntimePreviewResult,
-                        Self::control_api_audit_target_for_route(
-                            ControlApiRoute::RuntimePreview,
-                            None,
-                        ),
-                        AdminAuditGeneration {
-                            active_generation: Some(current.generation()),
-                            ..Default::default()
-                        },
-                        AdminAuditResult::Failed,
-                        Some("invalid_request_body".to_string()),
-                    );
-                    return response;
-                }
-            };
+        let plan_request = match Self::control_api_json_body_or_default::<
+            ControlApiRuntimePlanRequest,
+        >(req)
+        .await
+        {
+            Ok(payload) => payload,
+            Err(response) => {
+                Self::emit_control_api_audit_event(
+                    &runtime_state.security,
+                    identity.as_ref(),
+                    request_context.as_ref(),
+                    AdminAuditEventType::RuntimePreview,
+                    AdminAuditAction::RuntimePreviewResult,
+                    Self::control_api_audit_target_for_route(ControlApiRoute::RuntimePreview, None),
+                    AdminAuditGeneration {
+                        active_generation: Some(current.generation()),
+                        ..Default::default()
+                    },
+                    AdminAuditResult::Failed,
+                    Some("invalid_request_body".to_string()),
+                );
+                return response;
+            }
+        };
         let activation_request = Self::control_api_activation_request(
             &plan_request,
             current.generation(),
@@ -309,7 +314,10 @@ impl QUICListener {
             request_context.as_ref(),
             AdminAuditEventType::RuntimePreview,
             AdminAuditAction::RuntimePreviewAttempt,
-            Self::control_api_audit_target_for_route(ControlApiRoute::RuntimePreview, config_path.clone()),
+            Self::control_api_audit_target_for_route(
+                ControlApiRoute::RuntimePreview,
+                config_path.clone(),
+            ),
             AdminAuditGeneration {
                 active_generation: Some(current.generation()),
                 ..Default::default()
@@ -671,7 +679,10 @@ impl QUICListener {
                 ..Default::default()
             },
             AdminAuditResult::Success,
-            payload.reason.clone().or_else(|| Some("runtime_rollback".to_string())),
+            payload
+                .reason
+                .clone()
+                .or_else(|| Some("runtime_rollback".to_string())),
         );
         let rollback = RuntimeActivationService::rollback_generation(
             &runtime_bundle_handle,
@@ -728,7 +739,10 @@ impl QUICListener {
         request_context: Option<ControlApiRequestContext>,
     ) -> Response<Full<Bytes>> {
         let runtime_state = state.current_service_state();
-        let active_generation = runtime_state.generation.as_ref().map(|current| current.generation());
+        let active_generation = runtime_state
+            .generation
+            .as_ref()
+            .map(|current| current.generation());
         Self::emit_control_api_audit_event(
             &runtime_state.security,
             identity.as_ref(),

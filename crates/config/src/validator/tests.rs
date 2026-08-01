@@ -5,12 +5,12 @@ use tempfile::tempdir;
 
 use super::validate;
 use crate::config::{
-    ApiKeyAuth, Backend, ClientAuth, Config, ControlApi, ControlApiAuditSink, ControlApiBearerToken,
-    ControlApiClientAuthMode, ControlApiRole, ExternalAuth, ExternalAuthFailureMode,
-    ExternalAuthRequestHeader, HealthCheck, JwtAuth, Listen, LoadBalancing, Log, LogFormat,
-    MetricsEndpoint, Observability, Performance, Resilience, RouteAuth, RouteMatch,
-    ScopedRateLimit, ScopedRateLimitScope, Security, Tls, TlsCertificate, Tracing, Upstream,
-    UpstreamTls,
+    ApiKeyAuth, Backend, ClientAuth, Config, ControlApi, ControlApiAuditSink,
+    ControlApiBearerToken, ControlApiClientAuthMode, ControlApiRole, ExternalAuth,
+    ExternalAuthFailureMode, ExternalAuthRequestHeader, HealthCheck, JwtAuth, Listen,
+    LoadBalancing, Log, LogFormat, MetricsEndpoint, Observability, Performance, Resilience,
+    RouteAuth, RouteMatch, ScopedRateLimit, ScopedRateLimitScope, Security, Tls, TlsCertificate,
+    Tracing, Upstream, UpstreamTls,
 };
 
 fn write_test_certs(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
@@ -1056,8 +1056,14 @@ fn rejects_control_api_invalid_role_ordering() {
     let (cert, key) = write_test_certs(dir.path());
     let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
     cfg.observability.control_api.enabled = true;
-    cfg.observability.control_api.authorization.runtime_read_role = ControlApiRole::Operator;
-    cfg.observability.control_api.authorization.runtime_mutate_role = ControlApiRole::Viewer;
+    cfg.observability
+        .control_api
+        .authorization
+        .runtime_read_role = ControlApiRole::Operator;
+    cfg.observability
+        .control_api
+        .authorization
+        .runtime_mutate_role = ControlApiRole::Viewer;
     cfg.observability.control_api.auth_token = Some("token".to_string());
     assert!(validate(&cfg).is_err());
 }

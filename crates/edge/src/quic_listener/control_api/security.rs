@@ -141,16 +141,16 @@ impl ControlApiIpAllowlistPolicy {
 
     #[allow(dead_code)]
     pub(in crate::quic_listener) fn allows(&self, ip: IpAddr) -> bool {
-        self.matcher.as_ref().map_or(true, |matcher| matcher.contains(ip))
+        self.matcher
+            .as_ref()
+            .map_or(true, |matcher| matcher.contains(ip))
     }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(in crate::quic_listener) enum ControlApiSourcePolicyDecision {
     Allow,
-    Deny {
-        reason: &'static str,
-    },
+    Deny { reason: &'static str },
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -240,7 +240,13 @@ impl ControlApiIpNetwork {
     #[allow(dead_code)]
     fn contains(&self, ip: IpAddr) -> bool {
         match (self, ip) {
-            (Self::V4 { network, prefix_len }, IpAddr::V4(ip)) => {
+            (
+                Self::V4 {
+                    network,
+                    prefix_len,
+                },
+                IpAddr::V4(ip),
+            ) => {
                 let raw = u32::from(ip);
                 let mask = if *prefix_len == 0 {
                     0
@@ -249,7 +255,13 @@ impl ControlApiIpNetwork {
                 };
                 (raw & mask) == *network
             }
-            (Self::V6 { network, prefix_len }, IpAddr::V6(ip)) => {
+            (
+                Self::V6 {
+                    network,
+                    prefix_len,
+                },
+                IpAddr::V6(ip),
+            ) => {
                 let raw = u128::from(ip);
                 let mask = if *prefix_len == 0 {
                     0

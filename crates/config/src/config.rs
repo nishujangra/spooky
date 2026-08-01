@@ -1104,7 +1104,10 @@ pub struct ControlApiAuth {
 impl std::fmt::Debug for ControlApiAuth {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ControlApiAuth")
-            .field("bearer_tokens", &format_args!("{} configured", self.bearer_tokens.len()))
+            .field(
+                "bearer_tokens",
+                &format_args!("{} configured", self.bearer_tokens.len()),
+            )
             .field("identity_source", &self.identity_source)
             .finish()
     }
@@ -1349,10 +1352,10 @@ mod tests {
     use super::{
         ApiKeyAuth, Config, ControlApi, ControlApiAudit, ControlApiAuditFormat,
         ControlApiAuditSink, ControlApiAuth, ControlApiAuthorization, ControlApiClientAuthMode,
-        ControlApiIpAllowlist, ControlApiRole, ControlApiTls, ExternalAuth,
-        ForwardedHeaderPolicy, JwtAuth, Listen, LoadBalancing, Log, MetricsEndpoint, Performance,
-        PrivilegeDrop, Resilience, RouteAuth, RoutingTransparency, Tracing, UpstreamHostPolicy,
-        UpstreamTls, Watchdog,
+        ControlApiIpAllowlist, ControlApiRole, ControlApiTls, ExternalAuth, ForwardedHeaderPolicy,
+        JwtAuth, Listen, LoadBalancing, Log, MetricsEndpoint, Performance, PrivilegeDrop,
+        Resilience, RouteAuth, RoutingTransparency, Tracing, UpstreamHostPolicy, UpstreamTls,
+        Watchdog,
     };
     use crate::config::CURRENT_CONFIG_VERSION;
 
@@ -1508,7 +1511,10 @@ security:
             control_api.reload_certs_path,
             ControlApi::default().reload_certs_path
         );
-        assert_eq!(control_api.tls.client_auth.mode, ControlApiClientAuthMode::Disabled);
+        assert_eq!(
+            control_api.tls.client_auth.mode,
+            ControlApiClientAuthMode::Disabled
+        );
         assert!(control_api.tls.client_auth.ca_file.is_none());
         assert!(control_api.tls.client_auth.ca_dir.is_none());
         assert!(control_api.auth.bearer_tokens.is_empty());
@@ -1521,7 +1527,10 @@ security:
             control_api.authorization.runtime_mutate_role,
             ControlApiRole::Operator
         );
-        assert_eq!(control_api.authorization.restart_role, ControlApiRole::Admin);
+        assert_eq!(
+            control_api.authorization.restart_role,
+            ControlApiRole::Admin
+        );
         assert!(control_api.ip_allowlist.cidrs.is_empty());
         assert!(!control_api.ip_allowlist.trust_proxy_headers);
         assert!(!control_api.audit.enabled);
@@ -1686,7 +1695,10 @@ enabled: true
         assert!(control_api.enabled);
         assert_eq!(control_api.port, ControlApi::default().port);
         assert_eq!(control_api.auth_token, None);
-        assert_eq!(control_api.authorization, ControlApiAuthorization::default());
+        assert_eq!(
+            control_api.authorization,
+            ControlApiAuthorization::default()
+        );
         assert_eq!(control_api.tls, ControlApiTls::default());
         assert_eq!(control_api.auth, ControlApiAuth::default());
         assert_eq!(control_api.ip_allowlist, ControlApiIpAllowlist::default());

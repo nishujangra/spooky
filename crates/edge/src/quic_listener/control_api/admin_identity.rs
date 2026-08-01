@@ -218,7 +218,8 @@ impl QUICListener {
             for role in &mtls.roles {
                 roles.insert(*role);
             }
-            actor_id = actor_id.or_else(|| Self::actor_id_from_mtls_identity(mtls, identity_source));
+            actor_id =
+                actor_id.or_else(|| Self::actor_id_from_mtls_identity(mtls, identity_source));
         }
 
         Some(AdminIdentity {
@@ -226,7 +227,9 @@ impl QUICListener {
             authn_mechanisms: mechanisms,
             roles: roles.into_iter().collect(),
             peer_addr: request_ctx.as_ref().map(|ctx| ctx.peer_addr),
-            mtls_subject: mtls_identity.as_ref().and_then(|identity| identity.subject.clone()),
+            mtls_subject: mtls_identity
+                .as_ref()
+                .and_then(|identity| identity.subject.clone()),
             mtls_san: mtls_identity
                 .as_ref()
                 .map(|identity| {
