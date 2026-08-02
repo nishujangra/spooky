@@ -18,7 +18,7 @@ cd "$REPO_ROOT"
 
 # ---- defaults --------------------------------------------------------------
 PKG_NAME="spooky"
-PKG_VERSION="0.4.1-beta"
+PKG_VERSION="0.4.2-beta"
 PKG_ARCH="amd64"
 SKIP_BUILD=0
 

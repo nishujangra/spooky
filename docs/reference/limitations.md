@@ -31,7 +31,13 @@ This page lists the most important current product limits so operators and contr
 ## Security And Policy Limits
 
 - JWT validation is local (HS256) and per-upstream; there is no external JWKS fetch or key rotation support.
-- RBAC is limited to scope/role checks against JWT claims; there is no generic policy engine.
+- Request-path RBAC is limited to scope/role checks against JWT claims; there is no generic policy engine.
+- Admin-plane RBAC is a fixed three-tier model (`viewer`, `operator`, `admin`) with per-route minimums; custom roles and per-route policy expressions are not supported.
+- Control API mTLS has no CRL or OCSP revocation checking — a compromised client certificate remains valid until its CA material is rotated.
+- When a bearer token and an mTLS identity are presented together, their roles are **unioned**, not intersected: a `viewer` token with an `admin` certificate is treated as `admin`. Certificates cannot be used to constrain a token.
+- An unrecognized `auth.identity_source.kind` is ignored and silently falls back to the default rather than failing config validation.
+- The admin audit stream is per-process and local; there is no fleet-wide aggregation, delivery guarantee, or tamper-evidence.
+- `ip_allowlist.trust_proxy_headers` is accepted in config but not honored — the source address is always the TCP peer, and proxy headers are never trusted.
 - External auth (HTTP subrequest and OIDC) is implemented as a non-blocking async check per upstream, with configurable fail-open/fail-closed behavior; there is no interactive login or session-cookie flow.
 - OIDC support covers discovery and token introspection only; there is no JWKS fetch or local token signature validation, and the discovery document is refetched on every request rather than cached.
 - No WAF or advanced request-inspection layer.

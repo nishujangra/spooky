@@ -136,6 +136,10 @@ These are architectural foundations rather than user-facing product features, bu
 | Structured logging | `Done` | Plain and JSON formats |
 | Canonical observability vocabulary | `Done` | Shared reason slugs align metrics, logs, and control-plane snapshot fields |
 | Control-plane runtime snapshots | `Done` | Backend lifecycle, runtime generation, watchdog, TLS, and coarse metrics summary exposed through shared runtime views |
+| Admin-plane RBAC | `Done` | `viewer` / `operator` / `admin` enforced per control API route; `401` and `403` are distinct |
+| Control API mTLS | `Done` | `disabled` / `optional` / `required`, with a client verifier scoped to the control API endpoint |
+| Admin audit event stream | `Done` | Stable JSON schema over a dedicated log target or file sink; attempt/result pairs for mutating actions |
+| Admin source-IP allowlisting | `Done` | CIDR gate evaluated before credential validation; TCP peer address only |
 | OTLP tracing hooks | `Done` | Optional |
 | Packaging for Docker | `Done` | Present |
 | Packaging for Debian/systemd | `Done` | Present |

@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.2-beta] - 2026-08-02
+
+### Added
+
+- Control API mTLS — `observability.control_api.tls.client_auth` supports `disabled`, `optional`, and `required` modes with a client-certificate verifier scoped to the control API endpoint, built independently of the data-plane listener's client-auth policy.
+- Admin-plane RBAC — `viewer`, `operator`, and `admin` roles enforced per route. Runtime snapshot and history reads require `viewer`; validate, preview, activate, rollback, reload, and cert reload require `operator`; restart requires `admin`. Minimum roles are configurable under `observability.control_api.authorization`.
+- Role-scoped admin credentials via `observability.control_api.auth.bearer_tokens[]`, each carrying a `role` and an optional `actor_id` used for audit attribution.
+- mTLS client-certificate identity — subject, common name, and DNS/URI SANs are extracted from the handshake certificate, with roles resolved from a configurable subject attribute via `auth.identity_source`.
+- Structured admin audit stream with a stable JSON schema (`event_type`, `time_unix_ms`, `actor`, `action`, `target`, `generation`, `result`, `reason`, `event_id`, `peer_addr`, `authn`). Events cover authentication success and failure, authorization denial, runtime snapshot reads, and attempt/result pairs for reload, activate, rollback, restart, cert reload, validate, and preview.
+- Dedicated audit sink under `observability.control_api.audit` — either a `spooky.control_api.audit` log target that emits raw JSON lines regardless of the application log format, or a file sink that keeps audit records out of the application log entirely.
+- Optional source-address gating via `observability.control_api.ip_allowlist`, evaluated before credential validation. The source is always the TCP peer address.
+
+### Changed
+
+- Privileged control API routes now distinguish authentication from authorization failure: a valid but under-scoped caller receives `403 Forbidden` with `reason: insufficient_role`, while missing or invalid authentication remains `401 Unauthorized`. **Breaking for automation that treats every rejection as `401`.** Denial bodies gained `reason` and `required_role` fields; mutation routes retain their existing `accepted`/`reloaded` flags.
+- The control API builds its own TLS server configuration rather than reusing the primary listener's bootstrap config. It advertises only `http/1.1` in ALPN — HTTP/2 was already rejected, but the rejection now happens during ALPN negotiation rather than after the handshake.
+- Plain-text log lines now include the log target (`<ts> <level> [<target>] <message>`). JSON log output is unchanged.
+- Control API TLS handshake failures are logged with a stable client-auth reason code alongside the underlying error detail, distinct from data-plane listener failures.
+- Control-plane authentication and authorization code moved to dedicated `admin_identity`, `admin_auth`, and `audit` modules, with no shared types between admin-plane and request-path auth.
+
+### Security
+
+- Bearer-token matching is constant-time across the entire configured token set, with no early return on match.
+- Configured admin tokens are never serialized into the `/admin/runtime` snapshot and are redacted in debug output.
+- Config validation rejects unsafe admin-plane combinations at startup: mTLS enabled without CA material, `optional` mTLS as the only authentication mechanism, inverted role ordering (for example a mutation role less privileged than the read role), a file audit sink without a path, and malformed CIDRs.
+
+### Compatibility
+
+- `observability.control_api.auth_token` continues to work and is mapped internally to an `admin`-scoped identity, so existing reload and restart automation is unaffected. All new admin-plane settings default to inert values — mTLS `disabled`, no static tokens, audit off, empty allowlist — so an unchanged config behaves exactly as it did in 0.4.1.
+- **One-way config compatibility.** `ControlApi` uses strict `deny_unknown_fields`: a 0.4.2 binary accepts a 0.4.1 config, but a 0.4.1 binary rejects any config using the new nested admin-plane fields. Plan rollbacks accordingly.
+
 ## [0.4.1-beta] - 2026-07-31
 
 ### Added
