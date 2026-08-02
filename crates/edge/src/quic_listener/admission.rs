@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
-    sync::{Arc, RwLock},
+    sync::{Arc, OnceLock, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -482,6 +482,7 @@ pub(super) enum JwtValidationFailureReason {
     MissingKid,
     MissingVerificationKey,
     AmbiguousVerificationKey,
+    KeySourceUnavailable,
     PemKeyParseFailed,
     JwkKeyParseFailed,
     InvalidKeyType,
@@ -508,6 +509,7 @@ impl JwtValidationFailureReason {
             Self::MissingKid => "missing_kid",
             Self::MissingVerificationKey => "missing_verification_key",
             Self::AmbiguousVerificationKey => "ambiguous_verification_key",
+            Self::KeySourceUnavailable => "key_source_unavailable",
             Self::PemKeyParseFailed => "pem_key_parse_failed",
             Self::JwkKeyParseFailed => "jwk_key_parse_failed",
             Self::InvalidKeyType => "invalid_key_type",
@@ -566,6 +568,300 @@ enum JwtVerificationKey<'a> {
     EcP256PublicKey(EcKey<Public>),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum JwtVerificationKeySource {
+    StaticSecret,
+    StaticAsymmetricKeys,
+    RemoteJwks { source_identity: String },
+}
+
+#[derive(Debug, Clone)]
+struct ResolvedJwtVerificationKey<'a> {
+    source: JwtVerificationKeySource,
+    key: JwtVerificationKey<'a>,
+}
+
+#[derive(Debug, Clone)]
+enum JwtKeyResolution<'a> {
+    Found(ResolvedJwtVerificationKey<'a>),
+    StaleButUsable(ResolvedJwtVerificationKey<'a>),
+    KeyNotFound {
+        source: JwtVerificationKeySource,
+    },
+    SourceUnavailable {
+        source: JwtVerificationKeySource,
+    },
+    ConfigurationInvalid {
+        source: JwtVerificationKeySource,
+        reason: JwtValidationFailureReason,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum JwtJwksCacheState {
+    Fresh,
+    // Only the refresh task constructs these; until it lands they are reachable
+    // solely from the resolver's test helpers.
+    #[allow(dead_code)]
+    Stale,
+    #[allow(dead_code)]
+    Unavailable,
+    #[allow(dead_code)]
+    Invalid,
+}
+
+#[derive(Debug, Clone)]
+struct JwtJwksCacheEntry {
+    state: JwtJwksCacheState,
+    keys: Vec<RuntimeJwtVerificationKey>,
+}
+
+struct JwtJwksSharedCache {
+    entries: RwLock<HashMap<String, JwtJwksCacheEntry>>,
+}
+
+static JWT_JWKS_SHARED_CACHE: OnceLock<JwtJwksSharedCache> = OnceLock::new();
+
+impl JwtJwksSharedCache {
+    fn shared() -> &'static Self {
+        JWT_JWKS_SHARED_CACHE.get_or_init(|| Self {
+            entries: RwLock::new(HashMap::new()),
+        })
+    }
+
+    fn get(&self, source_identity: &str) -> Option<JwtJwksCacheEntry> {
+        self.entries
+            .read()
+            .expect("jwks shared cache read lock")
+            .get(source_identity)
+            .cloned()
+    }
+
+    #[cfg(test)]
+    fn upsert(&self, source_identity: &str, entry: JwtJwksCacheEntry) {
+        self.entries
+            .write()
+            .expect("jwks shared cache write lock")
+            .insert(source_identity.to_string(), entry);
+    }
+
+    #[cfg(test)]
+    fn remove(&self, source_identity: &str) {
+        self.entries
+            .write()
+            .expect("jwks shared cache write lock")
+            .remove(source_identity);
+    }
+}
+
+#[cfg(test)]
+pub(super) fn prime_jwks_cache_for_test(
+    source_identity: &str,
+    stale: bool,
+    keys: Vec<RuntimeJwtVerificationKey>,
+) {
+    JwtJwksSharedCache::shared().upsert(
+        source_identity,
+        JwtJwksCacheEntry {
+            state: if stale {
+                JwtJwksCacheState::Stale
+            } else {
+                JwtJwksCacheState::Fresh
+            },
+            keys,
+        },
+    );
+}
+
+#[cfg(test)]
+pub(super) fn mark_jwks_source_unavailable_for_test(source_identity: &str) {
+    JwtJwksSharedCache::shared().upsert(
+        source_identity,
+        JwtJwksCacheEntry {
+            state: JwtJwksCacheState::Unavailable,
+            keys: Vec::new(),
+        },
+    );
+}
+
+#[cfg(test)]
+pub(super) fn mark_jwks_source_invalid_for_test(source_identity: &str) {
+    JwtJwksSharedCache::shared().upsert(
+        source_identity,
+        JwtJwksCacheEntry {
+            state: JwtJwksCacheState::Invalid,
+            keys: Vec::new(),
+        },
+    );
+}
+
+#[cfg(test)]
+pub(super) fn clear_jwks_cache_for_test(source_identity: &str) {
+    JwtJwksSharedCache::shared().remove(source_identity);
+}
+
+struct JwtKeyResolver<'a> {
+    jwt: &'a RuntimeJwtAuth,
+    algorithm: JwtAlgorithm,
+    kid: Option<&'a str>,
+    jwks_cache: &'static JwtJwksSharedCache,
+}
+
+impl<'a> JwtKeyResolver<'a> {
+    fn new(jwt: &'a RuntimeJwtAuth, algorithm: JwtAlgorithm, kid: Option<&'a str>) -> Self {
+        Self {
+            jwt,
+            algorithm,
+            kid,
+            jwks_cache: JwtJwksSharedCache::shared(),
+        }
+    }
+
+    fn resolve(&self) -> JwtKeyResolution<'a> {
+        if self.jwt.require_kid && self.kid.is_none() {
+            return JwtKeyResolution::ConfigurationInvalid {
+                source: match self.algorithm {
+                    JwtAlgorithm::Hs256 => JwtVerificationKeySource::StaticSecret,
+                    JwtAlgorithm::Rs256 | JwtAlgorithm::Es256 => {
+                        if self.jwt.jwks_url.is_some() {
+                            JwtVerificationKeySource::RemoteJwks {
+                                source_identity: self.jwt.jwks_url.clone().unwrap_or_default(),
+                            }
+                        } else {
+                            JwtVerificationKeySource::StaticAsymmetricKeys
+                        }
+                    }
+                },
+                reason: JwtValidationFailureReason::MissingKid,
+            };
+        }
+
+        match self.algorithm {
+            JwtAlgorithm::Hs256 => self.resolve_static_secret_source(),
+            JwtAlgorithm::Rs256 | JwtAlgorithm::Es256 => self.resolve_asymmetric_sources(),
+        }
+    }
+
+    fn resolve_static_secret_source(&self) -> JwtKeyResolution<'a> {
+        if self.jwt.secret.is_empty() {
+            return JwtKeyResolution::KeyNotFound {
+                source: JwtVerificationKeySource::StaticSecret,
+            };
+        }
+        JwtKeyResolution::Found(ResolvedJwtVerificationKey {
+            source: JwtVerificationKeySource::StaticSecret,
+            key: JwtVerificationKey::Hs256Secret(self.jwt.secret.as_str()),
+        })
+    }
+
+    fn resolve_asymmetric_sources(&self) -> JwtKeyResolution<'a> {
+        let mut found = Vec::new();
+        let mut stale = Vec::new();
+        let mut source_unavailable = None;
+        let mut key_not_found = None;
+
+        if !self.jwt.static_keys.is_empty() {
+            match self.resolve_static_asymmetric_source() {
+                JwtKeyResolution::Found(resolved) => found.push(resolved),
+                JwtKeyResolution::StaleButUsable(resolved) => stale.push(resolved),
+                JwtKeyResolution::KeyNotFound { source } => key_not_found = Some(source),
+                JwtKeyResolution::SourceUnavailable { source } => source_unavailable = Some(source),
+                JwtKeyResolution::ConfigurationInvalid { source, reason } => {
+                    return JwtKeyResolution::ConfigurationInvalid { source, reason };
+                }
+            }
+        }
+
+        if let Some(jwks_url) = self.jwt.jwks_url.as_deref() {
+            match self.resolve_remote_jwks_source(jwks_url) {
+                JwtKeyResolution::Found(resolved) => found.push(resolved),
+                JwtKeyResolution::StaleButUsable(resolved) => stale.push(resolved),
+                JwtKeyResolution::KeyNotFound { source } => key_not_found = Some(source),
+                JwtKeyResolution::SourceUnavailable { source } => source_unavailable = Some(source),
+                JwtKeyResolution::ConfigurationInvalid { source, reason } => {
+                    return JwtKeyResolution::ConfigurationInvalid { source, reason };
+                }
+            }
+        }
+
+        if found.len() + stale.len() > 1 {
+            return JwtKeyResolution::ConfigurationInvalid {
+                source: if found
+                    .first()
+                    .map(|resolved| {
+                        matches!(resolved.source, JwtVerificationKeySource::RemoteJwks { .. })
+                    })
+                    .unwrap_or(false)
+                {
+                    found[0].source.clone()
+                } else if let Some(resolved) = stale.first() {
+                    resolved.source.clone()
+                } else {
+                    JwtVerificationKeySource::StaticAsymmetricKeys
+                },
+                reason: JwtValidationFailureReason::AmbiguousVerificationKey,
+            };
+        }
+
+        if let Some(resolved) = found.into_iter().next() {
+            return JwtKeyResolution::Found(resolved);
+        }
+        if let Some(resolved) = stale.into_iter().next() {
+            return JwtKeyResolution::StaleButUsable(resolved);
+        }
+        if let Some(source) = source_unavailable {
+            return JwtKeyResolution::SourceUnavailable { source };
+        }
+        if let Some(source) = key_not_found {
+            return JwtKeyResolution::KeyNotFound { source };
+        }
+
+        JwtKeyResolution::KeyNotFound {
+            source: if self.jwt.jwks_url.is_some() {
+                JwtVerificationKeySource::RemoteJwks {
+                    source_identity: self.jwt.jwks_url.clone().unwrap_or_default(),
+                }
+            } else {
+                JwtVerificationKeySource::StaticAsymmetricKeys
+            },
+        }
+    }
+
+    fn resolve_static_asymmetric_source(&self) -> JwtKeyResolution<'a> {
+        resolve_matching_asymmetric_key(
+            &self.jwt.static_keys,
+            self.algorithm,
+            self.kid,
+            JwtVerificationKeySource::StaticAsymmetricKeys,
+            JwtJwksCacheState::Fresh,
+        )
+    }
+
+    fn resolve_remote_jwks_source(&self, source_identity: &str) -> JwtKeyResolution<'a> {
+        let source = JwtVerificationKeySource::RemoteJwks {
+            source_identity: source_identity.to_string(),
+        };
+        let Some(entry) = self.jwks_cache.get(source_identity) else {
+            return JwtKeyResolution::SourceUnavailable { source };
+        };
+
+        match entry.state {
+            JwtJwksCacheState::Unavailable => JwtKeyResolution::SourceUnavailable { source },
+            JwtJwksCacheState::Invalid => JwtKeyResolution::ConfigurationInvalid {
+                source,
+                reason: JwtValidationFailureReason::JwkKeyParseFailed,
+            },
+            JwtJwksCacheState::Fresh | JwtJwksCacheState::Stale => resolve_matching_asymmetric_key(
+                &entry.keys,
+                self.algorithm,
+                self.kid,
+                source,
+                entry.state,
+            ),
+        }
+    }
+}
+
 pub(super) fn validate_jwt_token(
     token: &str,
     jwt: &RuntimeJwtAuth,
@@ -574,7 +870,24 @@ pub(super) fn validate_jwt_token(
     let parsed = parse_compact_jwt(token)?;
     let header = parse_jose_header(&parsed.header_bytes)?;
     let algorithm = validate_jwt_algorithm_policy(jwt, header.algorithm)?;
-    let key = resolve_jwt_verification_key(jwt, algorithm, header.kid.as_deref())?;
+    let key = match JwtKeyResolver::new(jwt, algorithm, header.kid.as_deref()).resolve() {
+        JwtKeyResolution::Found(resolved) | JwtKeyResolution::StaleButUsable(resolved) => {
+            resolved.key
+        }
+        JwtKeyResolution::KeyNotFound { .. } => {
+            return Err(JwtValidationFailure::new(
+                JwtValidationFailureReason::MissingVerificationKey,
+            ));
+        }
+        JwtKeyResolution::SourceUnavailable { .. } => {
+            return Err(JwtValidationFailure::new(
+                JwtValidationFailureReason::KeySourceUnavailable,
+            ));
+        }
+        JwtKeyResolution::ConfigurationInvalid { reason, .. } => {
+            return Err(JwtValidationFailure::new(reason));
+        }
+    };
     verify_jwt_signature(&parsed, algorithm, key)?;
     let claims = parse_jwt_claims(&parsed.payload_bytes)?;
     validate_jwt_registered_claims(jwt, &claims, now)?;
@@ -651,32 +964,6 @@ fn validate_jwt_algorithm_policy(
     }
 }
 
-fn resolve_jwt_verification_key<'a>(
-    jwt: &'a RuntimeJwtAuth,
-    algorithm: JwtAlgorithm,
-    kid: Option<&str>,
-) -> Result<JwtVerificationKey<'a>, JwtValidationFailure> {
-    if jwt.require_kid && kid.is_none() {
-        return Err(JwtValidationFailure::new(
-            JwtValidationFailureReason::MissingKid,
-        ));
-    }
-
-    match algorithm {
-        JwtAlgorithm::Hs256 => {
-            if jwt.secret.is_empty() {
-                return Err(JwtValidationFailure::new(
-                    JwtValidationFailureReason::MissingVerificationKey,
-                ));
-            }
-            Ok(JwtVerificationKey::Hs256Secret(jwt.secret.as_str()))
-        }
-        JwtAlgorithm::Rs256 | JwtAlgorithm::Es256 => {
-            resolve_static_asymmetric_key(jwt, algorithm, kid)
-        }
-    }
-}
-
 fn verify_jwt_signature(
     parsed: &ParsedJwt<'_>,
     algorithm: JwtAlgorithm,
@@ -747,14 +1034,24 @@ fn verify_jwt_signature(
     }
 }
 
-fn resolve_static_asymmetric_key(
-    jwt: &RuntimeJwtAuth,
+fn resolve_matching_asymmetric_key<'a>(
+    keys: &[RuntimeJwtVerificationKey],
     algorithm: JwtAlgorithm,
     requested_kid: Option<&str>,
-) -> Result<JwtVerificationKey<'static>, JwtValidationFailure> {
+    source: JwtVerificationKeySource,
+    cache_state: JwtJwksCacheState,
+) -> JwtKeyResolution<'a> {
     let mut candidates = Vec::new();
-    for key in &jwt.static_keys {
-        let metadata = static_key_metadata(key)?;
+    for key in keys {
+        let metadata = match static_key_metadata(key) {
+            Ok(metadata) => metadata,
+            Err(failure) => {
+                return JwtKeyResolution::ConfigurationInvalid {
+                    source,
+                    reason: failure.reason,
+                };
+            }
+        };
         let effective_kid = metadata
             .kid
             .as_deref()
@@ -769,24 +1066,50 @@ fn resolve_static_asymmetric_key(
         {
             continue;
         }
-        candidates.push((key, metadata));
+        candidates.push(key);
     }
 
     if candidates.is_empty() {
-        return Err(JwtValidationFailure::new(
-            JwtValidationFailureReason::MissingVerificationKey,
-        ));
+        return JwtKeyResolution::KeyNotFound { source };
     }
-    // Reject ambiguity even when the token carries a `kid`: two static keys can
-    // resolve to the same effective kid when it is declared inside a JWK body
-    // rather than the config field, which config validation cannot catch.
     if candidates.len() > 1 {
-        return Err(JwtValidationFailure::new(
-            JwtValidationFailureReason::AmbiguousVerificationKey,
-        ));
+        return JwtKeyResolution::ConfigurationInvalid {
+            source,
+            reason: JwtValidationFailureReason::AmbiguousVerificationKey,
+        };
     }
 
-    parse_static_verification_key(candidates[0].0, algorithm)
+    // Both callers filter these states before selecting a key, so this is
+    // defensive: degrade to a rejection rather than panicking on the request
+    // path if that ever stops holding.
+    match cache_state {
+        JwtJwksCacheState::Unavailable => return JwtKeyResolution::SourceUnavailable { source },
+        JwtJwksCacheState::Invalid => {
+            return JwtKeyResolution::ConfigurationInvalid {
+                source,
+                reason: JwtValidationFailureReason::JwkKeyParseFailed,
+            };
+        }
+        JwtJwksCacheState::Fresh | JwtJwksCacheState::Stale => {}
+    }
+
+    let resolved_key = match parse_static_verification_key(candidates[0], algorithm) {
+        Ok(key) => key,
+        Err(failure) => {
+            return JwtKeyResolution::ConfigurationInvalid {
+                source,
+                reason: failure.reason,
+            };
+        }
+    };
+    let resolved = ResolvedJwtVerificationKey {
+        source,
+        key: resolved_key,
+    };
+    match cache_state {
+        JwtJwksCacheState::Stale => JwtKeyResolution::StaleButUsable(resolved),
+        _ => JwtKeyResolution::Found(resolved),
+    }
 }
 
 #[derive(Debug, Clone, Default)]

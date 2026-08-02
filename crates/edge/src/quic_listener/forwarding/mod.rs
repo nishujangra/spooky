@@ -1849,6 +1849,175 @@ mod tests {
     }
 
     #[test]
+    fn rs256_jwt_validation_accepts_remote_jwks_cached_keys() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let jwks_url = "https://issuer.example/.well-known/jwks.json";
+        super::super::admission::clear_jwks_cache_for_test(jwks_url);
+
+        let rsa = Rsa::generate(2048).expect("rsa key");
+        let pkey = PKey::from_rsa(rsa).expect("rsa pkey");
+        let token = test_rs256_jwt(
+            &pkey,
+            Some("jwks-rsa-1"),
+            serde_json::json!({
+                "iss": "issuer-1",
+                "aud": "aud-1",
+                "exp": 4_000_000_000u64,
+            }),
+        );
+        super::super::admission::prime_jwks_cache_for_test(
+            jwks_url,
+            false,
+            vec![RuntimeJwtVerificationKey::Pem {
+                kid: Some("jwks-rsa-1".to_string()),
+                alg: Some(JwtAlgorithm::Rs256),
+                public_key_pem: String::from_utf8(
+                    pkey.public_key_to_pem().expect("rsa public pem"),
+                )
+                .expect("utf8"),
+            }],
+        );
+
+        let policy = RuntimeJwtAuth {
+            issuer: Some("issuer-1".to_string()),
+            audience: Some("aud-1".to_string()),
+            allowed_algorithms: vec![JwtAlgorithm::Rs256],
+            require_kid: true,
+            jwks_url: Some(jwks_url.to_string()),
+            clock_skew: Duration::from_secs(30),
+            ..RuntimeJwtAuth::default()
+        };
+
+        let validated = super::super::admission::validate_jwt_token(token.as_str(), &policy, now)
+            .expect("rs256 jwt from cached jwks");
+        assert_eq!(validated.algorithm, JwtAlgorithm::Rs256);
+
+        super::super::admission::clear_jwks_cache_for_test(jwks_url);
+    }
+
+    #[test]
+    fn es256_jwt_validation_accepts_stale_remote_jwks_keys() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let jwks_url = "https://issuer.example/stale-jwks.json";
+        super::super::admission::clear_jwks_cache_for_test(jwks_url);
+
+        let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).expect("p256");
+        let ec_key = EcKey::generate(&group).expect("ec key");
+        let token = test_es256_jwt(
+            &ec_key,
+            Some("jwks-ec-1"),
+            serde_json::json!({
+                "iss": "issuer-1",
+                "aud": "aud-1",
+                "exp": 4_000_000_000u64,
+            }),
+        );
+        super::super::admission::prime_jwks_cache_for_test(
+            jwks_url,
+            true,
+            vec![RuntimeJwtVerificationKey::Jwk {
+                kid: Some("jwks-ec-1".to_string()),
+                alg: Some(JwtAlgorithm::Es256),
+                jwk: ec_public_jwk(&ec_key, Some("jwks-ec-1")),
+            }],
+        );
+
+        let policy = RuntimeJwtAuth {
+            issuer: Some("issuer-1".to_string()),
+            audience: Some("aud-1".to_string()),
+            allowed_algorithms: vec![JwtAlgorithm::Es256],
+            require_kid: true,
+            jwks_url: Some(jwks_url.to_string()),
+            clock_skew: Duration::from_secs(30),
+            ..RuntimeJwtAuth::default()
+        };
+
+        let validated = super::super::admission::validate_jwt_token(token.as_str(), &policy, now)
+            .expect("es256 jwt from stale jwks cache");
+        assert_eq!(validated.algorithm, JwtAlgorithm::Es256);
+
+        super::super::admission::clear_jwks_cache_for_test(jwks_url);
+    }
+
+    #[test]
+    fn jwt_validation_rejects_unavailable_remote_jwks_source() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let jwks_url = "https://issuer.example/unavailable-jwks.json";
+        super::super::admission::clear_jwks_cache_for_test(jwks_url);
+
+        let rsa = Rsa::generate(2048).expect("rsa key");
+        let pkey = PKey::from_rsa(rsa).expect("rsa pkey");
+        let token = test_rs256_jwt(
+            &pkey,
+            Some("jwks-rsa-2"),
+            serde_json::json!({
+                "iss": "issuer-1",
+                "aud": "aud-1",
+                "exp": 4_000_000_000u64,
+            }),
+        );
+        super::super::admission::mark_jwks_source_unavailable_for_test(jwks_url);
+
+        let failure = super::super::admission::validate_jwt_token(
+            token.as_str(),
+            &RuntimeJwtAuth {
+                issuer: Some("issuer-1".to_string()),
+                audience: Some("aud-1".to_string()),
+                allowed_algorithms: vec![JwtAlgorithm::Rs256],
+                require_kid: true,
+                jwks_url: Some(jwks_url.to_string()),
+                clock_skew: Duration::from_secs(30),
+                ..RuntimeJwtAuth::default()
+            },
+            now,
+        )
+        .expect_err("unavailable jwks source must be surfaced");
+
+        assert_eq!(failure.reason.as_str(), "key_source_unavailable");
+
+        super::super::admission::clear_jwks_cache_for_test(jwks_url);
+    }
+
+    #[test]
+    fn jwt_validation_rejects_invalid_remote_jwks_source() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let jwks_url = "https://issuer.example/invalid-jwks.json";
+        super::super::admission::clear_jwks_cache_for_test(jwks_url);
+
+        let rsa = Rsa::generate(2048).expect("rsa key");
+        let pkey = PKey::from_rsa(rsa).expect("rsa pkey");
+        let token = test_rs256_jwt(
+            &pkey,
+            Some("jwks-rsa-3"),
+            serde_json::json!({
+                "iss": "issuer-1",
+                "aud": "aud-1",
+                "exp": 4_000_000_000u64,
+            }),
+        );
+        super::super::admission::mark_jwks_source_invalid_for_test(jwks_url);
+
+        let failure = super::super::admission::validate_jwt_token(
+            token.as_str(),
+            &RuntimeJwtAuth {
+                issuer: Some("issuer-1".to_string()),
+                audience: Some("aud-1".to_string()),
+                allowed_algorithms: vec![JwtAlgorithm::Rs256],
+                require_kid: true,
+                jwks_url: Some(jwks_url.to_string()),
+                clock_skew: Duration::from_secs(30),
+                ..RuntimeJwtAuth::default()
+            },
+            now,
+        )
+        .expect_err("invalid jwks source must be surfaced");
+
+        assert_eq!(failure.reason.as_str(), "jwk_key_parse_failed");
+
+        super::super::admission::clear_jwks_cache_for_test(jwks_url);
+    }
+
+    #[test]
     fn jwt_rbac_requires_configured_scopes_and_roles() {
         let policy = RuntimeUpstreamPolicy {
             upstream_auth: RuntimeAuthPolicy {
