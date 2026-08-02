@@ -1577,8 +1577,43 @@ async fn control_api_runtime_snapshot_includes_jwks_cache_visibility() {
         }],
     );
     let state = control_api_state_with_runtime_bundle(&startup, &startup);
+    let metrics = state.current_service_state().metrics();
+    metrics.record_jwt_validation_failure("issuer_mismatch");
+    metrics.record_jwt_algorithm_rejection("RS256");
+    metrics.record_jwks_unknown_kid(jwks_url);
 
     let payload = json_body(QUICListener::render_control_api_runtime_snapshot(&state)).await;
+    let providers = payload["auth"]["providers"]
+        .as_array()
+        .expect("auth providers");
+    assert_eq!(providers.len(), 1);
+    assert_eq!(providers[0]["upstream"], "api");
+    assert_eq!(providers[0]["api_key_configured"], false);
+    assert_eq!(providers[0]["external_auth_configured"], false);
+    assert_eq!(providers[0]["jwt"]["provider_mode"], "remote_jwks");
+    assert_eq!(providers[0]["jwt"]["jwks_configured"], true);
+    assert_eq!(providers[0]["jwt"]["jwks_active"], true);
+    assert_eq!(providers[0]["jwt"]["jwks_cache_state"], "fresh");
+    assert_eq!(providers[0]["jwt"]["serving_from_stale_cache"], false);
+    assert_eq!(providers[0]["jwt"]["usable_key_count"], 1);
+    assert_eq!(
+        payload["auth"]["jwt_validation_failures"]
+            .as_array()
+            .expect("jwt failure reasons")[0]["reason"],
+        "issuer_mismatch"
+    );
+    assert_eq!(
+        payload["auth"]["jwt_algorithm_rejections"]
+            .as_array()
+            .expect("jwt algorithm rejections")[0]["reason"],
+        "RS256"
+    );
+    assert_eq!(
+        payload["auth"]["unknown_kid_events"]
+            .as_array()
+            .expect("unknown kid events")[0]["jwks_url"],
+        jwks_url
+    );
     let sources = payload["jwks"]["sources"].as_array().expect("jwks sources");
     assert_eq!(sources.len(), 1);
     assert_eq!(sources[0]["jwks_url"], jwks_url);

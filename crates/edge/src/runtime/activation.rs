@@ -1901,11 +1901,44 @@ fn summarize_auth_admission_resilience(bundle: &RuntimeBundle) -> String {
         .upstreams
         .iter()
         .map(|(name, upstream)| {
+            let jwt_mode = upstream
+                .policy
+                .upstream_auth
+                .jwt
+                .as_ref()
+                .map(runtime_jwt_summary_mode)
+                .unwrap_or("none");
+            let jwt_algorithms = upstream
+                .policy
+                .upstream_auth
+                .jwt
+                .as_ref()
+                .map(|jwt| {
+                    jwt.allowed_algorithms
+                        .iter()
+                        .map(|algorithm| match algorithm {
+                            spooky_config::config::JwtAlgorithm::Hs256 => "HS256",
+                            spooky_config::config::JwtAlgorithm::Rs256 => "RS256",
+                            spooky_config::config::JwtAlgorithm::Es256 => "ES256",
+                        })
+                        .collect::<Vec<_>>()
+                        .join(",")
+                })
+                .unwrap_or_default();
+            let jwks_configured = upstream
+                .policy
+                .upstream_auth
+                .jwt
+                .as_ref()
+                .is_some_and(|jwt| jwt.jwks_url.is_some());
             format!(
-                "{}:api_key={}:jwt={}:external={}:scopes={}:roles={}",
+                "{}:api_key={}:jwt={}:jwt_mode={}:jwt_algs={}:jwks_configured={}:external={}:scopes={}:roles={}",
                 name,
                 upstream.policy.upstream_auth.api_key.is_some(),
                 upstream.policy.upstream_auth.jwt.is_some(),
+                jwt_mode,
+                jwt_algorithms,
+                jwks_configured,
                 upstream.policy.upstream_auth.external_auth.is_some(),
                 upstream.policy.upstream_auth.required_scopes.join(","),
                 upstream.policy.upstream_auth.required_roles.join(","),
@@ -1934,6 +1967,20 @@ fn summarize_auth_admission_resilience(bundle: &RuntimeBundle) -> String {
     );
 
     format!("auth=[{}]; policies=[{}]", auth.join(" | "), resilience)
+}
+
+fn runtime_jwt_summary_mode(jwt: &spooky_config::runtime::RuntimeJwtAuth) -> &'static str {
+    let has_hs256 = !jwt.secret.is_empty();
+    let has_static_asymmetric = !jwt.static_keys.is_empty();
+    let has_jwks = jwt.jwks_url.is_some();
+    match (has_hs256, has_static_asymmetric, has_jwks) {
+        (true, false, false) => "hs256_only",
+        (false, true, false) => "static_asymmetric",
+        (false, false, true) => "remote_jwks",
+        (false, true, true) => "hybrid_asymmetric",
+        (true, true, false) | (true, false, true) | (true, true, true) => "hybrid",
+        (false, false, false) => "unconfigured",
+    }
 }
 
 fn summarize_observability_control_plane(bundle: &RuntimeBundle) -> String {

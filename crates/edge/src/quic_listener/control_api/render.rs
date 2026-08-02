@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use bytes::Bytes;
 use http_body_util::Full;
 use serde::Serialize;
+use spooky_config::runtime::RuntimeJwtAuth;
 use spooky_lb::health::HealthFailureReason;
 
 use super::{state::ControlApiState, *};
@@ -58,6 +59,7 @@ struct ControlApiRuntimePayload {
     workers: ControlApiWorkerPayload,
     watchdog: ControlApiRuntimeWatchdogPayload,
     adaptive_admission: ControlApiAdaptiveAdmissionPayload,
+    auth: ControlApiAuthPayload,
     jwks: ControlApiJwksPayload,
     backends: ControlApiBackendInventoryPayload,
     metrics: ControlApiMetricsPayload,
@@ -93,6 +95,61 @@ struct ControlApiBackendInventoryPayload {
     healthy: usize,
     total: usize,
     lifecycle: Vec<ControlApiBackendLifecyclePayload>,
+}
+
+#[derive(Serialize)]
+struct ControlApiAuthPayload {
+    providers: Vec<ControlApiAuthProviderPayload>,
+    jwt_validation_failures: Vec<ControlApiReasonCountPayload>,
+    jwt_algorithm_rejections: Vec<ControlApiReasonCountPayload>,
+    unknown_kid_events: Vec<ControlApiUnknownKidEventPayload>,
+}
+
+#[derive(Serialize)]
+struct ControlApiAuthProviderPayload {
+    upstream: String,
+    api_key_configured: bool,
+    external_auth_configured: bool,
+    required_scopes: Vec<String>,
+    required_roles: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    jwt: Option<ControlApiJwtProviderPayload>,
+}
+
+#[derive(Serialize)]
+struct ControlApiJwtProviderPayload {
+    provider_mode: &'static str,
+    allowed_algorithms: Vec<String>,
+    require_kid: bool,
+    issuers: Vec<String>,
+    audiences: Vec<String>,
+    static_key_count: usize,
+    jwks_configured: bool,
+    jwks_active: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    jwks_cache_state: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    serving_from_stale_cache: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    usable_key_count: Option<usize>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_refresh_success_unix_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_refresh_attempt_unix_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_failure_reason: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ControlApiReasonCountPayload {
+    reason: String,
+    count: u64,
+}
+
+#[derive(Serialize)]
+struct ControlApiUnknownKidEventPayload {
+    jwks_url: String,
+    count: u64,
 }
 
 #[derive(Serialize)]
@@ -350,6 +407,33 @@ impl ControlApiRuntimePayload {
         let listener_tls_store = state.listener_tls_store();
         let backend_inventory = state.snapshot_backend_inventory();
         let backend_summary = backend_inventory.summary();
+        let jwks_sources = crate::quic_listener::admission::snapshot_runtime_jwks_sources(
+            runtime.runtime_config(),
+        );
+        let jwks_by_url = jwks_sources
+            .iter()
+            .map(|snapshot| (snapshot.jwks_url.as_str(), snapshot))
+            .collect::<HashMap<_, _>>();
+
+        let mut auth_providers = runtime
+            .runtime_config()
+            .upstreams
+            .iter()
+            .map(|(name, upstream)| ControlApiAuthProviderPayload {
+                upstream: name.clone(),
+                api_key_configured: upstream.policy.upstream_auth.api_key.is_some(),
+                external_auth_configured: upstream.policy.upstream_auth.external_auth.is_some(),
+                required_scopes: upstream.policy.upstream_auth.required_scopes.clone(),
+                required_roles: upstream.policy.upstream_auth.required_roles.clone(),
+                jwt: upstream
+                    .policy
+                    .upstream_auth
+                    .jwt
+                    .as_ref()
+                    .map(|jwt| jwt_provider_payload(jwt, &jwks_by_url)),
+            })
+            .collect::<Vec<_>>();
+        auth_providers.sort_by(|left, right| left.upstream.cmp(&right.upstream));
 
         Self {
             uptime_ms: service_ctx.started_at.elapsed().as_millis() as u64,
@@ -368,24 +452,42 @@ impl ControlApiRuntimePayload {
                 current_limit: resilience.adaptive_admission.current_limit(),
                 inflight_percent: resilience.adaptive_admission.inflight_percent(),
             },
+            auth: ControlApiAuthPayload {
+                providers: auth_providers,
+                jwt_validation_failures: metrics
+                    .snapshot_jwt_validation_failures()
+                    .into_iter()
+                    .map(|(reason, count)| ControlApiReasonCountPayload { reason, count })
+                    .collect(),
+                jwt_algorithm_rejections: metrics
+                    .snapshot_jwt_algorithm_rejections()
+                    .into_iter()
+                    .map(|(reason, count)| ControlApiReasonCountPayload { reason, count })
+                    .collect(),
+                unknown_kid_events: metrics
+                    .snapshot_jwks_unknown_kid_events()
+                    .into_iter()
+                    .map(|(jwks_url, count)| ControlApiUnknownKidEventPayload { jwks_url, count })
+                    .collect(),
+            },
             jwks: ControlApiJwksPayload {
-                sources: crate::quic_listener::admission::snapshot_runtime_jwks_sources(
-                    runtime.runtime_config(),
-                )
-                .into_iter()
-                .map(|snapshot| ControlApiJwksSourcePayload {
-                    jwks_url: snapshot.jwks_url,
-                    allowed_algorithms: snapshot.allowed_algorithms,
-                    startup_behavior: snapshot.startup_behavior,
-                    cache_state: snapshot.state,
-                    active_key_count: snapshot.active_key_count,
-                    age_seconds: snapshot.age_seconds,
-                    last_refresh_attempt_unix_seconds: snapshot.last_refresh_attempt_unix_seconds,
-                    last_refresh_success_unix_seconds: snapshot.last_refresh_success_unix_seconds,
-                    last_failure_reason: snapshot.last_failure_reason,
-                    last_error: snapshot.last_error,
-                })
-                .collect(),
+                sources: jwks_sources
+                    .into_iter()
+                    .map(|snapshot| ControlApiJwksSourcePayload {
+                        jwks_url: snapshot.jwks_url,
+                        allowed_algorithms: snapshot.allowed_algorithms,
+                        startup_behavior: snapshot.startup_behavior,
+                        cache_state: snapshot.state,
+                        active_key_count: snapshot.active_key_count,
+                        age_seconds: snapshot.age_seconds,
+                        last_refresh_attempt_unix_seconds: snapshot
+                            .last_refresh_attempt_unix_seconds,
+                        last_refresh_success_unix_seconds: snapshot
+                            .last_refresh_success_unix_seconds,
+                        last_failure_reason: snapshot.last_failure_reason,
+                        last_error: snapshot.last_error,
+                    })
+                    .collect(),
             },
             backends: ControlApiBackendInventoryPayload::from_inventory(
                 backend_inventory,
@@ -437,6 +539,86 @@ impl ControlApiRuntimePayload {
                     config_path: active.startup().config_path.clone(),
                 }),
         }
+    }
+}
+
+fn jwt_provider_payload(
+    jwt: &RuntimeJwtAuth,
+    jwks_by_url: &HashMap<&str, &crate::quic_listener::admission::JwtJwksRuntimeSnapshot>,
+) -> ControlApiJwtProviderPayload {
+    let issuers = jwt
+        .issuer
+        .iter()
+        .cloned()
+        .chain(jwt.issuers.iter().cloned())
+        .collect::<Vec<_>>();
+    let audiences = jwt
+        .audience
+        .iter()
+        .cloned()
+        .chain(jwt.audiences.iter().cloned())
+        .collect::<Vec<_>>();
+    let jwks_snapshot = jwt
+        .jwks_url
+        .as_deref()
+        .and_then(|jwks_url| jwks_by_url.get(jwks_url).copied());
+    let jwks_cache_state = jwks_snapshot.map(|snapshot| snapshot.state);
+    let serving_from_stale_cache = jwks_cache_state.map(|state| {
+        matches!(
+            state,
+            "stale" | "refresh_failed_retained" | "quarantined_retained"
+        )
+    });
+    let usable_key_count = jwks_snapshot.map(|snapshot| snapshot.active_key_count);
+    let jwks_active = jwks_snapshot.is_some_and(|snapshot| {
+        snapshot.active_key_count > 0
+            && !matches!(snapshot.state, "never_fetched" | "empty_unusable")
+    });
+
+    ControlApiJwtProviderPayload {
+        provider_mode: jwt_provider_mode(jwt),
+        allowed_algorithms: jwt
+            .allowed_algorithms
+            .iter()
+            .map(|algorithm| jwt_algorithm_name(*algorithm).to_string())
+            .collect(),
+        require_kid: jwt.require_kid,
+        issuers,
+        audiences,
+        static_key_count: jwt.static_keys.len(),
+        jwks_configured: jwt.jwks_url.is_some(),
+        jwks_active,
+        jwks_cache_state,
+        serving_from_stale_cache,
+        usable_key_count,
+        last_refresh_success_unix_seconds: jwks_snapshot
+            .and_then(|snapshot| snapshot.last_refresh_success_unix_seconds),
+        last_refresh_attempt_unix_seconds: jwks_snapshot
+            .and_then(|snapshot| snapshot.last_refresh_attempt_unix_seconds),
+        last_failure_reason: jwks_snapshot
+            .and_then(|snapshot| snapshot.last_failure_reason.clone()),
+    }
+}
+
+fn jwt_provider_mode(jwt: &RuntimeJwtAuth) -> &'static str {
+    let has_hs256 = !jwt.secret.is_empty();
+    let has_static_asymmetric = !jwt.static_keys.is_empty();
+    let has_jwks = jwt.jwks_url.is_some();
+    match (has_hs256, has_static_asymmetric, has_jwks) {
+        (true, false, false) => "hs256_only",
+        (false, true, false) => "static_asymmetric",
+        (false, false, true) => "remote_jwks",
+        (false, true, true) => "hybrid_asymmetric",
+        (true, true, false) | (true, false, true) | (true, true, true) => "hybrid",
+        (false, false, false) => "unconfigured",
+    }
+}
+
+fn jwt_algorithm_name(algorithm: spooky_config::config::JwtAlgorithm) -> &'static str {
+    match algorithm {
+        spooky_config::config::JwtAlgorithm::Hs256 => "HS256",
+        spooky_config::config::JwtAlgorithm::Rs256 => "RS256",
+        spooky_config::config::JwtAlgorithm::Es256 => "ES256",
     }
 }
 
