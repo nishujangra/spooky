@@ -79,6 +79,7 @@ impl QUICListener {
     ) -> Result<PreparedListenerStartup, ProxyError> {
         let runtime_config = RuntimeConfig::from_config(&config)
             .map_err(|err| ProxyError::Transport(err.to_string()))?;
+        Self::initialize_jwks_startup(&runtime_config)?;
         let listener_config = runtime_config
             .listener_runtime_configs()
             .into_iter()
