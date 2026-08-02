@@ -23,11 +23,11 @@ pub use self::policies::{
     RuntimeBackendTransportKind, RuntimeBrownoutPolicy, RuntimeCircuitBreakerPolicy,
     RuntimeConnectionLimits, RuntimeExternalAuth, RuntimeExternalAuthFailureMode,
     RuntimeExternalAuthRequestHeader, RuntimeHedgingPolicy, RuntimeJwtAuth,
-    RuntimeListenerPolicySet, RuntimeLoadBalancingPolicy, RuntimeLoadBalancingStrategy,
-    RuntimePolicySet, RuntimeRateLimitPolicy, RuntimeRequestKeySpec, RuntimeRetryBudgetPolicy,
-    RuntimeRouteHostPattern, RuntimeRouteMatchPolicy, RuntimeRouteQueuePolicy,
-    RuntimeScopedRateLimitPolicy, RuntimeTimeoutPolicy, RuntimeTransportPolicy,
-    RuntimeWatchdogPolicy,
+    RuntimeJwtVerificationKey, RuntimeListenerPolicySet, RuntimeLoadBalancingPolicy,
+    RuntimeLoadBalancingStrategy, RuntimePolicySet, RuntimeRateLimitPolicy, RuntimeRequestKeySpec,
+    RuntimeRetryBudgetPolicy, RuntimeRouteHostPattern, RuntimeRouteMatchPolicy,
+    RuntimeRouteQueuePolicy, RuntimeScopedRateLimitPolicy, RuntimeTimeoutPolicy,
+    RuntimeTransportPolicy, RuntimeWatchdogPolicy,
 };
 
 #[derive(Debug, Clone)]

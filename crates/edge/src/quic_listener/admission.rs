@@ -5,12 +5,22 @@ use std::{
 };
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use boring::{
+    bn::BigNum,
+    ec::{EcGroup, EcKey},
+    ecdsa::EcdsaSig,
+    hash::MessageDigest,
+    nid::Nid,
+    pkey::{Id as PKeyId, PKey, Public},
+    rsa::{Padding, Rsa},
+    sign::Verifier,
+};
 use hmac::{Hmac, Mac};
 use http::StatusCode;
 use serde_json::Value;
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use spooky_config::config::JwtAlgorithm;
-use spooky_config::runtime::{RuntimeJwtAuth, RuntimeUpstreamPolicy};
+use spooky_config::runtime::{RuntimeJwtAuth, RuntimeJwtVerificationKey, RuntimeUpstreamPolicy};
 use spooky_lb::upstream_pool::UpstreamPool;
 use subtle::ConstantTimeEq;
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
@@ -471,6 +481,12 @@ pub(super) enum JwtValidationFailureReason {
     UnsupportedAlgorithm,
     MissingKid,
     MissingVerificationKey,
+    AmbiguousVerificationKey,
+    PemKeyParseFailed,
+    JwkKeyParseFailed,
+    InvalidKeyType,
+    UnsupportedCurve,
+    KeyTooWeak,
     SignatureInvalid,
     MissingExpiration,
     TokenExpired,
@@ -491,6 +507,12 @@ impl JwtValidationFailureReason {
             Self::UnsupportedAlgorithm => "unsupported_algorithm",
             Self::MissingKid => "missing_kid",
             Self::MissingVerificationKey => "missing_verification_key",
+            Self::AmbiguousVerificationKey => "ambiguous_verification_key",
+            Self::PemKeyParseFailed => "pem_key_parse_failed",
+            Self::JwkKeyParseFailed => "jwk_key_parse_failed",
+            Self::InvalidKeyType => "invalid_key_type",
+            Self::UnsupportedCurve => "unsupported_curve",
+            Self::KeyTooWeak => "key_too_weak",
             Self::SignatureInvalid => "signature_invalid",
             Self::MissingExpiration => "missing_expiration",
             Self::TokenExpired => "token_expired",
@@ -537,9 +559,11 @@ pub(super) struct ValidatedJwt {
     pub(super) claims: Value,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 enum JwtVerificationKey<'a> {
     Hs256Secret(&'a str),
+    RsaPublicKey(PKey<Public>),
+    EcP256PublicKey(EcKey<Public>),
 }
 
 pub(super) fn validate_jwt_token(
@@ -647,9 +671,9 @@ fn resolve_jwt_verification_key<'a>(
             }
             Ok(JwtVerificationKey::Hs256Secret(jwt.secret.as_str()))
         }
-        JwtAlgorithm::Rs256 | JwtAlgorithm::Es256 => Err(JwtValidationFailure::new(
-            JwtValidationFailureReason::UnsupportedAlgorithm,
-        )),
+        JwtAlgorithm::Rs256 | JwtAlgorithm::Es256 => {
+            resolve_static_asymmetric_key(jwt, algorithm, kid)
+        }
     }
 }
 
@@ -676,10 +700,371 @@ fn verify_jwt_signature(
             }
             Ok(())
         }
+        (JwtAlgorithm::Rs256, JwtVerificationKey::RsaPublicKey(public_key)) => {
+            let mut verifier =
+                Verifier::new(MessageDigest::sha256(), &public_key).map_err(|_| {
+                    JwtValidationFailure::new(JwtValidationFailureReason::SignatureInvalid)
+                })?;
+            verifier.set_rsa_padding(Padding::PKCS1).map_err(|_| {
+                JwtValidationFailure::new(JwtValidationFailureReason::SignatureInvalid)
+            })?;
+            verifier
+                .update(format!("{}.{}", parsed.header_b64, parsed.payload_b64).as_bytes())
+                .map_err(|_| {
+                    JwtValidationFailure::new(JwtValidationFailureReason::SignatureInvalid)
+                })?;
+            if !verifier.verify(&parsed.signature).map_err(|_| {
+                JwtValidationFailure::new(JwtValidationFailureReason::SignatureInvalid)
+            })? {
+                return Err(JwtValidationFailure::new(
+                    JwtValidationFailureReason::SignatureInvalid,
+                ));
+            }
+            Ok(())
+        }
+        (JwtAlgorithm::Es256, JwtVerificationKey::EcP256PublicKey(public_key)) => {
+            let der_signature = jose_es256_signature_to_der(&parsed.signature)?;
+            let digest = Sha256::digest(format!("{}.{}", parsed.header_b64, parsed.payload_b64));
+            let ecdsa_sig = EcdsaSig::from_der(&der_signature).map_err(|_| {
+                JwtValidationFailure::new(JwtValidationFailureReason::SignatureInvalid)
+            })?;
+            if !ecdsa_sig.verify(&digest, &public_key).map_err(|_| {
+                JwtValidationFailure::new(JwtValidationFailureReason::SignatureInvalid)
+            })? {
+                return Err(JwtValidationFailure::new(
+                    JwtValidationFailureReason::SignatureInvalid,
+                ));
+            }
+            Ok(())
+        }
+        (JwtAlgorithm::Hs256, JwtVerificationKey::RsaPublicKey(_))
+        | (JwtAlgorithm::Hs256, JwtVerificationKey::EcP256PublicKey(_)) => Err(
+            JwtValidationFailure::new(JwtValidationFailureReason::InvalidKeyType),
+        ),
         (JwtAlgorithm::Rs256 | JwtAlgorithm::Es256, _) => Err(JwtValidationFailure::new(
-            JwtValidationFailureReason::UnsupportedAlgorithm,
+            JwtValidationFailureReason::InvalidKeyType,
         )),
     }
+}
+
+fn resolve_static_asymmetric_key(
+    jwt: &RuntimeJwtAuth,
+    algorithm: JwtAlgorithm,
+    requested_kid: Option<&str>,
+) -> Result<JwtVerificationKey<'static>, JwtValidationFailure> {
+    let mut candidates = Vec::new();
+    for key in &jwt.static_keys {
+        let metadata = static_key_metadata(key)?;
+        let effective_kid = metadata
+            .kid
+            .as_deref()
+            .or_else(|| static_key_config_kid(key));
+        if let Some(requested_kid) = requested_kid
+            && effective_kid != Some(requested_kid)
+        {
+            continue;
+        }
+        if let Some(key_alg) = metadata.alg.or_else(|| static_key_config_alg(key))
+            && key_alg != algorithm
+        {
+            continue;
+        }
+        candidates.push((key, metadata));
+    }
+
+    if candidates.is_empty() {
+        return Err(JwtValidationFailure::new(
+            JwtValidationFailureReason::MissingVerificationKey,
+        ));
+    }
+    // Reject ambiguity even when the token carries a `kid`: two static keys can
+    // resolve to the same effective kid when it is declared inside a JWK body
+    // rather than the config field, which config validation cannot catch.
+    if candidates.len() > 1 {
+        return Err(JwtValidationFailure::new(
+            JwtValidationFailureReason::AmbiguousVerificationKey,
+        ));
+    }
+
+    parse_static_verification_key(candidates[0].0, algorithm)
+}
+
+#[derive(Debug, Clone, Default)]
+struct StaticKeyMetadata {
+    kid: Option<String>,
+    alg: Option<JwtAlgorithm>,
+}
+
+fn static_key_metadata(
+    key: &RuntimeJwtVerificationKey,
+) -> Result<StaticKeyMetadata, JwtValidationFailure> {
+    match key {
+        RuntimeJwtVerificationKey::Pem { kid, alg, .. } => Ok(StaticKeyMetadata {
+            kid: kid.clone(),
+            alg: *alg,
+        }),
+        RuntimeJwtVerificationKey::Jwk { kid, alg, jwk } => {
+            let parsed = parse_jwk_value(jwk)?;
+            let jwk_kid = parsed
+                .get("kid")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let jwk_alg = parsed
+                .get("alg")
+                .and_then(Value::as_str)
+                .map(parse_jwt_alg_str)
+                .transpose()?;
+            if let (Some(config_kid), Some(jwk_kid)) = (kid.as_deref(), jwk_kid.as_deref())
+                && config_kid != jwk_kid
+            {
+                return Err(JwtValidationFailure::new(
+                    JwtValidationFailureReason::JwkKeyParseFailed,
+                ));
+            }
+            if let (Some(config_alg), Some(jwk_alg)) = (*alg, jwk_alg)
+                && config_alg != jwk_alg
+            {
+                return Err(JwtValidationFailure::new(
+                    JwtValidationFailureReason::JwkKeyParseFailed,
+                ));
+            }
+            Ok(StaticKeyMetadata {
+                kid: kid.clone().or(jwk_kid),
+                alg: alg.or(jwk_alg),
+            })
+        }
+    }
+}
+
+fn static_key_config_kid(key: &RuntimeJwtVerificationKey) -> Option<&str> {
+    match key {
+        RuntimeJwtVerificationKey::Pem { kid, .. } | RuntimeJwtVerificationKey::Jwk { kid, .. } => {
+            kid.as_deref()
+        }
+    }
+}
+
+fn static_key_config_alg(key: &RuntimeJwtVerificationKey) -> Option<JwtAlgorithm> {
+    match key {
+        RuntimeJwtVerificationKey::Pem { alg, .. } | RuntimeJwtVerificationKey::Jwk { alg, .. } => {
+            *alg
+        }
+    }
+}
+
+fn parse_static_verification_key(
+    key: &RuntimeJwtVerificationKey,
+    algorithm: JwtAlgorithm,
+) -> Result<JwtVerificationKey<'static>, JwtValidationFailure> {
+    match key {
+        RuntimeJwtVerificationKey::Pem { public_key_pem, .. } => {
+            parse_pem_verification_key(public_key_pem, algorithm)
+        }
+        RuntimeJwtVerificationKey::Jwk { jwk, .. } => parse_jwk_verification_key(jwk, algorithm),
+    }
+}
+
+fn parse_pem_verification_key(
+    public_key_pem: &str,
+    algorithm: JwtAlgorithm,
+) -> Result<JwtVerificationKey<'static>, JwtValidationFailure> {
+    match algorithm {
+        JwtAlgorithm::Rs256 => {
+            if let Ok(public_key) = PKey::public_key_from_pem(public_key_pem.as_bytes()) {
+                if !matches!(public_key.id(), PKeyId::RSA | PKeyId::RSAPSS) {
+                    return Err(JwtValidationFailure::new(
+                        JwtValidationFailureReason::InvalidKeyType,
+                    ));
+                }
+                ensure_rsa_key_strength(&public_key)?;
+                return Ok(JwtVerificationKey::RsaPublicKey(public_key));
+            }
+            let rsa = Rsa::public_key_from_pem(public_key_pem.as_bytes())
+                .or_else(|_| Rsa::public_key_from_pem_pkcs1(public_key_pem.as_bytes()))
+                .map_err(|_| {
+                    JwtValidationFailure::new(JwtValidationFailureReason::PemKeyParseFailed)
+                })?;
+            let key = PKey::from_rsa(rsa).map_err(|_| {
+                JwtValidationFailure::new(JwtValidationFailureReason::PemKeyParseFailed)
+            })?;
+            ensure_rsa_key_strength(&key)?;
+            Ok(JwtVerificationKey::RsaPublicKey(key))
+        }
+        JwtAlgorithm::Es256 => {
+            if let Ok(public_key) = PKey::public_key_from_pem(public_key_pem.as_bytes()) {
+                if public_key.id() != PKeyId::EC {
+                    return Err(JwtValidationFailure::new(
+                        JwtValidationFailureReason::InvalidKeyType,
+                    ));
+                }
+                let ec_key = public_key.ec_key().map_err(|_| {
+                    JwtValidationFailure::new(JwtValidationFailureReason::PemKeyParseFailed)
+                })?;
+                ensure_p256_public_key(&ec_key)?;
+                return Ok(JwtVerificationKey::EcP256PublicKey(ec_key));
+            }
+            let ec_key = EcKey::public_key_from_pem(public_key_pem.as_bytes()).map_err(|_| {
+                JwtValidationFailure::new(JwtValidationFailureReason::PemKeyParseFailed)
+            })?;
+            ensure_p256_public_key(&ec_key)?;
+            Ok(JwtVerificationKey::EcP256PublicKey(ec_key))
+        }
+        JwtAlgorithm::Hs256 => Err(JwtValidationFailure::new(
+            JwtValidationFailureReason::InvalidKeyType,
+        )),
+    }
+}
+
+fn parse_jwk_verification_key(
+    jwk: &str,
+    algorithm: JwtAlgorithm,
+) -> Result<JwtVerificationKey<'static>, JwtValidationFailure> {
+    let jwk = parse_jwk_value(jwk)?;
+    match algorithm {
+        JwtAlgorithm::Rs256 => {
+            let kty = jwk.get("kty").and_then(Value::as_str);
+            if kty != Some("RSA") {
+                return Err(JwtValidationFailure::new(
+                    JwtValidationFailureReason::InvalidKeyType,
+                ));
+            }
+            let n = jwk
+                .get("n")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    JwtValidationFailure::new(JwtValidationFailureReason::JwkKeyParseFailed)
+                })
+                .and_then(decode_jwk_bignum)?;
+            let e = jwk
+                .get("e")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    JwtValidationFailure::new(JwtValidationFailureReason::JwkKeyParseFailed)
+                })
+                .and_then(decode_jwk_bignum)?;
+            let rsa = Rsa::from_public_components(n, e).map_err(|_| {
+                JwtValidationFailure::new(JwtValidationFailureReason::JwkKeyParseFailed)
+            })?;
+            let key = PKey::from_rsa(rsa).map_err(|_| {
+                JwtValidationFailure::new(JwtValidationFailureReason::JwkKeyParseFailed)
+            })?;
+            ensure_rsa_key_strength(&key)?;
+            Ok(JwtVerificationKey::RsaPublicKey(key))
+        }
+        JwtAlgorithm::Es256 => {
+            let kty = jwk.get("kty").and_then(Value::as_str);
+            if kty != Some("EC") {
+                return Err(JwtValidationFailure::new(
+                    JwtValidationFailureReason::InvalidKeyType,
+                ));
+            }
+            let crv = jwk.get("crv").and_then(Value::as_str);
+            if crv != Some("P-256") {
+                return Err(JwtValidationFailure::new(
+                    JwtValidationFailureReason::UnsupportedCurve,
+                ));
+            }
+            let x = jwk
+                .get("x")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    JwtValidationFailure::new(JwtValidationFailureReason::JwkKeyParseFailed)
+                })
+                .and_then(decode_jwk_bignum)?;
+            let y = jwk
+                .get("y")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    JwtValidationFailure::new(JwtValidationFailureReason::JwkKeyParseFailed)
+                })
+                .and_then(decode_jwk_bignum)?;
+            let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).map_err(|_| {
+                JwtValidationFailure::new(JwtValidationFailureReason::UnsupportedCurve)
+            })?;
+            let ec_key =
+                EcKey::from_public_key_affine_coordinates(&group, &x, &y).map_err(|_| {
+                    JwtValidationFailure::new(JwtValidationFailureReason::JwkKeyParseFailed)
+                })?;
+            ensure_p256_public_key(&ec_key)?;
+            Ok(JwtVerificationKey::EcP256PublicKey(ec_key))
+        }
+        JwtAlgorithm::Hs256 => Err(JwtValidationFailure::new(
+            JwtValidationFailureReason::InvalidKeyType,
+        )),
+    }
+}
+
+fn parse_jwk_value(jwk: &str) -> Result<Value, JwtValidationFailure> {
+    serde_json::from_str::<Value>(jwk)
+        .map_err(|_| JwtValidationFailure::new(JwtValidationFailureReason::JwkKeyParseFailed))
+}
+
+fn parse_jwt_alg_str(alg: &str) -> Result<JwtAlgorithm, JwtValidationFailure> {
+    match alg {
+        "HS256" => Ok(JwtAlgorithm::Hs256),
+        "RS256" => Ok(JwtAlgorithm::Rs256),
+        "ES256" => Ok(JwtAlgorithm::Es256),
+        _ => Err(JwtValidationFailure::new(
+            JwtValidationFailureReason::JwkKeyParseFailed,
+        )),
+    }
+}
+
+fn decode_jwk_bignum(encoded: &str) -> Result<BigNum, JwtValidationFailure> {
+    let bytes = URL_SAFE_NO_PAD
+        .decode(encoded)
+        .map_err(|_| JwtValidationFailure::new(JwtValidationFailureReason::JwkKeyParseFailed))?;
+    BigNum::from_slice(&bytes)
+        .map_err(|_| JwtValidationFailure::new(JwtValidationFailureReason::JwkKeyParseFailed))
+}
+
+/// Smallest RSA modulus accepted for RS256 verification. Anything shorter is
+/// forgeable in practice, so reject it rather than trusting operator config or
+/// a remote JWKS document to only publish sound keys.
+const MIN_RSA_KEY_BITS: u32 = 2048;
+
+fn ensure_rsa_key_strength(key: &PKey<Public>) -> Result<(), JwtValidationFailure> {
+    let bits = key
+        .rsa()
+        .map_err(|_| JwtValidationFailure::new(JwtValidationFailureReason::InvalidKeyType))?
+        .size()
+        .saturating_mul(8);
+    if bits < MIN_RSA_KEY_BITS {
+        return Err(JwtValidationFailure::new(
+            JwtValidationFailureReason::KeyTooWeak,
+        ));
+    }
+    Ok(())
+}
+
+fn ensure_p256_public_key(ec_key: &EcKey<Public>) -> Result<(), JwtValidationFailure> {
+    ec_key
+        .check_key()
+        .map_err(|_| JwtValidationFailure::new(JwtValidationFailureReason::InvalidKeyType))?;
+    let curve = ec_key.group().curve_name();
+    if curve != Some(Nid::X9_62_PRIME256V1) {
+        return Err(JwtValidationFailure::new(
+            JwtValidationFailureReason::UnsupportedCurve,
+        ));
+    }
+    Ok(())
+}
+
+fn jose_es256_signature_to_der(signature: &[u8]) -> Result<Vec<u8>, JwtValidationFailure> {
+    if signature.len() != 64 {
+        return Err(JwtValidationFailure::new(
+            JwtValidationFailureReason::SignatureInvalid,
+        ));
+    }
+    let r = BigNum::from_slice(&signature[..32])
+        .map_err(|_| JwtValidationFailure::new(JwtValidationFailureReason::SignatureInvalid))?;
+    let s = BigNum::from_slice(&signature[32..])
+        .map_err(|_| JwtValidationFailure::new(JwtValidationFailureReason::SignatureInvalid))?;
+    // `from_private_components` assembles a signature from its (r, s) scalars;
+    // despite the name it involves no private key material.
+    EcdsaSig::from_private_components(r, s)
+        .and_then(|sig| sig.to_der())
+        .map_err(|_| JwtValidationFailure::new(JwtValidationFailureReason::SignatureInvalid))
 }
 
 fn parse_jwt_claims(payload_bytes: &[u8]) -> Result<Value, JwtValidationFailure> {

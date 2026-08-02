@@ -1203,16 +1203,28 @@ impl QUICListener {
 
 #[cfg(test)]
 mod tests {
-
     use std::time::UNIX_EPOCH;
 
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use boring::{
+        bn::{BigNum, BigNumContext},
+        ec::{EcGroup, EcKey},
+        ecdsa::EcdsaSig,
+        hash::MessageDigest,
+        nid::Nid,
+        pkey::{PKey, Private},
+        rsa::{Padding, Rsa},
+        sign::Signer,
+    };
     use hmac::{Hmac, Mac};
     use serde_json::Value;
     use sha2::Sha256;
     use spooky_config::{
-        config::{ScopedRateLimit, ScopedRateLimitScope},
-        runtime::{RuntimeApiKeyAuth, RuntimeAuthPolicy, RuntimeJwtAuth, RuntimeUpstreamPolicy},
+        config::{JwtAlgorithm, ScopedRateLimit, ScopedRateLimitScope},
+        runtime::{
+            RuntimeApiKeyAuth, RuntimeAuthPolicy, RuntimeJwtAuth, RuntimeJwtVerificationKey,
+            RuntimeUpstreamPolicy,
+        },
     };
 
     use super::{auth::append_auth_request_headers, *};
@@ -1232,17 +1244,94 @@ mod tests {
     }
 
     fn test_hs256_jwt(secret: &str, claims: serde_json::Value, alg: &str) -> String {
-        let header = URL_SAFE_NO_PAD.encode(
-            serde_json::to_vec(&serde_json::json!({ "alg": alg, "typ": "JWT" }))
-                .expect("serialize header"),
-        );
-        let payload =
-            URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).expect("serialize claims"));
-        let signing_input = format!("{header}.{payload}");
-        let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("mac");
-        mac.update(signing_input.as_bytes());
-        let signature = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+        let header = serde_json::json!({ "alg": alg, "typ": "JWT" });
+        let signing_input = test_signing_input(&header, &claims);
+        let signature = {
+            let mut payload = Vec::new();
+            let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("mac");
+            mac.update(signing_input.as_bytes());
+            payload.extend_from_slice(&mac.finalize().into_bytes());
+            payload
+        };
+        test_signed_jwt(header, claims, signature)
+    }
+
+    fn test_rs256_jwt(key: &PKey<Private>, kid: Option<&str>, claims: serde_json::Value) -> String {
+        let header = serde_json::json!({
+            "alg": "RS256",
+            "typ": "JWT",
+            "kid": kid,
+        });
+        let signing_input = test_signing_input(&header, &claims);
+        let mut signer = Signer::new(MessageDigest::sha256(), key).expect("rsa signer");
+        signer.set_rsa_padding(Padding::PKCS1).expect("rsa padding");
+        signer
+            .update(signing_input.as_bytes())
+            .expect("rsa signing input");
+        test_signed_jwt(header, claims, signer.sign_to_vec().expect("rsa signature"))
+    }
+
+    fn test_es256_jwt(
+        key: &EcKey<Private>,
+        kid: Option<&str>,
+        claims: serde_json::Value,
+    ) -> String {
+        let header = serde_json::json!({
+            "alg": "ES256",
+            "typ": "JWT",
+            "kid": kid,
+        });
+        let signing_input = test_signing_input(&header, &claims);
+        let pkey = PKey::from_ec_key(key.clone()).expect("ec pkey");
+        let mut signer = Signer::new(MessageDigest::sha256(), &pkey).expect("ec signer");
+        signer
+            .update(signing_input.as_bytes())
+            .expect("ec signing input");
+        let der_signature = signer.sign_to_vec().expect("ec signature");
+        let jose_signature = der_ecdsa_signature_to_jose(&der_signature);
+        test_signed_jwt(header, claims, jose_signature)
+    }
+
+    fn test_signing_input(header: &serde_json::Value, claims: &serde_json::Value) -> String {
+        let header = URL_SAFE_NO_PAD.encode(serde_json::to_vec(header).expect("serialize header"));
+        let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(claims).expect("serialize claims"));
+        format!("{header}.{payload}")
+    }
+
+    fn test_signed_jwt(
+        header: serde_json::Value,
+        claims: serde_json::Value,
+        signature: impl AsRef<[u8]>,
+    ) -> String {
+        let signing_input = test_signing_input(&header, &claims);
+        let signature = URL_SAFE_NO_PAD.encode(signature.as_ref());
         format!("{signing_input}.{signature}")
+    }
+
+    fn der_ecdsa_signature_to_jose(der_signature: &[u8]) -> Vec<u8> {
+        let sig = EcdsaSig::from_der(der_signature).expect("ecdsa der");
+        let mut jose = sig.r().to_vec_padded(32).expect("ecdsa r");
+        jose.extend_from_slice(&sig.s().to_vec_padded(32).expect("ecdsa s"));
+        jose
+    }
+
+    fn ec_public_jwk(key: &EcKey<Private>, kid: Option<&str>) -> String {
+        let mut ctx = BigNumContext::new().expect("bn ctx");
+        let mut x = BigNum::new().expect("x");
+        let mut y = BigNum::new().expect("y");
+        let coordinate_len = key.group().degree().div_ceil(8) as usize;
+        key.public_key()
+            .affine_coordinates_gfp(key.group(), &mut x, &mut y, &mut ctx)
+            .expect("affine coordinates");
+        serde_json::json!({
+            "kty": "EC",
+            "alg": "ES256",
+            "kid": kid,
+            "crv": "P-256",
+            "x": URL_SAFE_NO_PAD.encode(x.to_vec_padded(coordinate_len).expect("x bytes")),
+            "y": URL_SAFE_NO_PAD.encode(y.to_vec_padded(coordinate_len).expect("y bytes")),
+        })
+        .to_string()
     }
 
     #[test]
@@ -1521,6 +1610,242 @@ mod tests {
         .expect_err("kid must be required");
 
         assert_eq!(failure.reason.as_str(), "missing_kid");
+    }
+
+    #[test]
+    fn rs256_jwt_validation_accepts_static_pem_keys() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let rsa = Rsa::generate(2048).expect("rsa key");
+        let pkey = PKey::from_rsa(rsa).expect("rsa pkey");
+        let token = test_rs256_jwt(
+            &pkey,
+            Some("rsa-key-1"),
+            serde_json::json!({
+                "iss": "issuer-1",
+                "aud": "aud-1",
+                "exp": 4_000_000_000u64,
+            }),
+        );
+        let policy = RuntimeJwtAuth {
+            issuer: Some("issuer-1".to_string()),
+            audience: Some("aud-1".to_string()),
+            allowed_algorithms: vec![JwtAlgorithm::Rs256],
+            require_kid: true,
+            static_keys: vec![RuntimeJwtVerificationKey::Pem {
+                kid: Some("rsa-key-1".to_string()),
+                alg: Some(JwtAlgorithm::Rs256),
+                public_key_pem: String::from_utf8(
+                    pkey.public_key_to_pem().expect("rsa public pem"),
+                )
+                .expect("utf8"),
+            }],
+            clock_skew: Duration::from_secs(30),
+            ..RuntimeJwtAuth::default()
+        };
+
+        let validated = super::super::admission::validate_jwt_token(token.as_str(), &policy, now)
+            .expect("rs256 jwt");
+        assert_eq!(validated.algorithm, JwtAlgorithm::Rs256);
+    }
+
+    #[test]
+    fn es256_jwt_validation_accepts_static_jwk_keys() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).expect("p256");
+        let ec_key = EcKey::generate(&group).expect("ec key");
+        let token = test_es256_jwt(
+            &ec_key,
+            Some("ec-key-1"),
+            serde_json::json!({
+                "iss": "issuer-1",
+                "aud": "aud-1",
+                "exp": 4_000_000_000u64,
+            }),
+        );
+        let policy = RuntimeJwtAuth {
+            issuer: Some("issuer-1".to_string()),
+            audience: Some("aud-1".to_string()),
+            allowed_algorithms: vec![JwtAlgorithm::Es256],
+            require_kid: true,
+            static_keys: vec![RuntimeJwtVerificationKey::Jwk {
+                kid: Some("ec-key-1".to_string()),
+                alg: Some(JwtAlgorithm::Es256),
+                jwk: ec_public_jwk(&ec_key, Some("ec-key-1")),
+            }],
+            clock_skew: Duration::from_secs(30),
+            ..RuntimeJwtAuth::default()
+        };
+
+        let validated = super::super::admission::validate_jwt_token(token.as_str(), &policy, now)
+            .expect("es256 jwt");
+        assert_eq!(validated.algorithm, JwtAlgorithm::Es256);
+    }
+
+    #[test]
+    fn jwt_validation_rejects_invalid_key_type_for_declared_algorithm() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let rsa = Rsa::generate(2048).expect("rsa key");
+        let pkey = PKey::from_rsa(rsa).expect("rsa pkey");
+        let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).expect("p256");
+        let ec_key = EcKey::generate(&group).expect("ec key");
+        let ec_public_pem = String::from_utf8(
+            PKey::from_ec_key(ec_key)
+                .expect("ec pkey")
+                .public_key_to_pem()
+                .expect("ec public pem"),
+        )
+        .expect("utf8");
+        let token = test_rs256_jwt(
+            &pkey,
+            Some("wrong-type"),
+            serde_json::json!({
+                "iss": "issuer-1",
+                "aud": "aud-1",
+                "exp": 4_000_000_000u64,
+            }),
+        );
+
+        let failure = super::super::admission::validate_jwt_token(
+            token.as_str(),
+            &RuntimeJwtAuth {
+                issuer: Some("issuer-1".to_string()),
+                audience: Some("aud-1".to_string()),
+                allowed_algorithms: vec![JwtAlgorithm::Rs256],
+                require_kid: true,
+                static_keys: vec![RuntimeJwtVerificationKey::Pem {
+                    kid: Some("wrong-type".to_string()),
+                    alg: Some(JwtAlgorithm::Rs256),
+                    public_key_pem: ec_public_pem,
+                }],
+                clock_skew: Duration::from_secs(30),
+                ..RuntimeJwtAuth::default()
+            },
+            now,
+        )
+        .expect_err("invalid key type");
+
+        assert_eq!(failure.reason.as_str(), "invalid_key_type");
+    }
+
+    #[test]
+    fn jwt_validation_rejects_rsa_keys_below_the_minimum_modulus_size() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let rsa = Rsa::generate(1024).expect("weak rsa key");
+        let key = PKey::from_rsa(rsa).expect("weak rsa pkey");
+        let token = test_rs256_jwt(
+            &key,
+            Some("weak-rsa"),
+            serde_json::json!({
+                "iss": "issuer-1",
+                "aud": "aud-1",
+                "exp": 4_000_000_000u64,
+            }),
+        );
+        let public_key_pem =
+            String::from_utf8(key.public_key_to_pem().expect("weak rsa pem")).expect("utf8 pem");
+
+        let failure = super::super::admission::validate_jwt_token(
+            token.as_str(),
+            &RuntimeJwtAuth {
+                issuer: Some("issuer-1".to_string()),
+                audience: Some("aud-1".to_string()),
+                allowed_algorithms: vec![JwtAlgorithm::Rs256],
+                static_keys: vec![RuntimeJwtVerificationKey::Pem {
+                    kid: Some("weak-rsa".to_string()),
+                    alg: Some(JwtAlgorithm::Rs256),
+                    public_key_pem,
+                }],
+                clock_skew: Duration::from_secs(30),
+                ..RuntimeJwtAuth::default()
+            },
+            now,
+        )
+        .expect_err("weak rsa key must be rejected");
+
+        assert_eq!(failure.reason.as_str(), "key_too_weak");
+    }
+
+    #[test]
+    fn jwt_validation_rejects_static_keys_that_collide_on_the_requested_kid() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).expect("p256");
+        let first = EcKey::generate(&group).expect("first p256 key");
+        let second = EcKey::generate(&group).expect("second p256 key");
+        let token = test_es256_jwt(
+            &first,
+            Some("shared-kid"),
+            serde_json::json!({
+                "iss": "issuer-1",
+                "aud": "aud-1",
+                "exp": 4_000_000_000u64,
+            }),
+        );
+
+        // Both keys resolve to the same effective kid because it is declared
+        // inside the JWK body, which config validation cannot deduplicate.
+        let failure = super::super::admission::validate_jwt_token(
+            token.as_str(),
+            &RuntimeJwtAuth {
+                issuer: Some("issuer-1".to_string()),
+                audience: Some("aud-1".to_string()),
+                allowed_algorithms: vec![JwtAlgorithm::Es256],
+                static_keys: vec![
+                    RuntimeJwtVerificationKey::Jwk {
+                        kid: None,
+                        alg: Some(JwtAlgorithm::Es256),
+                        jwk: ec_public_jwk(&first, Some("shared-kid")),
+                    },
+                    RuntimeJwtVerificationKey::Jwk {
+                        kid: None,
+                        alg: Some(JwtAlgorithm::Es256),
+                        jwk: ec_public_jwk(&second, Some("shared-kid")),
+                    },
+                ],
+                clock_skew: Duration::from_secs(30),
+                ..RuntimeJwtAuth::default()
+            },
+            now,
+        )
+        .expect_err("colliding kid must be rejected");
+
+        assert_eq!(failure.reason.as_str(), "ambiguous_verification_key");
+    }
+
+    #[test]
+    fn jwt_validation_rejects_unsupported_ec_curve() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let token = test_signed_jwt(
+            serde_json::json!({ "alg": "ES256", "typ": "JWT", "kid": "ec-384" }),
+            serde_json::json!({
+                "iss": "issuer-1",
+                "aud": "aud-1",
+                "exp": 4_000_000_000u64,
+            }),
+            vec![0u8; 64],
+        );
+        let group = EcGroup::from_curve_name(Nid::SECP384R1).expect("p384");
+        let ec_key = EcKey::generate(&group).expect("p384 key");
+
+        let failure = super::super::admission::validate_jwt_token(
+            token.as_str(),
+            &RuntimeJwtAuth {
+                issuer: Some("issuer-1".to_string()),
+                audience: Some("aud-1".to_string()),
+                allowed_algorithms: vec![JwtAlgorithm::Es256],
+                require_kid: true,
+                static_keys: vec![RuntimeJwtVerificationKey::Jwk {
+                    kid: Some("ec-384".to_string()),
+                    alg: Some(JwtAlgorithm::Es256),
+                    jwk: ec_public_jwk(&ec_key, Some("ec-384")).replace("\"P-256\"", "\"P-384\""),
+                }],
+                clock_skew: Duration::from_secs(30),
+                ..RuntimeJwtAuth::default()
+            },
+            now,
+        )
+        .expect_err("unsupported curve");
+
+        assert_eq!(failure.reason.as_str(), "unsupported_curve");
     }
 
     #[test]
