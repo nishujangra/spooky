@@ -3,7 +3,7 @@ use std::{collections::VecDeque, sync::Mutex};
 use std::{
     collections::{HashMap, HashSet},
     convert::Infallible,
-    sync::{Arc, OnceLock, RwLock},
+    sync::{Arc, OnceLock, RwLock, Weak},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -465,6 +465,7 @@ pub(super) fn jwt_is_authorized(
     let claims = match validate_jwt_token(token.as_str(), jwt, SystemTime::now()) {
         Ok(validated) => validated.claims,
         Err(failure) => {
+            observe_jwt_validation_failure(jwt, token.as_str(), &failure);
             log_jwt_validation_rejection(jwt, token.as_str(), &failure);
             return false;
         }
@@ -595,6 +596,41 @@ fn log_jwt_validation_rejection(jwt: &RuntimeJwtAuth, token: &str, failure: &Jwt
     );
 }
 
+fn observe_jwt_validation_failure(
+    jwt: &RuntimeJwtAuth,
+    token: &str,
+    failure: &JwtValidationFailure,
+) {
+    let Some(metrics) = current_jwt_jwks_metrics() else {
+        return;
+    };
+    metrics.record_jwt_validation_failure(failure.reason.as_str());
+    let header = parse_compact_jwt(token)
+        .ok()
+        .and_then(|parsed| parse_jose_header(&parsed.header_bytes).ok());
+    if matches!(
+        failure.reason,
+        JwtValidationFailureReason::AlgorithmNotAllowed
+            | JwtValidationFailureReason::UnsupportedAlgorithm
+            | JwtValidationFailureReason::MissingAlgorithm
+    ) {
+        let algorithm = header
+            .as_ref()
+            .map(|header| jwt_algorithm_name(header.algorithm))
+            .unwrap_or("unknown");
+        metrics.record_jwt_algorithm_rejection(algorithm);
+    }
+    if failure.reason == JwtValidationFailureReason::MissingVerificationKey
+        && let Some(source) = JwtJwksSourceConfig::from_jwt(jwt)
+        && header
+            .as_ref()
+            .and_then(|header| header.kid.as_deref())
+            .is_some()
+    {
+        metrics.record_jwks_unknown_kid(&source.jwks_url);
+    }
+}
+
 #[derive(Debug, Clone)]
 struct ParsedJwt<'a> {
     header_b64: &'a str,
@@ -714,9 +750,13 @@ struct JwtJwksCacheEntry {
     active_keys: Vec<JwtJwksActiveKey>,
     refresh_in_flight: bool,
     last_refresh_started_at: Option<Instant>,
+    last_refresh_started_wall: Option<SystemTime>,
     last_refresh_completed_at: Option<Instant>,
+    last_refresh_completed_wall: Option<SystemTime>,
     last_success_at: Option<Instant>,
+    last_success_wall: Option<SystemTime>,
     last_failure_at: Option<Instant>,
+    last_failure_wall: Option<SystemTime>,
     last_error: Option<String>,
     last_failure_reason: Option<JwtJwksFetchFailureReason>,
     next_on_demand_refresh_at: Option<Instant>,
@@ -730,6 +770,8 @@ struct JwtJwksCacheSnapshot {
     last_error: Option<String>,
     last_failure_reason: Option<JwtJwksFetchFailureReason>,
     last_success_at: Option<Instant>,
+    last_refresh_started_wall: Option<SystemTime>,
+    last_success_wall: Option<SystemTime>,
 }
 
 #[derive(Debug, Clone)]
@@ -744,6 +786,7 @@ struct JwtJwksSharedCache {
 
 static JWT_JWKS_SHARED_CACHE: OnceLock<JwtJwksSharedCache> = OnceLock::new();
 static JWT_JWKS_HTTP_CLIENT: OnceLock<JwtJwksHttpClient> = OnceLock::new();
+static JWT_JWKS_METRICS_SINK: OnceLock<RwLock<Weak<crate::Metrics>>> = OnceLock::new();
 #[cfg(test)]
 type JwtJwksFetchScript = Mutex<HashMap<String, VecDeque<Result<Value, JwtJwksFetchFailure>>>>;
 #[cfg(test)]
@@ -794,9 +837,13 @@ impl JwtJwksSharedCache {
                 active_keys: Vec::new(),
                 refresh_in_flight: false,
                 last_refresh_started_at: None,
+                last_refresh_started_wall: None,
                 last_refresh_completed_at: None,
+                last_refresh_completed_wall: None,
                 last_success_at: None,
+                last_success_wall: None,
                 last_failure_at: None,
+                last_failure_wall: None,
                 last_error: None,
                 last_failure_reason: None,
                 next_on_demand_refresh_at: None,
@@ -819,6 +866,8 @@ impl JwtJwksSharedCache {
                 last_error: entry.last_error.clone(),
                 last_failure_reason: entry.last_failure_reason,
                 last_success_at: entry.last_success_at,
+                last_refresh_started_wall: entry.last_refresh_started_wall,
+                last_success_wall: entry.last_success_wall,
             })
     }
 
@@ -832,6 +881,7 @@ impl JwtJwksSharedCache {
         }
         entry.refresh_in_flight = true;
         entry.last_refresh_started_at = Some(now);
+        entry.last_refresh_started_wall = Some(SystemTime::now());
         true
     }
 
@@ -847,9 +897,11 @@ impl JwtJwksSharedCache {
         };
         entry.refresh_in_flight = false;
         entry.last_refresh_completed_at = Some(now);
+        entry.last_refresh_completed_wall = Some(SystemTime::now());
         entry.last_error = None;
         entry.last_failure_reason = None;
         entry.last_failure_at = None;
+        entry.last_failure_wall = None;
         if keys.is_empty() {
             if entry.active_keys(now).is_empty() {
                 entry.active_keys.clear();
@@ -858,6 +910,7 @@ impl JwtJwksSharedCache {
                 entry.state = JwtJwksCacheState::QuarantinedRetained;
                 entry.prune_expired_keys(now);
                 entry.last_failure_at = Some(now);
+                entry.last_failure_wall = Some(SystemTime::now());
                 entry.last_error =
                     Some("empty_jwks: replacement produced no usable keys".to_string());
                 entry.last_failure_reason = Some(JwtJwksFetchFailureReason::MalformedDocument);
@@ -866,6 +919,7 @@ impl JwtJwksSharedCache {
         }
         entry.active_keys = entry.rollover_keys(keys, now);
         entry.last_success_at = Some(now);
+        entry.last_success_wall = Some(SystemTime::now());
         entry.state = JwtJwksCacheState::Fresh;
     }
 
@@ -881,7 +935,9 @@ impl JwtJwksSharedCache {
         };
         entry.refresh_in_flight = false;
         entry.last_refresh_completed_at = Some(now);
+        entry.last_refresh_completed_wall = Some(SystemTime::now());
         entry.last_failure_at = Some(now);
+        entry.last_failure_wall = Some(SystemTime::now());
         entry.last_error = Some(failure.to_string());
         entry.last_failure_reason = Some(failure.reason);
         if entry.active_keys(now).is_empty() {
@@ -908,6 +964,7 @@ impl JwtJwksSharedCache {
         }
         entry.refresh_in_flight = true;
         entry.last_refresh_started_at = Some(now);
+        entry.last_refresh_started_wall = Some(SystemTime::now());
         entry.next_on_demand_refresh_at = Some(now + entry.source.on_demand_refresh_cooldown());
         Some(entry.source.clone())
     }
@@ -927,6 +984,17 @@ impl JwtJwksSharedCache {
             .expect("jwks shared cache write lock")
             .remove(source_identity);
     }
+}
+
+fn jwt_jwks_metrics_sink() -> &'static RwLock<Weak<crate::Metrics>> {
+    JWT_JWKS_METRICS_SINK.get_or_init(|| RwLock::new(Weak::new()))
+}
+
+fn current_jwt_jwks_metrics() -> Option<Arc<crate::Metrics>> {
+    jwt_jwks_metrics_sink()
+        .read()
+        .ok()
+        .and_then(|metrics| metrics.upgrade())
 }
 
 impl JwtJwksCacheEntry {
@@ -1160,9 +1228,13 @@ pub(super) fn prime_jwks_cache_for_test(
                 .collect(),
             refresh_in_flight: false,
             last_refresh_started_at: None,
+            last_refresh_started_wall: None,
             last_refresh_completed_at: None,
+            last_refresh_completed_wall: None,
             last_success_at: Some(Instant::now()),
+            last_success_wall: Some(SystemTime::now()),
             last_failure_at: None,
+            last_failure_wall: None,
             last_error: None,
             last_failure_reason: None,
             next_on_demand_refresh_at: None,
@@ -1190,9 +1262,13 @@ pub(super) fn mark_jwks_source_unavailable_for_test(source_identity: &str) {
             active_keys: Vec::new(),
             refresh_in_flight: false,
             last_refresh_started_at: None,
+            last_refresh_started_wall: None,
             last_refresh_completed_at: None,
+            last_refresh_completed_wall: None,
             last_success_at: None,
+            last_success_wall: None,
             last_failure_at: Some(Instant::now()),
+            last_failure_wall: Some(SystemTime::now()),
             last_error: Some("request_failed: scripted unavailable jwks source".to_string()),
             last_failure_reason: Some(JwtJwksFetchFailureReason::RequestFailed),
             next_on_demand_refresh_at: None,
@@ -1220,9 +1296,13 @@ pub(super) fn mark_jwks_source_invalid_for_test(source_identity: &str) {
             active_keys: Vec::new(),
             refresh_in_flight: false,
             last_refresh_started_at: None,
+            last_refresh_started_wall: None,
             last_refresh_completed_at: None,
+            last_refresh_completed_wall: None,
             last_success_at: None,
+            last_success_wall: None,
             last_failure_at: Some(Instant::now()),
+            last_failure_wall: Some(SystemTime::now()),
             last_error: Some("malformed_document: scripted invalid jwks source".to_string()),
             last_failure_reason: Some(JwtJwksFetchFailureReason::MalformedDocument),
             next_on_demand_refresh_at: None,
@@ -1257,6 +1337,12 @@ fn runtime_jwks_sources(config: &RuntimeConfig) -> Vec<JwtJwksSourceConfig> {
 }
 
 impl QUICListener {
+    pub(super) fn register_jwt_jwks_metrics(metrics: &Arc<crate::Metrics>) {
+        if let Ok(mut sink) = jwt_jwks_metrics_sink().write() {
+            *sink = Arc::downgrade(metrics);
+        }
+    }
+
     pub(super) fn initialize_jwks_startup(
         config: &RuntimeConfig,
     ) -> Result<(), spooky_errors::ProxyError> {
@@ -1365,6 +1451,83 @@ fn jwt_jwks_cache_stale_window_expired(snapshot: &JwtJwksCacheSnapshot) -> bool 
     matches!(snapshot.state, JwtJwksCacheState::EmptyUnusable) && snapshot.last_success_at.is_some()
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct JwtJwksRuntimeSnapshot {
+    pub(super) jwks_url: String,
+    pub(super) allowed_algorithms: Vec<String>,
+    pub(super) startup_behavior: &'static str,
+    pub(super) state: &'static str,
+    pub(super) active_key_count: usize,
+    pub(super) age_seconds: Option<u64>,
+    pub(super) last_refresh_attempt_unix_seconds: Option<u64>,
+    pub(super) last_refresh_success_unix_seconds: Option<u64>,
+    pub(super) last_failure_reason: Option<String>,
+    pub(super) last_error: Option<String>,
+}
+
+pub(super) fn snapshot_runtime_jwks_sources(config: &RuntimeConfig) -> Vec<JwtJwksRuntimeSnapshot> {
+    let now = Instant::now();
+    let mut snapshots = runtime_jwks_sources(config)
+        .into_iter()
+        .map(|source| {
+            let entry = JwtJwksSharedCache::shared().snapshot(&source.source_identity, now);
+            let state = entry
+                .as_ref()
+                .map(|entry| jwt_jwks_cache_state_name(entry.state))
+                .unwrap_or("never_fetched");
+            let active_key_count = entry
+                .as_ref()
+                .map(|entry| entry.active_keys.len())
+                .unwrap_or_default();
+            let age_seconds = entry.as_ref().and_then(|entry| {
+                entry
+                    .last_success_wall
+                    .and_then(system_time_to_unix_seconds)
+                    .and_then(|last_success| {
+                        system_time_to_unix_seconds(SystemTime::now())
+                            .map(|now| now.saturating_sub(last_success))
+                    })
+            });
+            JwtJwksRuntimeSnapshot {
+                jwks_url: source.jwks_url.clone(),
+                allowed_algorithms: source
+                    .allowed_algorithms
+                    .iter()
+                    .map(|algorithm| jwt_algorithm_name(*algorithm).to_string())
+                    .collect(),
+                startup_behavior: match source.startup_behavior {
+                    JwksStartupBehavior::RequireReady => "require_ready",
+                    JwksStartupBehavior::AllowDegraded => "allow_degraded",
+                },
+                state,
+                active_key_count,
+                age_seconds,
+                last_refresh_attempt_unix_seconds: entry
+                    .as_ref()
+                    .and_then(|entry| entry.last_refresh_started_wall)
+                    .and_then(system_time_to_unix_seconds),
+                last_refresh_success_unix_seconds: entry
+                    .as_ref()
+                    .and_then(|entry| entry.last_success_wall)
+                    .and_then(system_time_to_unix_seconds),
+                last_failure_reason: entry
+                    .as_ref()
+                    .and_then(|entry| entry.last_failure_reason)
+                    .map(|reason| reason.as_str().to_string()),
+                last_error: entry.as_ref().and_then(|entry| entry.last_error.clone()),
+            }
+        })
+        .collect::<Vec<_>>();
+    snapshots.sort_by(|left, right| left.jwks_url.cmp(&right.jwks_url));
+    snapshots
+}
+
+fn system_time_to_unix_seconds(time: SystemTime) -> Option<u64> {
+    time.duration_since(UNIX_EPOCH)
+        .ok()
+        .map(|duration| duration.as_secs())
+}
+
 fn jwt_verification_keys_equivalent(
     left: &RuntimeJwtVerificationKey,
     right: &RuntimeJwtVerificationKey,
@@ -1407,6 +1570,19 @@ async fn refresh_jwks_source_once(
     if !cache.begin_refresh(&source, started_at) {
         return Ok(());
     }
+    if let Some(metrics) = current_jwt_jwks_metrics() {
+        metrics.record_jwks_refresh_started(&source.jwks_url, SystemTime::now());
+    }
+    log::debug!(
+        "JWKS refresh started source={} trigger={} configured_algorithms={:?}",
+        source.jwks_url,
+        trigger,
+        source
+            .allowed_algorithms
+            .iter()
+            .map(|algorithm| jwt_algorithm_name(*algorithm))
+            .collect::<Vec<_>>()
+    );
     refresh_jwks_source_inflight(source, trigger).await
 }
 
@@ -1415,6 +1591,7 @@ async fn refresh_jwks_source_inflight(
     trigger: &'static str,
 ) -> Result<(), JwtJwksFetchFailure> {
     let cache = JwtJwksSharedCache::shared();
+    let previous = cache.snapshot(&source.source_identity, Instant::now());
     match fetch_and_normalize_jwks(
         &source.jwks_url,
         &source.allowed_algorithms,
@@ -1425,6 +1602,26 @@ async fn refresh_jwks_source_inflight(
         Ok(keys) => {
             cache.complete_refresh_success(&source.source_identity, Instant::now(), keys);
             if let Some(snapshot) = cache.snapshot(&source.source_identity, Instant::now()) {
+                if let Some(metrics) = current_jwt_jwks_metrics() {
+                    metrics.record_jwks_refresh_success(
+                        &source.jwks_url,
+                        jwt_jwks_cache_state_name(snapshot.state),
+                        snapshot.active_keys.len(),
+                        SystemTime::now(),
+                        snapshot.last_success_wall,
+                    );
+                }
+                log::info!(
+                    "JWKS key-set replacement source={} trigger={} previous_active_keys={} active_keys={} state={}",
+                    source.jwks_url,
+                    trigger,
+                    previous
+                        .as_ref()
+                        .map(|entry| entry.active_keys.len())
+                        .unwrap_or_default(),
+                    snapshot.active_keys.len(),
+                    jwt_jwks_cache_state_name(snapshot.state)
+                );
                 match snapshot.state {
                     JwtJwksCacheState::Fresh | JwtJwksCacheState::Stale => {
                         log::debug!(
@@ -1475,6 +1672,22 @@ async fn refresh_jwks_source_inflight(
         Err(failure) => {
             cache.complete_refresh_failure(&source.source_identity, Instant::now(), &failure);
             let snapshot = cache.snapshot(&source.source_identity, Instant::now());
+            if let Some(metrics) = current_jwt_jwks_metrics() {
+                metrics.record_jwks_refresh_failure(
+                    &source.jwks_url,
+                    snapshot
+                        .as_ref()
+                        .map(|entry| jwt_jwks_cache_state_name(entry.state))
+                        .unwrap_or("missing"),
+                    snapshot
+                        .as_ref()
+                        .map(|entry| entry.active_keys.len())
+                        .unwrap_or_default(),
+                    SystemTime::now(),
+                    snapshot.as_ref().and_then(|entry| entry.last_success_wall),
+                    Some(failure.reason.as_str()),
+                );
+            }
             let state = snapshot
                 .as_ref()
                 .map(|entry| jwt_jwks_cache_state_name(entry.state))
@@ -1745,8 +1958,23 @@ impl<'a> JwtKeyResolver<'a> {
                     source.clone(),
                     entry.state,
                 );
+                if matches!(resolution, JwtKeyResolution::StaleButUsable(_)) {
+                    log::debug!(
+                        "Serving JWT verification from stale JWKS cache source={} state={} kid={} alg={}",
+                        source_config.jwks_url,
+                        jwt_jwks_cache_state_name(entry.state),
+                        self.kid.unwrap_or("none"),
+                        jwt_algorithm_name(self.algorithm)
+                    );
+                }
                 if matches!(resolution, JwtKeyResolution::KeyNotFound { .. }) && self.kid.is_some()
                 {
+                    log::debug!(
+                        "Unknown JWKS kid encountered source={} kid={} alg={} action=trigger_refresh_hint",
+                        source_config.jwks_url,
+                        self.kid.unwrap_or("none"),
+                        jwt_algorithm_name(self.algorithm)
+                    );
                     maybe_spawn_jwks_on_demand_refresh(&entry.source);
                 }
                 resolution
@@ -1902,7 +2130,12 @@ fn normalize_jwks_document(
         let Some(key) = (match normalize_jwks_key(jwk, &allowed_algorithms) {
             Ok(key) => key,
             Err(detail) => {
-                log::debug!("Ignoring JWKS key[{}] from {}: {}", index, jwks_url, detail);
+                log::warn!(
+                    "Ignoring suspicious JWKS key source={} index={} reason={}",
+                    jwks_url,
+                    index,
+                    detail
+                );
                 None
             }
         }) else {
@@ -3537,9 +3770,13 @@ mod tests {
                 }],
                 refresh_in_flight: false,
                 last_refresh_started_at: Some(cache_now - Duration::from_secs(121)),
+                last_refresh_started_wall: Some(SystemTime::now() - Duration::from_secs(121)),
                 last_refresh_completed_at: Some(cache_now - Duration::from_secs(121)),
+                last_refresh_completed_wall: Some(SystemTime::now() - Duration::from_secs(121)),
                 last_success_at: Some(cache_now - Duration::from_secs(121)),
+                last_success_wall: Some(SystemTime::now() - Duration::from_secs(121)),
                 last_failure_at: Some(cache_now - Duration::from_secs(1)),
+                last_failure_wall: Some(SystemTime::now() - Duration::from_secs(1)),
                 last_error: Some("request_failed: jwks refresh kept failing".to_string()),
                 last_failure_reason: Some(JwtJwksFetchFailureReason::RequestFailed),
                 next_on_demand_refresh_at: None,

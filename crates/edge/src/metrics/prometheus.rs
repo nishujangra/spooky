@@ -753,6 +753,110 @@ impl Metrics {
                 .load(Ordering::Relaxed)
         ));
         out.push_str(
+            "# HELP spooky_jwt_validation_failures_total Total JWT validation failures grouped by stable rejection reason.\n",
+        );
+        out.push_str("# TYPE spooky_jwt_validation_failures_total counter\n");
+        for (reason, count) in self.snapshot_jwt_validation_failures() {
+            out.push_str(&format!(
+                "spooky_jwt_validation_failures_total{{reason=\"{}\"}} {}\n",
+                escape_prometheus_label(&reason),
+                count
+            ));
+        }
+        out.push_str(
+            "# HELP spooky_jwt_algorithm_rejections_total Total JWT algorithm rejections grouped by JOSE alg.\n",
+        );
+        out.push_str("# TYPE spooky_jwt_algorithm_rejections_total counter\n");
+        for (algorithm, count) in self.snapshot_jwt_algorithm_rejections() {
+            out.push_str(&format!(
+                "spooky_jwt_algorithm_rejections_total{{algorithm=\"{}\"}} {}\n",
+                escape_prometheus_label(&algorithm),
+                count
+            ));
+        }
+        out.push_str(
+            "# HELP spooky_jwks_unknown_kid_total Total unknown-kid events that triggered JWKS miss handling.\n",
+        );
+        out.push_str("# TYPE spooky_jwks_unknown_kid_total counter\n");
+        for (jwks_url, count) in self.snapshot_jwks_unknown_kid_events() {
+            out.push_str(&format!(
+                "spooky_jwks_unknown_kid_total{{jwks_url=\"{}\"}} {}\n",
+                escape_prometheus_label(&jwks_url),
+                count
+            ));
+        }
+        out.push_str(
+            "# HELP spooky_jwks_refresh_success_total Total successful JWKS refreshes grouped by configured JWKS endpoint.\n",
+        );
+        out.push_str("# TYPE spooky_jwks_refresh_success_total counter\n");
+        out.push_str(
+            "# HELP spooky_jwks_refresh_failure_total Total failed JWKS refreshes grouped by configured JWKS endpoint.\n",
+        );
+        out.push_str("# TYPE spooky_jwks_refresh_failure_total counter\n");
+        out.push_str(
+            "# HELP spooky_jwks_age_seconds Current age of the active JWKS key set in seconds.\n",
+        );
+        out.push_str("# TYPE spooky_jwks_age_seconds gauge\n");
+        out.push_str(
+            "# HELP spooky_jwks_state Current JWKS cache state for a configured endpoint.\n",
+        );
+        out.push_str("# TYPE spooky_jwks_state gauge\n");
+        out.push_str(
+            "# HELP spooky_jwks_active_keys Current count of active verification keys retained for a configured JWKS endpoint.\n",
+        );
+        out.push_str("# TYPE spooky_jwks_active_keys gauge\n");
+        out.push_str(
+            "# HELP spooky_jwks_last_refresh_attempt_seconds Unix timestamp of the last JWKS refresh attempt.\n",
+        );
+        out.push_str("# TYPE spooky_jwks_last_refresh_attempt_seconds gauge\n");
+        out.push_str(
+            "# HELP spooky_jwks_last_refresh_success_seconds Unix timestamp of the last successful JWKS refresh.\n",
+        );
+        out.push_str("# TYPE spooky_jwks_last_refresh_success_seconds gauge\n");
+        let now_unix_seconds = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .map(|duration| duration.as_secs())
+            .unwrap_or_default();
+        for state in self.snapshot_jwks_source_state() {
+            let jwks_url = escape_prometheus_label(&state.jwks_url);
+            out.push_str(&format!(
+                "spooky_jwks_refresh_success_total{{jwks_url=\"{}\"}} {}\n",
+                jwks_url, state.refresh_success_total
+            ));
+            out.push_str(&format!(
+                "spooky_jwks_refresh_failure_total{{jwks_url=\"{}\"}} {}\n",
+                jwks_url, state.refresh_failure_total
+            ));
+            out.push_str(&format!(
+                "spooky_jwks_state{{jwks_url=\"{}\",state=\"{}\"}} 1\n",
+                jwks_url,
+                escape_prometheus_label(&state.state)
+            ));
+            out.push_str(&format!(
+                "spooky_jwks_active_keys{{jwks_url=\"{}\"}} {}\n",
+                jwks_url, state.active_key_count
+            ));
+            out.push_str(&format!(
+                "spooky_jwks_last_refresh_attempt_seconds{{jwks_url=\"{}\"}} {}\n",
+                jwks_url,
+                state.last_refresh_attempt_unix_seconds.unwrap_or_default()
+            ));
+            out.push_str(&format!(
+                "spooky_jwks_last_refresh_success_seconds{{jwks_url=\"{}\"}} {}\n",
+                jwks_url,
+                state.last_refresh_success_unix_seconds.unwrap_or_default()
+            ));
+            let age_seconds = state
+                .last_refresh_success_unix_seconds
+                .map(|last_success| now_unix_seconds.saturating_sub(last_success))
+                .unwrap_or_default();
+            out.push_str(&format!(
+                "spooky_jwks_age_seconds{{jwks_url=\"{}\"}} {}\n",
+                jwks_url, age_seconds
+            ));
+        }
+        out.push_str(
             "# HELP spooky_backend_dns_last_refresh_success_seconds Unix timestamp of the last successful backend DNS refresh.\n",
         );
         out.push_str("# TYPE spooky_backend_dns_last_refresh_success_seconds gauge\n");

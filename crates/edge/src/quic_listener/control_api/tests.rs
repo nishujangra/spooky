@@ -7,11 +7,11 @@ use log::LevelFilter;
 use spooky_config::{
     config::{
         Backend, ClientAuth, Config as SpookyConfigConfig, ControlApiAuditSink,
-        ControlApiBearerToken, ControlApiClientAuthMode, ControlApiRole, Listen, LoadBalancing,
-        Log, LogFormat, Observability, Performance, Resilience, RouteMatch, Security, Tls,
-        Upstream, UpstreamTls,
+        ControlApiBearerToken, ControlApiClientAuthMode, ControlApiRole, JwksStartupBehavior,
+        JwtAlgorithm, JwtAuth, Listen, LoadBalancing, Log, LogFormat, Observability, Performance,
+        Resilience, RouteMatch, Security, Tls, Upstream, UpstreamTls,
     },
-    runtime::RuntimeConfig,
+    runtime::{RuntimeConfig, RuntimeJwtVerificationKey},
 };
 use tempfile::tempdir;
 
@@ -1546,6 +1546,52 @@ async fn control_api_runtime_snapshot_endpoint_allows_viewer() {
     assert_eq!(route, super::admin_auth::ControlApiRoute::Runtime);
     let response = QUICListener::render_control_api_runtime_snapshot(&state);
     assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn control_api_runtime_snapshot_includes_jwks_cache_visibility() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let jwks_url = "https://issuer.example.com/.well-known/jwks.json";
+    let mut startup = test_config(cert, key);
+    startup
+        .upstream
+        .get_mut("api")
+        .expect("api upstream")
+        .auth
+        .jwt = Some(JwtAuth {
+        secret: String::new(),
+        allowed_algorithms: vec![JwtAlgorithm::Rs256],
+        jwks_url: Some(jwks_url.to_string()),
+        jwks_startup_behavior: JwksStartupBehavior::AllowDegraded,
+        ..JwtAuth::default()
+    });
+    crate::quic_listener::admission::prime_jwks_cache_for_test(
+        jwks_url,
+        false,
+        vec![RuntimeJwtVerificationKey::Pem {
+            kid: Some("cached-key-1".to_string()),
+            alg: Some(JwtAlgorithm::Rs256),
+            public_key_pem:
+                "-----BEGIN PUBLIC KEY-----\nMIIBCgKCAQEAtest\n-----END PUBLIC KEY-----".to_string(),
+        }],
+    );
+    let state = control_api_state_with_runtime_bundle(&startup, &startup);
+
+    let payload = json_body(QUICListener::render_control_api_runtime_snapshot(&state)).await;
+    let sources = payload["jwks"]["sources"].as_array().expect("jwks sources");
+    assert_eq!(sources.len(), 1);
+    assert_eq!(sources[0]["jwks_url"], jwks_url);
+    assert_eq!(sources[0]["startup_behavior"], "allow_degraded");
+    assert_eq!(sources[0]["cache_state"], "fresh");
+    assert_eq!(sources[0]["active_key_count"], 1);
+    assert_eq!(
+        sources[0]["allowed_algorithms"]
+            .as_array()
+            .expect("algorithms")[0],
+        "RS256"
+    );
+    crate::quic_listener::admission::clear_jwks_cache_for_test(jwks_url);
 }
 
 #[tokio::test]

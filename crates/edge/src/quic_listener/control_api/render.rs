@@ -58,6 +58,7 @@ struct ControlApiRuntimePayload {
     workers: ControlApiWorkerPayload,
     watchdog: ControlApiRuntimeWatchdogPayload,
     adaptive_admission: ControlApiAdaptiveAdmissionPayload,
+    jwks: ControlApiJwksPayload,
     backends: ControlApiBackendInventoryPayload,
     metrics: ControlApiMetricsPayload,
     tls: ControlApiTlsPayload,
@@ -92,6 +93,30 @@ struct ControlApiBackendInventoryPayload {
     healthy: usize,
     total: usize,
     lifecycle: Vec<ControlApiBackendLifecyclePayload>,
+}
+
+#[derive(Serialize)]
+struct ControlApiJwksPayload {
+    sources: Vec<ControlApiJwksSourcePayload>,
+}
+
+#[derive(Serialize)]
+struct ControlApiJwksSourcePayload {
+    jwks_url: String,
+    allowed_algorithms: Vec<String>,
+    startup_behavior: &'static str,
+    cache_state: &'static str,
+    active_key_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    age_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_refresh_attempt_unix_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_refresh_success_unix_seconds: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_failure_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_error: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -342,6 +367,25 @@ impl ControlApiRuntimePayload {
                 enabled: resilience.adaptive_admission.enabled(),
                 current_limit: resilience.adaptive_admission.current_limit(),
                 inflight_percent: resilience.adaptive_admission.inflight_percent(),
+            },
+            jwks: ControlApiJwksPayload {
+                sources: crate::quic_listener::admission::snapshot_runtime_jwks_sources(
+                    runtime.runtime_config(),
+                )
+                .into_iter()
+                .map(|snapshot| ControlApiJwksSourcePayload {
+                    jwks_url: snapshot.jwks_url,
+                    allowed_algorithms: snapshot.allowed_algorithms,
+                    startup_behavior: snapshot.startup_behavior,
+                    cache_state: snapshot.state,
+                    active_key_count: snapshot.active_key_count,
+                    age_seconds: snapshot.age_seconds,
+                    last_refresh_attempt_unix_seconds: snapshot.last_refresh_attempt_unix_seconds,
+                    last_refresh_success_unix_seconds: snapshot.last_refresh_success_unix_seconds,
+                    last_failure_reason: snapshot.last_failure_reason,
+                    last_error: snapshot.last_error,
+                })
+                .collect(),
             },
             backends: ControlApiBackendInventoryPayload::from_inventory(
                 backend_inventory,
