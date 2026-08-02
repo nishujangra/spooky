@@ -5,11 +5,14 @@ use tokio_rustls::TlsAcceptor;
 
 use super::*;
 
-mod auth;
+mod admin_auth;
+mod admin_identity;
+mod audit;
 mod context;
 mod http;
 mod reload;
 mod render;
+pub(in crate::quic_listener) mod security;
 mod service;
 mod state;
 

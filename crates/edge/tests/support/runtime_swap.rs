@@ -117,6 +117,7 @@ impl RuntimeSwapHarness {
                 auth_token: Some("runtime-swap-token".to_string()),
                 max_connections: 32,
                 connection_timeout_ms: 5_000,
+                ..ControlApi::default()
             },
             ..Observability::default()
         };

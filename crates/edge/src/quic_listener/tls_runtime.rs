@@ -1,4 +1,7 @@
 use super::*;
+use crate::quic_listener::control_api::security::{
+    ControlApiClientAuthPolicy, ControlApiClientVerifierState,
+};
 
 #[derive(Debug)]
 struct FallbackServerCertResolver {
@@ -529,6 +532,87 @@ impl QUICListener {
         }))
     }
 
+    fn load_root_store_from_pem_file(
+        path: &str,
+        field_name: &str,
+        roots: &mut RootCertStore,
+    ) -> Result<usize, ProxyError> {
+        let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
+            CertificateDer::pem_file_iter(path)
+                .map_err(|err| {
+                    ProxyError::Tls(format!("failed to read {field_name} '{path}': {err}"))
+                })?
+                .collect::<Result<_, _>>()
+                .map_err(|err| {
+                    ProxyError::Tls(format!("failed to parse {field_name} PEM '{path}': {err}"))
+                })?;
+        let mut count = 0usize;
+        for cert in certs {
+            roots.add(cert).map_err(|err| {
+                ProxyError::Tls(format!(
+                    "failed to add certificate from {field_name} '{path}': {err}"
+                ))
+            })?;
+            count = count.saturating_add(1);
+        }
+        Ok(count)
+    }
+
+    fn load_control_api_client_auth_roots(
+        client_auth: &ControlApiClientAuthPolicy,
+    ) -> Result<Option<Arc<RootCertStore>>, ProxyError> {
+        let ControlApiClientVerifierState::Configured(material) = &client_auth.verifier else {
+            return Ok(None);
+        };
+
+        let mut roots = RootCertStore::empty();
+        let mut loaded_any = false;
+        if let Some(ca_file) = material.ca_file.as_deref() {
+            Self::load_root_store_from_pem_file(
+                ca_file,
+                "observability.control_api.tls.client_auth.ca_file",
+                &mut roots,
+            )?;
+            loaded_any = true;
+        }
+
+        if let Some(ca_dir) = material.ca_dir.as_deref() {
+            let entries = std::fs::read_dir(ca_dir).map_err(|err| {
+                ProxyError::Tls(format!(
+                    "failed to read observability.control_api.tls.client_auth.ca_dir '{}': {}",
+                    ca_dir, err
+                ))
+            })?;
+            for entry in entries {
+                let entry = entry.map_err(|err| {
+                    ProxyError::Tls(format!(
+                        "failed to read entry in observability.control_api.tls.client_auth.ca_dir '{}': {}",
+                        ca_dir, err
+                    ))
+                })?;
+                let path = entry.path();
+                if !path.is_file() {
+                    continue;
+                }
+                let path_str = path.to_string_lossy().into_owned();
+                Self::load_root_store_from_pem_file(
+                    &path_str,
+                    "observability.control_api.tls.client_auth.ca_dir",
+                    &mut roots,
+                )?;
+                loaded_any = true;
+            }
+        }
+
+        if !loaded_any {
+            return Err(ProxyError::Tls(
+                "control API client-auth is enabled but no CA certificates were loaded".to_string(),
+            ));
+        }
+
+        Ok(Some(Arc::new(roots)))
+    }
+
     pub(super) fn load_listener_tls_material(
         config: &ListenerRuntimeConfig,
     ) -> Result<LoadedListenerTlsMaterial, ProxyError> {
@@ -645,6 +729,68 @@ impl QUICListener {
         let mut tls_config = builder.with_cert_resolver(resolver);
         tls_config.alpn_protocols = alpn_protocols;
         Ok(tls_config)
+    }
+
+    pub(in crate::quic_listener) fn build_control_api_server_tls_config(
+        config: &ListenerRuntimeConfig,
+        client_auth: &ControlApiClientAuthPolicy,
+    ) -> Result<Arc<RustlsServerConfig>, ProxyError> {
+        let loaded_tls = Self::load_listener_tls_material(config)?;
+
+        let builder = match client_auth.mode {
+            spooky_config::config::ControlApiClientAuthMode::Disabled => {
+                RustlsServerConfig::builder().with_no_client_auth()
+            }
+            spooky_config::config::ControlApiClientAuthMode::Optional
+            | spooky_config::config::ControlApiClientAuthMode::Required => {
+                let roots =
+                    Self::load_control_api_client_auth_roots(client_auth)?.ok_or_else(|| {
+                        ProxyError::Tls(
+                            "control API client-auth roots unavailable while mTLS is enabled"
+                                .to_string(),
+                        )
+                    })?;
+                let verifier_builder = WebPkiClientVerifier::builder(roots);
+                let verifier = if matches!(
+                    client_auth.mode,
+                    spooky_config::config::ControlApiClientAuthMode::Required
+                ) {
+                    verifier_builder.build()
+                } else {
+                    verifier_builder.allow_unauthenticated().build()
+                }
+                .map_err(|err| {
+                    ProxyError::Tls(format!(
+                        "failed to build control API client certificate verifier: {}",
+                        err
+                    ))
+                })?;
+                RustlsServerConfig::builder().with_client_cert_verifier(verifier)
+            }
+        };
+
+        let mut sni_resolver = ResolvesServerCertUsingSni::new();
+        for (server_name, identity) in &loaded_tls.sni_identities {
+            Self::validate_loaded_sni_identity(server_name, identity)?;
+            sni_resolver
+                .add(
+                    server_name.as_str(),
+                    identity.certified_key.as_ref().clone(),
+                )
+                .map_err(|err| {
+                    ProxyError::Tls(format!(
+                        "failed to add control API SNI certificate mapping for '{server_name}': {}",
+                        err
+                    ))
+                })?;
+        }
+        let resolver = Arc::new(FallbackServerCertResolver {
+            sni_resolver,
+            fallback: loaded_tls.default_identity.certified_key.clone(),
+        });
+        let mut tls_config = builder.with_cert_resolver(resolver);
+        tls_config.alpn_protocols = vec![b"http/1.1".to_vec()];
+        Ok(Arc::new(tls_config))
     }
 
     fn validate_loaded_sni_identity(
@@ -797,7 +943,9 @@ impl QUICListener {
         }
     }
 
-    pub(super) fn classify_downstream_tls_failure_reason(error: &str) -> &'static str {
+    pub(in crate::quic_listener) fn classify_downstream_tls_failure_reason(
+        error: &str,
+    ) -> &'static str {
         let lower = error.to_ascii_lowercase();
         if lower.contains("peer sent no certificates")
             || lower.contains("peer sent no certificate")

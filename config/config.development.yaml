@@ -36,5 +36,5 @@ observability:
     enabled: true
     address: "127.0.0.1"
     port: 9890
-    auth_token: "change-me"
-
+    # Local-development posture: bearer token only on loopback.
+    auth_token: "change-me-local-dev"

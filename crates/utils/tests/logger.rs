@@ -7,8 +7,9 @@ use std::{
 use log::LevelFilter;
 use serde_json::json;
 use spooky_utils::logger::{
+    CONTROL_API_AUDIT_LOG_TARGET,
     errors::{build_create_log_dir_error, build_open_log_file_error},
-    formatter::build_json_payload,
+    formatter::{build_json_payload, should_passthrough_raw_json_target},
     init::{LoggerInitStatus, try_init_logger},
     set_log_level,
 };
@@ -143,4 +144,12 @@ fn json_payload_preserves_embedded_quotes_and_whitespace() {
             "msg": r#"msg="backend failed" path="/api v1" detail="x=y, z""#,
         })
     );
+}
+
+#[test]
+fn control_api_audit_target_is_marked_for_raw_json_passthrough() {
+    assert!(should_passthrough_raw_json_target(
+        CONTROL_API_AUDIT_LOG_TARGET
+    ));
+    assert!(!should_passthrough_raw_json_target("spooky_edge"));
 }

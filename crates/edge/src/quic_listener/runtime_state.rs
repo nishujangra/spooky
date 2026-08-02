@@ -12,6 +12,7 @@ use spooky_transport::{SharedDnsResolver, UpstreamTransportPool};
 
 use crate::{
     Metrics,
+    quic_listener::control_api::security::ControlApiSecurityPolicy,
     resilience::runtime::RuntimeResilience,
     runtime::{
         backend::lifecycle::BackendLifecycleCoordinator,
@@ -40,6 +41,7 @@ pub(super) struct ControlPlaneRuntimeView {
     generation_tasks: Arc<RuntimeTaskRegistry>,
     listener_tls_store: Arc<ListenerTlsReloadStore>,
     primary_listener_label: Option<String>,
+    control_api_security: Arc<ControlApiSecurityPolicy>,
 }
 
 impl ControlPlaneRuntimeView {
@@ -67,6 +69,9 @@ impl ControlPlaneRuntimeView {
             primary_listener_label: runtime_config
                 .primary_listener_runtime_config()
                 .map(|listener| crate::quic_listener::QUICListener::listener_label(&listener)),
+            control_api_security: Arc::new(ControlApiSecurityPolicy::from_config(
+                &runtime_config.observability.control_api,
+            )),
         }
     }
 
@@ -89,6 +94,9 @@ impl ControlPlaneRuntimeView {
                 .runtime_config
                 .primary_listener_runtime_config()
                 .map(|listener| crate::quic_listener::QUICListener::listener_label(&listener)),
+            control_api_security: Arc::new(ControlApiSecurityPolicy::from_config(
+                &view.runtime_config.observability.control_api,
+            )),
         }
     }
 
@@ -150,6 +158,10 @@ impl ControlPlaneRuntimeView {
 
     pub(super) fn primary_listener_label(&self) -> Option<&str> {
         self.primary_listener_label.as_deref()
+    }
+
+    pub(super) fn control_api_security(&self) -> Arc<ControlApiSecurityPolicy> {
+        Arc::clone(&self.control_api_security)
     }
 
     pub(super) fn expected_workers(&self) -> usize {

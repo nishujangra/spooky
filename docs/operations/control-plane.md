@@ -28,7 +28,103 @@ Its responsibilities are:
 
 - protocol: HTTP/1.1 over TLS
 - audience: operators and automation only
-- security model: bearer-token protected for privileged routes
+- security model: a dedicated admin-plane authn/authz layer, separate from request-path auth
+
+### Admin-plane security contract
+
+This section is the implementation contract for control API authn/authz. Later control-plane security work should follow this matrix rather than inventing route-by-route behavior ad hoc.
+
+Authentication factors supported by the admin plane:
+
+- bearer token only
+- mTLS only
+- mTLS + bearer token
+
+Recommended production posture:
+
+- require mTLS on the control API
+- require either a bearer token or an mTLS-derived role-bearing identity
+- keep the control API bound to loopback or a strongly isolated admin network even when auth is enabled
+
+Role model:
+
+- `viewer`: read-only operator visibility
+- `operator`: read/write runtime operations that do not intentionally restart the process
+- `admin`: destructive or high-impact operational control, including restart
+
+Role inheritance:
+
+- `operator` includes all `viewer` permissions
+- `admin` includes all `operator` permissions
+
+Route classification:
+
+- unauthenticated or separately configurable: `/health`, `/ready`
+- read-only privileged: `/admin/runtime`, `/admin/runtime/history`, `/admin/runtime/history/{generation}`
+- mutating privileged: `/admin/runtime/validate`, `/admin/runtime/preview`, `/admin/runtime/activate`, `/admin/runtime/rollback`, `/admin/runtime/reload`, `/admin/runtime/reload-certs`, `/admin/runtime/restart`
+
+Route-to-role matrix:
+
+| Route family | Access level | Minimum role |
+| --- | --- | --- |
+| `/health` | unauthenticated or separately configurable | none |
+| `/ready` | unauthenticated or separately configurable | none |
+| `/admin/runtime` | read-only privileged | `viewer` |
+| `/admin/runtime/history` | read-only privileged | `viewer` |
+| `/admin/runtime/history/{generation}` | read-only privileged | `viewer` |
+| `/admin/runtime/validate` | mutating privileged | `operator` |
+| `/admin/runtime/preview` | mutating privileged | `operator` |
+| `/admin/runtime/activate` | mutating privileged | `operator` |
+| `/admin/runtime/rollback` | mutating privileged | `operator` |
+| `/admin/runtime/reload` | mutating privileged | `operator` |
+| `/admin/runtime/reload-certs` | mutating privileged | `operator` |
+| `/admin/runtime/restart` | mutating privileged | `admin` |
+
+Implementation rules:
+
+- authentication failure must be distinct from authorization failure
+- source-address policy must run before bearer-token validation when IP allowlisting is configured
+- read-only runtime visibility is a `viewer` capability, not an implicit side effect of having any token
+- restart is reserved for `admin`, even if other runtime mutation routes are granted to `operator`
+- this admin-plane contract is separate from upstream/request-path auth policy and must stay in control-plane code
+
+### Failure semantics
+
+Control API authn/authz failures are intentionally split:
+
+- `401 Unauthorized`: missing authentication or invalid authentication material
+- `403 Forbidden`: authenticated but insufficient role, or denied by pre-auth source-address policy
+
+Control API mTLS failure is separate:
+
+- when `observability.control_api.tls.client_auth.mode: required`, missing or invalid client certificates fail the TLS handshake
+- that failure happens before HTTP routing, so there is no HTTP `401` or `403` payload
+- operators should rely on control-plane TLS handshake logs and audit events for diagnosis
+
+### Admin-plane configuration guidance
+
+Preferred rollout order:
+
+1. Start with loopback-bound `auth_token` only for local development or migration compatibility.
+2. Move to `auth.bearer_tokens[]` with explicit `viewer` / `operator` / `admin` roles.
+3. Add IP allowlisting for the admin network.
+4. Require control API mTLS in production.
+5. Enable audit output and retain it separately from request-path logs.
+
+Compatibility guidance:
+
+- `observability.control_api.auth_token` remains supported intentionally to avoid operator lockout during migration
+- the legacy token is treated as an `admin` identity so existing reload/restart automation keeps current behavior
+- this is compatibility mode, not the target production design
+- one-way boundary: a newer Spooky binary accepts legacy control API config, but older binaries reject configs that use the newer nested admin-plane fields because the config schema uses `deny_unknown_fields`
+
+Recommended production posture:
+
+- `tls.client_auth.mode: required`
+- `auth.bearer_tokens[]` or role-bearing mTLS identity mapping
+- `ip_allowlist.cidrs` restricted to the admin network
+- audit enabled with JSON output
+- health and readiness protected explicitly if deployment policy requires it
 
 ### Route families
 
@@ -37,6 +133,8 @@ The current route family includes:
 - health
 - ready
 - runtime
+- runtime history
+- staged runtime operations: validate, preview, activate, rollback
 - reload-certs
 - reload
 - restart
@@ -115,9 +213,27 @@ This ensures:
 
 ### Control API
 
-Privileged control API routes require bearer-token authorization.
+Privileged control API routes must be authorized through the admin-plane security contract above.
+
+Supported authentication shapes are:
+
+- bearer token only
+- mTLS only
+- mTLS + bearer token
 
 Health and readiness routes are intentionally treated differently from privileged administration routes and may be left unauthenticated depending on configuration and deployment pattern.
+
+Minimum role requirements are:
+
+- `viewer` for runtime snapshot and generation history reads
+- `operator` for validate, preview, activate, rollback, reload, and cert reload
+- `admin` for restart
+
+Example postures:
+
+- local dev: bearer token only on loopback
+- transitional admin network: mTLS optional plus `viewer` token for read-only automation
+- production: mTLS required plus `operator` / `admin` identities, IP allowlisting, and audit enabled
 
 ### Metrics endpoint
 

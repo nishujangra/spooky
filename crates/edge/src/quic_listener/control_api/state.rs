@@ -69,6 +69,13 @@ impl ControlApiServiceCtx {
     }
 
     #[cfg(test)]
+    pub(super) fn current_security_policy(
+        &self,
+    ) -> Arc<crate::quic_listener::control_api::security::ControlApiSecurityPolicy> {
+        self.current_service_state().security
+    }
+
+    #[cfg(test)]
     pub(super) fn current_primary_listener_label(&self) -> Option<String> {
         self.current_service_state().primary_listener_label
     }

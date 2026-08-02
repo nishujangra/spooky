@@ -33,18 +33,175 @@ The `-k` flag skips certificate verification for self-signed certs.
 ## Security Expectations
 
 - bind to loopback or a strongly isolated admin network whenever possible
-- require a strong bearer token for privileged endpoints
+- prefer `mTLS required` plus either a bearer token or an mTLS-derived role-bearing identity in production
 - avoid broad public exposure even when authentication is enabled
+- if IP allowlisting is configured, source address policy is enforced before bearer-token validation
+- do not trust `X-Forwarded-For` or similar proxy headers unless a future deployment-specific policy layer explicitly enables that behavior
 
 ## Authentication
 
-Privileged endpoints use bearer-token authentication via:
+The admin plane supports these authentication shapes:
+
+- bearer token only
+- mTLS only
+- mTLS + bearer token
+
+Recommended production posture:
+
+- `mTLS required`
+- bearer token or another role-bearing admin identity
+- isolated admin network exposure
+
+Authentication and authorization are separate concerns:
+
+- authentication proves who the caller is
+- authorization decides whether the caller has `viewer`, `operator`, or `admin`
+
+Bearer-token form:
 
 ```http
 Authorization: Bearer <token>
 ```
 
-The token is configured with `observability.control_api.auth_token`.
+Compatibility note:
+
+- `observability.control_api.auth_token` remains supported as the legacy single-token admin credential
+- the legacy token is mapped internally to a static admin identity so existing operators keep current restart/reload privileges during migration
+- the legacy token runs in compatibility mode; it preserves behavior, but it is not the recommended production posture
+- new deployments should prefer `observability.control_api.auth.bearer_tokens[]` with explicit roles
+- compatibility boundary: a new Spooky binary accepts legacy `auth_token` configs, but an older binary will reject configs that use the newer nested control-plane fields because `ControlApi` uses strict `deny_unknown_fields`
+
+Role model:
+
+- `viewer`: runtime snapshot and history reads
+- `operator`: `viewer` plus validate, preview, activate, rollback, reload, and cert reload
+- `admin`: `operator` plus restart and future destructive admin actions
+
+This role matrix is the intended contract for control-plane implementation.
+
+## Route Classification And Role Matrix
+
+The admin plane classifies routes in three groups:
+
+- unauthenticated or separately configurable: `/health`, `/ready`
+- read-only privileged: `/admin/runtime`, `/admin/runtime/history`, `/admin/runtime/history/{generation}`
+- mutating privileged: `/admin/runtime/validate`, `/admin/runtime/preview`, `/admin/runtime/activate`, `/admin/runtime/rollback`, `/admin/runtime/reload`, `/admin/runtime/reload-certs`, `/admin/runtime/restart`
+
+Minimum role requirements:
+
+| Route | Method | Classification | Minimum role |
+| --- | --- | --- | --- |
+| `/health` | `GET` | unauthenticated or separately configurable | none |
+| `/ready` | `GET` | unauthenticated or separately configurable | none |
+| `/admin/runtime` | `GET` | read-only privileged | `viewer` |
+| `/admin/runtime/history` | `GET` | read-only privileged | `viewer` |
+| `/admin/runtime/history/{generation}` | `GET` | read-only privileged | `viewer` |
+| `/admin/runtime/validate` | `POST` | mutating privileged | `operator` |
+| `/admin/runtime/preview` | `POST` | mutating privileged | `operator` |
+| `/admin/runtime/activate` | `POST` | mutating privileged | `operator` |
+| `/admin/runtime/rollback` | `POST` | mutating privileged | `operator` |
+| `/admin/runtime/reload` | `POST` | mutating privileged | `operator` |
+| `/admin/runtime/reload-certs` | `POST` | mutating privileged | `operator` |
+| `/admin/runtime/restart` | `POST` | mutating privileged | `admin` |
+
+Contract rules:
+
+- `viewer` is the minimum privileged read role
+- `operator` is the minimum non-restart mutation role
+- `admin` is required for restart
+- health and readiness may remain unauthenticated, but deployments may choose to protect them separately
+- implementation should distinguish invalid authentication from insufficient role
+
+## Response Contract
+
+Privileged routes distinguish authentication failure from authorization failure:
+
+- `401 Unauthorized`: missing authentication or invalid authentication
+- `403 Forbidden`: authenticated caller is under-scoped, or the source-address policy rejected the request
+
+Representative reasons returned in JSON payloads:
+
+- `missing_authentication`
+- `invalid_bearer_token`
+- `insufficient_role`
+- `source_ip_not_allowed`
+
+When control API mTLS is configured as `required`, missing or invalid client certificates are rejected during the TLS handshake before HTTP routing. That failure does not produce an HTTP `401` or `403` response; the connection is terminated during handshake, and the server emits a control-plane TLS failure log with a stable client-auth reason code.
+
+## Configuration Patterns
+
+### Bearer-Only Local Dev
+
+Use this for loopback-only development or local automation:
+
+This is compatibility-friendly and intentionally simple, but it is not the recommended long-term production posture.
+
+```yaml
+observability:
+  control_api:
+    enabled: true
+    address: "127.0.0.1"
+    port: 9890
+    auth_token: "change-me-local-dev"
+```
+
+### mTLS Optional With Viewer Token
+
+Use this when you want to start accepting client certificates without making them mandatory yet:
+
+This is a transitional posture for gradual hardening. It is safer than legacy single-token mode, but still weaker than required mTLS.
+
+```yaml
+observability:
+  control_api:
+    enabled: true
+    address: "127.0.0.1"
+    port: 9902
+    tls:
+      client_auth:
+        mode: optional
+        ca_file: "/etc/spooky/pki/admin-ca.pem"
+    auth:
+      bearer_tokens:
+        - token: "viewer-token"
+          role: viewer
+          actor_id: "ops-readonly"
+```
+
+### mTLS Required With Operator/Admin Identities
+
+Recommended production posture:
+
+```yaml
+observability:
+  control_api:
+    enabled: true
+    required: true
+    address: "10.0.10.5"
+    port: 9902
+    tls:
+      client_auth:
+        mode: required
+        ca_file: "/etc/spooky/pki/admin-ca.pem"
+    auth:
+      bearer_tokens:
+        - token: "operator-token"
+          role: operator
+          actor_id: "ops-automation"
+        - token: "admin-token"
+          role: admin
+          actor_id: "platform-admin"
+      identity_source:
+        kind: "mtls_subject_cn"
+        role_attribute: "OU"
+    ip_allowlist:
+      cidrs:
+        - "10.0.10.0/24"
+    audit:
+      enabled: true
+      format: json
+      sink: log
+```
 
 ## Endpoints
 
@@ -77,6 +234,10 @@ Purpose:
 
 - runtime snapshot for operators
 
+Minimum role:
+
+- `viewer`
+
 Typical contents include:
 
 - worker and runtime state
@@ -105,6 +266,10 @@ Expected use:
 - CI gating on config changes before a deploy
 - confirming a config is loadable before scheduling a maintenance window
 
+Minimum role:
+
+- `operator`
+
 ### `POST /admin/runtime/preview`
 
 Purpose:
@@ -116,6 +281,10 @@ Returns `200` with the same plan shape as validate. Neither endpoint mutates the
 Expected use:
 
 - operator dry-run immediately before an activation, when you want the attempt in the audit trail
+
+Minimum role:
+
+- `operator`
 
 ### `POST /admin/runtime/activate`
 
@@ -136,6 +305,10 @@ Accepts the same optional body fields as `/admin/runtime/reload`.
 Expected use:
 
 - the preferred activation path — prefer this over the legacy `/reload` shortcut, since it returns the full diff, rejection detail, and generation history entry
+
+Minimum role:
+
+- `operator`
 
 ### `POST /admin/runtime/rollback`
 
@@ -161,6 +334,10 @@ Returns `202` on success. Failures:
 | `500` | resource preparation failed, or the rollback swap itself failed |
 
 Use `GET /admin/runtime/history` first to pick a target whose `rollback_candidate` is `true`.
+
+Minimum role:
+
+- `operator`
 
 Example:
 
@@ -203,6 +380,10 @@ Expected use:
 - auditing who changed runtime config, when, and from which config source
 - diagnosing why a staged activation never committed
 
+Minimum role:
+
+- `viewer`
+
 ### `GET /admin/runtime/history/{generation}`
 
 Purpose:
@@ -210,6 +391,10 @@ Purpose:
 - the retained-generation record and operation entries for a single generation
 
 Returns `200` with `generation`, a single `retained_generation` object (same shape as above), and the `entries` recorded against it. Returns `404` if that generation is not retained.
+
+Minimum role:
+
+- `viewer`
 
 ### `POST /admin/runtime/reload`
 
@@ -235,6 +420,10 @@ Expected use:
 
 - adding or removing backends
 - changing load balancing, timeouts, resilience, or routing policy at runtime
+
+Minimum role:
+
+- `operator`
 
 Optional request body:
 
@@ -277,6 +466,10 @@ Expected use:
 - listener certificate rotation
 - listener trust-material refresh
 
+Minimum role:
+
+- `operator`
+
 ### `POST /admin/runtime/restart`
 
 Purpose:
@@ -287,6 +480,10 @@ Expected use:
 
 - operational restart requests
 - orchestrated maintenance flow
+
+Minimum role:
+
+- `admin`
 
 ## Operator Notes
 
