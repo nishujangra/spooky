@@ -1208,6 +1208,7 @@ mod tests {
 
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use hmac::{Hmac, Mac};
+    use serde_json::Value;
     use sha2::Sha256;
     use spooky_config::{
         config::{ScopedRateLimit, ScopedRateLimitScope},
@@ -1445,6 +1446,81 @@ mod tests {
             )
             .is_none()
         );
+
+        let validated = super::super::admission::validate_jwt_token(
+            token.as_str(),
+            policy.upstream_auth.jwt.as_ref().expect("jwt policy"),
+            now,
+        )
+        .expect("validated jwt");
+        assert_eq!(
+            validated.algorithm,
+            spooky_config::config::JwtAlgorithm::Hs256
+        );
+        assert_eq!(
+            validated.claims.get("sub").and_then(Value::as_str),
+            Some("user-1")
+        );
+    }
+
+    #[test]
+    fn jwt_validation_rejects_algorithms_by_policy_with_stable_reasons() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let token = test_hs256_jwt(
+            "jwt-secret",
+            serde_json::json!({
+                "iss": "issuer-1",
+                "aud": "aud-1",
+                "exp": 4_000_000_000u64,
+            }),
+            "HS256",
+        );
+
+        let failure = super::super::admission::validate_jwt_token(
+            token.as_str(),
+            &RuntimeJwtAuth {
+                secret: "jwt-secret".to_string(),
+                issuer: Some("issuer-1".to_string()),
+                audience: Some("aud-1".to_string()),
+                allowed_algorithms: vec![spooky_config::config::JwtAlgorithm::Rs256],
+                clock_skew: Duration::from_secs(30),
+                ..RuntimeJwtAuth::default()
+            },
+            now,
+        )
+        .expect_err("algorithm must be rejected");
+
+        assert_eq!(failure.reason.as_str(), "algorithm_not_allowed");
+    }
+
+    #[test]
+    fn jwt_validation_rejects_missing_required_kid_with_stable_reason() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let token = test_hs256_jwt(
+            "jwt-secret",
+            serde_json::json!({
+                "iss": "issuer-1",
+                "aud": "aud-1",
+                "exp": 4_000_000_000u64,
+            }),
+            "HS256",
+        );
+
+        let failure = super::super::admission::validate_jwt_token(
+            token.as_str(),
+            &RuntimeJwtAuth {
+                secret: "jwt-secret".to_string(),
+                issuer: Some("issuer-1".to_string()),
+                audience: Some("aud-1".to_string()),
+                require_kid: true,
+                clock_skew: Duration::from_secs(30),
+                ..RuntimeJwtAuth::default()
+            },
+            now,
+        )
+        .expect_err("kid must be required");
+
+        assert_eq!(failure.reason.as_str(), "missing_kid");
     }
 
     #[test]

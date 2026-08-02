@@ -9,6 +9,7 @@ use hmac::{Hmac, Mac};
 use http::StatusCode;
 use serde_json::Value;
 use sha2::Sha256;
+use spooky_config::config::JwtAlgorithm;
 use spooky_config::runtime::{RuntimeJwtAuth, RuntimeUpstreamPolicy};
 use spooky_lb::upstream_pool::UpstreamPool;
 use subtle::ConstantTimeEq;
@@ -437,95 +438,342 @@ pub(super) fn jwt_is_authorized(
     let Some(token) = QUICListener::bearer_token_from_authorization_value(&raw) else {
         return false;
     };
-    let Some(claims) = validated_hs256_jwt_claims(token.as_str(), jwt, SystemTime::now()) else {
-        return false;
+    let claims = match validate_jwt_token(token.as_str(), jwt, SystemTime::now()) {
+        Ok(validated) => validated.claims,
+        Err(failure) => {
+            log::debug!(
+                "JWT validation rejected request: reason={}",
+                failure.reason.as_str()
+            );
+            return false;
+        }
     };
     jwt_claims_satisfy_rbac(policy, &claims)
 }
 
+#[cfg(test)]
 pub(super) fn validated_hs256_jwt_claims(
     token: &str,
     jwt: &RuntimeJwtAuth,
     now: SystemTime,
 ) -> Option<Value> {
+    let validated = validate_jwt_token(token, jwt, now).ok()?;
+    matches!(validated.algorithm, JwtAlgorithm::Hs256).then_some(validated.claims)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum JwtValidationFailureReason {
+    MalformedToken,
+    MalformedHeader,
+    MalformedClaims,
+    MissingAlgorithm,
+    AlgorithmNotAllowed,
+    UnsupportedAlgorithm,
+    MissingKid,
+    MissingVerificationKey,
+    SignatureInvalid,
+    MissingExpiration,
+    TokenExpired,
+    TokenNotYetValid,
+    TokenIssuedInFuture,
+    IssuerMismatch,
+    AudienceMismatch,
+}
+
+impl JwtValidationFailureReason {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::MalformedToken => "malformed_token",
+            Self::MalformedHeader => "malformed_header",
+            Self::MalformedClaims => "malformed_claims",
+            Self::MissingAlgorithm => "missing_algorithm",
+            Self::AlgorithmNotAllowed => "algorithm_not_allowed",
+            Self::UnsupportedAlgorithm => "unsupported_algorithm",
+            Self::MissingKid => "missing_kid",
+            Self::MissingVerificationKey => "missing_verification_key",
+            Self::SignatureInvalid => "signature_invalid",
+            Self::MissingExpiration => "missing_expiration",
+            Self::TokenExpired => "token_expired",
+            Self::TokenNotYetValid => "token_not_yet_valid",
+            Self::TokenIssuedInFuture => "token_issued_in_future",
+            Self::IssuerMismatch => "issuer_mismatch",
+            Self::AudienceMismatch => "audience_mismatch",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct JwtValidationFailure {
+    pub(super) reason: JwtValidationFailureReason,
+}
+
+impl JwtValidationFailure {
+    fn new(reason: JwtValidationFailureReason) -> Self {
+        Self { reason }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ParsedJwt<'a> {
+    header_b64: &'a str,
+    payload_b64: &'a str,
+    header_bytes: Vec<u8>,
+    payload_bytes: Vec<u8>,
+    signature: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ParsedJoseHeader {
+    algorithm: JwtAlgorithm,
+    kid: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct ValidatedJwt {
+    /// Retained for per-algorithm validation metrics and key-type confusion
+    /// checks; only read from tests until those land.
+    #[allow(dead_code)]
+    pub(super) algorithm: JwtAlgorithm,
+    pub(super) claims: Value,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum JwtVerificationKey<'a> {
+    Hs256Secret(&'a str),
+}
+
+pub(super) fn validate_jwt_token(
+    token: &str,
+    jwt: &RuntimeJwtAuth,
+    now: SystemTime,
+) -> Result<ValidatedJwt, JwtValidationFailure> {
+    let parsed = parse_compact_jwt(token)?;
+    let header = parse_jose_header(&parsed.header_bytes)?;
+    let algorithm = validate_jwt_algorithm_policy(jwt, header.algorithm)?;
+    let key = resolve_jwt_verification_key(jwt, algorithm, header.kid.as_deref())?;
+    verify_jwt_signature(&parsed, algorithm, key)?;
+    let claims = parse_jwt_claims(&parsed.payload_bytes)?;
+    validate_jwt_registered_claims(jwt, &claims, now)?;
+
+    Ok(ValidatedJwt { algorithm, claims })
+}
+
+fn parse_compact_jwt(token: &str) -> Result<ParsedJwt<'_>, JwtValidationFailure> {
     let mut parts = token.split('.');
     let (Some(header_b64), Some(payload_b64), Some(signature_b64), None) =
         (parts.next(), parts.next(), parts.next(), parts.next())
     else {
-        return None;
+        return Err(JwtValidationFailure::new(
+            JwtValidationFailureReason::MalformedToken,
+        ));
     };
-    let Ok(header_bytes) = URL_SAFE_NO_PAD.decode(header_b64) else {
-        return None;
+    let header_bytes = URL_SAFE_NO_PAD
+        .decode(header_b64)
+        .map_err(|_| JwtValidationFailure::new(JwtValidationFailureReason::MalformedHeader))?;
+    let payload_bytes = URL_SAFE_NO_PAD
+        .decode(payload_b64)
+        .map_err(|_| JwtValidationFailure::new(JwtValidationFailureReason::MalformedClaims))?;
+    let signature = URL_SAFE_NO_PAD
+        .decode(signature_b64)
+        .map_err(|_| JwtValidationFailure::new(JwtValidationFailureReason::MalformedToken))?;
+
+    Ok(ParsedJwt {
+        header_b64,
+        payload_b64,
+        header_bytes,
+        payload_bytes,
+        signature,
+    })
+}
+
+fn parse_jose_header(header_bytes: &[u8]) -> Result<ParsedJoseHeader, JwtValidationFailure> {
+    let header = serde_json::from_slice::<Value>(header_bytes)
+        .map_err(|_| JwtValidationFailure::new(JwtValidationFailureReason::MalformedHeader))?;
+    let alg = header
+        .get("alg")
+        .and_then(Value::as_str)
+        .ok_or_else(|| JwtValidationFailure::new(JwtValidationFailureReason::MissingAlgorithm))?;
+    let algorithm = match alg {
+        "HS256" => JwtAlgorithm::Hs256,
+        "RS256" => JwtAlgorithm::Rs256,
+        "ES256" => JwtAlgorithm::Es256,
+        _ => {
+            return Err(JwtValidationFailure::new(
+                JwtValidationFailureReason::UnsupportedAlgorithm,
+            ));
+        }
     };
-    let Ok(payload_bytes) = URL_SAFE_NO_PAD.decode(payload_b64) else {
-        return None;
-    };
-    let Ok(signature) = URL_SAFE_NO_PAD.decode(signature_b64) else {
-        return None;
-    };
-    let Ok(header) = serde_json::from_slice::<Value>(&header_bytes) else {
-        return None;
-    };
-    if header.get("alg").and_then(Value::as_str) != Some("HS256") {
-        return None;
+
+    Ok(ParsedJoseHeader {
+        algorithm,
+        kid: header
+            .get("kid")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    })
+}
+
+fn validate_jwt_algorithm_policy(
+    jwt: &RuntimeJwtAuth,
+    algorithm: JwtAlgorithm,
+) -> Result<JwtAlgorithm, JwtValidationFailure> {
+    if !jwt.allowed_algorithms.contains(&algorithm) {
+        return Err(JwtValidationFailure::new(
+            JwtValidationFailureReason::AlgorithmNotAllowed,
+        ));
+    }
+    match algorithm {
+        JwtAlgorithm::Hs256 | JwtAlgorithm::Rs256 | JwtAlgorithm::Es256 => Ok(algorithm),
+    }
+}
+
+fn resolve_jwt_verification_key<'a>(
+    jwt: &'a RuntimeJwtAuth,
+    algorithm: JwtAlgorithm,
+    kid: Option<&str>,
+) -> Result<JwtVerificationKey<'a>, JwtValidationFailure> {
+    if jwt.require_kid && kid.is_none() {
+        return Err(JwtValidationFailure::new(
+            JwtValidationFailureReason::MissingKid,
+        ));
     }
 
-    let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(jwt.secret.as_bytes()) else {
-        return None;
-    };
-    mac.update(format!("{header_b64}.{payload_b64}").as_bytes());
-    let expected = mac.finalize().into_bytes();
-    if expected.len() != signature.len()
-        || !bool::from(expected.as_slice().ct_eq(signature.as_slice()))
-    {
-        return None;
+    match algorithm {
+        JwtAlgorithm::Hs256 => {
+            if jwt.secret.is_empty() {
+                return Err(JwtValidationFailure::new(
+                    JwtValidationFailureReason::MissingVerificationKey,
+                ));
+            }
+            Ok(JwtVerificationKey::Hs256Secret(jwt.secret.as_str()))
+        }
+        JwtAlgorithm::Rs256 | JwtAlgorithm::Es256 => Err(JwtValidationFailure::new(
+            JwtValidationFailureReason::UnsupportedAlgorithm,
+        )),
     }
+}
 
-    let Ok(claims) = serde_json::from_slice::<Value>(&payload_bytes) else {
-        return None;
-    };
+fn verify_jwt_signature(
+    parsed: &ParsedJwt<'_>,
+    algorithm: JwtAlgorithm,
+    key: JwtVerificationKey<'_>,
+) -> Result<(), JwtValidationFailure> {
+    match (algorithm, key) {
+        (JwtAlgorithm::Hs256, JwtVerificationKey::Hs256Secret(secret)) => {
+            let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(secret.as_bytes()) else {
+                return Err(JwtValidationFailure::new(
+                    JwtValidationFailureReason::MissingVerificationKey,
+                ));
+            };
+            mac.update(format!("{}.{}", parsed.header_b64, parsed.payload_b64).as_bytes());
+            let expected = mac.finalize().into_bytes();
+            if expected.len() != parsed.signature.len()
+                || !bool::from(expected.as_slice().ct_eq(parsed.signature.as_slice()))
+            {
+                return Err(JwtValidationFailure::new(
+                    JwtValidationFailureReason::SignatureInvalid,
+                ));
+            }
+            Ok(())
+        }
+        (JwtAlgorithm::Rs256 | JwtAlgorithm::Es256, _) => Err(JwtValidationFailure::new(
+            JwtValidationFailureReason::UnsupportedAlgorithm,
+        )),
+    }
+}
+
+fn parse_jwt_claims(payload_bytes: &[u8]) -> Result<Value, JwtValidationFailure> {
+    serde_json::from_slice::<Value>(payload_bytes)
+        .map_err(|_| JwtValidationFailure::new(JwtValidationFailureReason::MalformedClaims))
+}
+
+fn validate_jwt_registered_claims(
+    jwt: &RuntimeJwtAuth,
+    claims: &Value,
+    now: SystemTime,
+) -> Result<(), JwtValidationFailure> {
     let Ok(now_secs) = now.duration_since(UNIX_EPOCH).map(|value| value.as_secs()) else {
-        return None;
+        return Err(JwtValidationFailure::new(
+            JwtValidationFailureReason::MalformedClaims,
+        ));
     };
     let clock_skew_secs = jwt.clock_skew.as_secs();
-    let exp = claims.get("exp").and_then(Value::as_u64)?;
+    let exp = claims
+        .get("exp")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| JwtValidationFailure::new(JwtValidationFailureReason::MissingExpiration))?;
     if now_secs > exp.saturating_add(clock_skew_secs) {
-        return None;
+        return Err(JwtValidationFailure::new(
+            JwtValidationFailureReason::TokenExpired,
+        ));
     }
     if claims
         .get("nbf")
         .and_then(Value::as_u64)
         .is_some_and(|nbf| now_secs.saturating_add(clock_skew_secs) < nbf)
     {
-        return None;
+        return Err(JwtValidationFailure::new(
+            JwtValidationFailureReason::TokenNotYetValid,
+        ));
     }
     if claims
         .get("iat")
         .and_then(Value::as_u64)
         .is_some_and(|iat| now_secs.saturating_add(clock_skew_secs) < iat)
     {
-        return None;
+        return Err(JwtValidationFailure::new(
+            JwtValidationFailureReason::TokenIssuedInFuture,
+        ));
     }
-    if jwt
-        .issuer
-        .as_deref()
-        .is_some_and(|issuer| claims.get("iss").and_then(Value::as_str) != Some(issuer))
-    {
-        return None;
+    if !jwt_issuer_matches(jwt, claims) {
+        return Err(JwtValidationFailure::new(
+            JwtValidationFailureReason::IssuerMismatch,
+        ));
     }
-    if let Some(audience) = jwt.audience.as_deref() {
-        let claim_aud = claims.get("aud")?;
-        match claim_aud {
-            Value::String(value) if value == audience => {}
-            Value::Array(values)
-                if values
-                    .iter()
-                    .any(|value| value.as_str().is_some_and(|value| value == audience)) => {}
-            _ => return None,
-        }
+    if !jwt_audience_matches(jwt, claims) {
+        return Err(JwtValidationFailure::new(
+            JwtValidationFailureReason::AudienceMismatch,
+        ));
     }
 
-    Some(claims)
+    Ok(())
+}
+
+fn jwt_issuer_matches(jwt: &RuntimeJwtAuth, claims: &Value) -> bool {
+    let expected = if let Some(issuer) = jwt.issuer.as_deref() {
+        vec![issuer]
+    } else {
+        jwt.issuers.iter().map(String::as_str).collect()
+    };
+    if expected.is_empty() {
+        return true;
+    }
+    let actual = claims.get("iss").and_then(Value::as_str);
+    expected.into_iter().any(|issuer| actual == Some(issuer))
+}
+
+fn jwt_audience_matches(jwt: &RuntimeJwtAuth, claims: &Value) -> bool {
+    let expected = if let Some(audience) = jwt.audience.as_deref() {
+        vec![audience]
+    } else {
+        jwt.audiences.iter().map(String::as_str).collect()
+    };
+    if expected.is_empty() {
+        return true;
+    }
+
+    let Some(claim_aud) = claims.get("aud") else {
+        return false;
+    };
+    match claim_aud {
+        Value::String(value) => expected.contains(&value.as_str()),
+        Value::Array(values) => values.iter().any(|value| {
+            value
+                .as_str()
+                .is_some_and(|value| expected.contains(&value))
+        }),
+        _ => false,
+    }
 }
 
 pub(super) fn jwt_claims_satisfy_rbac(policy: &RuntimeUpstreamPolicy, claims: &Value) -> bool {
