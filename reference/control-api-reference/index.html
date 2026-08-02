@@ -1459,14 +1459,221 @@
 <h2 id="security-expectations">Security Expectations</h2>
 <ul>
 <li>bind to loopback or a strongly isolated admin network whenever possible</li>
-<li>require a strong bearer token for privileged endpoints</li>
+<li>prefer <code>mTLS required</code> plus either a bearer token or an mTLS-derived role-bearing identity in production</li>
 <li>avoid broad public exposure even when authentication is enabled</li>
+<li>if IP allowlisting is configured, source address policy is enforced before bearer-token validation</li>
+<li>do not trust <code>X-Forwarded-For</code> or similar proxy headers unless a future deployment-specific policy layer explicitly enables that behavior</li>
 </ul>
 <h2 id="authentication">Authentication</h2>
-<p>Privileged endpoints use bearer-token authentication via:</p>
+<p>The admin plane supports these authentication shapes:</p>
+<ul>
+<li>bearer token only</li>
+<li>mTLS only</li>
+<li>mTLS + bearer token</li>
+</ul>
+<p>Recommended production posture:</p>
+<ul>
+<li><code>mTLS required</code></li>
+<li>bearer token or another role-bearing admin identity</li>
+<li>isolated admin network exposure</li>
+</ul>
+<p>Authentication and authorization are separate concerns:</p>
+<ul>
+<li>authentication proves who the caller is</li>
+<li>authorization decides whether the caller has <code>viewer</code>, <code>operator</code>, or <code>admin</code></li>
+</ul>
+<p>Bearer-token form:</p>
 <pre><code class="language-http">Authorization: Bearer &lt;token&gt;
 </code></pre>
-<p>The token is configured with <code>observability.control_api.auth_token</code>.</p>
+<p>Compatibility note:</p>
+<ul>
+<li><code>observability.control_api.auth_token</code> remains supported as the legacy single-token admin credential</li>
+<li>the legacy token is mapped internally to a static admin identity so existing operators keep current restart/reload privileges during migration</li>
+<li>the legacy token runs in compatibility mode; it preserves behavior, but it is not the recommended production posture</li>
+<li>new deployments should prefer <code>observability.control_api.auth.bearer_tokens[]</code> with explicit roles</li>
+<li>compatibility boundary: a new Spooky binary accepts legacy <code>auth_token</code> configs, but an older binary will reject configs that use the newer nested control-plane fields because <code>ControlApi</code> uses strict <code>deny_unknown_fields</code></li>
+</ul>
+<p>Role model:</p>
+<ul>
+<li><code>viewer</code>: runtime snapshot and history reads</li>
+<li><code>operator</code>: <code>viewer</code> plus validate, preview, activate, rollback, reload, and cert reload</li>
+<li><code>admin</code>: <code>operator</code> plus restart and future destructive admin actions</li>
+</ul>
+<p>This role matrix is the intended contract for control-plane implementation.</p>
+<h2 id="route-classification-and-role-matrix">Route Classification And Role Matrix</h2>
+<p>The admin plane classifies routes in three groups:</p>
+<ul>
+<li>unauthenticated or separately configurable: <code>/health</code>, <code>/ready</code></li>
+<li>read-only privileged: <code>/admin/runtime</code>, <code>/admin/runtime/history</code>, <code>/admin/runtime/history/{generation}</code></li>
+<li>mutating privileged: <code>/admin/runtime/validate</code>, <code>/admin/runtime/preview</code>, <code>/admin/runtime/activate</code>, <code>/admin/runtime/rollback</code>, <code>/admin/runtime/reload</code>, <code>/admin/runtime/reload-certs</code>, <code>/admin/runtime/restart</code></li>
+</ul>
+<p>Minimum role requirements:</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Route</th>
+<th>Method</th>
+<th>Classification</th>
+<th>Minimum role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/health</code></td>
+<td><code>GET</code></td>
+<td>unauthenticated or separately configurable</td>
+<td>none</td>
+</tr>
+<tr>
+<td><code>/ready</code></td>
+<td><code>GET</code></td>
+<td>unauthenticated or separately configurable</td>
+<td>none</td>
+</tr>
+<tr>
+<td><code>/admin/runtime</code></td>
+<td><code>GET</code></td>
+<td>read-only privileged</td>
+<td><code>viewer</code></td>
+</tr>
+<tr>
+<td><code>/admin/runtime/history</code></td>
+<td><code>GET</code></td>
+<td>read-only privileged</td>
+<td><code>viewer</code></td>
+</tr>
+<tr>
+<td><code>/admin/runtime/history/{generation}</code></td>
+<td><code>GET</code></td>
+<td>read-only privileged</td>
+<td><code>viewer</code></td>
+</tr>
+<tr>
+<td><code>/admin/runtime/validate</code></td>
+<td><code>POST</code></td>
+<td>mutating privileged</td>
+<td><code>operator</code></td>
+</tr>
+<tr>
+<td><code>/admin/runtime/preview</code></td>
+<td><code>POST</code></td>
+<td>mutating privileged</td>
+<td><code>operator</code></td>
+</tr>
+<tr>
+<td><code>/admin/runtime/activate</code></td>
+<td><code>POST</code></td>
+<td>mutating privileged</td>
+<td><code>operator</code></td>
+</tr>
+<tr>
+<td><code>/admin/runtime/rollback</code></td>
+<td><code>POST</code></td>
+<td>mutating privileged</td>
+<td><code>operator</code></td>
+</tr>
+<tr>
+<td><code>/admin/runtime/reload</code></td>
+<td><code>POST</code></td>
+<td>mutating privileged</td>
+<td><code>operator</code></td>
+</tr>
+<tr>
+<td><code>/admin/runtime/reload-certs</code></td>
+<td><code>POST</code></td>
+<td>mutating privileged</td>
+<td><code>operator</code></td>
+</tr>
+<tr>
+<td><code>/admin/runtime/restart</code></td>
+<td><code>POST</code></td>
+<td>mutating privileged</td>
+<td><code>admin</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Contract rules:</p>
+<ul>
+<li><code>viewer</code> is the minimum privileged read role</li>
+<li><code>operator</code> is the minimum non-restart mutation role</li>
+<li><code>admin</code> is required for restart</li>
+<li>health and readiness may remain unauthenticated, but deployments may choose to protect them separately</li>
+<li>implementation should distinguish invalid authentication from insufficient role</li>
+</ul>
+<h2 id="response-contract">Response Contract</h2>
+<p>Privileged routes distinguish authentication failure from authorization failure:</p>
+<ul>
+<li><code>401 Unauthorized</code>: missing authentication or invalid authentication</li>
+<li><code>403 Forbidden</code>: authenticated caller is under-scoped, or the source-address policy rejected the request</li>
+</ul>
+<p>Representative reasons returned in JSON payloads:</p>
+<ul>
+<li><code>missing_authentication</code></li>
+<li><code>invalid_bearer_token</code></li>
+<li><code>insufficient_role</code></li>
+<li><code>source_ip_not_allowed</code></li>
+</ul>
+<p>When control API mTLS is configured as <code>required</code>, missing or invalid client certificates are rejected during the TLS handshake before HTTP routing. That failure does not produce an HTTP <code>401</code> or <code>403</code> response; the connection is terminated during handshake, and the server emits a control-plane TLS failure log with a stable client-auth reason code.</p>
+<h2 id="configuration-patterns">Configuration Patterns</h2>
+<h3 id="bearer-only-local-dev">Bearer-Only Local Dev</h3>
+<p>Use this for loopback-only development or local automation:</p>
+<p>This is compatibility-friendly and intentionally simple, but it is not the recommended long-term production posture.</p>
+<pre><code class="language-yaml">observability:
+  control_api:
+    enabled: true
+    address: &quot;127.0.0.1&quot;
+    port: 9890
+    auth_token: &quot;change-me-local-dev&quot;
+</code></pre>
+<h3 id="mtls-optional-with-viewer-token">mTLS Optional With Viewer Token</h3>
+<p>Use this when you want to start accepting client certificates without making them mandatory yet:</p>
+<p>This is a transitional posture for gradual hardening. It is safer than legacy single-token mode, but still weaker than required mTLS.</p>
+<pre><code class="language-yaml">observability:
+  control_api:
+    enabled: true
+    address: &quot;127.0.0.1&quot;
+    port: 9902
+    tls:
+      client_auth:
+        mode: optional
+        ca_file: &quot;/etc/spooky/pki/admin-ca.pem&quot;
+    auth:
+      bearer_tokens:
+        - token: &quot;viewer-token&quot;
+          role: viewer
+          actor_id: &quot;ops-readonly&quot;
+</code></pre>
+<h3 id="mtls-required-with-operatoradmin-identities">mTLS Required With Operator/Admin Identities</h3>
+<p>Recommended production posture:</p>
+<pre><code class="language-yaml">observability:
+  control_api:
+    enabled: true
+    required: true
+    address: &quot;10.0.10.5&quot;
+    port: 9902
+    tls:
+      client_auth:
+        mode: required
+        ca_file: &quot;/etc/spooky/pki/admin-ca.pem&quot;
+    auth:
+      bearer_tokens:
+        - token: &quot;operator-token&quot;
+          role: operator
+          actor_id: &quot;ops-automation&quot;
+        - token: &quot;admin-token&quot;
+          role: admin
+          actor_id: &quot;platform-admin&quot;
+      identity_source:
+        kind: &quot;mtls_subject_cn&quot;
+        role_attribute: &quot;OU&quot;
+    ip_allowlist:
+      cidrs:
+        - &quot;10.0.10.0/24&quot;
+    audit:
+      enabled: true
+      format: json
+      sink: log
+</code></pre>
 <h2 id="endpoints">Endpoints</h2>
 <h3 id="get-health"><code>GET /health</code></h3>
 <p>Purpose:</p>
@@ -1494,6 +1701,10 @@
 <ul>
 <li>runtime snapshot for operators</li>
 </ul>
+<p>Minimum role:</p>
+<ul>
+<li><code>viewer</code></li>
+</ul>
 <p>Typical contents include:</p>
 <ul>
 <li>worker and runtime state</li>
@@ -1519,6 +1730,10 @@
 <li>CI gating on config changes before a deploy</li>
 <li>confirming a config is loadable before scheduling a maintenance window</li>
 </ul>
+<p>Minimum role:</p>
+<ul>
+<li><code>operator</code></li>
+</ul>
 <h3 id="post-adminruntimepreview"><code>POST /admin/runtime/preview</code></h3>
 <p>Purpose:</p>
 <ul>
@@ -1528,6 +1743,10 @@
 <p>Expected use:</p>
 <ul>
 <li>operator dry-run immediately before an activation, when you want the attempt in the audit trail</li>
+</ul>
+<p>Minimum role:</p>
+<ul>
+<li><code>operator</code></li>
 </ul>
 <h3 id="post-adminruntimeactivate"><code>POST /admin/runtime/activate</code></h3>
 <p>Purpose:</p>
@@ -1561,6 +1780,10 @@
 <p>Expected use:</p>
 <ul>
 <li>the preferred activation path — prefer this over the legacy <code>/reload</code> shortcut, since it returns the full diff, rejection detail, and generation history entry</li>
+</ul>
+<p>Minimum role:</p>
+<ul>
+<li><code>operator</code></li>
 </ul>
 <h3 id="post-adminruntimerollback"><code>POST /admin/runtime/rollback</code></h3>
 <p>Purpose:</p>
@@ -1623,6 +1846,10 @@
 </tbody>
 </table></div>
 <p>Use <code>GET /admin/runtime/history</code> first to pick a target whose <code>rollback_candidate</code> is <code>true</code>.</p>
+<p>Minimum role:</p>
+<ul>
+<li><code>operator</code></li>
+</ul>
 <p>Example:</p>
 <pre><code class="language-bash">curl -k --http1.1 -X POST https://127.0.0.1:9890/admin/runtime/rollback \
   -H &quot;Authorization: Bearer &lt;token&gt;&quot; \
@@ -1705,12 +1932,20 @@
 <li>auditing who changed runtime config, when, and from which config source</li>
 <li>diagnosing why a staged activation never committed</li>
 </ul>
+<p>Minimum role:</p>
+<ul>
+<li><code>viewer</code></li>
+</ul>
 <h3 id="get-adminruntimehistorygeneration"><code>GET /admin/runtime/history/{generation}</code></h3>
 <p>Purpose:</p>
 <ul>
 <li>the retained-generation record and operation entries for a single generation</li>
 </ul>
 <p>Returns <code>200</code> with <code>generation</code>, a single <code>retained_generation</code> object (same shape as above), and the <code>entries</code> recorded against it. Returns <code>404</code> if that generation is not retained.</p>
+<p>Minimum role:</p>
+<ul>
+<li><code>viewer</code></li>
+</ul>
 <h3 id="post-adminruntimereload"><code>POST /admin/runtime/reload</code></h3>
 <p>Legacy shortcut. Prefer <code>POST /admin/runtime/activate</code>, which returns the full diff and rejection detail.</p>
 <p>Purpose:</p>
@@ -1733,6 +1968,10 @@
 <ul>
 <li>adding or removing backends</li>
 <li>changing load balancing, timeouts, resilience, or routing policy at runtime</li>
+</ul>
+<p>Minimum role:</p>
+<ul>
+<li><code>operator</code></li>
 </ul>
 <p>Optional request body:</p>
 <div class="table-wrapper"><table>
@@ -1791,6 +2030,10 @@
 <li>listener certificate rotation</li>
 <li>listener trust-material refresh</li>
 </ul>
+<p>Minimum role:</p>
+<ul>
+<li><code>operator</code></li>
+</ul>
 <h3 id="post-adminruntimerestart"><code>POST /admin/runtime/restart</code></h3>
 <p>Purpose:</p>
 <ul>
@@ -1800,6 +2043,10 @@
 <ul>
 <li>operational restart requests</li>
 <li>orchestrated maintenance flow</li>
+</ul>
+<p>Minimum role:</p>
+<ul>
+<li><code>admin</code></li>
 </ul>
 <h2 id="operator-notes">Operator Notes</h2>
 <ul>
@@ -2296,6 +2543,50 @@
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#authentication');">
             Authentication
         </a>
+        
+
+        
+        <a href="#route-classification-and-role-matrix"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#route-classification-and-role-matrix');">
+            Route Classification And Role Matrix
+        </a>
+        
+
+        
+        <a href="#response-contract"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#response-contract');">
+            Response Contract
+        </a>
+        
+
+        
+        <a href="#configuration-patterns"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#configuration-patterns');">
+            Configuration Patterns
+        </a>
+        
+        
+        <a href="#bearer-only-local-dev"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#bearer-only-local-dev');">
+            Bearer-Only Local Dev
+        </a>
+        
+        <a href="#mtls-optional-with-viewer-token"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#mtls-optional-with-viewer-token');">
+            mTLS Optional With Viewer Token
+        </a>
+        
+        <a href="#mtls-required-with-operatoradmin-identities"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#mtls-required-with-operatoradmin-identities');">
+            mTLS Required With Operator/Admin Identities
+        </a>
+        
         
 
         

@@ -1477,6 +1477,26 @@
 <li>It can trigger certificate reload.</li>
 <li>It must be treated as an admin surface, not a public endpoint.</li>
 </ul>
+<p>Admin-plane authentication factors supported today:</p>
+<ul>
+<li>bearer token only</li>
+<li>mTLS only</li>
+<li>mTLS + bearer token</li>
+</ul>
+<p>Compatibility mode:</p>
+<ul>
+<li>the legacy <code>observability.control_api.auth_token</code> is still accepted</li>
+<li>it is mapped to an admin-scoped static identity to preserve existing behavior during migration</li>
+<li>this is deliberate backward compatibility, not the recommended steady-state production posture</li>
+<li>because the config schema uses <code>deny_unknown_fields</code>, compatibility is one-way: newer binaries accept legacy configs, but older binaries reject configs that use the newer nested admin-plane fields</li>
+</ul>
+<p>Recommended production posture:</p>
+<ul>
+<li><code>observability.control_api.tls.client_auth.mode: required</code></li>
+<li>bearer token or role-bearing mTLS identity</li>
+<li>admin-network IP allowlisting</li>
+<li>dedicated audit stream enabled</li>
+</ul>
 <h2 id="downstream-tls-model">Downstream TLS Model</h2>
 <p>Spooky supports:</p>
 <ul>
@@ -1489,6 +1509,82 @@
 <li>current client-auth coverage is centered on the bootstrap TLS listener path</li>
 <li>operators should verify whether their exact ingress shape requires stronger mTLS guarantees on every downstream path before broad rollout</li>
 </ul>
+<h2 id="admin-plane-authentication-and-authorization-model">Admin-Plane Authentication And Authorization Model</h2>
+<p>The control API admin plane is separate from request-path auth.</p>
+<p>Authentication and authorization are evaluated in this order:</p>
+<ol>
+<li>source-address policy, if <code>observability.control_api.ip_allowlist</code> is configured</li>
+<li>authentication using bearer token, mTLS identity, or both</li>
+<li>authorization against the route-to-role contract</li>
+</ol>
+<p>Role model:</p>
+<ul>
+<li><code>viewer</code>: runtime snapshot and generation history reads</li>
+<li><code>operator</code>: <code>viewer</code> plus validate, preview, activate, rollback, reload, and cert reload</li>
+<li><code>admin</code>: <code>operator</code> plus restart and future destructive admin actions</li>
+</ul>
+<p>Response and failure contract:</p>
+<ul>
+<li><code>401 Unauthorized</code>: missing or invalid authentication</li>
+<li><code>403 Forbidden</code>: authenticated but under-scoped, or denied by source-address policy</li>
+<li>TLS handshake rejection: client certificate missing or invalid when control API mTLS is required</li>
+</ul>
+<p>Handshake rejection is not an HTTP response. It terminates the TLS connection before routing and should be diagnosed through control-plane TLS logs and audit output.</p>
+<p>Admin-plane route contract:</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Route family</th>
+<th>Minimum role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/health</code>, <code>/ready</code></td>
+<td>unauthenticated or separately configurable</td>
+</tr>
+<tr>
+<td><code>/admin/runtime</code></td>
+<td><code>viewer</code></td>
+</tr>
+<tr>
+<td><code>/admin/runtime/history</code></td>
+<td><code>viewer</code></td>
+</tr>
+<tr>
+<td><code>/admin/runtime/history/{generation}</code></td>
+<td><code>viewer</code></td>
+</tr>
+<tr>
+<td><code>/admin/runtime/validate</code></td>
+<td><code>operator</code></td>
+</tr>
+<tr>
+<td><code>/admin/runtime/preview</code></td>
+<td><code>operator</code></td>
+</tr>
+<tr>
+<td><code>/admin/runtime/activate</code></td>
+<td><code>operator</code></td>
+</tr>
+<tr>
+<td><code>/admin/runtime/rollback</code></td>
+<td><code>operator</code></td>
+</tr>
+<tr>
+<td><code>/admin/runtime/reload</code></td>
+<td><code>operator</code></td>
+</tr>
+<tr>
+<td><code>/admin/runtime/reload-certs</code></td>
+<td><code>operator</code></td>
+</tr>
+<tr>
+<td><code>/admin/runtime/restart</code></td>
+<td><code>admin</code></td>
+</tr>
+</tbody>
+</table></div>
 <h2 id="upstream-tls-model">Upstream TLS Model</h2>
 <p>Upstream trust behavior is controlled by configuration.</p>
 <p>Safe posture:</p>
@@ -1529,6 +1625,12 @@
 <li>Failure mode (fail-open or fail-closed) is configured per provider. The default is fail-closed: a timeout or transport error denies the request rather than silently admitting it.</li>
 <li>OIDC mode uses discovery and token introspection to validate bearer tokens. It does not fetch or validate against JWKS, does not cache the discovery document (refetched per request), and does not implement interactive login or session-cookie flows.</li>
 </ul>
+<p>Boundary rule:</p>
+<ul>
+<li>request-path auth lives under upstream routing / forwarding policy</li>
+<li>admin-plane auth lives only under control-plane modules</li>
+<li>credentials, failures, and audit events from one plane must not be confused with the other</li>
+</ul>
 <h2 id="what-spooky-does-not-currently-provide">What Spooky Does Not Currently Provide</h2>
 <p>Spooky does not currently provide first-class:</p>
 <ul>
@@ -1542,7 +1644,11 @@
 <h2 id="recommended-deployment-security-posture">Recommended Deployment Security Posture</h2>
 <ul>
 <li>keep the control API bound to loopback or a strongly isolated admin network</li>
-<li>use a strong control API token and rotate it as an administrative secret</li>
+<li>use explicit admin roles rather than a single all-powerful token when possible</li>
+<li>require control API mTLS in production</li>
+<li>use a strong control API token and rotate it as an administrative secret when bearer auth is enabled</li>
+<li>restrict control API source addresses with <code>ip_allowlist.cidrs</code></li>
+<li>enable the dedicated admin audit stream</li>
 <li>keep upstream certificate verification enabled in production</li>
 <li>run with least privilege after bind</li>
 <li>restrict filesystem write access to the minimum required paths</li>
@@ -2052,6 +2158,14 @@
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#downstream-tls-model');">
             Downstream TLS Model
+        </a>
+        
+
+        
+        <a href="#admin-plane-authentication-and-authorization-model"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#admin-plane-authentication-and-authorization-model');">
+            Admin-Plane Authentication And Authorization Model
         </a>
         
 
