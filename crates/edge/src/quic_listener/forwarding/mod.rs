@@ -1205,6 +1205,8 @@ impl QUICListener {
 mod tests {
     use std::time::UNIX_EPOCH;
 
+    use super::{auth::append_auth_request_headers, *};
+    use crate::runtime::connection::auth::PendingHeaderMutation;
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use boring::{
         bn::{BigNum, BigNumContext},
@@ -1226,9 +1228,6 @@ mod tests {
             RuntimeUpstreamPolicy,
         },
     };
-
-    use super::{auth::append_auth_request_headers, *};
-    use crate::runtime::connection::auth::PendingHeaderMutation;
 
     fn sample_pending_forward(headers: Vec<quiche::h3::Header>) -> PendingForward {
         PendingForward {
@@ -1330,6 +1329,26 @@ mod tests {
             "crv": "P-256",
             "x": URL_SAFE_NO_PAD.encode(x.to_vec_padded(coordinate_len).expect("x bytes")),
             "y": URL_SAFE_NO_PAD.encode(y.to_vec_padded(coordinate_len).expect("y bytes")),
+        })
+        .to_string()
+    }
+
+    fn rsa_public_jwk(
+        key: &PKey<Private>,
+        kid: Option<&str>,
+        alg: Option<&str>,
+        use_value: Option<&str>,
+        key_ops: Option<Vec<&str>>,
+    ) -> String {
+        let rsa = key.rsa().expect("rsa private key");
+        serde_json::json!({
+            "kty": "RSA",
+            "kid": kid,
+            "alg": alg,
+            "use": use_value,
+            "key_ops": key_ops,
+            "n": URL_SAFE_NO_PAD.encode(rsa.n().to_vec()),
+            "e": URL_SAFE_NO_PAD.encode(rsa.e().to_vec()),
         })
         .to_string()
     }
@@ -2015,6 +2034,99 @@ mod tests {
         assert_eq!(failure.reason.as_str(), "jwk_key_parse_failed");
 
         super::super::admission::clear_jwks_cache_for_test(jwks_url);
+    }
+
+    #[test]
+    fn jwks_normalization_filters_keys_by_policy() {
+        let rsa = Rsa::generate(2048).expect("rsa key");
+        let rsa_key = PKey::from_rsa(rsa).expect("rsa pkey");
+        let ec_group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).expect("p256");
+        let ec_key = EcKey::generate(&ec_group).expect("ec key");
+        let ignored_rsa = Rsa::generate(2048).expect("ignored rsa");
+        let ignored_rsa_key = PKey::from_rsa(ignored_rsa).expect("ignored rsa pkey");
+
+        let jwks = serde_json::json!({
+            "keys": [
+                serde_json::from_str::<Value>(&rsa_public_jwk(
+                    &rsa_key,
+                    Some("rsa-allowed"),
+                    None,
+                    Some("sig"),
+                    Some(vec!["verify"]),
+                )).expect("rsa jwk"),
+                serde_json::from_str::<Value>(&ec_public_jwk(&ec_key, Some("ec-not-allowed")))
+                    .expect("ec jwk"),
+                serde_json::from_str::<Value>(&rsa_public_jwk(
+                    &ignored_rsa_key,
+                    Some("rsa-enc"),
+                    Some("RS256"),
+                    Some("enc"),
+                    Some(vec!["verify"]),
+                )).expect("enc jwk"),
+                serde_json::json!({
+                    "kty": "RSA",
+                    "kid": "malformed-rsa",
+                    "alg": "RS256",
+                    "use": "sig",
+                    "key_ops": ["verify"],
+                    "e": "AQAB"
+                })
+            ]
+        });
+
+        let keys = super::super::admission::normalize_jwks_document_for_test(
+            "https://issuer.example/jwks.json",
+            &jwks,
+            &[JwtAlgorithm::Rs256],
+        )
+        .expect("normalized jwks");
+
+        assert_eq!(keys.len(), 1);
+        match &keys[0] {
+            RuntimeJwtVerificationKey::Jwk { kid, alg, .. } => {
+                assert_eq!(kid.as_deref(), Some("rsa-allowed"));
+                assert_eq!(*alg, Some(JwtAlgorithm::Rs256));
+            }
+            other => panic!("expected normalized jwk key, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn jwks_normalization_rejects_duplicate_kid_entries() {
+        let first = Rsa::generate(2048).expect("first rsa");
+        let second = Rsa::generate(2048).expect("second rsa");
+        let first_key = PKey::from_rsa(first).expect("first pkey");
+        let second_key = PKey::from_rsa(second).expect("second pkey");
+        let jwks = serde_json::json!({
+            "keys": [
+                serde_json::from_str::<Value>(&rsa_public_jwk(
+                    &first_key,
+                    Some("shared-kid"),
+                    Some("RS256"),
+                    Some("sig"),
+                    Some(vec!["verify"]),
+                )).expect("first jwk"),
+                serde_json::from_str::<Value>(&rsa_public_jwk(
+                    &second_key,
+                    Some("shared-kid"),
+                    Some("RS256"),
+                    Some("sig"),
+                    Some(vec!["verify"]),
+                )).expect("second jwk")
+            ]
+        });
+
+        let failure = super::super::admission::normalize_jwks_document_for_test(
+            "https://issuer.example/jwks.json",
+            &jwks,
+            &[JwtAlgorithm::Rs256],
+        )
+        .expect_err("duplicate kid must be rejected");
+
+        assert_eq!(
+            failure.reason,
+            super::super::admission::JwtJwksFetchFailureReason::AmbiguousDuplicateKid
+        );
     }
 
     #[test]

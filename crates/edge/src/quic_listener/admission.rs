@@ -1,5 +1,6 @@
 use std::{
     collections::{HashMap, HashSet},
+    convert::Infallible,
     sync::{Arc, OnceLock, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
@@ -15,8 +16,16 @@ use boring::{
     rsa::{Padding, Rsa},
     sign::Verifier,
 };
+use bytes::Bytes;
 use hmac::{Hmac, Mac};
 use http::StatusCode;
+use http_body_util::{BodyExt, Full, combinators::BoxBody};
+use hyper::{
+    Request, Response,
+    body::{Body, Incoming},
+};
+use hyper_rustls::HttpsConnectorBuilder;
+use hyper_util::client::legacy::{Client, connect::HttpConnector};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use spooky_config::config::JwtAlgorithm;
@@ -621,6 +630,11 @@ struct JwtJwksSharedCache {
 }
 
 static JWT_JWKS_SHARED_CACHE: OnceLock<JwtJwksSharedCache> = OnceLock::new();
+#[allow(dead_code)]
+static JWT_JWKS_HTTP_CLIENT: OnceLock<JwtJwksHttpClient> = OnceLock::new();
+
+#[allow(dead_code)]
+const MAX_JWKS_BODY_BYTES: usize = 256 * 1024;
 
 impl JwtJwksSharedCache {
     fn shared() -> &'static Self {
@@ -652,6 +666,107 @@ impl JwtJwksSharedCache {
             .expect("jwks shared cache write lock")
             .remove(source_identity);
     }
+}
+
+#[allow(dead_code)]
+struct JwtJwksHttpClient {
+    client: Client<hyper_rustls::HttpsConnector<HttpConnector>, BoxBody<Bytes, Infallible>>,
+}
+
+#[allow(dead_code)]
+impl JwtJwksHttpClient {
+    fn shared() -> &'static Self {
+        JWT_JWKS_HTTP_CLIENT.get_or_init(|| {
+            let https = HttpsConnectorBuilder::new()
+                .with_webpki_roots()
+                .https_only()
+                .enable_http1()
+                .enable_http2()
+                .build();
+            let client = Client::builder(hyper_util::rt::TokioExecutor::new())
+                .pool_max_idle_per_host(8)
+                .pool_idle_timeout(Duration::from_secs(30))
+                .build(https);
+            Self { client }
+        })
+    }
+
+    async fn send(
+        &self,
+        request: Request<BoxBody<Bytes, Infallible>>,
+    ) -> Result<Response<Incoming>, JwtJwksFetchFailure> {
+        self.client
+            .request(request)
+            .await
+            .map_err(|err| JwtJwksFetchFailure::request_failed(err.to_string()))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum JwtJwksFetchFailureReason {
+    RequestFailed,
+    HttpStatus,
+    MalformedDocument,
+    AmbiguousDuplicateKid,
+}
+
+impl JwtJwksFetchFailureReason {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::RequestFailed => "request_failed",
+            Self::HttpStatus => "http_status",
+            Self::MalformedDocument => "malformed_document",
+            Self::AmbiguousDuplicateKid => "ambiguous_duplicate_kid",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct JwtJwksFetchFailure {
+    pub(super) reason: JwtJwksFetchFailureReason,
+    detail: String,
+}
+
+#[allow(dead_code)]
+impl JwtJwksFetchFailure {
+    fn request_failed(detail: String) -> Self {
+        Self {
+            reason: JwtJwksFetchFailureReason::RequestFailed,
+            detail,
+        }
+    }
+
+    fn http_status(status: StatusCode) -> Self {
+        Self {
+            reason: JwtJwksFetchFailureReason::HttpStatus,
+            detail: format!("jwks endpoint returned {status}"),
+        }
+    }
+
+    fn malformed_document(detail: impl Into<String>) -> Self {
+        Self {
+            reason: JwtJwksFetchFailureReason::MalformedDocument,
+            detail: detail.into(),
+        }
+    }
+
+    fn ambiguous_duplicate_kid(kid: &str) -> Self {
+        Self {
+            reason: JwtJwksFetchFailureReason::AmbiguousDuplicateKid,
+            detail: format!("duplicate jwks kid '{kid}'"),
+        }
+    }
+}
+
+impl std::fmt::Display for JwtJwksFetchFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.reason.as_str(), self.detail)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct NormalizedJwksDocument {
+    keys: Vec<RuntimeJwtVerificationKey>,
 }
 
 #[cfg(test)]
@@ -893,6 +1008,215 @@ pub(super) fn validate_jwt_token(
     validate_jwt_registered_claims(jwt, &claims, now)?;
 
     Ok(ValidatedJwt { algorithm, claims })
+}
+
+#[allow(dead_code)]
+pub(super) async fn fetch_and_normalize_jwks(
+    jwks_url: &str,
+    allowed_algorithms: &[JwtAlgorithm],
+    timeout: Duration,
+) -> Result<Vec<RuntimeJwtVerificationKey>, JwtJwksFetchFailure> {
+    let document = fetch_jwks_document(jwks_url, timeout).await?;
+    let normalized = normalize_jwks_document(jwks_url, &document, allowed_algorithms)?;
+    Ok(normalized.keys)
+}
+
+#[cfg(test)]
+pub(super) fn normalize_jwks_document_for_test(
+    jwks_url: &str,
+    document: &Value,
+    allowed_algorithms: &[JwtAlgorithm],
+) -> Result<Vec<RuntimeJwtVerificationKey>, JwtJwksFetchFailure> {
+    normalize_jwks_document(jwks_url, document, allowed_algorithms)
+        .map(|normalized| normalized.keys)
+}
+
+#[allow(dead_code)]
+async fn fetch_jwks_document(
+    jwks_url: &str,
+    timeout: Duration,
+) -> Result<Value, JwtJwksFetchFailure> {
+    let request = Request::builder()
+        .method(http::Method::GET)
+        .uri(jwks_url)
+        .body(BoxBody::new(Full::new(Bytes::new())))
+        .map_err(|err| JwtJwksFetchFailure::request_failed(err.to_string()))?;
+    let response = tokio::time::timeout(timeout, JwtJwksHttpClient::shared().send(request))
+        .await
+        .map_err(|_| JwtJwksFetchFailure::request_failed("jwks request timed out".to_string()))??;
+    if !response.status().is_success() {
+        return Err(JwtJwksFetchFailure::http_status(response.status()));
+    }
+    let body = collect_jwks_body(response.into_body()).await?;
+    serde_json::from_slice::<Value>(&body)
+        .map_err(|err| JwtJwksFetchFailure::malformed_document(err.to_string()))
+}
+
+#[allow(dead_code)]
+async fn collect_jwks_body(body: Incoming) -> Result<Vec<u8>, JwtJwksFetchFailure> {
+    collect_jwks_body_bounded(body).await
+}
+
+async fn collect_jwks_body_bounded<B>(mut body: B) -> Result<Vec<u8>, JwtJwksFetchFailure>
+where
+    B: Body<Data = Bytes> + Unpin,
+    B::Error: std::fmt::Display,
+{
+    let mut bytes = Vec::new();
+    while let Some(frame) = body.frame().await {
+        let frame = frame.map_err(|err| JwtJwksFetchFailure::request_failed(err.to_string()))?;
+        let Ok(chunk) = frame.into_data() else {
+            continue;
+        };
+        let next_len = bytes.len().saturating_add(chunk.len());
+        if next_len > MAX_JWKS_BODY_BYTES {
+            return Err(JwtJwksFetchFailure::malformed_document(format!(
+                "jwks document exceeded {} bytes",
+                MAX_JWKS_BODY_BYTES
+            )));
+        }
+        bytes.extend_from_slice(&chunk);
+    }
+    Ok(bytes)
+}
+
+fn normalize_jwks_document(
+    jwks_url: &str,
+    document: &Value,
+    allowed_algorithms: &[JwtAlgorithm],
+) -> Result<NormalizedJwksDocument, JwtJwksFetchFailure> {
+    let keys = document
+        .get("keys")
+        .and_then(Value::as_array)
+        .ok_or_else(|| JwtJwksFetchFailure::malformed_document("jwks document missing keys[]"))?;
+    let allowed_algorithms = allowed_algorithms.iter().copied().collect::<HashSet<_>>();
+    let mut normalized = Vec::new();
+    let mut seen_kids = HashSet::new();
+
+    for (index, jwk) in keys.iter().enumerate() {
+        let Some(key) = (match normalize_jwks_key(jwk, &allowed_algorithms) {
+            Ok(key) => key,
+            Err(detail) => {
+                log::debug!("Ignoring JWKS key[{}] from {}: {}", index, jwks_url, detail);
+                None
+            }
+        }) else {
+            continue;
+        };
+        let effective_kid = static_key_metadata(&key)
+            .map_err(|failure| JwtJwksFetchFailure::malformed_document(failure.reason.as_str()))?
+            .kid;
+        if let Some(kid) = effective_kid.as_deref()
+            && !seen_kids.insert(kid.to_string())
+        {
+            return Err(JwtJwksFetchFailure::ambiguous_duplicate_kid(kid));
+        }
+        normalized.push(key);
+    }
+
+    let configured_algorithms = allowed_algorithms
+        .iter()
+        .copied()
+        .map(jwt_algorithm_name)
+        .collect::<Vec<_>>()
+        .join(",");
+    log::debug!(
+        "JWKS fetch normalized source={} accepted_keys={} configured_algorithms={}",
+        jwks_url,
+        normalized.len(),
+        configured_algorithms
+    );
+
+    Ok(NormalizedJwksDocument { keys: normalized })
+}
+
+fn normalize_jwks_key(
+    jwk: &Value,
+    allowed_algorithms: &HashSet<JwtAlgorithm>,
+) -> Result<Option<RuntimeJwtVerificationKey>, String> {
+    let Some(jwk_object) = jwk.as_object() else {
+        return Err("must be a JSON object".to_string());
+    };
+
+    if let Some(use_value) = jwk_object.get("use").and_then(Value::as_str)
+        && use_value != "sig"
+    {
+        log::debug!("Ignoring JWKS key: key use '{}' is not accepted", use_value);
+        return Ok(None);
+    }
+
+    if let Some(key_ops) = jwk_object.get("key_ops").and_then(Value::as_array)
+        && !key_ops
+            .iter()
+            .filter_map(Value::as_str)
+            .any(|operation| operation == "verify")
+    {
+        log::debug!("Ignoring JWKS key: key_ops does not include verify");
+        return Ok(None);
+    }
+
+    let algorithm = match jwk_object.get("alg").and_then(Value::as_str) {
+        Some(alg) => parse_jwt_alg_str(alg)
+            .map_err(|_| format!("declares unsupported alg '{alg}' for jwks normalization"))?,
+        None => infer_jwk_algorithm(jwk)?,
+    };
+    if !matches!(algorithm, JwtAlgorithm::Rs256 | JwtAlgorithm::Es256) {
+        log::debug!(
+            "Ignoring JWKS key: algorithm '{}' is not an asymmetric signing algorithm",
+            jwt_algorithm_name(algorithm)
+        );
+        return Ok(None);
+    }
+    if !allowed_algorithms.contains(&algorithm) {
+        log::debug!(
+            "Ignoring JWKS key: algorithm '{}' is not enabled by policy",
+            jwt_algorithm_name(algorithm)
+        );
+        return Ok(None);
+    }
+
+    let kid = jwk_object
+        .get("kid")
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let jwk_string =
+        serde_json::to_string(jwk).map_err(|err| format!("failed to serialize jwk: {err}"))?;
+    let normalized = RuntimeJwtVerificationKey::Jwk {
+        kid,
+        alg: Some(algorithm),
+        jwk: jwk_string,
+    };
+    parse_static_verification_key(&normalized, algorithm).map_err(|failure| {
+        format!(
+            "cannot be used for {} verification: {}",
+            jwt_algorithm_name(algorithm),
+            failure.reason.as_str()
+        )
+    })?;
+    Ok(Some(normalized))
+}
+
+fn infer_jwk_algorithm(jwk: &Value) -> Result<JwtAlgorithm, String> {
+    let Some(kty) = jwk.get("kty").and_then(Value::as_str) else {
+        return Err("is missing kty".to_string());
+    };
+    match kty {
+        "RSA" => Ok(JwtAlgorithm::Rs256),
+        "EC" => match jwk.get("crv").and_then(Value::as_str) {
+            Some("P-256") => Ok(JwtAlgorithm::Es256),
+            Some(other) => Err(format!("declares unsupported EC curve '{other}'")),
+            None => Err("is missing crv for EC key".to_string()),
+        },
+        other => Err(format!("declares unsupported kty '{other}'")),
+    }
+}
+
+fn jwt_algorithm_name(algorithm: JwtAlgorithm) -> &'static str {
+    match algorithm {
+        JwtAlgorithm::Hs256 => "HS256",
+        JwtAlgorithm::Rs256 => "RS256",
+        JwtAlgorithm::Es256 => "ES256",
+    }
 }
 
 fn parse_compact_jwt(token: &str) -> Result<ParsedJwt<'_>, JwtValidationFailure> {
@@ -1549,6 +1873,8 @@ fn jwt_string_claim_values(claims: &Value, claim_names: &[&str]) -> HashSet<Stri
 mod tests {
     use std::{collections::HashMap, sync::Arc, time::Duration};
 
+    use bytes::Bytes;
+    use http_body_util::Full;
     use spooky_config::{
         config::{
             Backend, Config, ForwardedHeaderPolicy, HealthCheck, Listen, LoadBalancing, Resilience,
@@ -2196,5 +2522,20 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn jwks_body_collection_rejects_oversized_documents() {
+        let oversized_body = Full::new(Bytes::from(vec![b'x'; MAX_JWKS_BODY_BYTES + 1]));
+
+        let failure = collect_jwks_body_bounded(oversized_body)
+            .await
+            .expect_err("oversized jwks body must be rejected");
+
+        assert_eq!(failure.reason, JwtJwksFetchFailureReason::MalformedDocument);
+        assert!(failure.to_string().contains(&format!(
+            "jwks document exceeded {} bytes",
+            MAX_JWKS_BODY_BYTES
+        )));
     }
 }
