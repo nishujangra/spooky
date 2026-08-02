@@ -1960,6 +1960,26 @@
 <td>Backend lifecycle, runtime generation, watchdog, TLS, and coarse metrics summary exposed through shared runtime views</td>
 </tr>
 <tr>
+<td>Admin-plane RBAC</td>
+<td><code>Done</code></td>
+<td><code>viewer</code> / <code>operator</code> / <code>admin</code> enforced per control API route; <code>401</code> and <code>403</code> are distinct</td>
+</tr>
+<tr>
+<td>Control API mTLS</td>
+<td><code>Done</code></td>
+<td><code>disabled</code> / <code>optional</code> / <code>required</code>, with a client verifier scoped to the control API endpoint</td>
+</tr>
+<tr>
+<td>Admin audit event stream</td>
+<td><code>Done</code></td>
+<td>Stable JSON schema over a dedicated log target or file sink; attempt/result pairs for mutating actions</td>
+</tr>
+<tr>
+<td>Admin source-IP allowlisting</td>
+<td><code>Done</code></td>
+<td>CIDR gate evaluated before credential validation; TCP peer address only</td>
+</tr>
+<tr>
 <td>OTLP tracing hooks</td>
 <td><code>Done</code></td>
 <td>Optional</td>
