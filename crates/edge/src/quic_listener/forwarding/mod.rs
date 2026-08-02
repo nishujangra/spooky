@@ -1386,6 +1386,7 @@ mod tests {
                     issuer: Some("issuer-1".to_string()),
                     audience: Some("aud-1".to_string()),
                     clock_skew: Duration::from_secs(30),
+                    ..RuntimeJwtAuth::default()
                 }),
                 external_auth: None,
                 required_scopes: Vec::new(),
@@ -1418,6 +1419,7 @@ mod tests {
             issuer: Some("issuer-1".to_string()),
             audience: Some("aud-1".to_string()),
             clock_skew: Duration::from_secs(30),
+            ..RuntimeJwtAuth::default()
         };
         assert!(
             super::super::admission::validated_hs256_jwt_claims(token.as_str(), &wrong_secret, now)
@@ -1437,6 +1439,7 @@ mod tests {
                     issuer: None,
                     audience: None,
                     clock_skew: Duration::ZERO,
+                    ..RuntimeJwtAuth::default()
                 },
                 now
             )

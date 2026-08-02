@@ -637,6 +637,7 @@ mod tests {
                     issuer: Some("issuer-1".to_string()),
                     audience: Some("aud-1".to_string()),
                     clock_skew: Duration::from_secs(30),
+                    ..RuntimeJwtAuth::default()
                 }),
                 external_auth: None,
                 required_scopes: required_scopes.into_iter().map(str::to_string).collect(),

@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{collections::HashMap, time::Duration};
 
 use super::{config_invalid, normalize_optional_string};
 use crate::runtime::RuntimeConfigError;
@@ -61,12 +61,46 @@ impl RuntimeApiKeyAuth {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeJwtAuth {
     pub secret: String,
     pub issuer: Option<String>,
     pub audience: Option<String>,
+    pub issuers: Vec<String>,
+    pub audiences: Vec<String>,
+    pub allowed_algorithms: Vec<crate::config::JwtAlgorithm>,
+    pub require_kid: bool,
+    pub static_keys: Vec<RuntimeJwtVerificationKey>,
+    pub jwks_url: Option<String>,
+    pub jwks_refresh_interval: Duration,
+    pub jwks_request_timeout: Duration,
+    pub jwks_cache_ttl: Duration,
+    pub jwks_stale_if_error: Duration,
+    pub jwks_startup_behavior: crate::config::JwksStartupBehavior,
     pub clock_skew: Duration,
+}
+
+impl Default for RuntimeJwtAuth {
+    fn default() -> Self {
+        let defaults = crate::config::JwtAuth::default();
+        Self {
+            secret: defaults.secret,
+            issuer: defaults.issuer,
+            audience: defaults.audience,
+            issuers: Vec::new(),
+            audiences: Vec::new(),
+            allowed_algorithms: defaults.allowed_algorithms,
+            require_kid: defaults.require_kid,
+            static_keys: Vec::new(),
+            jwks_url: defaults.jwks_url,
+            jwks_refresh_interval: Duration::from_secs(defaults.jwks_refresh_interval_secs),
+            jwks_request_timeout: Duration::from_millis(defaults.jwks_request_timeout_ms),
+            jwks_cache_ttl: Duration::from_secs(defaults.jwks_cache_ttl_secs),
+            jwks_stale_if_error: Duration::from_secs(defaults.jwks_stale_if_error_secs),
+            jwks_startup_behavior: defaults.jwks_startup_behavior,
+            clock_skew: Duration::from_secs(defaults.clock_skew_secs),
+        }
+    }
 }
 
 impl RuntimeJwtAuth {
@@ -75,16 +109,86 @@ impl RuntimeJwtAuth {
         upstream_name: &str,
     ) -> Result<Self, RuntimeConfigError> {
         let secret = jwt.secret.trim();
-        if secret.is_empty() {
+        let has_hs256 = jwt
+            .allowed_algorithms
+            .iter()
+            .any(|alg| matches!(alg, crate::config::JwtAlgorithm::Hs256));
+        let has_asymmetric_alg = jwt.allowed_algorithms.iter().any(|alg| {
+            matches!(
+                alg,
+                crate::config::JwtAlgorithm::Rs256 | crate::config::JwtAlgorithm::Es256
+            )
+        });
+
+        if has_hs256 && secret.is_empty() {
             return Err(config_invalid(format!(
                 "upstream '{upstream_name}' auth.jwt.secret must be non-empty"
+            )));
+        }
+        if !secret.is_empty() && !has_hs256 {
+            return Err(config_invalid(format!(
+                "upstream '{upstream_name}' auth.jwt.secret requires auth.jwt.allowed_algorithms to include HS256"
+            )));
+        }
+
+        let issuer = normalize_optional_string(jwt.issuer.as_deref());
+        let audience = normalize_optional_string(jwt.audience.as_deref());
+        let issuers = normalize_optional_string_vec(
+            jwt.issuers.as_deref(),
+            &format!("upstream '{upstream_name}' auth.jwt.issuers"),
+        )?;
+        let audiences = normalize_optional_string_vec(
+            jwt.audiences.as_deref(),
+            &format!("upstream '{upstream_name}' auth.jwt.audiences"),
+        )?;
+
+        if issuer.is_some() && !issuers.is_empty() {
+            return Err(config_invalid(format!(
+                "upstream '{upstream_name}' auth.jwt.issuer and auth.jwt.issuers cannot both be set"
+            )));
+        }
+        if audience.is_some() && !audiences.is_empty() {
+            return Err(config_invalid(format!(
+                "upstream '{upstream_name}' auth.jwt.audience and auth.jwt.audiences cannot both be set"
+            )));
+        }
+
+        let allowed_algorithms = normalize_algorithms(&jwt.allowed_algorithms, upstream_name)?;
+        let static_keys =
+            normalize_static_keys(&jwt.static_keys, upstream_name, has_asymmetric_alg)?;
+        let jwks_url = normalize_optional_string(jwt.jwks_url.as_deref());
+
+        if jwks_url.is_some() && !has_asymmetric_alg {
+            return Err(config_invalid(format!(
+                "upstream '{upstream_name}' auth.jwt.jwks_url requires auth.jwt.allowed_algorithms to include RS256 or ES256"
+            )));
+        }
+        if !static_keys.is_empty() && !has_asymmetric_alg {
+            return Err(config_invalid(format!(
+                "upstream '{upstream_name}' auth.jwt.static_keys require auth.jwt.allowed_algorithms to include RS256 or ES256"
+            )));
+        }
+        if secret.is_empty() && static_keys.is_empty() && jwks_url.is_none() {
+            return Err(config_invalid(format!(
+                "upstream '{upstream_name}' auth.jwt must configure at least one key source"
             )));
         }
 
         Ok(Self {
             secret: secret.to_string(),
-            issuer: normalize_optional_string(jwt.issuer.as_deref()),
-            audience: normalize_optional_string(jwt.audience.as_deref()),
+            issuer,
+            audience,
+            issuers,
+            audiences,
+            allowed_algorithms,
+            require_kid: jwt.require_kid,
+            static_keys,
+            jwks_url,
+            jwks_refresh_interval: Duration::from_secs(jwt.jwks_refresh_interval_secs),
+            jwks_request_timeout: Duration::from_millis(jwt.jwks_request_timeout_ms),
+            jwks_cache_ttl: Duration::from_secs(jwt.jwks_cache_ttl_secs),
+            jwks_stale_if_error: Duration::from_secs(jwt.jwks_stale_if_error_secs),
+            jwks_startup_behavior: jwt.jwks_startup_behavior.clone(),
             clock_skew: Duration::from_secs(jwt.clock_skew_secs),
         })
     }
@@ -95,9 +199,184 @@ impl RuntimeJwtAuth {
             secret: self.secret.clone(),
             issuer: self.issuer.clone(),
             audience: self.audience.clone(),
+            issuers: (!self.issuers.is_empty()).then_some(self.issuers.clone()),
+            audiences: (!self.audiences.is_empty()).then_some(self.audiences.clone()),
+            allowed_algorithms: self.allowed_algorithms.clone(),
+            require_kid: self.require_kid,
+            static_keys: self
+                .static_keys
+                .iter()
+                .map(RuntimeJwtVerificationKey::as_config)
+                .collect(),
+            jwks_url: self.jwks_url.clone(),
+            jwks_refresh_interval_secs: self.jwks_refresh_interval.as_secs(),
+            jwks_request_timeout_ms: self.jwks_request_timeout.as_millis() as u64,
+            jwks_cache_ttl_secs: self.jwks_cache_ttl.as_secs(),
+            jwks_stale_if_error_secs: self.jwks_stale_if_error.as_secs(),
+            jwks_startup_behavior: self.jwks_startup_behavior.clone(),
             clock_skew_secs: self.clock_skew.as_secs(),
         }
     }
+}
+
+fn normalize_optional_string_vec(
+    values: Option<&[String]>,
+    field_name: &str,
+) -> Result<Vec<String>, RuntimeConfigError> {
+    match values {
+        Some(values) => normalize_nonempty_string_vec(field_name, values),
+        None => Ok(Vec::new()),
+    }
+}
+
+fn normalize_algorithms(
+    algorithms: &[crate::config::JwtAlgorithm],
+    upstream_name: &str,
+) -> Result<Vec<crate::config::JwtAlgorithm>, RuntimeConfigError> {
+    if algorithms.is_empty() {
+        return Err(config_invalid(format!(
+            "upstream '{upstream_name}' auth.jwt.allowed_algorithms must contain at least one algorithm"
+        )));
+    }
+
+    let mut normalized = Vec::with_capacity(algorithms.len());
+    for algorithm in algorithms {
+        if !normalized.contains(algorithm) {
+            normalized.push(*algorithm);
+        }
+    }
+    Ok(normalized)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeJwtVerificationKey {
+    Pem {
+        kid: Option<String>,
+        alg: Option<crate::config::JwtAlgorithm>,
+        public_key_pem: String,
+    },
+    Jwk {
+        kid: Option<String>,
+        alg: Option<crate::config::JwtAlgorithm>,
+        jwk: String,
+    },
+}
+
+impl RuntimeJwtVerificationKey {
+    fn normalize(
+        key: &crate::config::JwtVerificationKey,
+        field_name: &str,
+    ) -> Result<Self, RuntimeConfigError> {
+        match key {
+            crate::config::JwtVerificationKey::Pem {
+                kid,
+                alg,
+                public_key_pem,
+            } => {
+                let public_key_pem = public_key_pem.trim();
+                if public_key_pem.is_empty() {
+                    return Err(config_invalid(format!(
+                        "{field_name}.public_key_pem must be non-empty"
+                    )));
+                }
+                Ok(Self::Pem {
+                    kid: normalize_optional_string(kid.as_deref()),
+                    alg: *alg,
+                    public_key_pem: public_key_pem.to_string(),
+                })
+            }
+            crate::config::JwtVerificationKey::Jwk { kid, alg, jwk } => {
+                let jwk = jwk.trim();
+                if jwk.is_empty() {
+                    return Err(config_invalid(format!(
+                        "{field_name}.jwk must be non-empty"
+                    )));
+                }
+                Ok(Self::Jwk {
+                    kid: normalize_optional_string(kid.as_deref()),
+                    alg: *alg,
+                    jwk: jwk.to_string(),
+                })
+            }
+        }
+    }
+
+    fn kid(&self) -> Option<&str> {
+        match self {
+            Self::Pem { kid, .. } | Self::Jwk { kid, .. } => kid.as_deref(),
+        }
+    }
+
+    fn material_fingerprint(&self) -> String {
+        match self {
+            Self::Pem {
+                alg,
+                public_key_pem,
+                ..
+            } => format!("pem:{alg:?}:{public_key_pem}"),
+            Self::Jwk { alg, jwk, .. } => format!("jwk:{alg:?}:{jwk}"),
+        }
+    }
+
+    #[cfg(test)]
+    fn as_config(&self) -> crate::config::JwtVerificationKey {
+        match self {
+            Self::Pem {
+                kid,
+                alg,
+                public_key_pem,
+            } => crate::config::JwtVerificationKey::Pem {
+                kid: kid.clone(),
+                alg: *alg,
+                public_key_pem: public_key_pem.clone(),
+            },
+            Self::Jwk { kid, alg, jwk } => crate::config::JwtVerificationKey::Jwk {
+                kid: kid.clone(),
+                alg: *alg,
+                jwk: jwk.clone(),
+            },
+        }
+    }
+}
+
+fn normalize_static_keys(
+    keys: &[crate::config::JwtVerificationKey],
+    upstream_name: &str,
+    has_asymmetric_alg: bool,
+) -> Result<Vec<RuntimeJwtVerificationKey>, RuntimeConfigError> {
+    if !keys.is_empty() && !has_asymmetric_alg {
+        return Err(config_invalid(format!(
+            "upstream '{upstream_name}' auth.jwt.static_keys require auth.jwt.allowed_algorithms to include RS256 or ES256"
+        )));
+    }
+
+    let normalized = keys
+        .iter()
+        .enumerate()
+        .map(|(index, key)| {
+            RuntimeJwtVerificationKey::normalize(
+                key,
+                &format!("upstream '{upstream_name}' auth.jwt.static_keys[{index}]"),
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let mut fingerprints_by_kid: HashMap<String, String> = HashMap::new();
+    for key in &normalized {
+        let Some(kid) = key.kid() else {
+            continue;
+        };
+        let fingerprint = key.material_fingerprint();
+        if let Some(existing) = fingerprints_by_kid.insert(kid.to_string(), fingerprint.clone())
+            && existing != fingerprint
+        {
+            return Err(config_invalid(format!(
+                "upstream '{upstream_name}' auth.jwt.static_keys contains conflicting entries for kid '{kid}'"
+            )));
+        }
+    }
+
+    Ok(normalized)
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -424,6 +703,7 @@ mod tests {
             issuer: Some("  issuer.example  ".to_string()),
             audience: Some("  payments-api  ".to_string()),
             clock_skew_secs: 45,
+            ..JwtAuth::default()
         };
 
         let normalized = RuntimeJwtAuth::normalize(&jwt, "payments").expect("jwt auth");

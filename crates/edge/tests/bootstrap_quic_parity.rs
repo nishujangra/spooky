@@ -363,6 +363,7 @@ fn bootstrap_and_quic_local_jwt_auth_decisions_match() {
                     issuer: Some("issuer-1".to_string()),
                     audience: Some("aud-1".to_string()),
                     clock_skew_secs: 30,
+                    ..JwtAuth::default()
                 }),
                 external_auth: None,
                 required_scopes: vec!["read:parity".to_string()],

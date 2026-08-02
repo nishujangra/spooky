@@ -269,6 +269,23 @@ pub struct JwtAuth {
     pub secret: String,
     pub issuer: Option<String>,
     pub audience: Option<String>,
+    pub issuers: Option<Vec<String>>,
+    pub audiences: Option<Vec<String>>,
+    #[serde(default = "JwtAuth::default_allowed_algorithms")]
+    pub allowed_algorithms: Vec<JwtAlgorithm>,
+    pub require_kid: bool,
+    pub static_keys: Vec<JwtVerificationKey>,
+    pub jwks_url: Option<String>,
+    #[serde(default = "JwtAuth::default_jwks_refresh_interval_secs")]
+    pub jwks_refresh_interval_secs: u64,
+    #[serde(default = "JwtAuth::default_jwks_request_timeout_ms")]
+    pub jwks_request_timeout_ms: u64,
+    #[serde(default = "JwtAuth::default_jwks_cache_ttl_secs")]
+    pub jwks_cache_ttl_secs: u64,
+    #[serde(default = "JwtAuth::default_jwks_stale_if_error_secs")]
+    pub jwks_stale_if_error_secs: u64,
+    #[serde(default = "JwksStartupBehavior::default")]
+    pub jwks_startup_behavior: JwksStartupBehavior,
     pub clock_skew_secs: u64,
 }
 
@@ -278,9 +295,79 @@ impl Default for JwtAuth {
             secret: String::new(),
             issuer: None,
             audience: None,
+            issuers: None,
+            audiences: None,
+            allowed_algorithms: Self::default_allowed_algorithms(),
+            require_kid: false,
+            static_keys: Vec::new(),
+            jwks_url: None,
+            jwks_refresh_interval_secs: Self::default_jwks_refresh_interval_secs(),
+            jwks_request_timeout_ms: Self::default_jwks_request_timeout_ms(),
+            jwks_cache_ttl_secs: Self::default_jwks_cache_ttl_secs(),
+            jwks_stale_if_error_secs: Self::default_jwks_stale_if_error_secs(),
+            jwks_startup_behavior: JwksStartupBehavior::default(),
             clock_skew_secs: 30,
         }
     }
+}
+
+impl JwtAuth {
+    fn default_allowed_algorithms() -> Vec<JwtAlgorithm> {
+        vec![JwtAlgorithm::Hs256]
+    }
+
+    const fn default_jwks_refresh_interval_secs() -> u64 {
+        300
+    }
+
+    const fn default_jwks_request_timeout_ms() -> u64 {
+        2_000
+    }
+
+    const fn default_jwks_cache_ttl_secs() -> u64 {
+        900
+    }
+
+    const fn default_jwks_stale_if_error_secs() -> u64 {
+        3_600
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum JwtAlgorithm {
+    #[serde(rename = "HS256", alias = "hs256")]
+    Hs256,
+    #[serde(rename = "RS256", alias = "rs256")]
+    Rs256,
+    #[serde(rename = "ES256", alias = "es256")]
+    Es256,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum JwksStartupBehavior {
+    #[default]
+    RequireReady,
+    AllowDegraded,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum JwtVerificationKey {
+    Pem {
+        #[serde(default)]
+        kid: Option<String>,
+        #[serde(default)]
+        alg: Option<JwtAlgorithm>,
+        public_key_pem: String,
+    },
+    Jwk {
+        #[serde(default)]
+        kid: Option<String>,
+        #[serde(default)]
+        alg: Option<JwtAlgorithm>,
+        jwk: String,
+    },
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq, Default)]
@@ -1471,6 +1558,35 @@ security:
             serde_yaml::from_str(r#"secret: test-secret"#).expect("jwt auth should parse");
         assert_eq!(jwt.issuer, JwtAuth::default().issuer);
         assert_eq!(jwt.audience, JwtAuth::default().audience);
+        assert_eq!(jwt.issuers, JwtAuth::default().issuers);
+        assert_eq!(jwt.audiences, JwtAuth::default().audiences);
+        assert_eq!(
+            jwt.allowed_algorithms,
+            JwtAuth::default().allowed_algorithms
+        );
+        assert_eq!(jwt.require_kid, JwtAuth::default().require_kid);
+        assert_eq!(jwt.static_keys.len(), JwtAuth::default().static_keys.len());
+        assert_eq!(jwt.jwks_url, JwtAuth::default().jwks_url);
+        assert_eq!(
+            jwt.jwks_refresh_interval_secs,
+            JwtAuth::default().jwks_refresh_interval_secs
+        );
+        assert_eq!(
+            jwt.jwks_request_timeout_ms,
+            JwtAuth::default().jwks_request_timeout_ms
+        );
+        assert_eq!(
+            jwt.jwks_cache_ttl_secs,
+            JwtAuth::default().jwks_cache_ttl_secs
+        );
+        assert_eq!(
+            jwt.jwks_stale_if_error_secs,
+            JwtAuth::default().jwks_stale_if_error_secs
+        );
+        assert_eq!(
+            jwt.jwks_startup_behavior,
+            JwtAuth::default().jwks_startup_behavior
+        );
         assert_eq!(jwt.clock_skew_secs, JwtAuth::default().clock_skew_secs);
     }
 
