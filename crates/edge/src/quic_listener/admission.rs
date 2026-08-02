@@ -815,6 +815,7 @@ impl JwtJwksSharedCache {
                 entry.last_failure_at = Some(now);
                 entry.last_error =
                     Some("empty_jwks: replacement produced no usable keys".to_string());
+                entry.last_failure_reason = Some(JwtJwksFetchFailureReason::MalformedDocument);
             }
             return;
         }
@@ -953,7 +954,13 @@ impl JwtJwksCacheEntry {
         };
         let age = now.saturating_duration_since(last_success_at);
         if age <= self.source.cache_ttl {
-            return JwtJwksCacheState::Fresh;
+            return match self.state {
+                JwtJwksCacheState::RefreshFailedRetained => {
+                    JwtJwksCacheState::RefreshFailedRetained
+                }
+                JwtJwksCacheState::QuarantinedRetained => JwtJwksCacheState::QuarantinedRetained,
+                _ => JwtJwksCacheState::Fresh,
+            };
         }
         if age
             <= self
