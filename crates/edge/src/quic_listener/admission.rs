@@ -3829,6 +3829,221 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    async fn refresh_transport_failure_retains_last_known_good_keys_and_keeps_validating() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let jwks_url = "https://issuer.example.com/refresh-failure-retention-jwks.json";
+        clear_jwks_cache_for_test(jwks_url);
+
+        let key = PKey::from_rsa(Rsa::generate(2048).expect("rsa")).expect("pkey");
+        let source = JwtJwksSourceConfig {
+            source_identity: jwks_url.to_string(),
+            jwks_url: jwks_url.to_string(),
+            allowed_algorithms: vec![JwtAlgorithm::Rs256],
+            refresh_interval: Duration::from_secs(60),
+            request_timeout: Duration::from_secs(1),
+            cache_ttl: Duration::from_secs(60),
+            stale_if_error: Duration::from_secs(60),
+            startup_behavior: JwksStartupBehavior::AllowDegraded,
+        };
+        JwtJwksSharedCache::shared().register_source(source.clone());
+        script_jwks_fetches_for_test(
+            jwks_url,
+            vec![
+                Ok(serde_json::json!({ "keys": [test_rsa_public_jwk(&key, "retained-kid")] })),
+                Err(JwtJwksFetchFailure::request_failed(
+                    "connection refused".to_string(),
+                )),
+            ],
+        );
+
+        refresh_jwks_source_once(source.clone(), "startup")
+            .await
+            .expect("initial refresh");
+        refresh_jwks_source_once(source.clone(), "periodic")
+            .await
+            .expect_err("transport failure must surface");
+
+        let snapshot = JwtJwksSharedCache::shared()
+            .snapshot(&source.source_identity, Instant::now())
+            .expect("snapshot after transport failure");
+        assert_eq!(snapshot.state, JwtJwksCacheState::RefreshFailedRetained);
+        assert_eq!(snapshot.active_keys.len(), 1);
+        assert_eq!(
+            snapshot.last_failure_reason,
+            Some(JwtJwksFetchFailureReason::RequestFailed)
+        );
+
+        // A failed refresh must never revoke working keys: the last-known-good
+        // set keeps validating tokens until the staleness window expires.
+        let jwt = RuntimeJwtAuth {
+            issuer: Some("issuer-1".to_string()),
+            audience: Some("aud-1".to_string()),
+            allowed_algorithms: vec![JwtAlgorithm::Rs256],
+            require_kid: true,
+            jwks_url: Some(jwks_url.to_string()),
+            clock_skew: Duration::from_secs(30),
+            ..RuntimeJwtAuth::default()
+        };
+        let token = test_rs256_jwt(
+            &key,
+            "retained-kid",
+            serde_json::json!({
+                "iss": "issuer-1",
+                "aud": "aud-1",
+                "exp": 4_000_000_000u64,
+            }),
+        );
+        let validated = validate_jwt_token(token.as_str(), &jwt, now)
+            .expect("retained keys must keep validating after refresh failure");
+        assert_eq!(validated.algorithm, JwtAlgorithm::Rs256);
+
+        clear_jwks_cache_for_test(jwks_url);
+    }
+
+    #[test]
+    fn jose_header_parsing_maps_supported_algorithms_and_rejects_the_rest() {
+        let parsed = parse_jose_header(br#"{"alg":"RS256","typ":"JWT","kid":"key-1"}"#)
+            .expect("supported header");
+        assert_eq!(parsed.algorithm, JwtAlgorithm::Rs256);
+        assert_eq!(parsed.kid.as_deref(), Some("key-1"));
+
+        let without_kid = parse_jose_header(br#"{"alg":"ES256"}"#).expect("header without kid");
+        assert_eq!(without_kid.algorithm, JwtAlgorithm::Es256);
+        assert_eq!(without_kid.kid, None);
+
+        // `alg: none` and unknown algorithms must never resolve to a
+        // verification mode, otherwise signature checking can be skipped.
+        for header in [
+            br#"{"alg":"none"}"#.as_slice(),
+            br#"{"alg":"HS512"}"#.as_slice(),
+        ] {
+            assert_eq!(
+                parse_jose_header(header)
+                    .expect_err("unsupported alg must be rejected")
+                    .reason,
+                JwtValidationFailureReason::UnsupportedAlgorithm
+            );
+        }
+
+        assert_eq!(
+            parse_jose_header(br#"{"typ":"JWT"}"#)
+                .expect_err("missing alg must be rejected")
+                .reason,
+            JwtValidationFailureReason::MissingAlgorithm
+        );
+        assert_eq!(
+            parse_jose_header(b"not-json")
+                .expect_err("malformed header must be rejected")
+                .reason,
+            JwtValidationFailureReason::MalformedHeader
+        );
+    }
+
+    #[test]
+    fn static_key_parsing_reports_distinct_failures_for_pem_and_jwk_material() {
+        assert_eq!(
+            parse_pem_verification_key("-----BEGIN PUBLIC KEY-----\nnope\n", JwtAlgorithm::Rs256)
+                .expect_err("malformed pem must be rejected")
+                .reason,
+            JwtValidationFailureReason::PemKeyParseFailed
+        );
+        assert_eq!(
+            parse_jwk_verification_key("{not json", JwtAlgorithm::Rs256)
+                .expect_err("malformed jwk must be rejected")
+                .reason,
+            JwtValidationFailureReason::JwkKeyParseFailed
+        );
+        assert_eq!(
+            parse_jwk_verification_key(r#"{"kty":"EC","crv":"P-256"}"#, JwtAlgorithm::Rs256)
+                .expect_err("kty mismatch must be rejected")
+                .reason,
+            JwtValidationFailureReason::InvalidKeyType
+        );
+
+        let ec_key =
+            EcKey::generate(&EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).expect("p256 group"))
+                .expect("p256 key");
+        let ec_pem = String::from_utf8(ec_key.public_key_to_pem().expect("ec pem")).expect("utf8");
+        assert_eq!(
+            parse_pem_verification_key(&ec_pem, JwtAlgorithm::Rs256)
+                .expect_err("ec key must not satisfy rs256")
+                .reason,
+            JwtValidationFailureReason::InvalidKeyType
+        );
+        assert!(parse_pem_verification_key(&ec_pem, JwtAlgorithm::Es256).is_ok());
+    }
+
+    #[test]
+    fn cache_state_transitions_track_ttl_staleness_and_retention_windows() {
+        let start = Instant::now();
+        let mut entry = JwtJwksCacheEntry {
+            source: JwtJwksSourceConfig {
+                source_identity: "transitions".to_string(),
+                jwks_url: "https://issuer.example.com/transitions.json".to_string(),
+                allowed_algorithms: vec![JwtAlgorithm::Rs256],
+                refresh_interval: Duration::from_secs(60),
+                request_timeout: Duration::from_secs(1),
+                cache_ttl: Duration::from_secs(60),
+                stale_if_error: Duration::from_secs(60),
+                startup_behavior: JwksStartupBehavior::AllowDegraded,
+            },
+            state: JwtJwksCacheState::NeverFetched,
+            active_keys: Vec::new(),
+            refresh_in_flight: false,
+            last_refresh_started_at: None,
+            last_refresh_started_wall: None,
+            last_refresh_completed_at: None,
+            last_refresh_completed_wall: None,
+            last_success_at: None,
+            last_success_wall: None,
+            last_failure_at: None,
+            last_failure_wall: None,
+            last_error: None,
+            last_failure_reason: None,
+            next_on_demand_refresh_at: None,
+        };
+
+        assert_eq!(
+            entry.effective_state(start),
+            JwtJwksCacheState::NeverFetched
+        );
+
+        entry.active_keys = vec![JwtJwksActiveKey {
+            key: RuntimeJwtVerificationKey::Pem {
+                kid: Some("k1".to_string()),
+                alg: Some(JwtAlgorithm::Rs256),
+                public_key_pem: "pem".to_string(),
+            },
+            retained_until: None,
+        }];
+        entry.state = JwtJwksCacheState::Fresh;
+        entry.last_success_at = Some(start);
+
+        assert_eq!(entry.effective_state(start), JwtJwksCacheState::Fresh);
+        assert_eq!(
+            entry.effective_state(start + Duration::from_secs(90)),
+            JwtJwksCacheState::Stale
+        );
+        assert_eq!(
+            entry.effective_state(start + Duration::from_secs(200)),
+            JwtJwksCacheState::EmptyUnusable
+        );
+
+        // Retention states survive the TTL window instead of being reported as
+        // fresh, so operators keep seeing why the set is degraded.
+        entry.state = JwtJwksCacheState::RefreshFailedRetained;
+        assert_eq!(
+            entry.effective_state(start),
+            JwtJwksCacheState::RefreshFailedRetained
+        );
+        entry.state = JwtJwksCacheState::QuarantinedRetained;
+        assert_eq!(
+            entry.effective_state(start + Duration::from_secs(90)),
+            JwtJwksCacheState::QuarantinedRetained
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
     async fn unknown_kid_rejects_current_request_and_triggers_refresh_hint() {
         let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         let jwks_url = "https://issuer.example.com/on-demand-jwks.json";
