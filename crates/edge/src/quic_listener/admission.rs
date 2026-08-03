@@ -2418,10 +2418,18 @@ fn resolve_matching_asymmetric_key<'a>(
             .kid
             .as_deref()
             .or_else(|| static_key_config_kid(key));
-        if let Some(requested_kid) = requested_kid
-            && effective_kid != Some(requested_kid)
-        {
-            continue;
+        match requested_kid {
+            Some(requested_kid) => {
+                if effective_kid != Some(requested_kid) {
+                    continue;
+                }
+            }
+            None => {
+                // Tokens without a `kid` are only accepted when exactly one
+                // algorithm-compatible key remains after policy filtering.
+                // Multiple candidates are treated as ambiguous rather than
+                // guessing which verification mode the issuer intended.
+            }
         }
         if let Some(key_alg) = metadata.alg.or_else(|| static_key_config_alg(key))
             && key_alg != algorithm
@@ -2811,11 +2819,7 @@ fn validate_jwt_registered_claims(
 }
 
 fn jwt_issuer_matches(jwt: &RuntimeJwtAuth, claims: &Value) -> bool {
-    let expected = if let Some(issuer) = jwt.issuer.as_deref() {
-        vec![issuer]
-    } else {
-        jwt.issuers.iter().map(String::as_str).collect()
-    };
+    let expected = jwt_expected_issuers(jwt);
     if expected.is_empty() {
         return true;
     }
@@ -2824,11 +2828,7 @@ fn jwt_issuer_matches(jwt: &RuntimeJwtAuth, claims: &Value) -> bool {
 }
 
 fn jwt_audience_matches(jwt: &RuntimeJwtAuth, claims: &Value) -> bool {
-    let expected = if let Some(audience) = jwt.audience.as_deref() {
-        vec![audience]
-    } else {
-        jwt.audiences.iter().map(String::as_str).collect()
-    };
+    let expected = jwt_expected_audiences(jwt);
     if expected.is_empty() {
         return true;
     }
@@ -2844,6 +2844,22 @@ fn jwt_audience_matches(jwt: &RuntimeJwtAuth, claims: &Value) -> bool {
                 .is_some_and(|value| expected.contains(&value))
         }),
         _ => false,
+    }
+}
+
+fn jwt_expected_issuers(jwt: &RuntimeJwtAuth) -> Vec<&str> {
+    if let Some(issuer) = jwt.issuer.as_deref() {
+        vec![issuer]
+    } else {
+        jwt.issuers.iter().map(String::as_str).collect()
+    }
+}
+
+fn jwt_expected_audiences(jwt: &RuntimeJwtAuth) -> Vec<&str> {
+    if let Some(audience) = jwt.audience.as_deref() {
+        vec![audience]
+    } else {
+        jwt.audiences.iter().map(String::as_str).collect()
     }
 }
 

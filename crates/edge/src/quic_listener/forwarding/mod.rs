@@ -1668,6 +1668,95 @@ mod tests {
     }
 
     #[test]
+    fn rs256_jwt_validation_allows_missing_kid_when_exactly_one_key_matches() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let rsa = Rsa::generate(2048).expect("rsa key");
+        let pkey = PKey::from_rsa(rsa).expect("rsa pkey");
+        let token = test_rs256_jwt(
+            &pkey,
+            None,
+            serde_json::json!({
+                "iss": "issuer-1",
+                "aud": "aud-1",
+                "exp": 4_000_000_000u64,
+            }),
+        );
+        let policy = RuntimeJwtAuth {
+            issuer: Some("issuer-1".to_string()),
+            audience: Some("aud-1".to_string()),
+            allowed_algorithms: vec![JwtAlgorithm::Rs256],
+            require_kid: false,
+            static_keys: vec![RuntimeJwtVerificationKey::Pem {
+                kid: Some("rsa-key-1".to_string()),
+                alg: Some(JwtAlgorithm::Rs256),
+                public_key_pem: String::from_utf8(
+                    pkey.public_key_to_pem().expect("rsa public pem"),
+                )
+                .expect("utf8"),
+            }],
+            clock_skew: Duration::from_secs(30),
+            ..RuntimeJwtAuth::default()
+        };
+
+        let validated = super::super::admission::validate_jwt_token(token.as_str(), &policy, now)
+            .expect("rs256 jwt without kid");
+        assert_eq!(validated.algorithm, JwtAlgorithm::Rs256);
+    }
+
+    #[test]
+    fn rs256_jwt_validation_rejects_missing_kid_when_multiple_keys_match() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let first = Rsa::generate(2048).expect("first rsa key");
+        let first_key = PKey::from_rsa(first).expect("first rsa pkey");
+        let second = Rsa::generate(2048).expect("second rsa key");
+        let second_key = PKey::from_rsa(second).expect("second rsa pkey");
+        let token = test_rs256_jwt(
+            &first_key,
+            None,
+            serde_json::json!({
+                "iss": "issuer-1",
+                "aud": "aud-1",
+                "exp": 4_000_000_000u64,
+            }),
+        );
+
+        let failure = super::super::admission::validate_jwt_token(
+            token.as_str(),
+            &RuntimeJwtAuth {
+                issuer: Some("issuer-1".to_string()),
+                audience: Some("aud-1".to_string()),
+                allowed_algorithms: vec![JwtAlgorithm::Rs256],
+                static_keys: vec![
+                    RuntimeJwtVerificationKey::Pem {
+                        kid: Some("rsa-key-1".to_string()),
+                        alg: Some(JwtAlgorithm::Rs256),
+                        public_key_pem: String::from_utf8(
+                            first_key.public_key_to_pem().expect("first rsa public pem"),
+                        )
+                        .expect("utf8"),
+                    },
+                    RuntimeJwtVerificationKey::Pem {
+                        kid: Some("rsa-key-2".to_string()),
+                        alg: Some(JwtAlgorithm::Rs256),
+                        public_key_pem: String::from_utf8(
+                            second_key
+                                .public_key_to_pem()
+                                .expect("second rsa public pem"),
+                        )
+                        .expect("utf8"),
+                    },
+                ],
+                clock_skew: Duration::from_secs(30),
+                ..RuntimeJwtAuth::default()
+            },
+            now,
+        )
+        .expect_err("missing kid with multiple matching keys must be ambiguous");
+
+        assert_eq!(failure.reason.as_str(), "ambiguous_verification_key");
+    }
+
+    #[test]
     fn es256_jwt_validation_accepts_static_jwk_keys() {
         let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).expect("p256");
@@ -1744,6 +1833,76 @@ mod tests {
         .expect_err("invalid key type");
 
         assert_eq!(failure.reason.as_str(), "invalid_key_type");
+    }
+
+    #[test]
+    fn jwt_validation_rejects_valid_signature_for_wrong_issuer() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let rsa = Rsa::generate(2048).expect("rsa key");
+        let pkey = PKey::from_rsa(rsa).expect("rsa pkey");
+        let token = test_rs256_jwt(
+            &pkey,
+            Some("rsa-key-1"),
+            serde_json::json!({
+                "iss": "issuer-2",
+                "aud": "aud-1",
+                "exp": 4_000_000_000u64,
+            }),
+        );
+
+        let failure = super::super::admission::validate_jwt_token(
+            token.as_str(),
+            &RuntimeJwtAuth {
+                issuers: vec!["issuer-1".to_string(), "issuer-3".to_string()],
+                audience: Some("aud-1".to_string()),
+                allowed_algorithms: vec![JwtAlgorithm::Rs256],
+                require_kid: true,
+                static_keys: vec![RuntimeJwtVerificationKey::Pem {
+                    kid: Some("rsa-key-1".to_string()),
+                    alg: Some(JwtAlgorithm::Rs256),
+                    public_key_pem: String::from_utf8(
+                        pkey.public_key_to_pem().expect("rsa public pem"),
+                    )
+                    .expect("utf8"),
+                }],
+                clock_skew: Duration::from_secs(30),
+                ..RuntimeJwtAuth::default()
+            },
+            now,
+        )
+        .expect_err("wrong issuer must be rejected after signature verification");
+
+        assert_eq!(failure.reason.as_str(), "issuer_mismatch");
+    }
+
+    #[test]
+    fn jwt_validation_accepts_tokens_against_multiple_issuer_and_audience_values() {
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        let token = test_hs256_jwt(
+            "jwt-secret",
+            serde_json::json!({
+                "iss": "issuer-2",
+                "aud": ["aud-3", "aud-2"],
+                "exp": 4_000_000_000u64,
+            }),
+            "HS256",
+        );
+
+        let validated = super::super::admission::validate_jwt_token(
+            token.as_str(),
+            &RuntimeJwtAuth {
+                secret: "jwt-secret".to_string(),
+                issuers: vec!["issuer-1".to_string(), "issuer-2".to_string()],
+                audiences: vec!["aud-1".to_string(), "aud-2".to_string()],
+                allowed_algorithms: vec![JwtAlgorithm::Hs256],
+                clock_skew: Duration::from_secs(30),
+                ..RuntimeJwtAuth::default()
+            },
+            now,
+        )
+        .expect("jwt should match one configured issuer and one configured audience");
+
+        assert_eq!(validated.algorithm, JwtAlgorithm::Hs256);
     }
 
     #[test]
