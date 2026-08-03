@@ -1147,6 +1147,30 @@ pub(crate) fn plan_runtime_reload(
         }
     };
 
+    // Prove `require_ready` JWKS sources before the generation is assembled and
+    // `NormalizeRuntime` is recorded as accepted, so a reload cannot activate a
+    // provider whose key set has never been shown to be usable.
+    if let Err(err) =
+        QUICListener::preflight_require_ready_jwks(&runtime_config, "reload_preflight")
+    {
+        let rejected =
+            RejectedChange::resource_preparation_failed("runtime jwks preflight", err.to_string());
+        validation.push(PlanningPhaseResult {
+            phase: PlanningPhase::NormalizeRuntime,
+            status: PlanningPhaseStatus::Rejected,
+            summary: rejected.message.clone(),
+        });
+        return rejected_reload_plan(
+            request,
+            config_source,
+            Some(config.version),
+            current_generation,
+            candidate_generation,
+            validation,
+            vec![rejected],
+        );
+    }
+
     let carried = CarriedProcessSharedServices::from_active(current.shared_services());
     let next_shared_state =
         match QUICListener::build_shared_state_with_carried(&runtime_config, Some(carried)) {
