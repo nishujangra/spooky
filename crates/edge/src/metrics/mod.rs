@@ -147,7 +147,7 @@ pub(crate) struct BackendRotationState {
 
 #[derive(Default, Clone)]
 pub(crate) struct JwksSourceState {
-    pub(crate) jwks_url: String,
+    pub(crate) jwks_source_id: String,
     pub(crate) refresh_success_total: u64,
     pub(crate) refresh_failure_total: u64,
     pub(crate) active_key_count: u64,
@@ -876,31 +876,32 @@ impl Metrics {
         }
     }
 
-    pub fn record_jwks_unknown_kid(&self, jwks_url: &str) {
+    pub fn record_jwks_unknown_kid(&self, jwks_source_id: &str) {
         if let Ok(mut guard) = self.jwks_unknown_kid_events.write() {
-            *guard.entry(jwks_url.to_string()).or_default() += 1;
+            *guard.entry(jwks_source_id.to_string()).or_default() += 1;
         }
     }
 
-    pub fn record_jwks_refresh_started(&self, jwks_url: &str, refreshed_at: SystemTime) {
+    pub fn record_jwks_refresh_started(&self, jwks_source_id: &str, refreshed_at: SystemTime) {
         let refreshed_at = refreshed_at
             .duration_since(UNIX_EPOCH)
             .ok()
             .map(|duration| duration.as_secs());
         if let Ok(mut guard) = self.jwks_source_state.write() {
-            let entry = guard
-                .entry(jwks_url.to_string())
-                .or_insert_with(|| JwksSourceState {
-                    jwks_url: jwks_url.to_string(),
-                    ..JwksSourceState::default()
-                });
+            let entry =
+                guard
+                    .entry(jwks_source_id.to_string())
+                    .or_insert_with(|| JwksSourceState {
+                        jwks_source_id: jwks_source_id.to_string(),
+                        ..JwksSourceState::default()
+                    });
             entry.last_refresh_attempt_unix_seconds = refreshed_at;
         }
     }
 
     pub fn record_jwks_refresh_success(
         &self,
-        jwks_url: &str,
+        jwks_source_id: &str,
         state: &str,
         active_key_count: usize,
         refreshed_at: SystemTime,
@@ -914,12 +915,13 @@ impl Metrics {
             .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
             .map(|duration| duration.as_secs());
         if let Ok(mut guard) = self.jwks_source_state.write() {
-            let entry = guard
-                .entry(jwks_url.to_string())
-                .or_insert_with(|| JwksSourceState {
-                    jwks_url: jwks_url.to_string(),
-                    ..JwksSourceState::default()
-                });
+            let entry =
+                guard
+                    .entry(jwks_source_id.to_string())
+                    .or_insert_with(|| JwksSourceState {
+                        jwks_source_id: jwks_source_id.to_string(),
+                        ..JwksSourceState::default()
+                    });
             entry.refresh_success_total = entry.refresh_success_total.saturating_add(1);
             entry.active_key_count = active_key_count as u64;
             entry.state = state.to_string();
@@ -931,7 +933,7 @@ impl Metrics {
 
     pub fn record_jwks_refresh_failure(
         &self,
-        jwks_url: &str,
+        jwks_source_id: &str,
         state: &str,
         active_key_count: usize,
         refreshed_at: SystemTime,
@@ -946,12 +948,13 @@ impl Metrics {
             .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
             .map(|duration| duration.as_secs());
         if let Ok(mut guard) = self.jwks_source_state.write() {
-            let entry = guard
-                .entry(jwks_url.to_string())
-                .or_insert_with(|| JwksSourceState {
-                    jwks_url: jwks_url.to_string(),
-                    ..JwksSourceState::default()
-                });
+            let entry =
+                guard
+                    .entry(jwks_source_id.to_string())
+                    .or_insert_with(|| JwksSourceState {
+                        jwks_source_id: jwks_source_id.to_string(),
+                        ..JwksSourceState::default()
+                    });
             entry.refresh_failure_total = entry.refresh_failure_total.saturating_add(1);
             entry.active_key_count = active_key_count as u64;
             entry.state = state.to_string();
@@ -1104,7 +1107,7 @@ impl Metrics {
             .map(|guard| {
                 let mut entries = guard
                     .iter()
-                    .map(|(jwks_url, value)| (jwks_url.clone(), *value))
+                    .map(|(jwks_source_id, value)| (jwks_source_id.clone(), *value))
                     .collect::<Vec<_>>();
                 entries.sort_by(|(left, _), (right, _)| left.cmp(right));
                 entries
@@ -1117,7 +1120,7 @@ impl Metrics {
             .read()
             .map(|guard| {
                 let mut entries = guard.values().cloned().collect::<Vec<_>>();
-                entries.sort_by(|left, right| left.jwks_url.cmp(&right.jwks_url));
+                entries.sort_by(|left, right| left.jwks_source_id.cmp(&right.jwks_source_id));
                 entries
             })
             .unwrap_or_default()
@@ -1723,17 +1726,11 @@ mod tests {
         let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         metrics.record_jwt_validation_failure("issuer_mismatch");
         metrics.record_jwt_algorithm_rejection("RS256");
-        metrics.record_jwks_unknown_kid("https://issuer.example.com/jwks.json");
-        metrics.record_jwks_refresh_started("https://issuer.example.com/jwks.json", now);
-        metrics.record_jwks_refresh_success(
-            "https://issuer.example.com/jwks.json",
-            "fresh",
-            2,
-            now,
-            Some(now),
-        );
+        metrics.record_jwks_unknown_kid("jwks:example");
+        metrics.record_jwks_refresh_started("jwks:example", now);
+        metrics.record_jwks_refresh_success("jwks:example", "fresh", 2, now, Some(now));
         metrics.record_jwks_refresh_failure(
-            "https://issuer.example.com/jwks.json",
+            "jwks:example",
             "refresh_failed_retained",
             2,
             now,
@@ -1747,20 +1744,20 @@ mod tests {
             rendered.contains("spooky_jwt_validation_failures_total{reason=\"issuer_mismatch\"} 1")
         );
         assert!(rendered.contains("spooky_jwt_algorithm_rejections_total{algorithm=\"RS256\"} 1"));
+        assert!(
+            rendered.contains("spooky_jwks_unknown_kid_total{jwks_source_id=\"jwks:example\"} 1")
+        );
+        assert!(
+            rendered
+                .contains("spooky_jwks_refresh_success_total{jwks_source_id=\"jwks:example\"} 1")
+        );
+        assert!(
+            rendered
+                .contains("spooky_jwks_refresh_failure_total{jwks_source_id=\"jwks:example\"} 1")
+        );
         assert!(rendered.contains(
-            "spooky_jwks_unknown_kid_total{jwks_url=\"https://issuer.example.com/jwks.json\"} 1"
+            "spooky_jwks_state{jwks_source_id=\"jwks:example\",state=\"refresh_failed_retained\"} 1"
         ));
-        assert!(rendered.contains(
-            "spooky_jwks_refresh_success_total{jwks_url=\"https://issuer.example.com/jwks.json\"} 1"
-        ));
-        assert!(rendered.contains(
-            "spooky_jwks_refresh_failure_total{jwks_url=\"https://issuer.example.com/jwks.json\"} 1"
-        ));
-        assert!(rendered.contains(
-            "spooky_jwks_state{jwks_url=\"https://issuer.example.com/jwks.json\",state=\"refresh_failed_retained\"} 1"
-        ));
-        assert!(rendered.contains(
-            "spooky_jwks_active_keys{jwks_url=\"https://issuer.example.com/jwks.json\"} 2"
-        ));
+        assert!(rendered.contains("spooky_jwks_active_keys{jwks_source_id=\"jwks:example\"} 2"));
     }
 }

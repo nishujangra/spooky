@@ -778,19 +778,19 @@ impl Metrics {
             "# HELP spooky_jwks_unknown_kid_total Total unknown-kid events that triggered JWKS miss handling.\n",
         );
         out.push_str("# TYPE spooky_jwks_unknown_kid_total counter\n");
-        for (jwks_url, count) in self.snapshot_jwks_unknown_kid_events() {
+        for (jwks_source_id, count) in self.snapshot_jwks_unknown_kid_events() {
             out.push_str(&format!(
-                "spooky_jwks_unknown_kid_total{{jwks_url=\"{}\"}} {}\n",
-                escape_prometheus_label(&jwks_url),
+                "spooky_jwks_unknown_kid_total{{jwks_source_id=\"{}\"}} {}\n",
+                escape_prometheus_label(&jwks_source_id),
                 count
             ));
         }
         out.push_str(
-            "# HELP spooky_jwks_refresh_success_total Total successful JWKS refreshes grouped by configured JWKS endpoint.\n",
+            "# HELP spooky_jwks_refresh_success_total Total successful JWKS refreshes grouped by JWKS source identity.\n",
         );
         out.push_str("# TYPE spooky_jwks_refresh_success_total counter\n");
         out.push_str(
-            "# HELP spooky_jwks_refresh_failure_total Total failed JWKS refreshes grouped by configured JWKS endpoint.\n",
+            "# HELP spooky_jwks_refresh_failure_total Total failed JWKS refreshes grouped by JWKS source identity.\n",
         );
         out.push_str("# TYPE spooky_jwks_refresh_failure_total counter\n");
         out.push_str(
@@ -798,11 +798,11 @@ impl Metrics {
         );
         out.push_str("# TYPE spooky_jwks_age_seconds gauge\n");
         out.push_str(
-            "# HELP spooky_jwks_state Current JWKS cache state for a configured endpoint.\n",
+            "# HELP spooky_jwks_state Current JWKS cache state for a configured JWKS source.\n",
         );
         out.push_str("# TYPE spooky_jwks_state gauge\n");
         out.push_str(
-            "# HELP spooky_jwks_active_keys Current count of active verification keys retained for a configured JWKS endpoint.\n",
+            "# HELP spooky_jwks_active_keys Current count of active verification keys retained for a configured JWKS source.\n",
         );
         out.push_str("# TYPE spooky_jwks_active_keys gauge\n");
         out.push_str(
@@ -819,32 +819,32 @@ impl Metrics {
             .map(|duration| duration.as_secs())
             .unwrap_or_default();
         for state in self.snapshot_jwks_source_state() {
-            let jwks_url = escape_prometheus_label(&state.jwks_url);
+            let jwks_source_id = escape_prometheus_label(&state.jwks_source_id);
             out.push_str(&format!(
-                "spooky_jwks_refresh_success_total{{jwks_url=\"{}\"}} {}\n",
-                jwks_url, state.refresh_success_total
+                "spooky_jwks_refresh_success_total{{jwks_source_id=\"{}\"}} {}\n",
+                jwks_source_id, state.refresh_success_total
             ));
             out.push_str(&format!(
-                "spooky_jwks_refresh_failure_total{{jwks_url=\"{}\"}} {}\n",
-                jwks_url, state.refresh_failure_total
+                "spooky_jwks_refresh_failure_total{{jwks_source_id=\"{}\"}} {}\n",
+                jwks_source_id, state.refresh_failure_total
             ));
             out.push_str(&format!(
-                "spooky_jwks_state{{jwks_url=\"{}\",state=\"{}\"}} 1\n",
-                jwks_url,
+                "spooky_jwks_state{{jwks_source_id=\"{}\",state=\"{}\"}} 1\n",
+                jwks_source_id,
                 escape_prometheus_label(&state.state)
             ));
             out.push_str(&format!(
-                "spooky_jwks_active_keys{{jwks_url=\"{}\"}} {}\n",
-                jwks_url, state.active_key_count
+                "spooky_jwks_active_keys{{jwks_source_id=\"{}\"}} {}\n",
+                jwks_source_id, state.active_key_count
             ));
             out.push_str(&format!(
-                "spooky_jwks_last_refresh_attempt_seconds{{jwks_url=\"{}\"}} {}\n",
-                jwks_url,
+                "spooky_jwks_last_refresh_attempt_seconds{{jwks_source_id=\"{}\"}} {}\n",
+                jwks_source_id,
                 state.last_refresh_attempt_unix_seconds.unwrap_or_default()
             ));
             out.push_str(&format!(
-                "spooky_jwks_last_refresh_success_seconds{{jwks_url=\"{}\"}} {}\n",
-                jwks_url,
+                "spooky_jwks_last_refresh_success_seconds{{jwks_source_id=\"{}\"}} {}\n",
+                jwks_source_id,
                 state.last_refresh_success_unix_seconds.unwrap_or_default()
             ));
             let age_seconds = state
@@ -852,8 +852,8 @@ impl Metrics {
                 .map(|last_success| now_unix_seconds.saturating_sub(last_success))
                 .unwrap_or_default();
             out.push_str(&format!(
-                "spooky_jwks_age_seconds{{jwks_url=\"{}\"}} {}\n",
-                jwks_url, age_seconds
+                "spooky_jwks_age_seconds{{jwks_source_id=\"{}\"}} {}\n",
+                jwks_source_id, age_seconds
             ));
         }
         out.push_str(

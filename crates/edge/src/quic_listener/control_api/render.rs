@@ -148,7 +148,7 @@ struct ControlApiReasonCountPayload {
 
 #[derive(Serialize)]
 struct ControlApiUnknownKidEventPayload {
-    jwks_url: String,
+    jwks_source_id: String,
     count: u64,
 }
 
@@ -159,7 +159,8 @@ struct ControlApiJwksPayload {
 
 #[derive(Serialize)]
 struct ControlApiJwksSourcePayload {
-    jwks_url: String,
+    jwks_source_id: String,
+    jwks_endpoint: String,
     allowed_algorithms: Vec<String>,
     startup_behavior: &'static str,
     cache_state: &'static str,
@@ -410,9 +411,9 @@ impl ControlApiRuntimePayload {
         let jwks_sources = crate::quic_listener::admission::snapshot_runtime_jwks_sources(
             runtime.runtime_config(),
         );
-        let jwks_by_url = jwks_sources
+        let jwks_by_source_id = jwks_sources
             .iter()
-            .map(|snapshot| (snapshot.jwks_url.as_str(), snapshot))
+            .map(|snapshot| (snapshot.source_id.as_str(), snapshot))
             .collect::<HashMap<_, _>>();
 
         let mut auth_providers = runtime
@@ -430,7 +431,7 @@ impl ControlApiRuntimePayload {
                     .upstream_auth
                     .jwt
                     .as_ref()
-                    .map(|jwt| jwt_provider_payload(jwt, &jwks_by_url)),
+                    .map(|jwt| jwt_provider_payload(jwt, &jwks_by_source_id)),
             })
             .collect::<Vec<_>>();
         auth_providers.sort_by(|left, right| left.upstream.cmp(&right.upstream));
@@ -467,14 +468,18 @@ impl ControlApiRuntimePayload {
                 unknown_kid_events: metrics
                     .snapshot_jwks_unknown_kid_events()
                     .into_iter()
-                    .map(|(jwks_url, count)| ControlApiUnknownKidEventPayload { jwks_url, count })
+                    .map(|(jwks_source_id, count)| ControlApiUnknownKidEventPayload {
+                        jwks_source_id,
+                        count,
+                    })
                     .collect(),
             },
             jwks: ControlApiJwksPayload {
                 sources: jwks_sources
                     .into_iter()
                     .map(|snapshot| ControlApiJwksSourcePayload {
-                        jwks_url: snapshot.jwks_url,
+                        jwks_source_id: snapshot.source_id,
+                        jwks_endpoint: snapshot.endpoint,
                         allowed_algorithms: snapshot.allowed_algorithms,
                         startup_behavior: snapshot.startup_behavior,
                         cache_state: snapshot.state,
@@ -544,7 +549,7 @@ impl ControlApiRuntimePayload {
 
 fn jwt_provider_payload(
     jwt: &RuntimeJwtAuth,
-    jwks_by_url: &HashMap<&str, &crate::quic_listener::admission::JwtJwksRuntimeSnapshot>,
+    jwks_by_source_id: &HashMap<&str, &crate::quic_listener::admission::JwtJwksRuntimeSnapshot>,
 ) -> ControlApiJwtProviderPayload {
     let issuers = jwt
         .issuer
@@ -561,7 +566,8 @@ fn jwt_provider_payload(
     let jwks_snapshot = jwt
         .jwks_url
         .as_deref()
-        .and_then(|jwks_url| jwks_by_url.get(jwks_url).copied());
+        .and_then(|_| crate::quic_listener::admission::runtime_jwks_source_identity(jwt))
+        .and_then(|source_id| jwks_by_source_id.get(source_id.as_str()).copied());
     let jwks_cache_state = jwks_snapshot.map(|snapshot| snapshot.state);
     let serving_from_stale_cache = jwks_cache_state.map(|state| {
         matches!(
