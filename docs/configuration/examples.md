@@ -227,7 +227,120 @@ upstream:
         address: "backend.private.example:8443"
 ```
 
-## Example 7: Current Reload Stance
+## Example 7: Static RS256 And ES256 JWT Keys
+
+Pin verification to public keys you manage yourself. `secret` stays empty because
+`HS256` is not in the allowlist — configuring both is rejected at startup.
+
+```yaml
+version: 1
+
+listen:
+  protocol: http3
+  address: "0.0.0.0"
+  port: 443
+  tls:
+    cert: /etc/spooky/certs/fullchain.pem
+    key: /etc/spooky/certs/privkey.pem
+
+upstream:
+  api_pool:
+    route:
+      path_prefix: "/"
+    auth:
+      jwt:
+        secret: ""
+        issuer: "https://issuer.example.com/"
+        audience: "payments-api"
+        allowed_algorithms: ["RS256", "ES256"]
+        require_kid: true
+        static_keys:
+          - kind: pem
+            kid: "rsa-2026-01"
+            alg: "RS256"
+            public_key_pem: |
+              -----BEGIN PUBLIC KEY-----
+              MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A...
+              -----END PUBLIC KEY-----
+          - kind: pem
+            kid: "ec-2026-01"
+            alg: "ES256"
+            public_key_pem: |
+              -----BEGIN PUBLIC KEY-----
+              MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...
+              -----END PUBLIC KEY-----
+        clock_skew_secs: 30
+    backends:
+      - id: "backend1"
+        address: "backend.internal.example:8443"
+```
+
+Keys may also be supplied as JWK documents with `kind: jwk` and a `jwk` string field
+instead of `public_key_pem`. RSA keys shorter than 2048 bits are rejected.
+
+## Example 8: JWKS-Backed Validation With Strict Policy
+
+Fetch signing keys from the issuer and enforce a strict issuer/audience/algorithm
+policy. Multiple issuers and audiences use the plural fields; the singular
+`issuer`/`audience` fields remain supported but cannot be combined with them.
+
+```yaml
+version: 1
+
+listen:
+  protocol: http3
+  address: "0.0.0.0"
+  port: 443
+  tls:
+    cert: /etc/spooky/certs/fullchain.pem
+    key: /etc/spooky/certs/privkey.pem
+
+upstream:
+  api_pool:
+    route:
+      path_prefix: "/"
+    auth:
+      jwt:
+        secret: ""
+        issuers:
+          - "https://issuer.example.com/"
+          - "https://issuer-eu.example.com/"
+        audiences:
+          - "payments-api"
+          - "payments-api-internal"
+        allowed_algorithms: ["RS256", "ES256"]
+        require_kid: true
+        jwks_url: "https://issuer.example.com/.well-known/jwks.json"
+        jwks_refresh_interval_secs: 300
+        jwks_request_timeout_ms: 2000
+        jwks_cache_ttl_secs: 900
+        jwks_stale_if_error_secs: 3600
+        jwks_startup_behavior: require_ready
+        clock_skew_secs: 30
+      required_scopes:
+        - "payments:read"
+    backends:
+      - id: "backend1"
+        address: "backend.internal.example:8443"
+```
+
+`jwks_url` must be an absolute `https` URL. Omitting `issuers`/`audiences` entirely
+disables those checks — signature and expiry are still enforced, but any issuer's
+token signed by a trusted key is accepted, so set them in production.
+
+### Startup Behavior Choices
+
+`jwks_startup_behavior` decides what happens when the initial fetch fails:
+
+| Value | Behavior |
+| --- | --- |
+| `require_ready` (default) | Startup fails with an error naming the endpoint and cache state. Use when the upstream must never serve traffic with unverifiable tokens. |
+| `allow_degraded` | The process boots and retries in the background. JWT requests are rejected until keys load. Use when availability of other upstreams matters more than this one being immediately ready. |
+
+Both reject tokens while keys are missing; they differ only in whether the process
+starts at all.
+
+## Example 9: Current Reload Stance
 
 Spooky supports **full configuration hot reload** via `POST /admin/runtime/reload`, alongside
 certificate-only reload for new handshakes. When planning operations:

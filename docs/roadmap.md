@@ -95,7 +95,7 @@ These areas make Spooky far more competitive as a general production reverse pro
 
 ### 8. Auth And Policy Features
 
-- JWKS / asymmetric JWT validation (RS256/ES256) — local JWT validation ships today but is HS256-only
+- broader JOSE algorithm coverage (`RS384`/`RS512`, additional ECDSA curves) and discovery-based JWKS resolution
 - stronger route-level policy controls and layered/chained auth providers
 
 _Already shipped (previously listed here as future): scoped rate limiting (route/client/tenant/token),
