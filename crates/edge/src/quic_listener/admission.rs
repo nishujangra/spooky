@@ -627,7 +627,7 @@ fn observe_jwt_validation_failure(
             .and_then(|header| header.kid.as_deref())
             .is_some()
     {
-        metrics.record_jwks_unknown_kid(&source.jwks_url);
+        metrics.record_jwks_unknown_kid(&source.source_identity);
     }
 }
 
@@ -741,6 +741,10 @@ impl JwtJwksSourceConfig {
             .min(Duration::from_secs(30))
             .max(Duration::from_secs(5))
     }
+
+    fn public_endpoint(&self) -> String {
+        jwt_jwks_public_endpoint(&self.jwks_url)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -813,29 +817,7 @@ impl JwtJwksSharedCache {
         entries
             .entry(source.source_identity.clone())
             .and_modify(|entry| {
-                let mut merged_algorithms = entry.source.allowed_algorithms.clone();
-                for algorithm in &source.allowed_algorithms {
-                    if !merged_algorithms.contains(algorithm) {
-                        merged_algorithms.push(*algorithm);
-                    }
-                }
-                merged_algorithms.sort_by_key(|algorithm| jwt_algorithm_name(*algorithm));
-                entry.source.allowed_algorithms = merged_algorithms;
-                entry.source.refresh_interval =
-                    entry.source.refresh_interval.min(source.refresh_interval);
-                entry.source.request_timeout =
-                    entry.source.request_timeout.max(source.request_timeout);
-                entry.source.cache_ttl = entry.source.cache_ttl.min(source.cache_ttl);
-                entry.source.stale_if_error =
-                    entry.source.stale_if_error.max(source.stale_if_error);
-                entry.source.startup_behavior =
-                    match (&entry.source.startup_behavior, &source.startup_behavior) {
-                        (JwksStartupBehavior::RequireReady, _)
-                        | (_, JwksStartupBehavior::RequireReady) => {
-                            JwksStartupBehavior::RequireReady
-                        }
-                        _ => JwksStartupBehavior::AllowDegraded,
-                    };
+                merge_jwks_source_config(&mut entry.source, &source);
             })
             .or_insert_with(|| JwtJwksCacheEntry {
                 source,
@@ -1180,7 +1162,7 @@ pub(super) struct JwtJwksFetchFailure {
 
 #[allow(dead_code)]
 impl JwtJwksFetchFailure {
-    fn request_failed(detail: String) -> Self {
+    pub(super) fn request_failed(detail: String) -> Self {
         Self {
             reason: JwtJwksFetchFailureReason::RequestFailed,
             detail,
@@ -1194,7 +1176,7 @@ impl JwtJwksFetchFailure {
         }
     }
 
-    fn malformed_document(detail: impl Into<String>) -> Self {
+    pub(super) fn malformed_document(detail: impl Into<String>) -> Self {
         Self {
             reason: JwtJwksFetchFailureReason::MalformedDocument,
             detail: detail.into(),
@@ -1226,8 +1208,9 @@ pub(super) fn prime_jwks_cache_for_test(
     stale: bool,
     keys: Vec<RuntimeJwtVerificationKey>,
 ) {
+    let cache_key = jwks_test_cache_key(source_identity);
     let source = JwtJwksSourceConfig {
-        source_identity: source_identity.to_string(),
+        source_identity: cache_key.clone(),
         jwks_url: source_identity.to_string(),
         allowed_algorithms: vec![JwtAlgorithm::Rs256, JwtAlgorithm::Es256],
         refresh_interval: Duration::from_secs(60),
@@ -1237,7 +1220,7 @@ pub(super) fn prime_jwks_cache_for_test(
         startup_behavior: JwksStartupBehavior::AllowDegraded,
     };
     JwtJwksSharedCache::shared().upsert(
-        source_identity,
+        &cache_key,
         JwtJwksCacheEntry {
             source,
             state: if stale {
@@ -1270,8 +1253,9 @@ pub(super) fn prime_jwks_cache_for_test(
 
 #[cfg(test)]
 pub(super) fn mark_jwks_source_unavailable_for_test(source_identity: &str) {
+    let cache_key = jwks_test_cache_key(source_identity);
     let source = JwtJwksSourceConfig {
-        source_identity: source_identity.to_string(),
+        source_identity: cache_key.clone(),
         jwks_url: source_identity.to_string(),
         allowed_algorithms: vec![JwtAlgorithm::Rs256, JwtAlgorithm::Es256],
         refresh_interval: Duration::from_secs(60),
@@ -1281,7 +1265,7 @@ pub(super) fn mark_jwks_source_unavailable_for_test(source_identity: &str) {
         startup_behavior: JwksStartupBehavior::AllowDegraded,
     };
     JwtJwksSharedCache::shared().upsert(
-        source_identity,
+        &cache_key,
         JwtJwksCacheEntry {
             source,
             state: JwtJwksCacheState::NeverFetched,
@@ -1304,8 +1288,9 @@ pub(super) fn mark_jwks_source_unavailable_for_test(source_identity: &str) {
 
 #[cfg(test)]
 pub(super) fn mark_jwks_source_invalid_for_test(source_identity: &str) {
+    let cache_key = jwks_test_cache_key(source_identity);
     let source = JwtJwksSourceConfig {
-        source_identity: source_identity.to_string(),
+        source_identity: cache_key.clone(),
         jwks_url: source_identity.to_string(),
         allowed_algorithms: vec![JwtAlgorithm::Rs256, JwtAlgorithm::Es256],
         refresh_interval: Duration::from_secs(60),
@@ -1315,7 +1300,7 @@ pub(super) fn mark_jwks_source_invalid_for_test(source_identity: &str) {
         startup_behavior: JwksStartupBehavior::AllowDegraded,
     };
     JwtJwksSharedCache::shared().upsert(
-        source_identity,
+        &cache_key,
         JwtJwksCacheEntry {
             source,
             state: JwtJwksCacheState::EmptyUnusable,
@@ -1338,12 +1323,60 @@ pub(super) fn mark_jwks_source_invalid_for_test(source_identity: &str) {
 
 #[cfg(test)]
 pub(super) fn clear_jwks_cache_for_test(source_identity: &str) {
-    JwtJwksSharedCache::shared().remove(source_identity);
+    JwtJwksSharedCache::shared().remove(&jwks_test_cache_key(source_identity));
+}
+
+#[cfg(test)]
+pub(super) fn jwks_source_identity_for_test(jwks_url: &str) -> String {
+    jwt_jwks_source_identity(jwks_url, &[])
+}
+
+#[cfg(test)]
+fn jwks_test_cache_key(source_identity: &str) -> String {
+    if source_identity.starts_with("https://") {
+        jwks_source_identity_for_test(source_identity)
+    } else {
+        source_identity.to_string()
+    }
+}
+
+pub(super) fn runtime_jwks_source_identity(jwt: &RuntimeJwtAuth) -> Option<String> {
+    JwtJwksSourceConfig::from_jwt(jwt).map(|source| source.source_identity)
 }
 
 fn jwt_jwks_source_identity(jwks_url: &str, allowed_algorithms: &[JwtAlgorithm]) -> String {
     let _ = allowed_algorithms;
-    jwks_url.to_string()
+    let digest = Sha256::digest(jwks_url.as_bytes());
+    format!("jwks:{}", hex::encode(&digest[..12]))
+}
+
+fn jwt_jwks_public_endpoint(jwks_url: &str) -> String {
+    jwks_url
+        .split(['?', '#'])
+        .next()
+        .unwrap_or(jwks_url)
+        .to_string()
+}
+
+fn merge_jwks_source_config(existing: &mut JwtJwksSourceConfig, incoming: &JwtJwksSourceConfig) {
+    let mut merged_algorithms = existing.allowed_algorithms.clone();
+    for algorithm in &incoming.allowed_algorithms {
+        if !merged_algorithms.contains(algorithm) {
+            merged_algorithms.push(*algorithm);
+        }
+    }
+    merged_algorithms.sort_by_key(|algorithm| jwt_algorithm_name(*algorithm));
+    existing.allowed_algorithms = merged_algorithms;
+    existing.refresh_interval = existing.refresh_interval.min(incoming.refresh_interval);
+    existing.request_timeout = existing.request_timeout.max(incoming.request_timeout);
+    existing.cache_ttl = existing.cache_ttl.min(incoming.cache_ttl);
+    existing.stale_if_error = existing.stale_if_error.max(incoming.stale_if_error);
+    existing.startup_behavior = match (&existing.startup_behavior, &incoming.startup_behavior) {
+        (JwksStartupBehavior::RequireReady, _) | (_, JwksStartupBehavior::RequireReady) => {
+            JwksStartupBehavior::RequireReady
+        }
+        _ => JwksStartupBehavior::AllowDegraded,
+    };
 }
 
 fn runtime_jwks_sources(config: &RuntimeConfig) -> Vec<JwtJwksSourceConfig> {
@@ -1357,9 +1390,12 @@ fn runtime_jwks_sources(config: &RuntimeConfig) -> Vec<JwtJwksSourceConfig> {
         };
         sources
             .entry(source.source_identity.clone())
+            .and_modify(|existing| merge_jwks_source_config(existing, &source))
             .or_insert(source);
     }
-    sources.into_values().collect()
+    let mut sources = sources.into_values().collect::<Vec<_>>();
+    sources.sort_by(|left, right| left.source_identity.cmp(&right.source_identity));
+    sources
 }
 
 impl QUICListener {
@@ -1371,6 +1407,13 @@ impl QUICListener {
 
     pub(super) fn initialize_jwks_startup(
         config: &RuntimeConfig,
+    ) -> Result<(), spooky_errors::ProxyError> {
+        Self::preflight_require_ready_jwks(config, "startup_preflight")
+    }
+
+    pub(crate) fn preflight_require_ready_jwks(
+        config: &RuntimeConfig,
+        trigger: &'static str,
     ) -> Result<(), spooky_errors::ProxyError> {
         let sources = runtime_jwks_sources(config);
         if sources.is_empty() {
@@ -1396,26 +1439,33 @@ impl QUICListener {
                 .map_err(|err| format!("failed to create JWKS startup runtime: {err}"))?;
             runtime.block_on(async move {
                 for source in require_ready {
-                    refresh_jwks_source_once(source.clone(), "startup_preflight")
+                    refresh_jwks_source_once(source.clone(), trigger)
                         .await
                         .map_err(|failure| {
                             format!(
-                                "jwks startup preflight failed source={} startup_behavior=require_ready detail={}",
-                                source.jwks_url, failure
+                                "jwks require-ready preflight failed source_id={} endpoint={} trigger={} startup_behavior=require_ready detail={}",
+                                source.source_identity,
+                                source.public_endpoint(),
+                                trigger,
+                                failure
                             )
                         })?;
                     let snapshot = JwtJwksSharedCache::shared()
                         .snapshot(&source.source_identity, Instant::now())
                         .ok_or_else(|| {
                             format!(
-                                "jwks startup preflight failed source={} startup_behavior=require_ready detail=missing_cache_snapshot",
-                                source.jwks_url
+                                "jwks require-ready preflight failed source_id={} endpoint={} trigger={} startup_behavior=require_ready detail=missing_cache_snapshot",
+                                source.source_identity,
+                                source.public_endpoint(),
+                                trigger
                             )
                         })?;
                     if !jwt_jwks_cache_state_usable(snapshot.state) {
                         return Err(format!(
-                            "jwks startup preflight failed source={} startup_behavior=require_ready state={} detail={}",
-                            source.jwks_url,
+                            "jwks require-ready preflight failed source_id={} endpoint={} trigger={} startup_behavior=require_ready state={} detail={}",
+                            source.source_identity,
+                            source.public_endpoint(),
+                            trigger,
                             jwt_jwks_cache_state_name(snapshot.state),
                             snapshot.last_error.unwrap_or_else(|| {
                                 "jwks source has no usable keys after startup preflight"
@@ -1479,7 +1529,8 @@ fn jwt_jwks_cache_stale_window_expired(snapshot: &JwtJwksCacheSnapshot) -> bool 
 
 #[derive(Debug, Clone)]
 pub(super) struct JwtJwksRuntimeSnapshot {
-    pub(super) jwks_url: String,
+    pub(super) source_id: String,
+    pub(super) endpoint: String,
     pub(super) allowed_algorithms: Vec<String>,
     pub(super) startup_behavior: &'static str,
     pub(super) state: &'static str,
@@ -1515,7 +1566,8 @@ pub(super) fn snapshot_runtime_jwks_sources(config: &RuntimeConfig) -> Vec<JwtJw
                     })
             });
             JwtJwksRuntimeSnapshot {
-                jwks_url: source.jwks_url.clone(),
+                source_id: source.source_identity.clone(),
+                endpoint: source.public_endpoint(),
                 allowed_algorithms: source
                     .allowed_algorithms
                     .iter()
@@ -1544,7 +1596,7 @@ pub(super) fn snapshot_runtime_jwks_sources(config: &RuntimeConfig) -> Vec<JwtJw
             }
         })
         .collect::<Vec<_>>();
-    snapshots.sort_by(|left, right| left.jwks_url.cmp(&right.jwks_url));
+    snapshots.sort_by(|left, right| left.source_id.cmp(&right.source_id));
     snapshots
 }
 
@@ -1597,7 +1649,7 @@ async fn refresh_jwks_source_once(
         return Ok(());
     }
     if let Some(metrics) = current_jwt_jwks_metrics() {
-        metrics.record_jwks_refresh_started(&source.jwks_url, SystemTime::now());
+        metrics.record_jwks_refresh_started(&source.source_identity, SystemTime::now());
     }
     log::debug!(
         "JWKS refresh started source={} trigger={} configured_algorithms={:?}",
@@ -1630,7 +1682,7 @@ async fn refresh_jwks_source_inflight(
             if let Some(snapshot) = cache.snapshot(&source.source_identity, Instant::now()) {
                 if let Some(metrics) = current_jwt_jwks_metrics() {
                     metrics.record_jwks_refresh_success(
-                        &source.jwks_url,
+                        &source.source_identity,
                         jwt_jwks_cache_state_name(snapshot.state),
                         snapshot.active_keys.len(),
                         SystemTime::now(),
@@ -1700,7 +1752,7 @@ async fn refresh_jwks_source_inflight(
             let snapshot = cache.snapshot(&source.source_identity, Instant::now());
             if let Some(metrics) = current_jwt_jwks_metrics() {
                 metrics.record_jwks_refresh_failure(
-                    &source.jwks_url,
+                    &source.source_identity,
                     snapshot
                         .as_ref()
                         .map(|entry| jwt_jwks_cache_state_name(entry.state))
@@ -1828,7 +1880,9 @@ impl<'a> JwtKeyResolver<'a> {
                     JwtAlgorithm::Rs256 | JwtAlgorithm::Es256 => {
                         if self.jwt.jwks_url.is_some() {
                             JwtVerificationKeySource::RemoteJwks {
-                                source_identity: self.jwt.jwks_url.clone().unwrap_or_default(),
+                                source_identity: JwtJwksSourceConfig::from_jwt(self.jwt)
+                                    .map(|source| source.source_identity)
+                                    .unwrap_or_default(),
                             }
                         } else {
                             JwtVerificationKeySource::StaticAsymmetricKeys
@@ -3715,10 +3769,11 @@ mod tests {
     async fn startup_jwks_refresh_populates_active_key_set() {
         let jwks_url = "https://issuer.example.com/startup-jwks.json";
         clear_jwks_cache_for_test(jwks_url);
+        let source_identity = jwks_source_identity_for_test(jwks_url);
         let rsa = Rsa::generate(2048).expect("rsa key");
         let key = PKey::from_rsa(rsa).expect("rsa pkey");
         let source = JwtJwksSourceConfig {
-            source_identity: jwks_url.to_string(),
+            source_identity: source_identity.clone(),
             jwks_url: jwks_url.to_string(),
             allowed_algorithms: vec![JwtAlgorithm::Rs256],
             refresh_interval: Duration::from_secs(60),
@@ -3776,14 +3831,75 @@ mod tests {
     }
 
     #[test]
+    fn runtime_jwks_sources_merge_same_url_policies_deterministically() {
+        let jwks_url = "https://issuer.example.com/shared-jwks.json?token=secret";
+        let mut config = test_runtime_config_with_jwks_auth(JwtAuth {
+            secret: String::new(),
+            allowed_algorithms: vec![JwtAlgorithm::Rs256],
+            jwks_url: Some(jwks_url.to_string()),
+            jwks_request_timeout_ms: 1000,
+            jwks_refresh_interval_secs: 60,
+            jwks_cache_ttl_secs: 300,
+            jwks_stale_if_error_secs: 60,
+            jwks_startup_behavior: JwksStartupBehavior::AllowDegraded,
+            ..JwtAuth::default()
+        });
+        config
+            .upstreams
+            .insert("api-2".to_string(), config.upstreams["api"].clone());
+        config
+            .upstreams
+            .get_mut("api-2")
+            .expect("api-2")
+            .policy
+            .upstream_auth
+            .jwt = Some(RuntimeJwtAuth {
+            secret: String::new(),
+            allowed_algorithms: vec![JwtAlgorithm::Es256],
+            jwks_url: Some(jwks_url.to_string()),
+            jwks_request_timeout: Duration::from_secs(5),
+            jwks_refresh_interval: Duration::from_secs(15),
+            jwks_cache_ttl: Duration::from_secs(120),
+            jwks_stale_if_error: Duration::from_secs(180),
+            jwks_startup_behavior: JwksStartupBehavior::RequireReady,
+            ..RuntimeJwtAuth::default()
+        });
+
+        let sources = runtime_jwks_sources(&config);
+        assert_eq!(sources.len(), 1);
+        assert_eq!(
+            sources[0].source_identity,
+            jwks_source_identity_for_test(jwks_url)
+        );
+        assert_eq!(sources[0].jwks_url, jwks_url);
+        assert_eq!(
+            sources[0].allowed_algorithms,
+            vec![JwtAlgorithm::Es256, JwtAlgorithm::Rs256]
+        );
+        assert_eq!(sources[0].refresh_interval, Duration::from_secs(15));
+        assert_eq!(sources[0].request_timeout, Duration::from_secs(5));
+        assert_eq!(sources[0].cache_ttl, Duration::from_secs(120));
+        assert_eq!(sources[0].stale_if_error, Duration::from_secs(180));
+        assert_eq!(
+            sources[0].startup_behavior,
+            JwksStartupBehavior::RequireReady
+        );
+        assert_eq!(
+            sources[0].public_endpoint(),
+            "https://issuer.example.com/shared-jwks.json"
+        );
+    }
+
+    #[test]
     fn stale_jwks_cache_beyond_configured_limit_rejects_requests() {
         let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         let jwks_url = "https://issuer.example.com/expired-stale-jwks.json";
         clear_jwks_cache_for_test(jwks_url);
+        let source_identity = jwks_source_identity_for_test(jwks_url);
 
         let key = PKey::from_rsa(Rsa::generate(2048).expect("rsa")).expect("pkey");
         let source = JwtJwksSourceConfig {
-            source_identity: jwks_url.to_string(),
+            source_identity: source_identity.clone(),
             jwks_url: jwks_url.to_string(),
             allowed_algorithms: vec![JwtAlgorithm::Rs256],
             refresh_interval: Duration::from_secs(60),
@@ -3794,7 +3910,7 @@ mod tests {
         };
         let cache_now = Instant::now();
         JwtJwksSharedCache::shared().upsert(
-            jwks_url,
+            &source_identity,
             JwtJwksCacheEntry {
                 source,
                 state: JwtJwksCacheState::Stale,
@@ -3855,10 +3971,11 @@ mod tests {
         let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         let jwks_url = "https://issuer.example.com/refresh-failure-retention-jwks.json";
         clear_jwks_cache_for_test(jwks_url);
+        let source_identity = jwks_source_identity_for_test(jwks_url);
 
         let key = PKey::from_rsa(Rsa::generate(2048).expect("rsa")).expect("pkey");
         let source = JwtJwksSourceConfig {
-            source_identity: jwks_url.to_string(),
+            source_identity: source_identity.clone(),
             jwks_url: jwks_url.to_string(),
             allowed_algorithms: vec![JwtAlgorithm::Rs256],
             refresh_interval: Duration::from_secs(60),
@@ -4150,11 +4267,12 @@ mod tests {
         let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         let jwks_url = "https://issuer.example.com/rollover-overlap-jwks.json";
         clear_jwks_cache_for_test(jwks_url);
+        let source_identity = jwks_source_identity_for_test(jwks_url);
 
         let old_key = PKey::from_rsa(Rsa::generate(2048).expect("old rsa")).expect("old pkey");
         let new_key = PKey::from_rsa(Rsa::generate(2048).expect("new rsa")).expect("new pkey");
         let source = JwtJwksSourceConfig {
-            source_identity: jwks_url.to_string(),
+            source_identity: source_identity.clone(),
             jwks_url: jwks_url.to_string(),
             allowed_algorithms: vec![JwtAlgorithm::Rs256],
             refresh_interval: Duration::from_secs(60),
@@ -4208,11 +4326,12 @@ mod tests {
         let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         let jwks_url = "https://issuer.example.com/reused-kid-jwks.json";
         clear_jwks_cache_for_test(jwks_url);
+        let source_identity = jwks_source_identity_for_test(jwks_url);
 
         let old_key = PKey::from_rsa(Rsa::generate(2048).expect("old rsa")).expect("old pkey");
         let new_key = PKey::from_rsa(Rsa::generate(2048).expect("new rsa")).expect("new pkey");
         let source = JwtJwksSourceConfig {
-            source_identity: jwks_url.to_string(),
+            source_identity: source_identity.clone(),
             jwks_url: jwks_url.to_string(),
             allowed_algorithms: vec![JwtAlgorithm::Rs256],
             refresh_interval: Duration::from_secs(60),
@@ -4271,10 +4390,11 @@ mod tests {
         let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         let jwks_url = "https://issuer.example.com/quarantine-jwks.json";
         clear_jwks_cache_for_test(jwks_url);
+        let source_identity = jwks_source_identity_for_test(jwks_url);
 
         let key = PKey::from_rsa(Rsa::generate(2048).expect("rsa")).expect("pkey");
         let source = JwtJwksSourceConfig {
-            source_identity: jwks_url.to_string(),
+            source_identity: source_identity.clone(),
             jwks_url: jwks_url.to_string(),
             allowed_algorithms: vec![JwtAlgorithm::Rs256],
             refresh_interval: Duration::from_secs(60),

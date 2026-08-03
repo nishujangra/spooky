@@ -133,7 +133,7 @@ upstream:
       type: "{lb_type}"
     route:
       path_prefix: "{path_prefix}"
-    backends:
+{auth}    backends:
       - id: "{backend_id}"
         address: "{backend_address}"
         weight: {backend_weight}
@@ -150,6 +150,7 @@ log:
         key = config.listen.tls.key,
         lb_type = upstream.load_balancing.lb_type,
         path_prefix = upstream.route.path_prefix.as_deref().unwrap_or("/"),
+        auth = render_test_auth_yaml(&upstream.auth),
         backend_id = backend.id,
         backend_address = backend.address,
         backend_weight = backend.weight,
@@ -157,6 +158,61 @@ log:
         log_level = config.log.level,
     );
     std::fs::write(path, yaml).expect("write config file");
+}
+
+/// Renders only the JWT slice of `auth` that reload tests exercise. The wider
+/// config template is hand-written because `Config` is deserialize-only, so
+/// anything not emitted here is silently dropped on the round-trip through disk.
+fn render_test_auth_yaml(auth: &spooky_config::config::RouteAuth) -> String {
+    let Some(jwt) = auth.jwt.as_ref() else {
+        return String::new();
+    };
+    let mut yaml = String::from("    auth:\n      jwt:\n");
+    yaml.push_str(&format!("        secret: \"{}\"\n", jwt.secret));
+    if let Some(issuer) = jwt.issuer.as_deref() {
+        yaml.push_str(&format!("        issuer: \"{issuer}\"\n"));
+    }
+    if let Some(audience) = jwt.audience.as_deref() {
+        yaml.push_str(&format!("        audience: \"{audience}\"\n"));
+    }
+    let algorithms = jwt
+        .allowed_algorithms
+        .iter()
+        .map(|algorithm| match algorithm {
+            JwtAlgorithm::Hs256 => "\"HS256\"",
+            JwtAlgorithm::Rs256 => "\"RS256\"",
+            JwtAlgorithm::Es256 => "\"ES256\"",
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    yaml.push_str(&format!("        allowed_algorithms: [{algorithms}]\n"));
+    if let Some(jwks_url) = jwt.jwks_url.as_deref() {
+        yaml.push_str(&format!("        jwks_url: \"{jwks_url}\"\n"));
+        yaml.push_str(&format!(
+            "        jwks_refresh_interval_secs: {}\n",
+            jwt.jwks_refresh_interval_secs
+        ));
+        yaml.push_str(&format!(
+            "        jwks_request_timeout_ms: {}\n",
+            jwt.jwks_request_timeout_ms
+        ));
+        yaml.push_str(&format!(
+            "        jwks_cache_ttl_secs: {}\n",
+            jwt.jwks_cache_ttl_secs
+        ));
+        yaml.push_str(&format!(
+            "        jwks_stale_if_error_secs: {}\n",
+            jwt.jwks_stale_if_error_secs
+        ));
+        yaml.push_str(&format!(
+            "        jwks_startup_behavior: {}\n",
+            match jwt.jwks_startup_behavior {
+                JwksStartupBehavior::RequireReady => "require_ready",
+                JwksStartupBehavior::AllowDegraded => "allow_degraded",
+            }
+        ));
+    }
+    yaml
 }
 
 fn control_api_state_with_runtime_bundle(
@@ -1553,6 +1609,7 @@ async fn control_api_runtime_snapshot_includes_jwks_cache_visibility() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
     let jwks_url = "https://issuer.example.com/.well-known/jwks.json";
+    let jwks_source_id = crate::quic_listener::admission::jwks_source_identity_for_test(jwks_url);
     let mut startup = test_config(cert, key);
     startup
         .upstream
@@ -1580,7 +1637,7 @@ async fn control_api_runtime_snapshot_includes_jwks_cache_visibility() {
     let metrics = state.current_service_state().metrics();
     metrics.record_jwt_validation_failure("issuer_mismatch");
     metrics.record_jwt_algorithm_rejection("RS256");
-    metrics.record_jwks_unknown_kid(jwks_url);
+    metrics.record_jwks_unknown_kid(&jwks_source_id);
 
     let payload = json_body(QUICListener::render_control_api_runtime_snapshot(&state)).await;
     let providers = payload["auth"]["providers"]
@@ -1611,12 +1668,13 @@ async fn control_api_runtime_snapshot_includes_jwks_cache_visibility() {
     assert_eq!(
         payload["auth"]["unknown_kid_events"]
             .as_array()
-            .expect("unknown kid events")[0]["jwks_url"],
-        jwks_url
+            .expect("unknown kid events")[0]["jwks_source_id"],
+        jwks_source_id
     );
     let sources = payload["jwks"]["sources"].as_array().expect("jwks sources");
     assert_eq!(sources.len(), 1);
-    assert_eq!(sources[0]["jwks_url"], jwks_url);
+    assert_eq!(sources[0]["jwks_source_id"], jwks_source_id);
+    assert_eq!(sources[0]["jwks_endpoint"], jwks_url);
     assert_eq!(sources[0]["startup_behavior"], "allow_degraded");
     assert_eq!(sources[0]["cache_state"], "fresh");
     assert_eq!(sources[0]["active_key_count"], 1);
@@ -1626,6 +1684,72 @@ async fn control_api_runtime_snapshot_includes_jwks_cache_visibility() {
             .expect("algorithms")[0],
         "RS256"
     );
+    crate::quic_listener::admission::clear_jwks_cache_for_test(jwks_url);
+}
+
+#[test]
+fn staged_reload_planner_rejects_new_require_ready_jwks_when_preflight_fails() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+    let current_config = test_config(cert.clone(), key.clone());
+    write_config_file(&config_path, &current_config);
+
+    let bundle =
+        runtime_bundle_from_config(config_path.to_string_lossy().as_ref(), &current_config);
+    let current = RuntimeBundleHandle::new(bundle).current_view();
+
+    let jwks_url = "https://issuer.example.com/reload-require-ready.json?token=secret";
+    crate::quic_listener::admission::clear_jwks_cache_for_test(jwks_url);
+    crate::quic_listener::admission::script_jwks_fetches_for_test(
+        jwks_url,
+        vec![Err(
+            crate::quic_listener::admission::JwtJwksFetchFailure::request_failed(
+                "scripted reload outage".to_string(),
+            ),
+        )],
+    );
+
+    let mut next_config = test_config(cert, key);
+    next_config.upstream.get_mut("api").expect("api").auth.jwt = Some(JwtAuth {
+        secret: String::new(),
+        allowed_algorithms: vec![JwtAlgorithm::Rs256],
+        jwks_url: Some(jwks_url.to_string()),
+        jwks_request_timeout_ms: 1000,
+        jwks_refresh_interval_secs: 60,
+        jwks_cache_ttl_secs: 60,
+        jwks_stale_if_error_secs: 60,
+        jwks_startup_behavior: JwksStartupBehavior::RequireReady,
+        issuer: Some("issuer-1".to_string()),
+        audience: Some("aud-1".to_string()),
+        ..JwtAuth::default()
+    });
+    write_config_file(&config_path, &next_config);
+
+    let plan = plan_runtime_reload(
+        &current,
+        planner_request(current.generation()),
+        ReloadConfigInput::Path {
+            path: config_path.to_string_lossy().to_string(),
+        },
+    );
+
+    assert!(!plan.can_activate());
+    assert_eq!(
+        plan.plan.phase_status(PlanningPhase::NormalizeRuntime),
+        Some(PlanningPhaseStatus::Rejected)
+    );
+    assert!(plan.plan.rejected_changes.iter().any(|rejection| {
+        rejection.kind == RejectedChangeKind::ResourcePreparationFailed
+            && rejection.field_path.as_deref() == Some("runtime jwks preflight")
+    }));
+    assert!(
+        plan.plan
+            .rejection_summary
+            .as_deref()
+            .is_some_and(|summary| summary.contains("runtime jwks preflight"))
+    );
+
     crate::quic_listener::admission::clear_jwks_cache_for_test(jwks_url);
 }
 
