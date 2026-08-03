@@ -803,7 +803,13 @@ impl JwtJwksSharedCache {
     }
 
     fn register_source(&self, source: JwtJwksSourceConfig) {
-        let mut entries = self.entries.write().expect("jwks shared cache write lock");
+        let Ok(mut entries) = self.entries.write() else {
+            log::error!(
+                "JWKS cache lock poisoned; skipping source registration source={}",
+                source.jwks_url
+            );
+            return;
+        };
         entries
             .entry(source.source_identity.clone())
             .and_modify(|entry| {
@@ -851,9 +857,11 @@ impl JwtJwksSharedCache {
     }
 
     fn snapshot(&self, source_identity: &str, now: Instant) -> Option<JwtJwksCacheSnapshot> {
+        // A poisoned lock yields `None`, which callers already treat as an
+        // unavailable key source and reject rather than admit.
         self.entries
             .read()
-            .expect("jwks shared cache read lock")
+            .ok()?
             .get(source_identity)
             .map(|entry| JwtJwksCacheSnapshot {
                 source: entry.source.clone(),
@@ -872,7 +880,13 @@ impl JwtJwksSharedCache {
     }
 
     fn begin_refresh(&self, source: &JwtJwksSourceConfig, now: Instant) -> bool {
-        let mut entries = self.entries.write().expect("jwks shared cache write lock");
+        let Ok(mut entries) = self.entries.write() else {
+            log::error!(
+                "JWKS cache lock poisoned; skipping refresh source={}",
+                source.jwks_url
+            );
+            return false;
+        };
         let Some(entry) = entries.get_mut(&source.source_identity) else {
             return false;
         };
@@ -891,7 +905,12 @@ impl JwtJwksSharedCache {
         now: Instant,
         keys: Vec<RuntimeJwtVerificationKey>,
     ) {
-        let mut entries = self.entries.write().expect("jwks shared cache write lock");
+        let Ok(mut entries) = self.entries.write() else {
+            log::error!(
+                "JWKS cache lock poisoned; dropping refresh result source={source_identity}"
+            );
+            return;
+        };
         let Some(entry) = entries.get_mut(source_identity) else {
             return;
         };
@@ -929,7 +948,12 @@ impl JwtJwksSharedCache {
         now: Instant,
         failure: &JwtJwksFetchFailure,
     ) {
-        let mut entries = self.entries.write().expect("jwks shared cache write lock");
+        let Ok(mut entries) = self.entries.write() else {
+            log::error!(
+                "JWKS cache lock poisoned; dropping refresh failure source={source_identity}"
+            );
+            return;
+        };
         let Some(entry) = entries.get_mut(source_identity) else {
             return;
         };
@@ -952,7 +976,9 @@ impl JwtJwksSharedCache {
         source_identity: &str,
         now: Instant,
     ) -> Option<JwtJwksSourceConfig> {
-        let mut entries = self.entries.write().expect("jwks shared cache write lock");
+        // A poisoned lock means no on-demand refresh is scheduled; the periodic
+        // refresh remains the recovery path.
+        let mut entries = self.entries.write().ok()?;
         let entry = entries.get_mut(source_identity)?;
         if entry.refresh_in_flight {
             return None;
@@ -2418,18 +2444,14 @@ fn resolve_matching_asymmetric_key<'a>(
             .kid
             .as_deref()
             .or_else(|| static_key_config_kid(key));
-        match requested_kid {
-            Some(requested_kid) => {
-                if effective_kid != Some(requested_kid) {
-                    continue;
-                }
-            }
-            None => {
-                // Tokens without a `kid` are only accepted when exactly one
-                // algorithm-compatible key remains after policy filtering.
-                // Multiple candidates are treated as ambiguous rather than
-                // guessing which verification mode the issuer intended.
-            }
+        // A token without a `kid` filters on algorithm alone, and is only
+        // accepted when exactly one compatible key survives; the ambiguity
+        // check below rejects the rest rather than guessing which key the
+        // issuer intended.
+        if let Some(requested_kid) = requested_kid
+            && effective_kid != Some(requested_kid)
+        {
+            continue;
         }
         if let Some(key_alg) = metadata.alg.or_else(|| static_key_config_alg(key))
             && key_alg != algorithm
