@@ -577,11 +577,12 @@ fn log_jwt_validation_rejection(jwt: &RuntimeJwtAuth, token: &str, failure: &Jwt
             .as_ref()
             .is_some_and(jwt_jwks_cache_stale_window_expired);
         log::debug!(
-            "JWT validation rejected request: reason={} alg={} kid={} jwks_url={} jwks_state={} jwks_failure_reason={} stale_window_expired={}",
+            "JWT validation rejected request: reason={} alg={} kid={} jwks_source_id={} jwks_endpoint={} jwks_state={} jwks_failure_reason={} stale_window_expired={}",
             failure.reason.as_str(),
             algorithm,
             kid,
-            source.jwks_url,
+            source.source_identity,
+            source.public_endpoint(),
             state,
             cache_reason,
             stale_expired
@@ -809,8 +810,8 @@ impl JwtJwksSharedCache {
     fn register_source(&self, source: JwtJwksSourceConfig) {
         let Ok(mut entries) = self.entries.write() else {
             log::error!(
-                "JWKS cache lock poisoned; skipping source registration source={}",
-                source.jwks_url
+                "JWKS cache lock poisoned; skipping source registration source_id={}",
+                source.source_identity
             );
             return;
         };
@@ -864,8 +865,8 @@ impl JwtJwksSharedCache {
     fn begin_refresh(&self, source: &JwtJwksSourceConfig, now: Instant) -> bool {
         let Ok(mut entries) = self.entries.write() else {
             log::error!(
-                "JWKS cache lock poisoned; skipping refresh source={}",
-                source.jwks_url
+                "JWKS cache lock poisoned; skipping refresh source_id={}",
+                source.source_identity
             );
             return false;
         };
@@ -1652,8 +1653,9 @@ async fn refresh_jwks_source_once(
         metrics.record_jwks_refresh_started(&source.source_identity, SystemTime::now());
     }
     log::debug!(
-        "JWKS refresh started source={} trigger={} configured_algorithms={:?}",
-        source.jwks_url,
+        "JWKS refresh started source_id={} endpoint={} trigger={} configured_algorithms={:?}",
+        source.source_identity,
+        source.public_endpoint(),
         trigger,
         source
             .allowed_algorithms
@@ -1690,8 +1692,9 @@ async fn refresh_jwks_source_inflight(
                     );
                 }
                 log::info!(
-                    "JWKS key-set replacement source={} trigger={} previous_active_keys={} active_keys={} state={}",
-                    source.jwks_url,
+                    "JWKS key-set replacement source_id={} endpoint={} trigger={} previous_active_keys={} active_keys={} state={}",
+                    source.source_identity,
+                    source.public_endpoint(),
                     trigger,
                     previous
                         .as_ref()
@@ -1703,8 +1706,9 @@ async fn refresh_jwks_source_inflight(
                 match snapshot.state {
                     JwtJwksCacheState::Fresh | JwtJwksCacheState::Stale => {
                         log::debug!(
-                            "JWKS refresh published usable key set source={} trigger={} state={} active_keys={}",
-                            source.jwks_url,
+                            "JWKS refresh published usable key set source_id={} endpoint={} trigger={} state={} active_keys={}",
+                            source.source_identity,
+                            source.public_endpoint(),
                             trigger,
                             jwt_jwks_cache_state_name(snapshot.state),
                             snapshot.active_keys.len()
@@ -1712,8 +1716,9 @@ async fn refresh_jwks_source_inflight(
                     }
                     JwtJwksCacheState::QuarantinedRetained => {
                         log::warn!(
-                            "JWKS refresh quarantined replacement and retained last-known-good keys source={} trigger={} state={} active_keys={} detail={}",
-                            source.jwks_url,
+                            "JWKS refresh quarantined replacement and retained last-known-good keys source_id={} endpoint={} trigger={} state={} active_keys={} detail={}",
+                            source.source_identity,
+                            source.public_endpoint(),
                             trigger,
                             jwt_jwks_cache_state_name(snapshot.state),
                             snapshot.active_keys.len(),
@@ -1725,8 +1730,9 @@ async fn refresh_jwks_source_inflight(
                     }
                     JwtJwksCacheState::EmptyUnusable => {
                         log::warn!(
-                            "JWKS refresh left source unusable; JWT requests will be rejected source={} trigger={} state={} detail={}",
-                            source.jwks_url,
+                            "JWKS refresh left source unusable; JWT requests will be rejected source_id={} endpoint={} trigger={} state={} detail={}",
+                            source.source_identity,
+                            source.public_endpoint(),
                             trigger,
                             jwt_jwks_cache_state_name(snapshot.state),
                             snapshot
@@ -1737,8 +1743,9 @@ async fn refresh_jwks_source_inflight(
                     }
                     JwtJwksCacheState::NeverFetched | JwtJwksCacheState::RefreshFailedRetained => {
                         log::warn!(
-                            "JWKS refresh ended in unexpected cache state source={} trigger={} state={}",
-                            source.jwks_url,
+                            "JWKS refresh ended in unexpected cache state source_id={} endpoint={} trigger={} state={}",
+                            source.source_identity,
+                            source.public_endpoint(),
                             trigger,
                             jwt_jwks_cache_state_name(snapshot.state)
                         );
@@ -1783,8 +1790,9 @@ async fn refresh_jwks_source_inflight(
                 "reject_tokens"
             };
             log::warn!(
-                "JWKS refresh failed source={} trigger={} state={} active_keys={} action={} detail={}",
-                source.jwks_url,
+                "JWKS refresh failed source_id={} endpoint={} trigger={} state={} active_keys={} action={} detail={}",
+                source.source_identity,
+                source.public_endpoint(),
                 trigger,
                 state,
                 retained_keys,
@@ -1834,8 +1842,9 @@ impl QUICListener {
                             )
                         ) {
                             log::warn!(
-                                "JWKS source not ready after startup refresh source={} startup_behavior=require_ready",
-                                task_source.jwks_url
+                                "JWKS source not ready after startup refresh source_id={} endpoint={} startup_behavior=require_ready",
+                                task_source.source_identity,
+                                task_source.public_endpoint()
                             );
                         }
                     }
@@ -2040,8 +2049,9 @@ impl<'a> JwtKeyResolver<'a> {
                 );
                 if matches!(resolution, JwtKeyResolution::StaleButUsable(_)) {
                     log::debug!(
-                        "Serving JWT verification from stale JWKS cache source={} state={} kid={} alg={}",
-                        source_config.jwks_url,
+                        "Serving JWT verification from stale JWKS cache source_id={} endpoint={} state={} kid={} alg={}",
+                        source_config.source_identity,
+                        source_config.public_endpoint(),
                         jwt_jwks_cache_state_name(entry.state),
                         self.kid.unwrap_or("none"),
                         jwt_algorithm_name(self.algorithm)
@@ -2050,8 +2060,9 @@ impl<'a> JwtKeyResolver<'a> {
                 if matches!(resolution, JwtKeyResolution::KeyNotFound { .. }) && self.kid.is_some()
                 {
                     log::debug!(
-                        "Unknown JWKS kid encountered source={} kid={} alg={} action=trigger_refresh_hint",
-                        source_config.jwks_url,
+                        "Unknown JWKS kid encountered source_id={} endpoint={} kid={} alg={} action=trigger_refresh_hint",
+                        source_config.source_identity,
+                        source_config.public_endpoint(),
                         self.kid.unwrap_or("none"),
                         jwt_algorithm_name(self.algorithm)
                     );
@@ -2103,7 +2114,11 @@ pub(super) async fn fetch_and_normalize_jwks(
     timeout: Duration,
 ) -> Result<Vec<RuntimeJwtVerificationKey>, JwtJwksFetchFailure> {
     let document = fetch_jwks_document(jwks_url, timeout).await?;
-    let normalized = normalize_jwks_document(jwks_url, &document, allowed_algorithms)?;
+    let normalized = normalize_jwks_document(
+        &jwt_jwks_public_endpoint(jwks_url),
+        &document,
+        allowed_algorithms,
+    )?;
     Ok(normalized.keys)
 }
 
@@ -2113,8 +2128,12 @@ pub(super) fn normalize_jwks_document_for_test(
     document: &Value,
     allowed_algorithms: &[JwtAlgorithm],
 ) -> Result<Vec<RuntimeJwtVerificationKey>, JwtJwksFetchFailure> {
-    normalize_jwks_document(jwks_url, document, allowed_algorithms)
-        .map(|normalized| normalized.keys)
+    normalize_jwks_document(
+        &jwt_jwks_public_endpoint(jwks_url),
+        document,
+        allowed_algorithms,
+    )
+    .map(|normalized| normalized.keys)
 }
 
 #[allow(dead_code)]
@@ -2193,8 +2212,10 @@ where
     Ok(bytes)
 }
 
+/// `endpoint` must already be sanitized (see [`jwt_jwks_public_endpoint`]); this
+/// function logs it, so a raw configured URL would leak query credentials.
 fn normalize_jwks_document(
-    jwks_url: &str,
+    endpoint: &str,
     document: &Value,
     allowed_algorithms: &[JwtAlgorithm],
 ) -> Result<NormalizedJwksDocument, JwtJwksFetchFailure> {
@@ -2211,8 +2232,8 @@ fn normalize_jwks_document(
             Ok(key) => key,
             Err(detail) => {
                 log::warn!(
-                    "Ignoring suspicious JWKS key source={} index={} reason={}",
-                    jwks_url,
+                    "Ignoring suspicious JWKS key endpoint={} index={} reason={}",
+                    endpoint,
                     index,
                     detail
                 );
@@ -2239,8 +2260,8 @@ fn normalize_jwks_document(
         .collect::<Vec<_>>()
         .join(",");
     log::debug!(
-        "JWKS fetch normalized source={} accepted_keys={} configured_algorithms={}",
-        jwks_url,
+        "JWKS fetch normalized endpoint={} accepted_keys={} configured_algorithms={}",
+        endpoint,
         normalized.len(),
         configured_algorithms
     );
