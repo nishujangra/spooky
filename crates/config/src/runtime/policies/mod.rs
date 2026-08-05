@@ -20,7 +20,7 @@ pub use self::{
     },
     auth::{
         RuntimeApiKeyAuth, RuntimeAuthPolicy, RuntimeExternalAuth, RuntimeExternalAuthFailureMode,
-        RuntimeExternalAuthRequestHeader, RuntimeJwtAuth,
+        RuntimeExternalAuthRequestHeader, RuntimeJwtAuth, RuntimeJwtVerificationKey,
     },
     backend::{
         RuntimeBackendAddressKind, RuntimeBackendDnsPolicy, RuntimeBackendEndpoint,

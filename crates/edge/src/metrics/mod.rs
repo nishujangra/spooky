@@ -109,6 +109,10 @@ pub struct Metrics {
     pub backend_dns_refresh_address_changes: AtomicU64,
     pub backend_client_rotations: AtomicU64,
     pub backend_client_rotation_failures: AtomicU64,
+    jwt_validation_failures: RwLock<HashMap<String, u64>>,
+    jwt_algorithm_rejections: RwLock<HashMap<String, u64>>,
+    jwks_unknown_kid_events: RwLock<HashMap<String, u64>>,
+    jwks_source_state: RwLock<HashMap<String, JwksSourceState>>,
     route_latency_sample_every: u64,
     route_latency_sample_counter: AtomicU64,
     route_labels: Vec<String>,
@@ -139,6 +143,18 @@ pub(crate) struct BackendDnsState {
 #[derive(Default, Clone)]
 pub(crate) struct BackendRotationState {
     pub(crate) rotations: u64,
+}
+
+#[derive(Default, Clone)]
+pub(crate) struct JwksSourceState {
+    pub(crate) jwks_source_id: String,
+    pub(crate) refresh_success_total: u64,
+    pub(crate) refresh_failure_total: u64,
+    pub(crate) active_key_count: u64,
+    pub(crate) state: String,
+    pub(crate) last_refresh_attempt_unix_seconds: Option<u64>,
+    pub(crate) last_refresh_success_unix_seconds: Option<u64>,
+    pub(crate) last_failure_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -551,6 +567,10 @@ impl Metrics {
             backend_dns_refresh_address_changes: AtomicU64::new(0),
             backend_client_rotations: AtomicU64::new(0),
             backend_client_rotation_failures: AtomicU64::new(0),
+            jwt_validation_failures: RwLock::new(HashMap::new()),
+            jwt_algorithm_rejections: RwLock::new(HashMap::new()),
+            jwks_unknown_kid_events: RwLock::new(HashMap::new()),
+            jwks_source_state: RwLock::new(HashMap::new()),
             route_latency_sample_every,
             route_latency_sample_counter: AtomicU64::new(0),
             route_labels: route_labels_dedup,
@@ -844,6 +864,108 @@ impl Metrics {
             .fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_jwt_validation_failure(&self, reason: &str) {
+        if let Ok(mut guard) = self.jwt_validation_failures.write() {
+            *guard.entry(reason.to_string()).or_default() += 1;
+        }
+    }
+
+    pub fn record_jwt_algorithm_rejection(&self, algorithm: &str) {
+        if let Ok(mut guard) = self.jwt_algorithm_rejections.write() {
+            *guard.entry(algorithm.to_string()).or_default() += 1;
+        }
+    }
+
+    pub fn record_jwks_unknown_kid(&self, jwks_source_id: &str) {
+        if let Ok(mut guard) = self.jwks_unknown_kid_events.write() {
+            *guard.entry(jwks_source_id.to_string()).or_default() += 1;
+        }
+    }
+
+    pub fn record_jwks_refresh_started(&self, jwks_source_id: &str, refreshed_at: SystemTime) {
+        let refreshed_at = refreshed_at
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .map(|duration| duration.as_secs());
+        if let Ok(mut guard) = self.jwks_source_state.write() {
+            let entry =
+                guard
+                    .entry(jwks_source_id.to_string())
+                    .or_insert_with(|| JwksSourceState {
+                        jwks_source_id: jwks_source_id.to_string(),
+                        ..JwksSourceState::default()
+                    });
+            entry.last_refresh_attempt_unix_seconds = refreshed_at;
+        }
+    }
+
+    pub fn record_jwks_refresh_success(
+        &self,
+        jwks_source_id: &str,
+        state: &str,
+        active_key_count: usize,
+        refreshed_at: SystemTime,
+        last_success_at: Option<SystemTime>,
+    ) {
+        let refreshed_at = refreshed_at
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .map(|duration| duration.as_secs());
+        let last_success_at = last_success_at
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs());
+        if let Ok(mut guard) = self.jwks_source_state.write() {
+            let entry =
+                guard
+                    .entry(jwks_source_id.to_string())
+                    .or_insert_with(|| JwksSourceState {
+                        jwks_source_id: jwks_source_id.to_string(),
+                        ..JwksSourceState::default()
+                    });
+            entry.refresh_success_total = entry.refresh_success_total.saturating_add(1);
+            entry.active_key_count = active_key_count as u64;
+            entry.state = state.to_string();
+            entry.last_refresh_attempt_unix_seconds = refreshed_at;
+            entry.last_refresh_success_unix_seconds = last_success_at.or(refreshed_at);
+            entry.last_failure_reason = None;
+        }
+    }
+
+    pub fn record_jwks_refresh_failure(
+        &self,
+        jwks_source_id: &str,
+        state: &str,
+        active_key_count: usize,
+        refreshed_at: SystemTime,
+        last_success_at: Option<SystemTime>,
+        failure_reason: Option<&str>,
+    ) {
+        let refreshed_at = refreshed_at
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .map(|duration| duration.as_secs());
+        let last_success_at = last_success_at
+            .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
+            .map(|duration| duration.as_secs());
+        if let Ok(mut guard) = self.jwks_source_state.write() {
+            let entry =
+                guard
+                    .entry(jwks_source_id.to_string())
+                    .or_insert_with(|| JwksSourceState {
+                        jwks_source_id: jwks_source_id.to_string(),
+                        ..JwksSourceState::default()
+                    });
+            entry.refresh_failure_total = entry.refresh_failure_total.saturating_add(1);
+            entry.active_key_count = active_key_count as u64;
+            entry.state = state.to_string();
+            entry.last_refresh_attempt_unix_seconds = refreshed_at;
+            if let Some(last_success_at) = last_success_at {
+                entry.last_refresh_success_unix_seconds = Some(last_success_at);
+            }
+            entry.last_failure_reason = failure_reason.map(ToOwned::to_owned);
+        }
+    }
+
     pub fn record_backend_connect(
         &self,
         backend: &str,
@@ -946,6 +1068,59 @@ impl Metrics {
                     .map(|(backend, state)| (backend.clone(), state.clone()))
                     .collect::<Vec<_>>();
                 entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+                entries
+            })
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn snapshot_jwt_validation_failures(&self) -> Vec<(String, u64)> {
+        self.jwt_validation_failures
+            .read()
+            .map(|guard| {
+                let mut entries = guard
+                    .iter()
+                    .map(|(reason, value)| (reason.clone(), *value))
+                    .collect::<Vec<_>>();
+                entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+                entries
+            })
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn snapshot_jwt_algorithm_rejections(&self) -> Vec<(String, u64)> {
+        self.jwt_algorithm_rejections
+            .read()
+            .map(|guard| {
+                let mut entries = guard
+                    .iter()
+                    .map(|(algorithm, value)| (algorithm.clone(), *value))
+                    .collect::<Vec<_>>();
+                entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+                entries
+            })
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn snapshot_jwks_unknown_kid_events(&self) -> Vec<(String, u64)> {
+        self.jwks_unknown_kid_events
+            .read()
+            .map(|guard| {
+                let mut entries = guard
+                    .iter()
+                    .map(|(jwks_source_id, value)| (jwks_source_id.clone(), *value))
+                    .collect::<Vec<_>>();
+                entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+                entries
+            })
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn snapshot_jwks_source_state(&self) -> Vec<JwksSourceState> {
+        self.jwks_source_state
+            .read()
+            .map(|guard| {
+                let mut entries = guard.values().cloned().collect::<Vec<_>>();
+                entries.sort_by(|left, right| left.jwks_source_id.cmp(&right.jwks_source_id));
                 entries
             })
             .unwrap_or_default()
@@ -1538,3 +1713,51 @@ impl Metrics {
 }
 
 mod prometheus;
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    #[test]
+    fn prometheus_render_includes_jwt_and_jwks_observability_series() {
+        let metrics = Metrics::default();
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+        metrics.record_jwt_validation_failure("issuer_mismatch");
+        metrics.record_jwt_algorithm_rejection("RS256");
+        metrics.record_jwks_unknown_kid("jwks:example");
+        metrics.record_jwks_refresh_started("jwks:example", now);
+        metrics.record_jwks_refresh_success("jwks:example", "fresh", 2, now, Some(now));
+        metrics.record_jwks_refresh_failure(
+            "jwks:example",
+            "refresh_failed_retained",
+            2,
+            now,
+            Some(now),
+            Some("request_failed"),
+        );
+
+        let rendered = metrics.render_prometheus();
+
+        assert!(
+            rendered.contains("spooky_jwt_validation_failures_total{reason=\"issuer_mismatch\"} 1")
+        );
+        assert!(rendered.contains("spooky_jwt_algorithm_rejections_total{algorithm=\"RS256\"} 1"));
+        assert!(
+            rendered.contains("spooky_jwks_unknown_kid_total{jwks_source_id=\"jwks:example\"} 1")
+        );
+        assert!(
+            rendered
+                .contains("spooky_jwks_refresh_success_total{jwks_source_id=\"jwks:example\"} 1")
+        );
+        assert!(
+            rendered
+                .contains("spooky_jwks_refresh_failure_total{jwks_source_id=\"jwks:example\"} 1")
+        );
+        assert!(rendered.contains(
+            "spooky_jwks_state{jwks_source_id=\"jwks:example\",state=\"refresh_failed_retained\"} 1"
+        ));
+        assert!(rendered.contains("spooky_jwks_active_keys{jwks_source_id=\"jwks:example\"} 2"));
+    }
+}

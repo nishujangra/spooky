@@ -64,6 +64,7 @@ impl QUICListener {
                 runtime.watchdog().as_ref(),
                 runtime.expected_workers(),
             );
+            Self::register_jwt_jwks_metrics(&runtime.metrics());
             let task_registry = runtime.generation_tasks();
             Self::spawn_backend_dns_refresh(
                 runtime.runtime_config(),
@@ -73,6 +74,7 @@ impl QUICListener {
                 runtime.metrics(),
                 Arc::clone(&task_registry),
             );
+            Self::spawn_jwks_refresh(runtime.runtime_config(), Arc::clone(&task_registry));
             Self::spawn_health_checks(
                 runtime.upstream_pools().clone(),
                 runtime.transport_pool(),

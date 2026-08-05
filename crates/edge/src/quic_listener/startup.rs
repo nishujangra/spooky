@@ -79,6 +79,9 @@ impl QUICListener {
     ) -> Result<PreparedListenerStartup, ProxyError> {
         let runtime_config = RuntimeConfig::from_config(&config)
             .map_err(|err| ProxyError::Transport(err.to_string()))?;
+        let shared_state = Arc::new(Self::build_shared_state(&runtime_config)?);
+        Self::register_jwt_jwks_metrics(&Arc::clone(&shared_state.shared_services().metrics));
+        Self::initialize_jwks_startup(&runtime_config)?;
         let listener_config = runtime_config
             .listener_runtime_configs()
             .into_iter()
@@ -86,7 +89,6 @@ impl QUICListener {
             .ok_or_else(|| {
                 ProxyError::Transport("no effective listeners configured".to_string())
             })?;
-        let shared_state = Arc::new(Self::build_shared_state(&runtime_config)?);
         Self::spawn_control_plane_tasks(&runtime_config, &shared_state, 1)?;
         let socket = Self::bind_socket(&listener_config, false)?;
 

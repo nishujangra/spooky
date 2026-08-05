@@ -501,9 +501,30 @@ fn validate_upstream_policy(
     }
 
     if let Some(jwt) = upstream.auth.jwt.as_ref() {
-        if jwt.secret.trim().is_empty() {
+        let has_hs256 = jwt
+            .allowed_algorithms
+            .iter()
+            .any(|alg| matches!(alg, crate::config::JwtAlgorithm::Hs256));
+        let has_asymmetric_alg = jwt.allowed_algorithms.iter().any(|alg| {
+            matches!(
+                alg,
+                crate::config::JwtAlgorithm::Rs256 | crate::config::JwtAlgorithm::Es256
+            )
+        });
+
+        if jwt.allowed_algorithms.is_empty() {
+            return Err(RuntimeConfigError::ConfigInvalid(format!(
+                "upstream '{upstream_name}' auth.jwt.allowed_algorithms must contain at least one algorithm"
+            )));
+        }
+        if has_hs256 && jwt.secret.trim().is_empty() {
             return Err(RuntimeConfigError::ConfigInvalid(format!(
                 "upstream '{upstream_name}' auth.jwt.secret must be non-empty"
+            )));
+        }
+        if !jwt.secret.trim().is_empty() && !has_hs256 {
+            return Err(RuntimeConfigError::ConfigInvalid(format!(
+                "upstream '{upstream_name}' auth.jwt.secret requires auth.jwt.allowed_algorithms to include HS256"
             )));
         }
         if jwt
@@ -522,6 +543,112 @@ fn validate_upstream_policy(
         {
             return Err(RuntimeConfigError::ConfigInvalid(format!(
                 "upstream '{upstream_name}' auth.jwt.audience must be non-empty when provided"
+            )));
+        }
+        if jwt.issuer.is_some() && jwt.issuers.is_some() {
+            return Err(RuntimeConfigError::ConfigInvalid(format!(
+                "upstream '{upstream_name}' auth.jwt.issuer and auth.jwt.issuers cannot both be set"
+            )));
+        }
+        if jwt.audience.is_some() && jwt.audiences.is_some() {
+            return Err(RuntimeConfigError::ConfigInvalid(format!(
+                "upstream '{upstream_name}' auth.jwt.audience and auth.jwt.audiences cannot both be set"
+            )));
+        }
+        if let Some(issuers) = jwt.issuers.as_ref()
+            && (issuers.is_empty() || issuers.iter().any(|value| value.trim().is_empty()))
+        {
+            return Err(RuntimeConfigError::ConfigInvalid(format!(
+                "upstream '{upstream_name}' auth.jwt.issuers must be non-empty and must not contain empty values"
+            )));
+        }
+        if let Some(audiences) = jwt.audiences.as_ref()
+            && (audiences.is_empty() || audiences.iter().any(|value| value.trim().is_empty()))
+        {
+            return Err(RuntimeConfigError::ConfigInvalid(format!(
+                "upstream '{upstream_name}' auth.jwt.audiences must be non-empty and must not contain empty values"
+            )));
+        }
+        if jwt
+            .jwks_url
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err(RuntimeConfigError::ConfigInvalid(format!(
+                "upstream '{upstream_name}' auth.jwt.jwks_url must be non-empty when provided"
+            )));
+        }
+        if let Some(jwks_url) = jwt.jwks_url.as_deref() {
+            let valid_jwks_url =
+                jwks_url.starts_with("https://") || jwks_url.starts_with("http://");
+            if !jwks_url.trim().is_empty() && !valid_jwks_url {
+                return Err(RuntimeConfigError::ConfigInvalid(format!(
+                    "upstream '{upstream_name}' auth.jwt.jwks_url must be an absolute http(s) URL"
+                )));
+            }
+        }
+        if jwt.jwks_url.is_some() && !has_asymmetric_alg {
+            return Err(RuntimeConfigError::ConfigInvalid(format!(
+                "upstream '{upstream_name}' auth.jwt.jwks_url requires auth.jwt.allowed_algorithms to include RS256 or ES256"
+            )));
+        }
+        if !jwt.static_keys.is_empty() && !has_asymmetric_alg {
+            return Err(RuntimeConfigError::ConfigInvalid(format!(
+                "upstream '{upstream_name}' auth.jwt.static_keys require auth.jwt.allowed_algorithms to include RS256 or ES256"
+            )));
+        }
+        if jwt.jwks_url.is_some() {
+            if jwt.jwks_refresh_interval_secs == 0 {
+                return Err(RuntimeConfigError::ConfigInvalid(format!(
+                    "upstream '{upstream_name}' auth.jwt.jwks_refresh_interval_secs must be greater than 0"
+                )));
+            }
+            if jwt.jwks_request_timeout_ms == 0 {
+                return Err(RuntimeConfigError::ConfigInvalid(format!(
+                    "upstream '{upstream_name}' auth.jwt.jwks_request_timeout_ms must be greater than 0"
+                )));
+            }
+            if jwt.jwks_cache_ttl_secs == 0 {
+                return Err(RuntimeConfigError::ConfigInvalid(format!(
+                    "upstream '{upstream_name}' auth.jwt.jwks_cache_ttl_secs must be greater than 0"
+                )));
+            }
+        }
+        for (index, key) in jwt.static_keys.iter().enumerate() {
+            match key {
+                crate::config::JwtVerificationKey::Pem {
+                    kid,
+                    public_key_pem,
+                    ..
+                } => {
+                    if kid.as_deref().is_some_and(|value| value.trim().is_empty()) {
+                        return Err(RuntimeConfigError::ConfigInvalid(format!(
+                            "upstream '{upstream_name}' auth.jwt.static_keys[{index}].kid must be non-empty when provided"
+                        )));
+                    }
+                    if public_key_pem.trim().is_empty() {
+                        return Err(RuntimeConfigError::ConfigInvalid(format!(
+                            "upstream '{upstream_name}' auth.jwt.static_keys[{index}].public_key_pem must be non-empty"
+                        )));
+                    }
+                }
+                crate::config::JwtVerificationKey::Jwk { kid, jwk, .. } => {
+                    if kid.as_deref().is_some_and(|value| value.trim().is_empty()) {
+                        return Err(RuntimeConfigError::ConfigInvalid(format!(
+                            "upstream '{upstream_name}' auth.jwt.static_keys[{index}].kid must be non-empty when provided"
+                        )));
+                    }
+                    if jwk.trim().is_empty() {
+                        return Err(RuntimeConfigError::ConfigInvalid(format!(
+                            "upstream '{upstream_name}' auth.jwt.static_keys[{index}].jwk must be non-empty"
+                        )));
+                    }
+                }
+            }
+        }
+        if jwt.secret.trim().is_empty() && jwt.static_keys.is_empty() && jwt.jwks_url.is_none() {
+            return Err(RuntimeConfigError::ConfigInvalid(format!(
+                "upstream '{upstream_name}' auth.jwt must configure at least one key source"
             )));
         }
     }

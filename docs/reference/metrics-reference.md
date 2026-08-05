@@ -145,6 +145,26 @@ Practical note:
 | `spooky_backend_client_rotations_total` | counter | Backend client rotations caused by DNS changes |
 | `spooky_backend_dns_last_refresh_success_seconds` | gauge | Unix timestamp of last successful refresh |
 
+## JWT And JWKS Metrics
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `spooky_jwt_validation_failures_total{reason}` | counter | JWT validation failures by stable rejection reason |
+| `spooky_jwt_algorithm_rejections_total{algorithm}` | counter | Tokens rejected because their `alg` is not in the allowlist |
+| `spooky_jwks_unknown_kid_total{jwks_url}` | counter | Tokens presenting a `kid` absent from the cached key set |
+| `spooky_jwks_refresh_success_total{jwks_url}` | counter | Successful JWKS refreshes |
+| `spooky_jwks_refresh_failure_total{jwks_url}` | counter | Failed JWKS refreshes |
+| `spooky_jwks_age_seconds{jwks_url}` | gauge | Age of the active key set since last successful refresh |
+| `spooky_jwks_state{jwks_url,state}` | gauge | Current cache state, `1` on the active state series |
+| `spooky_jwks_active_keys{jwks_url}` | gauge | Usable verification keys currently loaded |
+| `spooky_jwks_last_refresh_attempt_seconds{jwks_url}` | gauge | Unix timestamp of the last refresh attempt |
+| `spooky_jwks_last_refresh_success_seconds{jwks_url}` | gauge | Unix timestamp of the last successful refresh |
+
+`spooky_jwks_state` reports one of `never_fetched`, `fresh`, `stale`,
+`refresh_failed_retained`, `quarantined_retained`, or `empty_unusable`. Only the
+last is unable to validate tokens; the two `*_retained` states are still serving
+last-known-good keys.
+
 ## Control Plane And Runtime Metrics
 
 | Metric | Type | Meaning |

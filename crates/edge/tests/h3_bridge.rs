@@ -2722,6 +2722,7 @@ fn upstream_jwt_auth_rejects_missing_token_and_allows_valid_token() {
                 issuer: Some("issuer-1".to_string()),
                 audience: Some("aud-1".to_string()),
                 clock_skew_secs: 30,
+                ..spooky_config::config::JwtAuth::default()
             }),
             external_auth: None,
             required_scopes: vec!["read:fast".to_string()],

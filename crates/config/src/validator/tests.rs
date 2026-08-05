@@ -7,10 +7,10 @@ use super::validate;
 use crate::config::{
     ApiKeyAuth, Backend, ClientAuth, Config, ControlApi, ControlApiAuditSink,
     ControlApiBearerToken, ControlApiClientAuthMode, ControlApiRole, ExternalAuth,
-    ExternalAuthFailureMode, ExternalAuthRequestHeader, HealthCheck, JwtAuth, Listen,
-    LoadBalancing, Log, LogFormat, MetricsEndpoint, Observability, Performance, Resilience,
-    RouteAuth, RouteMatch, ScopedRateLimit, ScopedRateLimitScope, Security, Tls, TlsCertificate,
-    Tracing, Upstream, UpstreamTls,
+    ExternalAuthFailureMode, ExternalAuthRequestHeader, HealthCheck, JwtAlgorithm, JwtAuth,
+    JwtVerificationKey, Listen, LoadBalancing, Log, LogFormat, MetricsEndpoint, Observability,
+    Performance, Resilience, RouteAuth, RouteMatch, ScopedRateLimit, ScopedRateLimitScope,
+    Security, Tls, TlsCertificate, Tracing, Upstream, UpstreamTls,
 };
 
 fn write_test_certs(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
@@ -1438,6 +1438,7 @@ fn accepts_upstream_jwt_auth_with_issuer_and_audience() {
             issuer: Some("issuer-1".to_string()),
             audience: Some("aud-1".to_string()),
             clock_skew_secs: 30,
+            ..JwtAuth::default()
         }),
         external_auth: None,
         required_scopes: Vec::new(),
@@ -1463,6 +1464,7 @@ fn rejects_upstream_jwt_auth_without_secret() {
             issuer: None,
             audience: None,
             clock_skew_secs: 30,
+            ..JwtAuth::default()
         }),
         external_auth: None,
         required_scopes: Vec::new(),
@@ -1488,11 +1490,103 @@ fn rejects_upstream_jwt_auth_with_empty_issuer() {
             issuer: Some(" ".to_string()),
             audience: None,
             clock_skew_secs: 30,
+            ..JwtAuth::default()
         }),
         external_auth: None,
         required_scopes: Vec::new(),
         required_roles: Vec::new(),
     };
+
+    assert!(validate(&cfg).is_err());
+}
+
+#[test]
+fn rejects_upstream_jwt_auth_with_ambiguous_scalar_and_list_issuer_policy() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.upstream
+        .get_mut("test_upstream")
+        .expect("upstream")
+        .auth
+        .jwt = Some(JwtAuth {
+        secret: "jwt-secret".to_string(),
+        issuer: Some("issuer-1".to_string()),
+        issuers: Some(vec!["issuer-2".to_string()]),
+        ..JwtAuth::default()
+    });
+
+    assert!(validate(&cfg).is_err());
+}
+
+#[test]
+fn accepts_upstream_asymmetric_jwt_auth_with_jwks_url_and_no_secret() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.upstream
+        .get_mut("test_upstream")
+        .expect("upstream")
+        .auth
+        .jwt = Some(JwtAuth {
+        secret: String::new(),
+        allowed_algorithms: vec![JwtAlgorithm::Rs256],
+        jwks_url: Some("https://issuer.example.com/.well-known/jwks.json".to_string()),
+        ..JwtAuth::default()
+    });
+
+    assert!(validate(&cfg).is_ok());
+}
+
+#[test]
+fn rejects_upstream_jwt_auth_with_secret_and_no_hs256_algorithm() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.upstream
+        .get_mut("test_upstream")
+        .expect("upstream")
+        .auth
+        .jwt = Some(JwtAuth {
+        secret: "jwt-secret".to_string(),
+        allowed_algorithms: vec![JwtAlgorithm::Rs256],
+        jwks_url: Some("https://issuer.example.com/.well-known/jwks.json".to_string()),
+        ..JwtAuth::default()
+    });
+
+    assert!(validate(&cfg).is_err());
+}
+
+#[test]
+fn rejects_conflicting_jwt_static_key_ids() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.upstream
+        .get_mut("test_upstream")
+        .expect("upstream")
+        .auth
+        .jwt = Some(JwtAuth {
+        secret: String::new(),
+        allowed_algorithms: vec![JwtAlgorithm::Rs256],
+        static_keys: vec![
+            JwtVerificationKey::Pem {
+                kid: Some("shared-kid".to_string()),
+                alg: Some(JwtAlgorithm::Rs256),
+                public_key_pem: "pem-a".to_string(),
+            },
+            JwtVerificationKey::Pem {
+                kid: Some("shared-kid".to_string()),
+                alg: Some(JwtAlgorithm::Rs256),
+                public_key_pem: "pem-b".to_string(),
+            },
+        ],
+        ..JwtAuth::default()
+    });
 
     assert!(validate(&cfg).is_err());
 }

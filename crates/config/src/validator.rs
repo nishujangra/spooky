@@ -7,7 +7,7 @@ use crate::{
     backend_endpoint::{BackendEndpoint, BackendScheme},
     config::{
         CURRENT_CONFIG_VERSION, Config, ControlApi, ControlApiAuditSink, ControlApiClientAuthMode,
-        ExternalAuth, Listen, SUPPORTED_CONFIG_VERSIONS, ScopedRateLimitScope,
+        ExternalAuth, JwtVerificationKey, Listen, SUPPORTED_CONFIG_VERSIONS, ScopedRateLimitScope,
         UpstreamHostPolicyMode, UpstreamTls,
     },
 };
@@ -1540,9 +1540,34 @@ fn validate_inner(config: &Config) -> bool {
         }
 
         if let Some(jwt) = upstream.auth.jwt.as_ref() {
-            if jwt.secret.trim().is_empty() {
+            let has_hs256 = jwt
+                .allowed_algorithms
+                .iter()
+                .any(|alg| matches!(alg, crate::config::JwtAlgorithm::Hs256));
+            let has_asymmetric_alg = jwt.allowed_algorithms.iter().any(|alg| {
+                matches!(
+                    alg,
+                    crate::config::JwtAlgorithm::Rs256 | crate::config::JwtAlgorithm::Es256
+                )
+            });
+
+            if jwt.allowed_algorithms.is_empty() {
+                validation_error!(
+                    "upstream '{}' auth.jwt.allowed_algorithms must contain at least one algorithm",
+                    upstream_name
+                );
+                return false;
+            }
+            if has_hs256 && jwt.secret.trim().is_empty() {
                 validation_error!(
                     "upstream '{}' auth.jwt.secret must be non-empty",
+                    upstream_name
+                );
+                return false;
+            }
+            if !jwt.secret.trim().is_empty() && !has_hs256 {
+                validation_error!(
+                    "upstream '{}' auth.jwt.secret requires auth.jwt.allowed_algorithms to include HS256",
                     upstream_name
                 );
                 return false;
@@ -1565,6 +1590,186 @@ fn validate_inner(config: &Config) -> bool {
             {
                 validation_error!(
                     "upstream '{}' auth.jwt.audience must be non-empty when provided",
+                    upstream_name
+                );
+                return false;
+            }
+            if jwt.issuer.is_some() && jwt.issuers.is_some() {
+                validation_error!(
+                    "upstream '{}' auth.jwt.issuer and auth.jwt.issuers cannot both be set",
+                    upstream_name
+                );
+                return false;
+            }
+            if jwt.audience.is_some() && jwt.audiences.is_some() {
+                validation_error!(
+                    "upstream '{}' auth.jwt.audience and auth.jwt.audiences cannot both be set",
+                    upstream_name
+                );
+                return false;
+            }
+            if let Some(issuers) = jwt.issuers.as_ref()
+                && (issuers.is_empty() || issuers.iter().any(|value| value.trim().is_empty()))
+            {
+                validation_error!(
+                    "upstream '{}' auth.jwt.issuers must be non-empty and must not contain empty values",
+                    upstream_name
+                );
+                return false;
+            }
+            if let Some(audiences) = jwt.audiences.as_ref()
+                && (audiences.is_empty() || audiences.iter().any(|value| value.trim().is_empty()))
+            {
+                validation_error!(
+                    "upstream '{}' auth.jwt.audiences must be non-empty and must not contain empty values",
+                    upstream_name
+                );
+                return false;
+            }
+            if jwt
+                .jwks_url
+                .as_deref()
+                .is_some_and(|value| value.trim().is_empty())
+            {
+                validation_error!(
+                    "upstream '{}' auth.jwt.jwks_url must be non-empty when provided",
+                    upstream_name
+                );
+                return false;
+            }
+            if let Some(jwks_url) = jwt.jwks_url.as_deref()
+                && !jwks_url.trim().is_empty()
+                && !is_valid_https_url(jwks_url)
+            {
+                validation_error!(
+                    "upstream '{}' auth.jwt.jwks_url must be an absolute https URL",
+                    upstream_name
+                );
+                return false;
+            }
+            if jwt.jwks_url.is_some() && !has_asymmetric_alg {
+                validation_error!(
+                    "upstream '{}' auth.jwt.jwks_url requires auth.jwt.allowed_algorithms to include RS256 or ES256",
+                    upstream_name
+                );
+                return false;
+            }
+            if !jwt.static_keys.is_empty() && !has_asymmetric_alg {
+                validation_error!(
+                    "upstream '{}' auth.jwt.static_keys require auth.jwt.allowed_algorithms to include RS256 or ES256",
+                    upstream_name
+                );
+                return false;
+            }
+            if jwt.jwks_url.is_some() {
+                if jwt.jwks_refresh_interval_secs == 0 {
+                    validation_error!(
+                        "upstream '{}' auth.jwt.jwks_refresh_interval_secs must be greater than 0",
+                        upstream_name
+                    );
+                    return false;
+                }
+                if jwt.jwks_request_timeout_ms == 0 {
+                    validation_error!(
+                        "upstream '{}' auth.jwt.jwks_request_timeout_ms must be greater than 0",
+                        upstream_name
+                    );
+                    return false;
+                }
+                if jwt.jwks_cache_ttl_secs == 0 {
+                    validation_error!(
+                        "upstream '{}' auth.jwt.jwks_cache_ttl_secs must be greater than 0",
+                        upstream_name
+                    );
+                    return false;
+                }
+            }
+            let mut jwt_key_fingerprints: HashMap<String, String> = HashMap::new();
+            for (index, key) in jwt.static_keys.iter().enumerate() {
+                match key {
+                    JwtVerificationKey::Pem {
+                        kid,
+                        alg,
+                        public_key_pem,
+                        ..
+                    } => {
+                        if kid.as_deref().is_some_and(|value| value.trim().is_empty()) {
+                            validation_error!(
+                                "upstream '{}' auth.jwt.static_keys[{}].kid must be non-empty when provided",
+                                upstream_name,
+                                index
+                            );
+                            return false;
+                        }
+                        if public_key_pem.trim().is_empty() {
+                            validation_error!(
+                                "upstream '{}' auth.jwt.static_keys[{}].public_key_pem must be non-empty",
+                                upstream_name,
+                                index
+                            );
+                            return false;
+                        }
+                        if let Some(kid) = kid
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                        {
+                            let fingerprint = format!("pem:{:?}:{}", alg, public_key_pem.trim());
+                            if let Some(existing) =
+                                jwt_key_fingerprints.insert(kid.to_string(), fingerprint.clone())
+                                && existing != fingerprint
+                            {
+                                validation_error!(
+                                    "upstream '{}' auth.jwt.static_keys contains conflicting entries for kid '{}'",
+                                    upstream_name,
+                                    kid
+                                );
+                                return false;
+                            }
+                        }
+                    }
+                    JwtVerificationKey::Jwk { kid, jwk, alg } => {
+                        if kid.as_deref().is_some_and(|value| value.trim().is_empty()) {
+                            validation_error!(
+                                "upstream '{}' auth.jwt.static_keys[{}].kid must be non-empty when provided",
+                                upstream_name,
+                                index
+                            );
+                            return false;
+                        }
+                        if jwk.trim().is_empty() {
+                            validation_error!(
+                                "upstream '{}' auth.jwt.static_keys[{}].jwk must be non-empty",
+                                upstream_name,
+                                index
+                            );
+                            return false;
+                        }
+                        if let Some(kid) = kid
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|value| !value.is_empty())
+                        {
+                            let fingerprint = format!("jwk:{:?}:{}", alg, jwk.trim());
+                            if let Some(existing) =
+                                jwt_key_fingerprints.insert(kid.to_string(), fingerprint.clone())
+                                && existing != fingerprint
+                            {
+                                validation_error!(
+                                    "upstream '{}' auth.jwt.static_keys contains conflicting entries for kid '{}'",
+                                    upstream_name,
+                                    kid
+                                );
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+            if jwt.secret.trim().is_empty() && jwt.static_keys.is_empty() && jwt.jwks_url.is_none()
+            {
+                validation_error!(
+                    "upstream '{}' auth.jwt must configure at least one key source",
                     upstream_name
                 );
                 return false;

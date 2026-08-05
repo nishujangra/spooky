@@ -15,8 +15,9 @@ use http_body_util::Full;
 use hyper::{Request, Response, body::Incoming};
 use serial_test::serial;
 use spooky_config::config::{
-    ApiKeyAuth, ExternalAuth, ExternalAuthFailureMode, ExternalAuthRequestHeader, JwtAuth,
-    LoadBalancing, RouteAuth, RouteMatch, ScopedRateLimit, ScopedRateLimitScope, Upstream,
+    ApiKeyAuth, ExternalAuth, ExternalAuthFailureMode, ExternalAuthRequestHeader, JwtAlgorithm,
+    JwtAuth, JwtVerificationKey, LoadBalancing, RouteAuth, RouteMatch, ScopedRateLimit,
+    ScopedRateLimitScope, Upstream,
 };
 
 mod support;
@@ -343,6 +344,102 @@ fn bootstrap_and_quic_local_api_key_auth_decisions_match() {
 }
 
 #[test]
+fn bootstrap_and_quic_rs256_jwt_auth_decisions_match() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = BootstrapQuicParityHarness::new();
+    let backend_addr = harness.start_h1_static_backend(b"rs256 ok\n");
+
+    let signing_key =
+        boring::pkey::PKey::from_rsa(boring::rsa::Rsa::generate(2048).expect("generate rsa key"))
+            .expect("rsa pkey");
+    let public_key_pem = String::from_utf8(
+        signing_key
+            .public_key_to_pem()
+            .expect("encode rsa public pem"),
+    )
+    .expect("utf8 pem");
+
+    let upstreams = HashMap::from([(
+        "api".to_string(),
+        auth_protected_upstream(
+            "/jwt-rs256",
+            vec![make_backend("backend-a", backend_addr.to_string())],
+            RouteAuth {
+                api_key: None,
+                jwt: Some(JwtAuth {
+                    secret: String::new(),
+                    issuer: Some("issuer-1".to_string()),
+                    audience: Some("aud-1".to_string()),
+                    allowed_algorithms: vec![JwtAlgorithm::Rs256],
+                    require_kid: true,
+                    static_keys: vec![JwtVerificationKey::Pem {
+                        kid: Some("parity-kid".to_string()),
+                        alg: Some(JwtAlgorithm::Rs256),
+                        public_key_pem,
+                    }],
+                    clock_skew_secs: 30,
+                    ..JwtAuth::default()
+                }),
+                external_auth: None,
+                required_scopes: vec!["read:parity".to_string()],
+                required_roles: Vec::new(),
+            },
+        ),
+    )]);
+
+    let config = harness.make_config(upstreams);
+    harness
+        .start_listener(config)
+        .expect("listener with bootstrap");
+
+    let deny_request = ParityRequestSpec {
+        method: "GET",
+        authority: "localhost",
+        path: "/jwt-rs256",
+        headers: &[],
+        body: None,
+        user_agent: "spooky-bootstrap-quic-parity-test",
+        selected_response_headers: &["www-authenticate"],
+        capture_metrics_delta: false,
+    };
+    let deny_pair = harness.run_parity_pair(deny_request).expect("rs256 deny");
+    assert_eq!(deny_pair.quic.response.status, 401);
+    assert_eq!(deny_pair.bootstrap.response.status, 401);
+    assert_eq!(
+        deny_pair.bootstrap.response.selected_headers,
+        deny_pair.quic.response.selected_headers
+    );
+
+    let token = encode_test_rs256_jwt(
+        &signing_key,
+        "parity-kid",
+        serde_json::json!({
+            "sub": "user-1",
+            "iss": "issuer-1",
+            "aud": "aud-1",
+            "exp": 4_000_000_000u64,
+            "scope": "read:parity",
+        }),
+    );
+    let authorization = format!("Bearer {token}");
+    let allow_request = ParityRequestSpec {
+        headers: &[("authorization", authorization.as_str())],
+        ..deny_request
+    };
+    let allow_pair = harness.run_parity_pair(allow_request).expect("rs256 allow");
+    assert_eq!(allow_pair.quic.response.status, 200);
+    assert_eq!(allow_pair.bootstrap.response.status, 200);
+    assert_eq!(allow_pair.quic.response.body, b"rs256 ok\n");
+    assert_eq!(
+        allow_pair.bootstrap.response.body,
+        allow_pair.quic.response.body
+    );
+}
+
+#[test]
 fn bootstrap_and_quic_local_jwt_auth_decisions_match() {
     if !local_listener_bind_available() {
         return;
@@ -363,6 +460,7 @@ fn bootstrap_and_quic_local_jwt_auth_decisions_match() {
                     issuer: Some("issuer-1".to_string()),
                     audience: Some("aud-1".to_string()),
                     clock_skew_secs: 30,
+                    ..JwtAuth::default()
                 }),
                 external_auth: None,
                 required_scopes: vec!["read:parity".to_string()],
@@ -1487,6 +1585,29 @@ fn encode_test_hs256_jwt(secret: &str, claims: serde_json::Value) -> String {
     let mut mac = Hmac::<Sha256>::new_from_slice(secret.as_bytes()).expect("mac");
     mac.update(signing_input.as_bytes());
     let signature = URL_SAFE_NO_PAD.encode(mac.finalize().into_bytes());
+    format!("{signing_input}.{signature}")
+}
+
+fn encode_test_rs256_jwt(
+    key: &boring::pkey::PKey<boring::pkey::Private>,
+    kid: &str,
+    claims: serde_json::Value,
+) -> String {
+    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use boring::{hash::MessageDigest, rsa::Padding, sign::Signer};
+
+    let header = URL_SAFE_NO_PAD.encode(
+        serde_json::to_vec(&serde_json::json!({ "alg": "RS256", "typ": "JWT", "kid": kid }))
+            .expect("serialize header"),
+    );
+    let payload = URL_SAFE_NO_PAD.encode(serde_json::to_vec(&claims).expect("serialize claims"));
+    let signing_input = format!("{header}.{payload}");
+    let mut signer = Signer::new(MessageDigest::sha256(), key).expect("rsa signer");
+    signer.set_rsa_padding(Padding::PKCS1).expect("rsa padding");
+    signer
+        .update(signing_input.as_bytes())
+        .expect("rsa signing input");
+    let signature = URL_SAFE_NO_PAD.encode(signer.sign_to_vec().expect("rsa signature"));
     format!("{signing_input}.{signature}")
 }
 

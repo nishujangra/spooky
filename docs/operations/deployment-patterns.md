@@ -49,7 +49,7 @@ Partial fit today. Per-upstream auth is implemented and enforced — API-key, lo
 scope/role RBAC, and external auth (HTTP subrequest or OIDC) — and scoped rate limiting
 (route/client/tenant/token) ships. It is weaker than a full API gateway because:
 
-- JWT validation is HS256-only (no RS256/ES256 or JWKS-backed rotation)
+- JWT validation covers `HS256`/`RS256`/`ES256` with JWKS-backed rotation, but not `RS384`/`RS512`/`PS*`/`EdDSA` or non-P-256 curves
 - rate limiting is per-instance and scope-based (no distributed/cross-instance rate limiting)
 - rich request/response transformation is missing
 - there is no generic policy engine or auth-provider chaining

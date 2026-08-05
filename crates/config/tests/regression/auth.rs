@@ -105,6 +105,7 @@ fn runtime_config_normalizes_jwt_and_scoped_rate_limit_contracts() {
             issuer: Some(" issuer-1 ".to_string()),
             audience: Some(" spooky-api ".to_string()),
             clock_skew_secs: 45,
+            ..JwtAuth::default()
         });
         upstream.auth.required_scopes = vec![" read:api ".to_string()];
         upstream.auth.required_roles = vec![" admin ".to_string()];

@@ -119,6 +119,60 @@ Recommended sequence:
 4. Watch error rate, route latency, health transitions, and shed counters.
 5. Expand only after the canary stays stable.
 
+## Scenario: JWT Rejections Or Stale JWKS State
+
+First, find out whether the problem is the tokens or the keys:
+
+1. Check `GET /admin/runtime` and read `jwks.sources[]` and `auth.providers[]`.
+2. Read `cache_state`. `fresh` or `stale` means keys are loading; `empty_unusable`
+   means no usable keys and every JWT request is being rejected.
+3. Compare `last_refresh_attempt_unix_seconds` with `last_refresh_success_unix_seconds`.
+   A recent attempt with an old success means refreshes are failing — read
+   `last_failure_reason`.
+4. Read `auth.jwt_validation_failures[]` for the dominant rejection reason.
+
+What the common reasons mean:
+
+| Reason | Cause |
+| --- | --- |
+| `key_source_unavailable` | JWKS never loaded or aged past the staleness window |
+| `missing_verification_key` | Token's `kid` is not in the cached set; check whether the issuer rotated early |
+| `algorithm_not_allowed` | Token `alg` is outside `allowed_algorithms` |
+| `issuer_mismatch` / `audience_mismatch` | Token is valid but issued for a different issuer or audience |
+| `token_expired` | Ordinary client-side expiry, not a server problem |
+| `ambiguous_verification_key` | Two configured keys resolve to the same `kid` |
+
+Recovery:
+
+- if the issuer rotated early, an unknown `kid` already triggers a rate-limited
+  background refresh — wait one refresh interval before intervening
+- if refreshes are failing, verify the endpoint is reachable over HTTPS from the
+  proxy host; keys keep validating until `jwks_stale_if_error_secs` elapses
+- if state is `empty_unusable`, treat it as an auth outage for that upstream
+- avoid restarting a node with `require_ready` while the issuer is down: it will
+  fail to boot rather than start degraded
+
+### Rotation Cadence And Refresh Intervals
+
+- keep `jwks_refresh_interval_secs` (default `300`) well below the issuer's rotation
+  interval so new keys are cached before tokens signed with them arrive
+- keep `jwks_cache_ttl_secs` (default `900`) at roughly three refresh intervals so a
+  single failed refresh does not immediately mark the set stale
+- `jwks_stale_if_error_secs` (default `3600`) is the outage budget: how long
+  last-known-good keys keep working while refreshes fail. It also sets the overlap
+  window during which a key dropped from the JWKS stays valid
+- overlap old and new keys in the published JWKS for at least one full
+  `jwks_cache_ttl_secs` when rotating
+
+### Alerts Worth Adding
+
+- `spooky_jwks_state{state="empty_unusable"} == 1` — auth outage for that upstream, page
+- `spooky_jwks_age_seconds` above `jwks_cache_ttl_secs` — refreshes are not landing
+- `rate(spooky_jwks_refresh_failure_total[15m]) > 0` sustained — issuer or network problem
+- `rate(spooky_jwks_unknown_kid_total[5m])` rising — likely an unannounced rotation
+- `rate(spooky_jwt_validation_failures_total{reason="key_source_unavailable"}[5m]) > 0` —
+  requests are being rejected for key-availability reasons rather than bad tokens
+
 ## Scenario: Brownout Or Overload Triggering
 
 Check:

@@ -121,10 +121,11 @@ These are architectural foundations rather than user-facing product features, bu
 | Header mutation for forwarding policy | `Done` | Host and forwarded-header policy exists |
 | Generic request/response rewrite engine | `Missing` | Not a broad filter system |
 | API key auth | `Done` | Per-upstream, local fast path |
-| JWT validation | `Done` | Local HS256 validation, per-upstream |
+| JWT validation | `Done` | Local `HS256`/`RS256`/`ES256` validation, per-upstream; explicit algorithm allowlist |
+| JWKS key sources | `Done` | Static PEM/JWK keys or remote JWKS URL, background refresh, rollover overlap, last-known-good retention |
 | RBAC / policy engine | `Partial` | Scope/role requirements enforced against JWT claims only |
 | External auth integration | `Done` | Async HTTP subrequest per upstream; non-blocking, fail-open/fail-closed configurable |
-| OIDC / auth gateway | `Partial` | Discovery + token introspection; no JWKS/local signature validation, no interactive login/session-cookie flows |
+| OIDC / auth gateway | `Partial` | Discovery + token introspection; no interactive login/session-cookie flows. Local signature validation is available via JWT `jwks_url` |
 | WAF capabilities | `Missing` | Not implemented |
 | Plugin / extension model | `Missing` | Not implemented |
 
