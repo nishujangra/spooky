@@ -1506,7 +1506,7 @@ configurable retention, and automatic rollback on post-activation health regress
 </ul>
 <h3 id="8-auth-and-policy-features">8. Auth And Policy Features</h3>
 <ul>
-<li>JWKS / asymmetric JWT validation (RS256/ES256) — local JWT validation ships today but is HS256-only</li>
+<li>broader JOSE algorithm coverage (<code>RS384</code>/<code>RS512</code>, additional ECDSA curves) and discovery-based JWKS resolution</li>
 <li>stronger route-level policy controls and layered/chained auth providers</li>
 </ul>
 <p><em>Already shipped (previously listed here as future): scoped rate limiting (route/client/tenant/token),

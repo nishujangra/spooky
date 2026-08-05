@@ -1474,7 +1474,7 @@
 scope/role RBAC, and external auth (HTTP subrequest or OIDC) — and scoped rate limiting
 (route/client/tenant/token) ships. It is weaker than a full API gateway because:</p>
 <ul>
-<li>JWT validation is HS256-only (no RS256/ES256 or JWKS-backed rotation)</li>
+<li>JWT validation covers <code>HS256</code>/<code>RS256</code>/<code>ES256</code> with JWKS-backed rotation, but not <code>RS384</code>/<code>RS512</code>/<code>PS*</code>/<code>EdDSA</code> or non-P-256 curves</li>
 <li>rate limiting is per-instance and scope-based (no distributed/cross-instance rate limiting)</li>
 <li>rich request/response transformation is missing</li>
 <li>there is no generic policy engine or auth-provider chaining</li>

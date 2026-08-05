@@ -1615,7 +1615,7 @@
 <p>Spooky supports per-upstream request authentication, checked in this order:</p>
 <ul>
 <li><strong>API key</strong>: a configured header is compared against a static key list. Local, synchronous, no network call.</li>
-<li><strong>JWT</strong>: local HS256 signature and claim validation (issuer, audience, clock skew), plus optional scope/role checks against token claims. Local, synchronous, no network call.</li>
+<li><strong>JWT</strong>: local signature and claim validation (issuer, audience, clock skew), plus optional scope/role checks against token claims. Supports <code>HS256</code> with a shared secret, and <code>RS256</code>/<code>ES256</code> against static PEM/JWK public keys or a remote JWKS endpoint. Always local and synchronous on the request path — JWKS keys are served from an in-memory cache refreshed in the background, never fetched during request validation.</li>
 <li><strong>External auth</strong>: an async HTTP subrequest (generic HTTP or OIDC-shaped) sent to a configured auth endpoint, gated before upstream admission so the request never reaches the backend while auth is pending. Only one external auth provider is supported per upstream, and it cannot be combined with API key or JWT in the current version.</li>
 </ul>
 <p>External auth details:</p>
@@ -1623,7 +1623,14 @@
 <li>The auth call runs on a dedicated HTTP client, isolated from upstream backend transport, inflight accounting, and health state — an auth outage cannot degrade backend routing.</li>
 <li>A decision maps to <code>Allow</code>, <code>Deny</code>, <code>Redirect</code>, or <code>Challenge</code>; only headers on an explicit allowlist are copied from the auth server's response into the response sent to the client.</li>
 <li>Failure mode (fail-open or fail-closed) is configured per provider. The default is fail-closed: a timeout or transport error denies the request rather than silently admitting it.</li>
-<li>OIDC mode uses discovery and token introspection to validate bearer tokens. It does not fetch or validate against JWKS, does not cache the discovery document (refetched per request), and does not implement interactive login or session-cookie flows.</li>
+<li>OIDC mode uses discovery and token introspection to validate bearer tokens. It does not cache the discovery document (refetched per request) and does not implement interactive login or session-cookie flows. For local signature validation against an issuer's published keys, use JWT auth with <code>jwks_url</code> instead.</li>
+</ul>
+<p>JWT signature verification details:</p>
+<ul>
+<li>The algorithm allowlist is explicit policy, not inferred from configured key material. A token whose <code>alg</code> header is absent from <code>allowed_algorithms</code> is rejected before any key is resolved, and <code>alg: none</code> never maps to a verification mode.</li>
+<li>Key type is re-checked at verification time, so an asymmetric public key can never satisfy an <code>HS256</code> token and vice versa.</li>
+<li>RSA keys below 2048 bits are rejected, whether configured statically or published via JWKS.</li>
+<li>Refresh failures never widen access: the last known-good key set keeps validating until the staleness window expires, after which requests are rejected rather than admitted.</li>
 </ul>
 <p>Boundary rule:</p>
 <ul>
@@ -1634,7 +1641,6 @@
 <h2 id="what-spooky-does-not-currently-provide">What Spooky Does Not Currently Provide</h2>
 <p>Spooky does not currently provide first-class:</p>
 <ul>
-<li>JWKS-based JWT validation or key rotation</li>
 <li>OIDC login flows (interactive/browser SSO) or session-cookie handling</li>
 <li>a generic RBAC/policy engine beyond scope/role checks on JWT claims</li>
 <li>WAF behavior</li>

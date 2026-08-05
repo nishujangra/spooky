@@ -1464,7 +1464,10 @@
 </ul>
 <h2 id="security-and-policy-limits">Security And Policy Limits</h2>
 <ul>
-<li>JWT validation is local (HS256) and per-upstream; there is no external JWKS fetch or key rotation support.</li>
+<li>JWT validation is local and per-upstream, covering <code>HS256</code>, <code>RS256</code>, and <code>ES256</code>. Other JOSE algorithms (<code>RS384</code>/<code>RS512</code>, <code>PS*</code>, <code>EdDSA</code>, ECDSA curves other than P-256) are not supported.</li>
+<li>JWKS support is direct-URL only; there is no discovery-document-based JWKS resolution, and the JWKS cache is process-local rather than shared across instances.</li>
+<li>A JWKS source removed or repointed by a config reload is not evicted from the in-memory key cache for the remaining process lifetime.</li>
+<li>When both static asymmetric keys and a <code>jwks_url</code> are configured and a token matches a key in each, the request is rejected as ambiguous rather than resolved by precedence.</li>
 <li>Request-path RBAC is limited to scope/role checks against JWT claims; there is no generic policy engine.</li>
 <li>Admin-plane RBAC is a fixed three-tier model (<code>viewer</code>, <code>operator</code>, <code>admin</code>) with per-route minimums; custom roles and per-route policy expressions are not supported.</li>
 <li>Control API mTLS has no CRL or OCSP revocation checking — a compromised client certificate remains valid until its CA material is rotated.</li>
@@ -1473,7 +1476,7 @@
 <li>The admin audit stream is per-process and local; there is no fleet-wide aggregation, delivery guarantee, or tamper-evidence.</li>
 <li><code>ip_allowlist.trust_proxy_headers</code> is accepted in config but not honored — the source address is always the TCP peer, and proxy headers are never trusted.</li>
 <li>External auth (HTTP subrequest and OIDC) is implemented as a non-blocking async check per upstream, with configurable fail-open/fail-closed behavior; there is no interactive login or session-cookie flow.</li>
-<li>OIDC support covers discovery and token introspection only; there is no JWKS fetch or local token signature validation, and the discovery document is refetched on every request rather than cached.</li>
+<li>OIDC external auth covers discovery and token introspection only, and the discovery document is refetched on every request rather than cached. Local signature validation against an issuer's keys is available through JWT auth with <code>jwks_url</code>, not through the OIDC provider.</li>
 <li>No WAF or advanced request-inspection layer.</li>
 </ul>
 <h2 id="platform-and-ecosystem-limits">Platform And Ecosystem Limits</h2>

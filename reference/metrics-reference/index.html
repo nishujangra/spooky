@@ -1911,6 +1911,72 @@
 </tr>
 </tbody>
 </table></div>
+<h2 id="jwt-and-jwks-metrics">JWT And JWKS Metrics</h2>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Type</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>spooky_jwt_validation_failures_total{reason}</code></td>
+<td>counter</td>
+<td>JWT validation failures by stable rejection reason</td>
+</tr>
+<tr>
+<td><code>spooky_jwt_algorithm_rejections_total{algorithm}</code></td>
+<td>counter</td>
+<td>Tokens rejected because their <code>alg</code> is not in the allowlist</td>
+</tr>
+<tr>
+<td><code>spooky_jwks_unknown_kid_total{jwks_url}</code></td>
+<td>counter</td>
+<td>Tokens presenting a <code>kid</code> absent from the cached key set</td>
+</tr>
+<tr>
+<td><code>spooky_jwks_refresh_success_total{jwks_url}</code></td>
+<td>counter</td>
+<td>Successful JWKS refreshes</td>
+</tr>
+<tr>
+<td><code>spooky_jwks_refresh_failure_total{jwks_url}</code></td>
+<td>counter</td>
+<td>Failed JWKS refreshes</td>
+</tr>
+<tr>
+<td><code>spooky_jwks_age_seconds{jwks_url}</code></td>
+<td>gauge</td>
+<td>Age of the active key set since last successful refresh</td>
+</tr>
+<tr>
+<td><code>spooky_jwks_state{jwks_url,state}</code></td>
+<td>gauge</td>
+<td>Current cache state, <code>1</code> on the active state series</td>
+</tr>
+<tr>
+<td><code>spooky_jwks_active_keys{jwks_url}</code></td>
+<td>gauge</td>
+<td>Usable verification keys currently loaded</td>
+</tr>
+<tr>
+<td><code>spooky_jwks_last_refresh_attempt_seconds{jwks_url}</code></td>
+<td>gauge</td>
+<td>Unix timestamp of the last refresh attempt</td>
+</tr>
+<tr>
+<td><code>spooky_jwks_last_refresh_success_seconds{jwks_url}</code></td>
+<td>gauge</td>
+<td>Unix timestamp of the last successful refresh</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>spooky_jwks_state</code> reports one of <code>never_fetched</code>, <code>fresh</code>, <code>stale</code>,
+<code>refresh_failed_retained</code>, <code>quarantined_retained</code>, or <code>empty_unusable</code>. Only the
+last is unable to validate tokens; the two <code>*_retained</code> states are still serving
+last-known-good keys.</p>
 <h2 id="control-plane-and-runtime-metrics">Control Plane And Runtime Metrics</h2>
 <div class="table-wrapper"><table>
 <thead>
@@ -2518,6 +2584,14 @@
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#dns-and-backend-refresh-metrics');">
             DNS And Backend Refresh Metrics
+        </a>
+        
+
+        
+        <a href="#jwt-and-jwks-metrics"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#jwt-and-jwks-metrics');">
+            JWT And JWKS Metrics
         </a>
         
 

@@ -1640,7 +1640,120 @@ upstream:
       - id: &quot;backend1&quot;
         address: &quot;backend.private.example:8443&quot;
 </code></pre>
-<h2 id="example-7-current-reload-stance">Example 7: Current Reload Stance</h2>
+<h2 id="example-7-static-rs256-and-es256-jwt-keys">Example 7: Static RS256 And ES256 JWT Keys</h2>
+<p>Pin verification to public keys you manage yourself. <code>secret</code> stays empty because
+<code>HS256</code> is not in the allowlist — configuring both is rejected at startup.</p>
+<pre><code class="language-yaml">version: 1
+
+listen:
+  protocol: http3
+  address: &quot;0.0.0.0&quot;
+  port: 443
+  tls:
+    cert: /etc/spooky/certs/fullchain.pem
+    key: /etc/spooky/certs/privkey.pem
+
+upstream:
+  api_pool:
+    route:
+      path_prefix: &quot;/&quot;
+    auth:
+      jwt:
+        secret: &quot;&quot;
+        issuer: &quot;https://issuer.example.com/&quot;
+        audience: &quot;payments-api&quot;
+        allowed_algorithms: [&quot;RS256&quot;, &quot;ES256&quot;]
+        require_kid: true
+        static_keys:
+          - kind: pem
+            kid: &quot;rsa-2026-01&quot;
+            alg: &quot;RS256&quot;
+            public_key_pem: |
+              -----BEGIN PUBLIC KEY-----
+              MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8A...
+              -----END PUBLIC KEY-----
+          - kind: pem
+            kid: &quot;ec-2026-01&quot;
+            alg: &quot;ES256&quot;
+            public_key_pem: |
+              -----BEGIN PUBLIC KEY-----
+              MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE...
+              -----END PUBLIC KEY-----
+        clock_skew_secs: 30
+    backends:
+      - id: &quot;backend1&quot;
+        address: &quot;backend.internal.example:8443&quot;
+</code></pre>
+<p>Keys may also be supplied as JWK documents with <code>kind: jwk</code> and a <code>jwk</code> string field
+instead of <code>public_key_pem</code>. RSA keys shorter than 2048 bits are rejected.</p>
+<h2 id="example-8-jwks-backed-validation-with-strict-policy">Example 8: JWKS-Backed Validation With Strict Policy</h2>
+<p>Fetch signing keys from the issuer and enforce a strict issuer/audience/algorithm
+policy. Multiple issuers and audiences use the plural fields; the singular
+<code>issuer</code>/<code>audience</code> fields remain supported but cannot be combined with them.</p>
+<pre><code class="language-yaml">version: 1
+
+listen:
+  protocol: http3
+  address: &quot;0.0.0.0&quot;
+  port: 443
+  tls:
+    cert: /etc/spooky/certs/fullchain.pem
+    key: /etc/spooky/certs/privkey.pem
+
+upstream:
+  api_pool:
+    route:
+      path_prefix: &quot;/&quot;
+    auth:
+      jwt:
+        secret: &quot;&quot;
+        issuers:
+          - &quot;https://issuer.example.com/&quot;
+          - &quot;https://issuer-eu.example.com/&quot;
+        audiences:
+          - &quot;payments-api&quot;
+          - &quot;payments-api-internal&quot;
+        allowed_algorithms: [&quot;RS256&quot;, &quot;ES256&quot;]
+        require_kid: true
+        jwks_url: &quot;https://issuer.example.com/.well-known/jwks.json&quot;
+        jwks_refresh_interval_secs: 300
+        jwks_request_timeout_ms: 2000
+        jwks_cache_ttl_secs: 900
+        jwks_stale_if_error_secs: 3600
+        jwks_startup_behavior: require_ready
+        clock_skew_secs: 30
+      required_scopes:
+        - &quot;payments:read&quot;
+    backends:
+      - id: &quot;backend1&quot;
+        address: &quot;backend.internal.example:8443&quot;
+</code></pre>
+<p><code>jwks_url</code> must be an absolute <code>https</code> URL. Omitting <code>issuers</code>/<code>audiences</code> entirely
+disables those checks — signature and expiry are still enforced, but any issuer's
+token signed by a trusted key is accepted, so set them in production.</p>
+<h3 id="startup-behavior-choices">Startup Behavior Choices</h3>
+<p><code>jwks_startup_behavior</code> decides what happens when the initial fetch fails:</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Value</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>require_ready</code> (default)</td>
+<td>Startup fails with an error naming the endpoint and cache state. Use when the upstream must never serve traffic with unverifiable tokens.</td>
+</tr>
+<tr>
+<td><code>allow_degraded</code></td>
+<td>The process boots and retries in the background. JWT requests are rejected until keys load. Use when availability of other upstreams matters more than this one being immediately ready.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Both reject tokens while keys are missing; they differ only in whether the process
+starts at all.</p>
+<h2 id="example-9-current-reload-stance">Example 9: Current Reload Stance</h2>
 <p>Spooky supports <strong>full configuration hot reload</strong> via <code>POST /admin/runtime/reload</code>, alongside
 certificate-only reload for new handshakes. When planning operations:</p>
 <ul>
@@ -2155,10 +2268,34 @@ certificate-only reload for new handshakes. When planning operations:</p>
         
 
         
-        <a href="#example-7-current-reload-stance"
+        <a href="#example-7-static-rs256-and-es256-jwt-keys"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#example-7-current-reload-stance');">
-            Example 7: Current Reload Stance
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#example-7-static-rs256-and-es256-jwt-keys');">
+            Example 7: Static RS256 And ES256 JWT Keys
+        </a>
+        
+
+        
+        <a href="#example-8-jwks-backed-validation-with-strict-policy"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#example-8-jwks-backed-validation-with-strict-policy');">
+            Example 8: JWKS-Backed Validation With Strict Policy
+        </a>
+        
+        
+        <a href="#startup-behavior-choices"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#startup-behavior-choices');">
+            Startup Behavior Choices
+        </a>
+        
+        
+
+        
+        <a href="#example-9-current-reload-stance"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#example-9-current-reload-stance');">
+            Example 9: Current Reload Stance
         </a>
         
 

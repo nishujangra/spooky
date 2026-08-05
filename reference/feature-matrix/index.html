@@ -1900,7 +1900,12 @@
 <tr>
 <td>JWT validation</td>
 <td><code>Done</code></td>
-<td>Local HS256 validation, per-upstream</td>
+<td>Local <code>HS256</code>/<code>RS256</code>/<code>ES256</code> validation, per-upstream; explicit algorithm allowlist</td>
+</tr>
+<tr>
+<td>JWKS key sources</td>
+<td><code>Done</code></td>
+<td>Static PEM/JWK keys or remote JWKS URL, background refresh, rollover overlap, last-known-good retention</td>
 </tr>
 <tr>
 <td>RBAC / policy engine</td>
@@ -1915,7 +1920,7 @@
 <tr>
 <td>OIDC / auth gateway</td>
 <td><code>Partial</code></td>
-<td>Discovery + token introspection; no JWKS/local signature validation, no interactive login/session-cookie flows</td>
+<td>Discovery + token introspection; no interactive login/session-cookie flows. Local signature validation is available via JWT <code>jwks_url</code></td>
 </tr>
 <tr>
 <td>WAF capabilities</td>

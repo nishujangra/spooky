@@ -1547,6 +1547,83 @@
 <li>Watch error rate, route latency, health transitions, and shed counters.</li>
 <li>Expand only after the canary stays stable.</li>
 </ol>
+<h2 id="scenario-jwt-rejections-or-stale-jwks-state">Scenario: JWT Rejections Or Stale JWKS State</h2>
+<p>First, find out whether the problem is the tokens or the keys:</p>
+<ol>
+<li>Check <code>GET /admin/runtime</code> and read <code>jwks.sources[]</code> and <code>auth.providers[]</code>.</li>
+<li>Read <code>cache_state</code>. <code>fresh</code> or <code>stale</code> means keys are loading; <code>empty_unusable</code>
+   means no usable keys and every JWT request is being rejected.</li>
+<li>Compare <code>last_refresh_attempt_unix_seconds</code> with <code>last_refresh_success_unix_seconds</code>.
+   A recent attempt with an old success means refreshes are failing — read
+   <code>last_failure_reason</code>.</li>
+<li>Read <code>auth.jwt_validation_failures[]</code> for the dominant rejection reason.</li>
+</ol>
+<p>What the common reasons mean:</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Reason</th>
+<th>Cause</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>key_source_unavailable</code></td>
+<td>JWKS never loaded or aged past the staleness window</td>
+</tr>
+<tr>
+<td><code>missing_verification_key</code></td>
+<td>Token's <code>kid</code> is not in the cached set; check whether the issuer rotated early</td>
+</tr>
+<tr>
+<td><code>algorithm_not_allowed</code></td>
+<td>Token <code>alg</code> is outside <code>allowed_algorithms</code></td>
+</tr>
+<tr>
+<td><code>issuer_mismatch</code> / <code>audience_mismatch</code></td>
+<td>Token is valid but issued for a different issuer or audience</td>
+</tr>
+<tr>
+<td><code>token_expired</code></td>
+<td>Ordinary client-side expiry, not a server problem</td>
+</tr>
+<tr>
+<td><code>ambiguous_verification_key</code></td>
+<td>Two configured keys resolve to the same <code>kid</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Recovery:</p>
+<ul>
+<li>if the issuer rotated early, an unknown <code>kid</code> already triggers a rate-limited
+  background refresh — wait one refresh interval before intervening</li>
+<li>if refreshes are failing, verify the endpoint is reachable over HTTPS from the
+  proxy host; keys keep validating until <code>jwks_stale_if_error_secs</code> elapses</li>
+<li>if state is <code>empty_unusable</code>, treat it as an auth outage for that upstream</li>
+<li>avoid restarting a node with <code>require_ready</code> while the issuer is down: it will
+  fail to boot rather than start degraded</li>
+</ul>
+<h3 id="rotation-cadence-and-refresh-intervals">Rotation Cadence And Refresh Intervals</h3>
+<ul>
+<li>keep <code>jwks_refresh_interval_secs</code> (default <code>300</code>) well below the issuer's rotation
+  interval so new keys are cached before tokens signed with them arrive</li>
+<li>keep <code>jwks_cache_ttl_secs</code> (default <code>900</code>) at roughly three refresh intervals so a
+  single failed refresh does not immediately mark the set stale</li>
+<li><code>jwks_stale_if_error_secs</code> (default <code>3600</code>) is the outage budget: how long
+  last-known-good keys keep working while refreshes fail. It also sets the overlap
+  window during which a key dropped from the JWKS stays valid</li>
+<li>overlap old and new keys in the published JWKS for at least one full
+  <code>jwks_cache_ttl_secs</code> when rotating</li>
+</ul>
+<h3 id="alerts-worth-adding">Alerts Worth Adding</h3>
+<ul>
+<li><code>spooky_jwks_state{state="empty_unusable"} == 1</code> — auth outage for that upstream, page</li>
+<li><code>spooky_jwks_age_seconds</code> above <code>jwks_cache_ttl_secs</code> — refreshes are not landing</li>
+<li><code>rate(spooky_jwks_refresh_failure_total[15m]) &gt; 0</code> sustained — issuer or network problem</li>
+<li><code>rate(spooky_jwks_unknown_kid_total[5m])</code> rising — likely an unannounced rotation</li>
+<li><code>rate(spooky_jwt_validation_failures_total{reason="key_source_unavailable"}[5m]) &gt; 0</code> —
+  requests are being rejected for key-availability reasons rather than bad tokens</li>
+</ul>
 <h2 id="scenario-brownout-or-overload-triggering">Scenario: Brownout Or Overload Triggering</h2>
 <p>Check:</p>
 <ul>
@@ -2079,6 +2156,28 @@
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#scenario-route-or-upstream-change');">
             Scenario: Route Or Upstream Change
         </a>
+        
+
+        
+        <a href="#scenario-jwt-rejections-or-stale-jwks-state"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#scenario-jwt-rejections-or-stale-jwks-state');">
+            Scenario: JWT Rejections Or Stale JWKS State
+        </a>
+        
+        
+        <a href="#rotation-cadence-and-refresh-intervals"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#rotation-cadence-and-refresh-intervals');">
+            Rotation Cadence And Refresh Intervals
+        </a>
+        
+        <a href="#alerts-worth-adding"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#alerts-worth-adding');">
+            Alerts Worth Adding
+        </a>
+        
         
 
         
