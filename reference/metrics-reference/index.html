@@ -1932,47 +1932,52 @@
 <td>Tokens rejected because their <code>alg</code> is not in the allowlist</td>
 </tr>
 <tr>
-<td><code>spooky_jwks_unknown_kid_total{jwks_url}</code></td>
+<td><code>spooky_jwks_unknown_kid_total{jwks_source_id}</code></td>
 <td>counter</td>
 <td>Tokens presenting a <code>kid</code> absent from the cached key set</td>
 </tr>
 <tr>
-<td><code>spooky_jwks_refresh_success_total{jwks_url}</code></td>
+<td><code>spooky_jwks_refresh_success_total{jwks_source_id}</code></td>
 <td>counter</td>
 <td>Successful JWKS refreshes</td>
 </tr>
 <tr>
-<td><code>spooky_jwks_refresh_failure_total{jwks_url}</code></td>
+<td><code>spooky_jwks_refresh_failure_total{jwks_source_id}</code></td>
 <td>counter</td>
 <td>Failed JWKS refreshes</td>
 </tr>
 <tr>
-<td><code>spooky_jwks_age_seconds{jwks_url}</code></td>
+<td><code>spooky_jwks_age_seconds{jwks_source_id}</code></td>
 <td>gauge</td>
 <td>Age of the active key set since last successful refresh</td>
 </tr>
 <tr>
-<td><code>spooky_jwks_state{jwks_url,state}</code></td>
+<td><code>spooky_jwks_state{jwks_source_id,state}</code></td>
 <td>gauge</td>
 <td>Current cache state, <code>1</code> on the active state series</td>
 </tr>
 <tr>
-<td><code>spooky_jwks_active_keys{jwks_url}</code></td>
+<td><code>spooky_jwks_active_keys{jwks_source_id}</code></td>
 <td>gauge</td>
 <td>Usable verification keys currently loaded</td>
 </tr>
 <tr>
-<td><code>spooky_jwks_last_refresh_attempt_seconds{jwks_url}</code></td>
+<td><code>spooky_jwks_last_refresh_attempt_seconds{jwks_source_id}</code></td>
 <td>gauge</td>
 <td>Unix timestamp of the last refresh attempt</td>
 </tr>
 <tr>
-<td><code>spooky_jwks_last_refresh_success_seconds{jwks_url}</code></td>
+<td><code>spooky_jwks_last_refresh_success_seconds{jwks_source_id}</code></td>
 <td>gauge</td>
 <td>Unix timestamp of the last successful refresh</td>
 </tr>
 </tbody>
 </table></div>
+<p>JWKS series are labelled by <code>jwks_source_id</code>, an opaque per-source identifier —
+the configured endpoint URL is never used as a label value, so query strings and
+embedded credentials cannot leak into the metrics endpoint. Map a source id back
+to its endpoint through <code>jwks.sources[]</code> in the <code>/admin/runtime</code> snapshot, which
+reports both <code>jwks_source_id</code> and a sanitized <code>jwks_endpoint</code>.</p>
 <p><code>spooky_jwks_state</code> reports one of <code>never_fetched</code>, <code>fresh</code>, <code>stale</code>,
 <code>refresh_failed_retained</code>, <code>quarantined_retained</code>, or <code>empty_unusable</code>. Only the
 last is unable to validate tokens; the two <code>*_retained</code> states are still serving

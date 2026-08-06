@@ -1510,7 +1510,8 @@ configurable retention, and automatic rollback on post-activation health regress
 <li>stronger route-level policy controls and layered/chained auth providers</li>
 </ul>
 <p><em>Already shipped (previously listed here as future): scoped rate limiting (route/client/tenant/token),
-local HS256 JWT validation with scope/role RBAC, and external auth via HTTP subrequest or OIDC.</em></p>
+local <code>HS256</code>/<code>RS256</code>/<code>ES256</code> JWT validation with scope/role RBAC, static and JWKS-backed key sources
+with background refresh and rollover overlap, and external auth via HTTP subrequest or OIDC.</em></p>
 <h2 id="longer-term-competitive-priorities">Longer-Term Competitive Priorities</h2>
 <p>These areas are what move Spooky from “strong specialized edge proxy” toward “top-tier proxy platform.”</p>
 <h3 id="9-discovery-and-platform-integration">9. Discovery And Platform Integration</h3>
