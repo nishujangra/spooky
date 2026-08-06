@@ -99,7 +99,8 @@ These areas make Spooky far more competitive as a general production reverse pro
 - stronger route-level policy controls and layered/chained auth providers
 
 _Already shipped (previously listed here as future): scoped rate limiting (route/client/tenant/token),
-local HS256 JWT validation with scope/role RBAC, and external auth via HTTP subrequest or OIDC._
+local `HS256`/`RS256`/`ES256` JWT validation with scope/role RBAC, static and JWKS-backed key sources
+with background refresh and rollover overlap, and external auth via HTTP subrequest or OIDC._
 
 ## Longer-Term Competitive Priorities
 

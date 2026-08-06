@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.3-beta] - 2026-08-06
+
+### Added
+
+- Asymmetric JWT validation — `RS256` and `ES256` join `HS256` on the local, synchronous request-path verifier. Signature checking never makes a network call.
+- Static public-key material via `auth.jwt.static_keys[]`, given either as PEM (`kind: pem`, `public_key_pem`) or as a JWK document (`kind: jwk`, `jwk`), each carrying a `kid` and `alg`.
+- Remote JWKS key sources via `auth.jwt.jwks_url`, with a background-refreshed in-memory cache tuned by `jwks_refresh_interval_secs` (default `300`), `jwks_cache_ttl_secs` (default `900`), `jwks_stale_if_error_secs` (default `3600`), and `jwks_request_timeout_ms`. An unknown `kid` triggers a rate-limited on-demand refresh rather than a per-request fetch.
+- JWKS cache state machine with explicit states — `never_fetched`, `fresh`, `stale`, `refresh_failed_retained`, `quarantined_retained`, `empty_unusable` — so retained last-known-good keys are distinguishable from an unusable key set.
+- Startup readiness gating via `auth.jwt.jwks_startup_behavior`. Under `require_ready`, a source that cannot load fails startup rather than admitting traffic with no keys, and reload activation preflights the same condition instead of committing a generation that cannot validate tokens.
+- Explicit algorithm policy — `auth.jwt.allowed_algorithms` and `require_kid` are configured independently of the key material present, and multi-valued `issuers`/`audiences` complement the existing singular `issuer`/`audience` fields.
+- JWT and JWKS metrics: `spooky_jwt_validation_failures_total{reason}`, `spooky_jwt_algorithm_rejections_total{algorithm}`, and per-source `spooky_jwks_unknown_kid_total`, `spooky_jwks_refresh_success_total`, `spooky_jwks_refresh_failure_total`, `spooky_jwks_age_seconds`, `spooky_jwks_state`, `spooky_jwks_active_keys`, `spooky_jwks_last_refresh_attempt_seconds`, and `spooky_jwks_last_refresh_success_seconds`.
+- Runtime introspection for auth — `GET /admin/runtime` gained a `jwks.sources[]` block (source id, sanitized endpoint, cache state, active key count, refresh timestamps, last failure reason) and per-upstream JWT provider state under `auth.providers[]`, alongside validation-failure and algorithm-rejection counters.
+- Structured JWT rejection logs carrying the canonical reason, token `alg` and `kid`, JWKS source id, cache state, and whether the staleness window had expired.
+
+### Changed
+
+- JWT validation was restructured into a canonical pipeline (JOSE parse → algorithm policy → key resolution → signature → claims) with a stable rejection-reason vocabulary, replacing ad-hoc failure paths. Reasons include `algorithm_not_allowed`, `missing_verification_key`, `key_source_unavailable`, `ambiguous_verification_key`, `issuer_mismatch`, `audience_mismatch`, and `token_expired`.
+- Key selection is re-checked at verification time, so an asymmetric public key can never satisfy an `HS256` token and vice versa, and `alg: none` never maps to a verification mode.
+- OIDC external auth documentation now points at JWT `jwks_url` for local signature validation; the OIDC provider itself still does discovery and introspection only.
+
+### Fixed
+
+- JWKS cache entries in `refresh_failed_retained` and `quarantined_retained` states are preserved for the remainder of the TTL window instead of being dropped, so a transient issuer outage no longer causes an immediate auth outage.
+- Two JWKS sources configured with the same URL but different policies are merged deterministically rather than depending on upstream iteration order.
+- Tokens presenting no `kid` are accepted only when exactly one algorithm-compatible key survives issuer/policy filtering; multiple candidates are rejected as ambiguous instead of the verifier guessing which key the issuer intended.
+
+### Security
+
+- JWKS telemetry is labelled by an opaque `jwks_source_id` rather than the configured URL, and endpoint values surfaced in logs and the runtime snapshot are sanitized of query strings, so credentials embedded in a JWKS URL cannot leak through the metrics endpoint, logs, or `/admin/runtime`.
+- RSA keys shorter than 2048 bits are rejected, whether configured statically or published by a JWKS endpoint.
+- A refresh failure never widens access: last-known-good keys keep validating until `jwks_stale_if_error_secs` elapses, after which requests are rejected rather than admitted.
+- Config validation rejects incoherent JWT policy at startup: a shared `secret` configured without `HS256` in `allowed_algorithms`, `HS256` allowed with an empty `secret`, and a JWT provider with no key material at all. A token matching both a static key and a JWKS key is rejected as ambiguous rather than resolved by precedence.
+
+### Compatibility
+
+- Existing `HS256` JWT configs are unaffected. `allowed_algorithms` defaults to `HS256` only, `static_keys` is empty, and `jwks_url` is unset, so no JWKS machinery is engaged and an unchanged 0.4.2 config behaves exactly as it did. Note that `jwks_startup_behavior` defaults to `require_ready` — it applies only once `jwks_url` is set, so adopting JWKS is fail-closed at startup by default; choose `allow_degraded` explicitly if you would rather boot without keys.
+- **One-way config compatibility.** `JwtAuth` uses strict `deny_unknown_fields`: a 0.4.3 binary accepts a 0.4.2 config, but a 0.4.2 binary rejects any config using `static_keys`, `jwks_url`, `allowed_algorithms`, `require_kid`, `issuers`, `audiences`, or the `jwks_*` tuning fields. Plan rollbacks accordingly.
+
 ## [0.4.2-beta] - 2026-08-02
 
 ### Added

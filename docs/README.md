@@ -74,7 +74,7 @@ Spooky is an open-source HTTP/3 (QUIC) edge reverse proxy written in Rust that t
 
 | Field | Value |
 |---|---|
-| Version | v0.4.2-beta |
+| Version | v0.4.3-beta |
 | Maturity | Beta |
 | License | GPLv3 |
 
