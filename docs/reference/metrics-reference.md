@@ -151,14 +151,20 @@ Practical note:
 | --- | --- | --- |
 | `spooky_jwt_validation_failures_total{reason}` | counter | JWT validation failures by stable rejection reason |
 | `spooky_jwt_algorithm_rejections_total{algorithm}` | counter | Tokens rejected because their `alg` is not in the allowlist |
-| `spooky_jwks_unknown_kid_total{jwks_url}` | counter | Tokens presenting a `kid` absent from the cached key set |
-| `spooky_jwks_refresh_success_total{jwks_url}` | counter | Successful JWKS refreshes |
-| `spooky_jwks_refresh_failure_total{jwks_url}` | counter | Failed JWKS refreshes |
-| `spooky_jwks_age_seconds{jwks_url}` | gauge | Age of the active key set since last successful refresh |
-| `spooky_jwks_state{jwks_url,state}` | gauge | Current cache state, `1` on the active state series |
-| `spooky_jwks_active_keys{jwks_url}` | gauge | Usable verification keys currently loaded |
-| `spooky_jwks_last_refresh_attempt_seconds{jwks_url}` | gauge | Unix timestamp of the last refresh attempt |
-| `spooky_jwks_last_refresh_success_seconds{jwks_url}` | gauge | Unix timestamp of the last successful refresh |
+| `spooky_jwks_unknown_kid_total{jwks_source_id}` | counter | Tokens presenting a `kid` absent from the cached key set |
+| `spooky_jwks_refresh_success_total{jwks_source_id}` | counter | Successful JWKS refreshes |
+| `spooky_jwks_refresh_failure_total{jwks_source_id}` | counter | Failed JWKS refreshes |
+| `spooky_jwks_age_seconds{jwks_source_id}` | gauge | Age of the active key set since last successful refresh |
+| `spooky_jwks_state{jwks_source_id,state}` | gauge | Current cache state, `1` on the active state series |
+| `spooky_jwks_active_keys{jwks_source_id}` | gauge | Usable verification keys currently loaded |
+| `spooky_jwks_last_refresh_attempt_seconds{jwks_source_id}` | gauge | Unix timestamp of the last refresh attempt |
+| `spooky_jwks_last_refresh_success_seconds{jwks_source_id}` | gauge | Unix timestamp of the last successful refresh |
+
+JWKS series are labelled by `jwks_source_id`, an opaque per-source identifier —
+the configured endpoint URL is never used as a label value, so query strings and
+embedded credentials cannot leak into the metrics endpoint. Map a source id back
+to its endpoint through `jwks.sources[]` in the `/admin/runtime` snapshot, which
+reports both `jwks_source_id` and a sanitized `jwks_endpoint`.
 
 `spooky_jwks_state` reports one of `never_fetched`, `fresh`, `stale`,
 `refresh_failed_retained`, `quarantined_retained`, or `empty_unusable`. Only the
