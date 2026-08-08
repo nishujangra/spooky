@@ -1,4 +1,4 @@
-use std::{collections::HashSet, net::SocketAddr, time::Duration};
+use std::{collections::HashSet, future::Future, net::SocketAddr, pin::Pin, time::Duration};
 
 use sha2::{Digest, Sha256};
 use spooky_config::{
@@ -107,6 +107,21 @@ pub struct QuotaCompositeKey {
     pub key: String,
     pub labels: QuotaIdentityLabels,
     pub dimensions: QuotaSelectorDimensions,
+}
+
+pub type QuotaCounterEvalFuture<'a> = Pin<
+    Box<
+        dyn Future<Output = Result<QuotaCounterEvaluationOutcome, QuotaCounterBackendError>>
+            + Send
+            + 'a,
+    >,
+>;
+
+/// Distributed quota backends must evaluate all configured windows in one atomic operation.
+/// Implementations should not split this into independent reads and writes, which would admit
+/// request races between burst and sustained counters under concurrent load.
+pub trait DistributedQuotaCounterBackend: Send + Sync {
+    fn evaluate<'a>(&'a self, request: QuotaCounterEvaluationRequest) -> QuotaCounterEvalFuture<'a>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -308,6 +323,16 @@ impl QuotaPolicyRuntime {
             selector: QuotaSelectorMatcher::from_raw(&value.selector),
             burst: value.burst.as_ref().map(QuotaWindowPolicy::from_raw),
             sustained: value.sustained.as_ref().map(QuotaWindowPolicy::from_raw),
+        }
+    }
+
+    pub fn counter_request(&self, composite_key: QuotaCompositeKey) -> QuotaCounterEvaluationRequest {
+        QuotaCounterEvaluationRequest {
+            policy_name: self.name.clone(),
+            composite_key,
+            cost: 1,
+            burst: self.burst.clone(),
+            sustained: self.sustained.clone(),
         }
     }
 }
@@ -535,6 +560,7 @@ impl QuotaDenyReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuotaWindowUsage {
     pub limit: u64,
+    pub consumed: u64,
     pub remaining: u64,
     pub window: Duration,
     pub reset_after: Option<Duration>,
@@ -544,6 +570,61 @@ pub struct QuotaWindowUsage {
 pub struct QuotaCounterResult {
     pub burst: Option<QuotaWindowUsage>,
     pub sustained: Option<QuotaWindowUsage>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuotaCounterEvaluationRequest {
+    pub policy_name: String,
+    pub composite_key: QuotaCompositeKey,
+    pub cost: u64,
+    pub burst: Option<QuotaWindowPolicy>,
+    pub sustained: Option<QuotaWindowPolicy>,
+}
+
+impl QuotaCounterEvaluationRequest {
+    pub fn with_cost(mut self, cost: u64) -> Self {
+        self.cost = cost.max(1);
+        self
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum QuotaCounterEvaluationDecision {
+    Allowed,
+    Denied(QuotaDenyReason),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuotaCounterEvaluationOutcome {
+    pub matched_policy: String,
+    pub composite_key: QuotaCompositeKey,
+    pub decision: QuotaCounterEvaluationDecision,
+    pub counter: QuotaCounterResult,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuotaCounterBackendErrorKind {
+    Timeout,
+    Unavailable,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuotaCounterBackendError {
+    pub policy_name: Option<String>,
+    pub composite_key: Option<String>,
+    pub kind: QuotaCounterBackendErrorKind,
+    pub detail: Option<String>,
+}
+
+impl QuotaCounterBackendError {
+    pub fn deny_reason(&self) -> QuotaDenyReason {
+        match self.kind {
+            QuotaCounterBackendErrorKind::Timeout => QuotaDenyReason::BackendTimeout,
+            QuotaCounterBackendErrorKind::Unavailable => QuotaDenyReason::BackendUnavailable,
+            QuotaCounterBackendErrorKind::Error => QuotaDenyReason::BackendError,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1200,6 +1281,135 @@ mod tests {
                 &context
             ),
             RequestKeyExtraction::Found("client-a".to_string())
+        );
+    }
+
+    #[test]
+    fn quota_counter_request_clones_policy_windows_and_defaults_cost() {
+        let policy = QuotaPolicyRuntime {
+            name: "tenant-quota".to_string(),
+            route_allowlist: HashSet::from(["api".to_string()]),
+            selector: QuotaSelectorMatcher {
+                route: true,
+                tenant: Some(QuotaSelectorKeySpec::Header("x-tenant-id".to_string())),
+                token: None,
+                client: None,
+            },
+            burst: Some(QuotaWindowPolicy {
+                requests: 50,
+                window: Duration::from_secs(1),
+            }),
+            sustained: Some(QuotaWindowPolicy {
+                requests: 500,
+                window: Duration::from_secs(60),
+            }),
+        };
+        let composite_key = QuotaCompositeKey {
+            policy_name: "tenant-quota".to_string(),
+            key: "policy=12:tenant-quota|route=3:api|tenant=4:acme|".to_string(),
+            labels: QuotaIdentityLabels {
+                route: Some("api".to_string()),
+                tenant: Some("acme".to_string()),
+                token: None,
+                client: None,
+            },
+            dimensions: policy.selector.dimensions(),
+        };
+
+        let request = policy.counter_request(composite_key.clone()).with_cost(3);
+
+        assert_eq!(request.policy_name, "tenant-quota");
+        assert_eq!(request.composite_key, composite_key);
+        assert_eq!(request.cost, 3);
+        assert_eq!(request.burst, policy.burst);
+        assert_eq!(request.sustained, policy.sustained);
+    }
+
+    #[test]
+    fn quota_counter_backend_errors_map_to_canonical_deny_reasons() {
+        let timeout = QuotaCounterBackendError {
+            policy_name: Some("tenant-quota".to_string()),
+            composite_key: Some("k1".to_string()),
+            kind: QuotaCounterBackendErrorKind::Timeout,
+            detail: None,
+        };
+        assert_eq!(timeout.deny_reason(), QuotaDenyReason::BackendTimeout);
+
+        let unavailable = QuotaCounterBackendError {
+            policy_name: Some("tenant-quota".to_string()),
+            composite_key: Some("k1".to_string()),
+            kind: QuotaCounterBackendErrorKind::Unavailable,
+            detail: Some("redis unavailable".to_string()),
+        };
+        assert_eq!(
+            unavailable.deny_reason(),
+            QuotaDenyReason::BackendUnavailable
+        );
+
+        let error = QuotaCounterBackendError {
+            policy_name: Some("tenant-quota".to_string()),
+            composite_key: Some("k1".to_string()),
+            kind: QuotaCounterBackendErrorKind::Error,
+            detail: Some("script error".to_string()),
+        };
+        assert_eq!(error.deny_reason(), QuotaDenyReason::BackendError);
+    }
+
+    #[test]
+    fn quota_counter_outcome_captures_multi_window_consumption_and_denial() {
+        let composite_key = QuotaCompositeKey {
+            policy_name: "tenant-quota".to_string(),
+            key: "policy=12:tenant-quota|route=3:api|tenant=4:acme|".to_string(),
+            labels: QuotaIdentityLabels {
+                route: Some("api".to_string()),
+                tenant: Some("acme".to_string()),
+                token: None,
+                client: None,
+            },
+            dimensions: QuotaSelectorDimensions {
+                route: true,
+                tenant: true,
+                token: false,
+                client: false,
+            },
+        };
+
+        let outcome = QuotaCounterEvaluationOutcome {
+            matched_policy: "tenant-quota".to_string(),
+            composite_key,
+            decision: QuotaCounterEvaluationDecision::Denied(
+                QuotaDenyReason::BurstQuotaExhausted,
+            ),
+            counter: QuotaCounterResult {
+                burst: Some(QuotaWindowUsage {
+                    limit: 50,
+                    consumed: 50,
+                    remaining: 0,
+                    window: Duration::from_secs(1),
+                    reset_after: Some(Duration::from_millis(750)),
+                }),
+                sustained: Some(QuotaWindowUsage {
+                    limit: 500,
+                    consumed: 320,
+                    remaining: 180,
+                    window: Duration::from_secs(60),
+                    reset_after: Some(Duration::from_secs(12)),
+                }),
+            },
+        };
+
+        assert_eq!(outcome.matched_policy, "tenant-quota");
+        assert_eq!(
+            outcome.decision,
+            QuotaCounterEvaluationDecision::Denied(QuotaDenyReason::BurstQuotaExhausted)
+        );
+        assert_eq!(
+            outcome.counter.burst.as_ref().map(|window| window.consumed),
+            Some(50)
+        );
+        assert_eq!(
+            outcome.counter.sustained.as_ref().map(|window| window.remaining),
+            Some(180)
         );
     }
 }
