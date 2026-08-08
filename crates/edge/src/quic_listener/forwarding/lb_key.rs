@@ -34,12 +34,14 @@ impl<'a> LbKeyRequestParts<'a> {
     }
 }
 
+#[cfg(test)]
 struct LbKeyResolutionInput<'a> {
     lb_type: &'a str,
     lb_key_spec: Option<&'a str>,
     request: LbKeyRequestParts<'a>,
 }
 
+#[cfg(test)]
 impl<'a> LbKeyResolutionInput<'a> {
     fn new(lb_type: &'a str, lb_key_spec: Option<&'a str>, request: LbKeyRequestParts<'a>) -> Self {
         Self {
@@ -62,6 +64,7 @@ pub(super) struct ResolvedLbKey {
     pub(super) source: LbKeySource,
 }
 
+#[cfg(test)]
 fn extract_cookie_value(cookie_header: &str, cookie_name: &str) -> Option<String> {
     for pair in cookie_header.split(';') {
         let part = pair.trim();
@@ -80,6 +83,7 @@ fn extract_cookie_value(cookie_header: &str, cookie_name: &str) -> Option<String
     None
 }
 
+#[cfg(test)]
 fn extract_query_param(path: &str, param: &str) -> Option<String> {
     let (_, query) = path.split_once('?')?;
     for pair in query.split('&') {
@@ -112,6 +116,7 @@ impl QUICListener {
         Self::resolve_lb_key_for_runtime_input(lb_strategy, lb_key_spec, &request)
     }
 
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(in crate::quic_listener::forwarding) fn resolve_lb_key(
         lb_type: &str,
@@ -148,6 +153,7 @@ impl QUICListener {
         }
     }
 
+    #[cfg(test)]
     fn resolve_lb_key_from_parts(
         lb_key_spec: &str,
         request: &LbKeyRequestParts<'_>,
@@ -219,6 +225,7 @@ impl QUICListener {
             .to_string()
     }
 
+    #[cfg(test)]
     fn resolve_lb_key_for_input(input: &LbKeyResolutionInput<'_>) -> ResolvedLbKey {
         let default_key = Self::default_lb_request_key_for_parts(&input.request);
 

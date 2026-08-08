@@ -543,10 +543,7 @@ fn evaluate_forwarding_post_auth_quota_policy(
         Some(pending_forward.upstream_name.as_ref()),
         pending_forward.method.as_ref(),
         pending_forward.path.as_ref(),
-        pending_forward
-            .authority
-            .as_deref()
-            .map(|value| value.as_ref()),
+        pending_forward.authority.as_deref(),
         None,
         Some(pending_forward.client_addr),
         Some(&header_lookup),
@@ -3777,7 +3774,7 @@ mod tests {
 
     mod post_auth_admission_execution {
         use super::*;
-        use crate::resilience::quota::QuotaBackendFailurePolicy;
+        use spooky_config::config::QuotaBackendFailurePolicy;
 
         fn test_pending_forward_for_api(headers: Vec<quiche::h3::Header>) -> PendingForward {
             PendingForward::sample_for_test(headers)

@@ -928,20 +928,15 @@ pub enum QuotaEnforcementMode {
     Enforce,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Default, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum QuotaBackendFailurePolicy {
     FailOpen,
+    #[default]
     FailClosed,
 }
 
-impl Default for QuotaBackendFailurePolicy {
-    fn default() -> Self {
-        Self::FailClosed
-    }
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Debug, Default, Deserialize, Serialize, Clone)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct QuotaPolicyConfig {
@@ -1041,19 +1036,6 @@ impl QuotaPolicyConfig {
 
     fn default_local_fallback_key_prefix() -> String {
         "spooky:quota:fallback".to_string()
-    }
-}
-
-impl Default for QuotaPolicyConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            enforcement: QuotaEnforcementMode::default(),
-            backend_failure_policy: QuotaBackendFailurePolicy::default(),
-            backend: QuotaCounterBackend::default(),
-            local_fallback: None,
-            policies: Vec::new(),
-        }
     }
 }
 

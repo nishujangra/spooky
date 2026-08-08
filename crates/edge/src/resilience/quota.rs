@@ -384,7 +384,7 @@ impl QuotaSelectorMatcher {
         }
     }
 
-    pub fn extract_identities(
+    pub(crate) fn extract_identities(
         &self,
         policy_name: &str,
         context: &QuotaIdentityContext<'_>,
@@ -1041,7 +1041,7 @@ impl QuotaRuntime {
 }
 
 impl QuotaPolicyRuntime {
-    pub fn composite_key(
+    pub(crate) fn composite_key(
         &self,
         context: &QuotaIdentityContext<'_>,
     ) -> Result<QuotaCompositeKey, QuotaIdentityRejection> {
@@ -1257,7 +1257,7 @@ impl QuotaDecision {
     }
 }
 
-pub async fn evaluate_admission_quota(
+pub(crate) async fn evaluate_admission_quota(
     runtime: &QuotaRuntime,
     backend: &dyn DistributedQuotaCounterBackend,
     context: &QuotaIdentityContext<'_>,
@@ -1510,7 +1510,7 @@ fn observe_quota_policy_outcome(
 ) {
     let policy_name = policy
         .map(|value| value.name.as_str())
-        .or_else(|| match decision {
+        .or(match decision {
             QuotaDecision::Allowed(allowance) => Some(allowance.policy_name.as_str()),
             QuotaDecision::Denied(denial) | QuotaDecision::ShadowDenied(denial) => {
                 Some(denial.policy_name.as_str())

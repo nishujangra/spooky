@@ -53,11 +53,11 @@ pub struct InMemoryDistributedQuotaCounterStore {
 
 impl InMemoryDistributedQuotaCounterStore {
     pub fn new(key_prefix: &str) -> Self {
-        Self::with_limits_and_time_source(key_prefix, None, || unix_now_ms())
+        Self::with_limits_and_time_source(key_prefix, None, unix_now_ms)
     }
 
     pub fn bounded(key_prefix: &str, max_entries: usize) -> Self {
-        Self::with_limits_and_time_source(key_prefix, Some(max_entries.max(1)), || unix_now_ms())
+        Self::with_limits_and_time_source(key_prefix, Some(max_entries.max(1)), unix_now_ms)
     }
 
     pub fn protocol_version(&self) -> &'static str {
@@ -68,6 +68,7 @@ impl InMemoryDistributedQuotaCounterStore {
         &self.key_prefix
     }
 
+    #[cfg(test)]
     fn with_time_source<F>(key_prefix: &str, time_source: F) -> Self
     where
         F: Fn() -> u64 + Send + Sync + 'static,
