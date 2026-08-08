@@ -6,6 +6,19 @@ use std::{
 
 use spooky_config::config::{ScopedRateLimit as ScopedRateLimitConfig, ScopedRateLimitScope};
 
+use super::quota::{
+    DistributedQuotaCounterBackend, QuotaBackendFailurePolicy, QuotaCounterBackend,
+    QuotaCounterBackendError, QuotaCounterBackendErrorKind, QuotaCounterBackendMetadata,
+    QuotaCounterEvalFuture, QuotaCounterEvaluationDecision, QuotaCounterEvaluationOutcome,
+    QuotaCounterEvaluationRequest, QuotaCounterResult, QuotaDenyReason, QuotaEnforcementMode,
+    QuotaPolicyRuntime, QuotaRuntime, QuotaSelectorKeySpec, QuotaSelectorMatcher,
+    QuotaWindowPolicy, QuotaWindowUsage,
+};
+
+const LEGACY_SCOPED_RATE_LIMIT_PROTOCOL_VERSION: &str = "legacy-scoped-token-bucket/v1";
+const LEGACY_SCOPED_BACKEND_KIND: &str = "legacy_scoped_rate_limit";
+const LEGACY_SCOPED_KEY_PREFIX: &str = "spooky:legacy-scoped-rate-limit";
+
 struct ScopedRateLimitBucket {
     burst: f64,
     rate_per_sec: f64,
@@ -27,7 +40,7 @@ impl ScopedRateLimitBucket {
         }
     }
 
-    fn try_consume(&mut self) -> bool {
+    fn evaluate(&mut self, cost: u64) -> ScopedRateLimitBucketEvaluation {
         let now = Instant::now();
         let refill = now
             .saturating_duration_since(self.last_refill)
@@ -42,13 +55,34 @@ impl ScopedRateLimitBucket {
             self.tokens = self.burst;
         }
 
-        if self.tokens >= 1.0 {
-            self.tokens -= 1.0;
-            true
+        let requested = cost.max(1) as f64;
+        if self.tokens >= requested {
+            self.tokens -= requested;
+            ScopedRateLimitBucketEvaluation {
+                allowed: true,
+                remaining_tokens: self.tokens.max(0.0),
+                retry_after: None,
+            }
         } else {
-            false
+            let deficit = (requested - self.tokens).max(0.0);
+            let retry_after = if self.rate_per_sec.is_finite() && self.rate_per_sec > 0.0 {
+                Some(Duration::from_secs_f64(deficit / self.rate_per_sec))
+            } else {
+                Some(Duration::from_secs(1))
+            };
+            ScopedRateLimitBucketEvaluation {
+                allowed: false,
+                remaining_tokens: self.tokens.max(0.0),
+                retry_after,
+            }
         }
     }
+}
+
+struct ScopedRateLimitBucketEvaluation {
+    allowed: bool,
+    remaining_tokens: f64,
+    retry_after: Option<Duration>,
 }
 
 pub struct ScopedRateLimitRule {
@@ -96,9 +130,63 @@ impl ScopedRateLimitRule {
     }
 
     fn allow(&self, key: &str) -> bool {
+        self.evaluate_bucket(key, 1).is_some_and(|evaluation| evaluation.allowed)
+    }
+
+    fn evaluate_request(
+        &self,
+        request: QuotaCounterEvaluationRequest,
+    ) -> Result<QuotaCounterEvaluationOutcome, QuotaCounterBackendError> {
+        let Some(evaluation) = self.evaluate_bucket(&request.composite_key.key, request.cost) else {
+            return Err(QuotaCounterBackendError {
+                policy_name: Some(request.policy_name),
+                composite_key: Some(request.composite_key.key),
+                kind: QuotaCounterBackendErrorKind::Unavailable,
+                detail: Some("scoped rate-limit bucket store lock is poisoned".to_string()),
+            });
+        };
+
+        let limit = u64::from(self.burst.max(1));
+        let remaining = evaluation
+            .remaining_tokens
+            .floor()
+            .clamp(0.0, limit as f64) as u64;
+        let consumed = limit.saturating_sub(remaining);
+        let counter = QuotaCounterResult {
+            burst: Some(QuotaWindowUsage {
+                limit,
+                consumed,
+                remaining,
+                window: Duration::from_secs(1),
+                reset_after: evaluation.retry_after,
+                bucket_started_at_unix_ms: None,
+                reset_at_unix_ms: None,
+                storage_key: Some(request.composite_key.key.clone()),
+            }),
+            sustained: None,
+        };
+
+        Ok(QuotaCounterEvaluationOutcome {
+            matched_policy: request.policy_name,
+            composite_key: request.composite_key,
+            decision: if evaluation.allowed {
+                QuotaCounterEvaluationDecision::Allowed
+            } else {
+                QuotaCounterEvaluationDecision::Denied(QuotaDenyReason::BurstQuotaExhausted)
+            },
+            counter,
+            backend_metadata: QuotaCounterBackendMetadata {
+                backend_kind: LEGACY_SCOPED_BACKEND_KIND.to_string(),
+                protocol_version: LEGACY_SCOPED_RATE_LIMIT_PROTOCOL_VERSION.to_string(),
+                evaluated_at_unix_ms: None,
+            },
+        })
+    }
+
+    fn evaluate_bucket(&self, key: &str, cost: u64) -> Option<ScopedRateLimitBucketEvaluation> {
         let mut buckets = match self.buckets.lock() {
             Ok(guard) => guard,
-            Err(_) => return true,
+            Err(_) => return None,
         };
         if buckets.len() >= 64 {
             let idle_ttl = self.idle_ttl;
@@ -107,7 +195,62 @@ impl ScopedRateLimitRule {
         let bucket = buckets
             .entry(key.to_string())
             .or_insert_with(|| ScopedRateLimitBucket::new(self.rate_per_sec, self.burst));
-        bucket.try_consume()
+        Some(bucket.evaluate(cost))
+    }
+
+    fn quota_policy(&self) -> QuotaPolicyRuntime {
+        let default_or_configured = |fallback: QuotaSelectorKeySpec, configured: Option<&str>| {
+            configured
+                .map(QuotaSelectorKeySpec::from_raw_key)
+                .unwrap_or(fallback)
+                .with_legacy_default_fallback()
+        };
+        let selector = match self.scope {
+            ScopedRateLimitScope::Route => QuotaSelectorMatcher {
+                route: true,
+                tenant: None,
+                token: None,
+                client: None,
+            },
+            ScopedRateLimitScope::Client => QuotaSelectorMatcher {
+                route: false,
+                tenant: None,
+                token: None,
+                client: Some(default_or_configured(
+                    QuotaSelectorKeySpec::PeerIp,
+                    self.key_spec(),
+                )),
+            },
+            ScopedRateLimitScope::Tenant => QuotaSelectorMatcher {
+                route: false,
+                tenant: Some(default_or_configured(
+                    QuotaSelectorKeySpec::Authority,
+                    self.key_spec(),
+                )),
+                token: None,
+                client: None,
+            },
+            ScopedRateLimitScope::Token => QuotaSelectorMatcher {
+                route: false,
+                tenant: None,
+                token: Some(default_or_configured(
+                    QuotaSelectorKeySpec::BearerToken,
+                    self.key_spec(),
+                )),
+                client: None,
+            },
+        };
+
+        QuotaPolicyRuntime {
+            name: self.name.clone(),
+            route_allowlist: self.route_allowlist.clone(),
+            selector,
+            burst: Some(QuotaWindowPolicy {
+                requests: u64::from(self.burst.max(1)),
+                window: Duration::from_secs(1),
+            }),
+            sustained: None,
+        }
     }
 }
 
@@ -120,16 +263,42 @@ pub struct ScopedRateLimitRejection {
 
 pub struct ScopedRateLimiters {
     rules: Vec<Arc<ScopedRateLimitRule>>,
+    rules_by_name: HashMap<String, Arc<ScopedRateLimitRule>>,
+    quota_runtime: Arc<QuotaRuntime>,
 }
 
 impl ScopedRateLimiters {
     pub fn new(rules: &[ScopedRateLimitConfig]) -> Self {
+        let rules = rules
+            .iter()
+            .map(|rule| Arc::new(ScopedRateLimitRule::from_config(rule)))
+            .collect::<Vec<_>>();
+        let rules_by_name = rules
+            .iter()
+            .map(|rule| (rule.name.clone(), Arc::clone(rule)))
+            .collect::<HashMap<_, _>>();
+        let quota_runtime = Arc::new(if rules.is_empty() {
+            QuotaRuntime::disabled()
+        } else {
+            QuotaRuntime {
+                enabled: true,
+                enforcement: QuotaEnforcementMode::Enforce,
+                backend_failure_policy: QuotaBackendFailurePolicy::FailOpen,
+                backend: QuotaCounterBackend::InMemory {
+                    key_prefix: LEGACY_SCOPED_KEY_PREFIX.to_string(),
+                },
+                policies: rules.iter().map(|rule| rule.quota_policy()).collect(),
+            }
+        });
         Self {
-            rules: rules
-                .iter()
-                .map(|rule| Arc::new(ScopedRateLimitRule::from_config(rule)))
-                .collect(),
+            rules,
+            rules_by_name,
+            quota_runtime,
         }
+    }
+
+    pub fn quota_runtime(&self) -> &QuotaRuntime {
+        self.quota_runtime.as_ref()
     }
 
     pub fn check<F>(&self, route: &str, mut key_for_rule: F) -> Option<ScopedRateLimitRejection>
@@ -153,5 +322,21 @@ impl ScopedRateLimiters {
             });
         }
         None
+    }
+}
+
+impl DistributedQuotaCounterBackend for ScopedRateLimiters {
+    fn evaluate<'a>(&'a self, request: QuotaCounterEvaluationRequest) -> QuotaCounterEvalFuture<'a> {
+        Box::pin(async move {
+            let Some(rule) = self.rules_by_name.get(&request.policy_name).cloned() else {
+                return Err(QuotaCounterBackendError {
+                    policy_name: Some(request.policy_name),
+                    composite_key: Some(request.composite_key.key),
+                    kind: QuotaCounterBackendErrorKind::Error,
+                    detail: Some("unknown scoped rate-limit policy".to_string()),
+                });
+            };
+            rule.evaluate_request(request)
+        })
     }
 }

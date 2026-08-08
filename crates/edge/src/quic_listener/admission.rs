@@ -3,6 +3,7 @@ use std::{collections::VecDeque, sync::Mutex};
 use std::{
     collections::{HashMap, HashSet},
     convert::Infallible,
+    net::SocketAddr,
     sync::{Arc, OnceLock, RwLock, Weak},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -50,7 +51,7 @@ use crate::{
         },
         route_queue::{RouteQueuePermit, RouteQueueRejection},
         runtime::RuntimeResilience,
-        scoped_rate_limit::{ScopedRateLimitRule, ScopedRateLimiters},
+        scoped_rate_limit::ScopedRateLimiters,
     },
     runtime::{
         connection::{auth::apply_auth_request_mutations, request::PendingForward},
@@ -189,19 +190,19 @@ pub(super) enum AdmissionPolicyDecision {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn evaluate_forwarding_pre_admission_policy<F>(
+pub(super) fn evaluate_forwarding_pre_admission_policy(
     policy: &RuntimeUpstreamPolicy,
     header_lookup: Option<&LbHeaderLookup<'_>>,
     brownout: &BrownoutController,
     inflight_percent: u8,
     route: &str,
+    method: &str,
+    path: &str,
+    authority: Option<&str>,
+    client_addr: SocketAddr,
     retry_after_seconds: u32,
     scoped_rate_limits: &ScopedRateLimiters,
-    key_for_rule: F,
-) -> AdmissionPolicyDecision
-where
-    F: FnMut(&ScopedRateLimitRule) -> Option<String>,
-{
+) -> AdmissionPolicyDecision {
     let auth = evaluate_local_auth_policy(policy, header_lookup);
     if auth != AdmissionPolicyDecision::AdmitReady {
         return auth;
@@ -212,7 +213,15 @@ where
         return brownout;
     }
 
-    evaluate_scoped_rate_limit_policy(scoped_rate_limits, route, key_for_rule)
+    evaluate_scoped_rate_limit_policy(
+        scoped_rate_limits,
+        route,
+        method,
+        path,
+        authority,
+        client_addr,
+        header_lookup,
+    )
 }
 
 pub(super) fn evaluate_local_auth_policy(
@@ -238,25 +247,49 @@ pub(super) fn evaluate_local_auth_policy(
     AdmissionPolicyDecision::AdmitReady
 }
 
-pub(super) fn evaluate_scoped_rate_limit_policy<F>(
+pub(super) fn evaluate_scoped_rate_limit_policy(
     scoped_rate_limits: &ScopedRateLimiters,
     route: &str,
-    key_for_rule: F,
-) -> AdmissionPolicyDecision
-where
-    F: FnMut(&ScopedRateLimitRule) -> Option<String>,
-{
-    let Some(rejection) = scoped_rate_limits.check(route, key_for_rule) else {
+    method: &str,
+    path: &str,
+    authority: Option<&str>,
+    client_addr: SocketAddr,
+    header_lookup: Option<&LbHeaderLookup<'_>>,
+) -> AdmissionPolicyDecision {
+    let Some(handle) = runtime_handle() else {
         return AdmissionPolicyDecision::AdmitReady;
     };
+    let quota_context = QuotaIdentityContext::new(
+        Some(route),
+        method,
+        path,
+        authority,
+        None,
+        Some(client_addr),
+        header_lookup,
+    );
 
-    AdmissionPolicyDecision::RateLimited(RateLimitedDecision {
-        rule_name: rejection.rule_name,
-        route: rejection.route,
-        status: StatusCode::TOO_MANY_REQUESTS,
-        body: b"request rate limited\n",
-        retry_after_seconds: rejection.retry_after_seconds,
-    })
+    match handle.block_on(async {
+        evaluate_admission_quota(
+            scoped_rate_limits.quota_runtime(),
+            scoped_rate_limits,
+            &quota_context,
+        )
+        .await
+    }) {
+        QuotaDecision::Denied(denial) => AdmissionPolicyDecision::RateLimited(RateLimitedDecision {
+            rule_name: denial.policy_name,
+            route: route.to_string(),
+            status: StatusCode::TOO_MANY_REQUESTS,
+            body: b"request rate limited\n",
+            retry_after_seconds: denial.retry_after_seconds.unwrap_or(1).max(1),
+        }),
+        QuotaDecision::NotApplied
+        | QuotaDecision::Allowed(_)
+        | QuotaDecision::ShadowDenied(_)
+        | QuotaDecision::FailedOpen(_)
+        | QuotaDecision::FailedClosed(_) => AdmissionPolicyDecision::AdmitReady,
+    }
 }
 
 pub(super) fn evaluate_brownout_policy(
@@ -3436,9 +3469,12 @@ mod tests {
                     &BrownoutController::new(false, 100, 50, Vec::new()),
                     0,
                     "api",
+                    "GET",
+                    "/resource",
+                    Some("api.example.com"),
+                    "198.51.100.10:443".parse().expect("client addr"),
                     7,
                     &ScopedRateLimiters::new(&[]),
-                    |_| None,
                 ))
                 .expect("unauthorized response");
             assert_eq!(unauthorized.status, StatusCode::UNAUTHORIZED);
@@ -3559,17 +3595,43 @@ mod tests {
             }])
         }
 
+        fn test_client_addr() -> SocketAddr {
+            "198.51.100.10:443".parse().expect("client addr")
+        }
+
         #[test]
         fn scoped_rate_limit_policy_admits_when_rule_does_not_reject() {
             let rate_limits = test_scoped_rate_limits();
+            let headers = HashMap::from([("x-tenant-id".to_string(), "tenant-a".to_string())]);
+            let lookup = |name: &str| headers.get(&name.to_ascii_lowercase()).cloned();
 
-            let allowed = evaluate_scoped_rate_limit_policy(&rate_limits, "payments", |_| {
-                Some("tenant-a".to_string())
-            });
-            let no_key = evaluate_scoped_rate_limit_policy(&rate_limits, "payments", |_| None);
-            let wrong_route = evaluate_scoped_rate_limit_policy(&rate_limits, "admin", |_| {
-                Some("tenant-a".to_string())
-            });
+            let allowed = evaluate_scoped_rate_limit_policy(
+                &rate_limits,
+                "payments",
+                "GET",
+                "/resource",
+                Some("api.example.com"),
+                test_client_addr(),
+                Some(&lookup),
+            );
+            let no_key = evaluate_scoped_rate_limit_policy(
+                &rate_limits,
+                "payments",
+                "GET",
+                "/resource",
+                Some("api.example.com"),
+                test_client_addr(),
+                None,
+            );
+            let wrong_route = evaluate_scoped_rate_limit_policy(
+                &rate_limits,
+                "admin",
+                "GET",
+                "/resource",
+                Some("api.example.com"),
+                test_client_addr(),
+                Some(&lookup),
+            );
 
             assert_eq!(allowed, AdmissionPolicyDecision::AdmitReady);
             assert_eq!(no_key, AdmissionPolicyDecision::AdmitReady);
@@ -3579,13 +3641,63 @@ mod tests {
         #[test]
         fn scoped_rate_limit_policy_returns_typed_rejection_for_exhausted_bucket() {
             let rate_limits = test_scoped_rate_limits();
+            let headers = HashMap::from([("x-tenant-id".to_string(), "tenant-a".to_string())]);
+            let lookup = |name: &str| headers.get(&name.to_ascii_lowercase()).cloned();
 
-            let first = evaluate_scoped_rate_limit_policy(&rate_limits, "payments", |_| {
-                Some("tenant-a".to_string())
-            });
-            let second = evaluate_scoped_rate_limit_policy(&rate_limits, "payments", |_| {
-                Some("tenant-a".to_string())
-            });
+            let first = evaluate_scoped_rate_limit_policy(
+                &rate_limits,
+                "payments",
+                "GET",
+                "/resource",
+                Some("api.example.com"),
+                test_client_addr(),
+                Some(&lookup),
+            );
+            let second = evaluate_scoped_rate_limit_policy(
+                &rate_limits,
+                "payments",
+                "GET",
+                "/resource",
+                Some("api.example.com"),
+                test_client_addr(),
+                Some(&lookup),
+            );
+
+            assert_eq!(first, AdmissionPolicyDecision::AdmitReady);
+            assert_eq!(
+                second,
+                AdmissionPolicyDecision::RateLimited(RateLimitedDecision {
+                    rule_name: "tenant-cap".to_string(),
+                    route: "payments".to_string(),
+                    status: StatusCode::TOO_MANY_REQUESTS,
+                    body: b"request rate limited\n",
+                    retry_after_seconds: 1,
+                })
+            );
+        }
+
+        #[test]
+        fn scoped_rate_limit_policy_preserves_legacy_default_key_fallback() {
+            let rate_limits = test_scoped_rate_limits();
+
+            let first = evaluate_scoped_rate_limit_policy(
+                &rate_limits,
+                "payments",
+                "GET",
+                "/resource",
+                Some("api.example.com"),
+                test_client_addr(),
+                None,
+            );
+            let second = evaluate_scoped_rate_limit_policy(
+                &rate_limits,
+                "payments",
+                "GET",
+                "/resource",
+                Some("api.example.com"),
+                test_client_addr(),
+                None,
+            );
 
             assert_eq!(first, AdmissionPolicyDecision::AdmitReady);
             assert_eq!(

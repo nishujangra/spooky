@@ -9,6 +9,7 @@ mod stream_progress;
 use std::convert::Infallible;
 
 use http_body_util::Full;
+#[cfg(test)]
 use spooky_config::config::ScopedRateLimitScope;
 use spooky_errors::ClassifiedUpstreamProxyError;
 
@@ -1180,6 +1181,7 @@ impl QUICListener {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn resolve_scoped_rate_limit_key(
         rule: &crate::resilience::scoped_rate_limit::ScopedRateLimitRule,
         route: &str,

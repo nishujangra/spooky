@@ -54,6 +54,7 @@ pub enum QuotaSelectorKeySpec {
     Header(String),
     Cookie(String),
     Query(String),
+    LegacyFallback(Box<QuotaSelectorKeySpec>),
 }
 
 pub(crate) type QuotaHeaderLookup<'a> = dyn Fn(&str) -> Option<String> + 'a;
@@ -394,7 +395,7 @@ impl QuotaSelectorMatcher {
 }
 
 impl QuotaSelectorKeySpec {
-    fn from_raw_key(value: &str) -> Self {
+    pub(crate) fn from_raw_key(value: &str) -> Self {
         let normalized = value.trim().to_ascii_lowercase();
         match normalized.as_str() {
             "path" => Self::Path,
@@ -417,6 +418,10 @@ impl QuotaSelectorKeySpec {
                 Self::Header(normalized)
             }
         }
+    }
+
+    pub(crate) fn with_legacy_default_fallback(self) -> Self {
+        Self::LegacyFallback(Box::new(self))
     }
 }
 
@@ -945,7 +950,37 @@ fn extract_quota_selector_key(
         QuotaSelectorKeySpec::Header(name) => extract_header_value(name, context.header_lookup),
         QuotaSelectorKeySpec::Cookie(name) => extract_cookie_key_value(name, context.header_lookup),
         QuotaSelectorKeySpec::Query(name) => extract_query_key_value(context.path, name),
+        QuotaSelectorKeySpec::LegacyFallback(inner) => {
+            match extract_quota_selector_key(inner.as_ref(), context) {
+                RequestKeyExtraction::Found(value) => RequestKeyExtraction::Found(value),
+                RequestKeyExtraction::Missing | RequestKeyExtraction::Invalid => {
+                    extract_legacy_default_request_key(context)
+                }
+            }
+        }
     }
+}
+
+fn extract_legacy_default_request_key(context: &QuotaIdentityContext<'_>) -> RequestKeyExtraction {
+    if let Some(authority) = context
+        .authority
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        return RequestKeyExtraction::Found(authority.to_string());
+    }
+
+    let path = context.path.trim();
+    if !path.is_empty() {
+        return RequestKeyExtraction::Found(path.to_string());
+    }
+
+    let method = context.method.trim();
+    if !method.is_empty() {
+        return RequestKeyExtraction::Found(method.to_string());
+    }
+
+    RequestKeyExtraction::Missing
 }
 
 fn extract_path_value(path: &str) -> RequestKeyExtraction {
@@ -1085,7 +1120,14 @@ fn quota_dimension_is_sensitive(
     dimension: QuotaIdentityDimension,
     spec: &QuotaSelectorKeySpec,
 ) -> bool {
-    matches!(dimension, QuotaIdentityDimension::Token) || matches!(spec, QuotaSelectorKeySpec::BearerToken)
+    matches!(dimension, QuotaIdentityDimension::Token)
+        || match spec {
+            QuotaSelectorKeySpec::BearerToken => true,
+            QuotaSelectorKeySpec::LegacyFallback(inner) => {
+                quota_dimension_is_sensitive(dimension, inner.as_ref())
+            }
+            _ => false,
+        }
 }
 
 fn stable_observable_identity_value(value: &str, sensitive: bool) -> String {
