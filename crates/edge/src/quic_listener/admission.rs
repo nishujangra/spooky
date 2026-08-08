@@ -3,6 +3,7 @@ use std::{collections::VecDeque, sync::Mutex};
 use std::{
     collections::{HashMap, HashSet},
     convert::Infallible,
+    future::Future,
     net::SocketAddr,
     sync::{Arc, OnceLock, RwLock, Weak},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
@@ -38,7 +39,7 @@ use spooky_config::{
 };
 use spooky_lb::upstream_pool::UpstreamPool;
 use subtle::ConstantTimeEq;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
+use tokio::{runtime::RuntimeFlavor, sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError}, task::block_in_place};
 
 use super::{LbHeaderLookup, QUICListener, runtime_handle, spawn_supervised_async_task};
 use crate::{
@@ -255,9 +256,9 @@ pub(super) fn evaluate_scoped_rate_limit_policy(
     client_addr: SocketAddr,
     header_lookup: Option<&LbHeaderLookup<'_>>,
 ) -> AdmissionPolicyDecision {
-    let Some(handle) = runtime_handle() else {
+    if runtime_handle().is_none() {
         return AdmissionPolicyDecision::AdmitReady;
-    };
+    }
     let quota_context = QuotaIdentityContext::new(
         Some(route),
         method,
@@ -268,14 +269,15 @@ pub(super) fn evaluate_scoped_rate_limit_policy(
         header_lookup,
     );
 
-    match handle.block_on(async {
+    match block_on_admission_future(async {
         evaluate_admission_quota(
             scoped_rate_limits.quota_runtime(),
             scoped_rate_limits,
             &quota_context,
         )
         .await
-    }) {
+    })
+    .unwrap_or(QuotaDecision::NotApplied) {
         QuotaDecision::Denied(denial) => {
             AdmissionPolicyDecision::RateLimited(RateLimitedDecision {
                 rule_name: denial.policy_name,
@@ -525,7 +527,7 @@ fn evaluate_forwarding_post_auth_quota_policy(
     pending_forward: &PendingForward,
 ) -> Option<PostAuthAdmissionRejection> {
     let backend = resilience.quota_backend.as_ref()?;
-    let handle = runtime_handle()?;
+    runtime_handle()?;
 
     let mut effective_headers = pending_forward.headers.as_ref().clone();
     apply_auth_request_mutations(
@@ -549,9 +551,10 @@ fn evaluate_forwarding_post_auth_quota_policy(
         Some(&header_lookup),
     );
 
-    match handle.block_on(async {
+    match block_on_admission_future(async {
         evaluate_admission_quota(resilience.quota.as_ref(), backend.as_ref(), &quota_context).await
-    }) {
+    })
+    .unwrap_or(QuotaDecision::NotApplied) {
         QuotaDecision::NotApplied | QuotaDecision::Allowed(_) | QuotaDecision::FailedOpen(_) => {
             None
         }
@@ -575,6 +578,22 @@ pub(super) fn try_acquire_owned_with_micro_wait(
     // Never block the synchronous QUIC worker thread: acquire immediately or
     // shed. A blocking wait here stalls every connection on the shard.
     semaphore.try_acquire_owned().map(|permit| (permit, false))
+}
+
+fn block_on_admission_future<F>(future: F) -> Option<F::Output>
+where
+    F: Future,
+{
+    if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        return match handle.runtime_flavor() {
+            RuntimeFlavor::MultiThread => Some(block_in_place(|| handle.block_on(future))),
+            RuntimeFlavor::CurrentThread => None,
+            _ => None,
+        };
+    }
+
+    let handle = runtime_handle()?;
+    Some(handle.block_on(future))
 }
 
 pub(super) fn api_key_is_authorized(
@@ -3824,6 +3843,30 @@ mod tests {
                 &test_upstream_inflight(),
                 Arc::new(Semaphore::new(1)),
             );
+            match &result {
+                PostAuthAdmissionExecution::Ready(_) => eprintln!("fail_open result: ready"),
+                PostAuthAdmissionExecution::Rejected(PostAuthAdmissionRejection::Quota(
+                    decision,
+                )) => eprintln!(
+                    "fail_open result: quota policy={} reason={:?} status={}",
+                    decision.policy_name, decision.reason, decision.status
+                ),
+                PostAuthAdmissionExecution::Rejected(PostAuthAdmissionRejection::Overloaded(
+                    decision,
+                )) => eprintln!(
+                    "fail_open result: overload reason={:?} status={} body={}",
+                    decision.reason,
+                    decision.status,
+                    String::from_utf8_lossy(decision.body)
+                ),
+                PostAuthAdmissionExecution::Rejected(PostAuthAdmissionRejection::Failed(
+                    failure,
+                )) => eprintln!(
+                    "fail_open result: failed status={} body={}",
+                    failure.status,
+                    String::from_utf8_lossy(failure.body)
+                ),
+            }
 
             assert!(matches!(
                 result,
@@ -4157,7 +4200,7 @@ mod tests {
                     OverloadDecision {
                         reason: OverloadDecisionReason::AdaptiveAdmission,
                         status: StatusCode::SERVICE_UNAVAILABLE,
-                        body: b"adaptive admission shed\n",
+                        body: b"adaptive admission overload\n",
                         ..
                     }
                 ))
