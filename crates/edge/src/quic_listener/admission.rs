@@ -39,7 +39,11 @@ use spooky_config::{
 };
 use spooky_lb::upstream_pool::UpstreamPool;
 use subtle::ConstantTimeEq;
-use tokio::{runtime::RuntimeFlavor, sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError}, task::block_in_place};
+use tokio::{
+    runtime::RuntimeFlavor,
+    sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError},
+    task::block_in_place,
+};
 
 use super::{LbHeaderLookup, QUICListener, runtime_handle, spawn_supervised_async_task};
 use crate::{
@@ -277,7 +281,8 @@ pub(super) fn evaluate_scoped_rate_limit_policy(
         )
         .await
     })
-    .unwrap_or(QuotaDecision::NotApplied) {
+    .unwrap_or(QuotaDecision::NotApplied)
+    {
         QuotaDecision::Denied(denial) => {
             AdmissionPolicyDecision::RateLimited(RateLimitedDecision {
                 rule_name: denial.policy_name,
@@ -554,7 +559,8 @@ fn evaluate_forwarding_post_auth_quota_policy(
     match block_on_admission_future(async {
         evaluate_admission_quota(resilience.quota.as_ref(), backend.as_ref(), &quota_context).await
     })
-    .unwrap_or(QuotaDecision::NotApplied) {
+    .unwrap_or(QuotaDecision::NotApplied)
+    {
         QuotaDecision::NotApplied | QuotaDecision::Allowed(_) | QuotaDecision::FailedOpen(_) => {
             None
         }
