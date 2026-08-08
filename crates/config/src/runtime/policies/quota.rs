@@ -1,8 +1,6 @@
 use std::{collections::HashSet, time::Duration};
 
-use super::{
-    RuntimeRequestKeySpec, config_invalid, normalize_optional_string,
-};
+use super::{RuntimeRequestKeySpec, config_invalid, normalize_optional_string};
 use crate::{
     config::{
         DistributedQuotaPolicy, DistributedQuotaSelector, DistributedQuotaSelectorSource,
@@ -549,7 +547,10 @@ mod tests {
             policy.selector.tenant,
             Some(RuntimeRequestKeySpec::Header("x-tenant-id".to_string()))
         );
-        assert_eq!(policy.selector.client, Some(RuntimeRequestKeySpec::ClientIp));
+        assert_eq!(
+            policy.selector.client,
+            Some(RuntimeRequestKeySpec::ClientIp)
+        );
         assert_eq!(
             policy.burst.as_ref().map(|window| window.window),
             Some(Duration::from_secs(1))
@@ -598,8 +599,8 @@ mod tests {
         invalid_tenant.selector.tenant = Some(DistributedQuotaSelectorSource {
             key: "client_ip".to_string(),
         });
-        let err = RuntimeQuotaPolicy::normalize(&invalid_tenant)
-            .expect_err("tenant client_ip must fail");
+        let err =
+            RuntimeQuotaPolicy::normalize(&invalid_tenant).expect_err("tenant client_ip must fail");
         assert_config_invalid(
             err,
             "resilience.quota.policies['tenant-contract'].selector.tenant key 'client_ip' is not valid for that identity dimension",

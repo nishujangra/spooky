@@ -10,6 +10,7 @@ use crate::resilience::{
     brownout::BrownoutController,
     circuit_breaker::CircuitBreakers,
     connect::{connect_authority_port, normalize_connect_authority},
+    quota::QuotaRuntime,
     retry_budget::RetryBudget,
     route_queue::RouteQueueLimiter,
     scoped_rate_limit::ScopedRateLimiters,
@@ -19,6 +20,7 @@ pub struct RuntimeResilience {
     pub adaptive_admission: Arc<AdaptiveAdmission>,
     pub route_queue: Arc<RouteQueueLimiter>,
     pub scoped_rate_limits: Arc<ScopedRateLimiters>,
+    pub quota: Arc<QuotaRuntime>,
     pub circuit_breakers: Arc<CircuitBreakers>,
     pub retry_budget: Arc<RetryBudget>,
     pub brownout: Arc<BrownoutController>,
@@ -59,6 +61,7 @@ impl RuntimeResilience {
             config.route_queue.caps.clone(),
         ));
         let scoped_rate_limits = Arc::new(ScopedRateLimiters::new(&config.scoped_rate_limits));
+        let quota = Arc::new(QuotaRuntime::from_resilience_config(config));
         let cb = &config.circuit_breaker;
         let circuit_breakers = Arc::new(CircuitBreakers::new(
             cb.enabled,
@@ -118,6 +121,7 @@ impl RuntimeResilience {
             adaptive_admission: admission,
             route_queue,
             scoped_rate_limits,
+            quota,
             circuit_breakers,
             retry_budget,
             brownout,
@@ -176,6 +180,7 @@ impl RuntimeResilience {
                 })
                 .collect::<Vec<_>>(),
         ));
+        let quota = Arc::new(QuotaRuntime::from_rate_limit_policies(rate_limit_policy));
         let circuit_breakers = Arc::new(CircuitBreakers::new(
             admission_policy.circuit_breaker.enabled,
             admission_policy.circuit_breaker.failure_threshold,
@@ -241,6 +246,7 @@ impl RuntimeResilience {
             adaptive_admission: admission,
             route_queue,
             scoped_rate_limits,
+            quota,
             circuit_breakers,
             retry_budget,
             brownout,
