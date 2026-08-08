@@ -23,6 +23,7 @@ use spooky_config::{
         RuntimeQuotaBackendFailurePolicy as ConfigRuntimeQuotaBackendFailurePolicy,
         RuntimeQuotaCounterBackend as ConfigRuntimeQuotaCounterBackend,
         RuntimeQuotaEnforcementMode as ConfigRuntimeQuotaEnforcementMode,
+        RuntimeQuotaLocalFallback as ConfigRuntimeQuotaLocalFallback,
         RuntimeQuotaPolicy as ConfigRuntimeQuotaPolicy,
         RuntimeQuotaPolicySet as ConfigRuntimeQuotaPolicySet,
         RuntimeQuotaSelectorMatcher as ConfigRuntimeQuotaSelectorMatcher,
@@ -41,6 +42,9 @@ mod redis;
 
 pub use memory::{InMemoryDistributedQuotaCounterStore, IN_MEMORY_QUOTA_PROTOCOL_VERSION};
 pub use redis::{RedisDistributedQuotaCounterStore, REDIS_QUOTA_PROTOCOL_VERSION};
+
+const LOCAL_FALLBACK_PROTOCOL_VERSION: &str = "degraded-local-fallback/v1";
+const LOCAL_FALLBACK_BACKEND_SEPARATOR: &str = "_local_fallback_";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuotaEnforcementMode {
@@ -262,6 +266,58 @@ impl DistributedQuotaCounterBackend for UnavailableDistributedQuotaCounterStore 
     }
 }
 
+#[derive(Clone)]
+pub struct DegradedQuotaCounterBackend {
+    primary: SharedDistributedQuotaCounterBackend,
+    primary_backend_kind: String,
+    local_fallback: Arc<InMemoryDistributedQuotaCounterStore>,
+}
+
+impl DegradedQuotaCounterBackend {
+    pub fn new(
+        primary: SharedDistributedQuotaCounterBackend,
+        primary_backend_kind: &str,
+        local_fallback: Arc<InMemoryDistributedQuotaCounterStore>,
+    ) -> Self {
+        Self {
+            primary,
+            primary_backend_kind: primary_backend_kind.to_string(),
+            local_fallback,
+        }
+    }
+}
+
+impl DistributedQuotaCounterBackend for DegradedQuotaCounterBackend {
+    fn evaluate<'a>(&'a self, request: QuotaCounterEvaluationRequest) -> QuotaCounterEvalFuture<'a> {
+        Box::pin(async move {
+            match self.primary.evaluate(request.clone()).await {
+                Ok(outcome) => Ok(outcome),
+                Err(primary_error) if should_attempt_local_fallback(&primary_error) => {
+                    match self.local_fallback.evaluate(request).await {
+                        Ok(mut fallback_outcome) => {
+                            fallback_outcome.backend_metadata.backend_kind =
+                                local_fallback_backend_mode(
+                                    &self.primary_backend_kind,
+                                    primary_error.deny_reason(),
+                                );
+                            fallback_outcome.backend_metadata.protocol_version = format!(
+                                "{}+{}",
+                                LOCAL_FALLBACK_PROTOCOL_VERSION,
+                                fallback_outcome.backend_metadata.protocol_version
+                            );
+                            Ok(fallback_outcome)
+                        }
+                        Err(fallback_error) => {
+                            Err(combine_primary_and_fallback_error(primary_error, fallback_error))
+                        }
+                    }
+                }
+                Err(primary_error) => Err(primary_error),
+            }
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuotaIdentityRejection {
     pub policy_name: String,
@@ -465,6 +521,35 @@ pub struct QuotaPolicyRuntime {
     pub selector: QuotaSelectorMatcher,
     pub burst: Option<QuotaWindowPolicy>,
     pub sustained: Option<QuotaWindowPolicy>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuotaLocalFallbackPolicy {
+    pub key_prefix: String,
+    pub max_entries: usize,
+}
+
+impl QuotaLocalFallbackPolicy {
+    fn from_runtime(value: &ConfigRuntimeQuotaLocalFallback) -> Self {
+        Self {
+            key_prefix: value.key_prefix.clone(),
+            max_entries: value.max_entries,
+        }
+    }
+
+    fn from_raw(value: &spooky_config::config::QuotaLocalFallbackConfig) -> Self {
+        Self {
+            key_prefix: value.key_prefix.trim().to_string(),
+            max_entries: value.max_entries.max(1),
+        }
+    }
+
+    fn build_store(&self) -> Arc<InMemoryDistributedQuotaCounterStore> {
+        Arc::new(InMemoryDistributedQuotaCounterStore::bounded(
+            &self.key_prefix,
+            self.max_entries,
+        ))
+    }
 }
 
 impl QuotaPolicyRuntime {
@@ -702,6 +787,7 @@ pub struct QuotaRuntime {
     pub enforcement: QuotaEnforcementMode,
     pub backend_failure_policy: QuotaBackendFailurePolicy,
     pub backend: QuotaCounterBackend,
+    pub local_fallback: Option<QuotaLocalFallbackPolicy>,
     pub policies: Vec<QuotaPolicyRuntime>,
 }
 
@@ -720,6 +806,7 @@ impl QuotaRuntime {
             backend: QuotaCounterBackend::InMemory {
                 key_prefix: "spooky:quota".to_string(),
             },
+            local_fallback: None,
             policies: Vec::new(),
         }
     }
@@ -748,6 +835,10 @@ impl QuotaRuntime {
                 }
             },
             backend: QuotaCounterBackend::from_runtime(&config.backend),
+            local_fallback: config
+                .local_fallback
+                .as_ref()
+                .map(QuotaLocalFallbackPolicy::from_runtime),
             policies: config
                 .policies
                 .iter()
@@ -768,6 +859,10 @@ impl QuotaRuntime {
                 RawQuotaBackendFailurePolicy::FailClosed => QuotaBackendFailurePolicy::FailClosed,
             },
             backend: QuotaCounterBackend::from_raw(&config.backend),
+            local_fallback: config
+                .local_fallback
+                .as_ref()
+                .map(QuotaLocalFallbackPolicy::from_raw),
             policies: config
                 .policies
                 .iter()
@@ -792,6 +887,37 @@ impl QuotaRuntime {
         &self,
     ) -> Result<SharedDistributedQuotaCounterBackend, QuotaCounterBackendError> {
         self.backend.distributed_store()
+    }
+
+    pub fn enforcement_backend(
+        &self,
+    ) -> (
+        SharedDistributedQuotaCounterBackend,
+        Option<QuotaCounterBackendError>,
+    ) {
+        let mut initialization_error = None;
+        let primary = match self.distributed_store() {
+            Ok(backend) => backend,
+            Err(error) => {
+                initialization_error = Some(error.clone());
+                Arc::new(UnavailableDistributedQuotaCounterStore::new(error))
+                    as SharedDistributedQuotaCounterBackend
+            }
+        };
+
+        let backend = self
+            .local_fallback
+            .as_ref()
+            .map(|fallback| {
+                Arc::new(DegradedQuotaCounterBackend::new(
+                    Arc::clone(&primary),
+                    self.backend.backend_kind(),
+                    fallback.build_store(),
+                )) as SharedDistributedQuotaCounterBackend
+            })
+            .unwrap_or(primary);
+
+        (backend, initialization_error)
     }
 
     pub fn policy_snapshots(&self) -> Vec<QuotaPolicyIntrospectionSnapshot> {
@@ -947,6 +1073,18 @@ impl QuotaDenyReason {
     }
 }
 
+fn local_fallback_backend_mode(
+    primary_backend_kind: &str,
+    reason: QuotaDenyReason,
+) -> String {
+    format!(
+        "{}{}{}",
+        primary_backend_kind,
+        LOCAL_FALLBACK_BACKEND_SEPARATOR,
+        reason.slug()
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuotaWindowUsage {
     pub limit: u64,
@@ -1025,6 +1163,36 @@ impl QuotaCounterBackendError {
             QuotaCounterBackendErrorKind::Unavailable => QuotaDenyReason::BackendUnavailable,
             QuotaCounterBackendErrorKind::Error => QuotaDenyReason::BackendError,
         }
+    }
+}
+
+fn should_attempt_local_fallback(error: &QuotaCounterBackendError) -> bool {
+    matches!(
+        error.kind,
+        QuotaCounterBackendErrorKind::Timeout | QuotaCounterBackendErrorKind::Unavailable
+    )
+}
+
+fn combine_primary_and_fallback_error(
+    primary: QuotaCounterBackendError,
+    fallback: QuotaCounterBackendError,
+) -> QuotaCounterBackendError {
+    QuotaCounterBackendError {
+        policy_name: fallback.policy_name.or(primary.policy_name),
+        composite_key: fallback.composite_key.or(primary.composite_key),
+        kind: fallback.kind,
+        detail: Some(match (primary.detail, fallback.detail) {
+            (Some(primary_detail), Some(fallback_detail)) => format!(
+                "primary quota backend failed: {primary_detail}; local fallback failed: {fallback_detail}"
+            ),
+            (Some(primary_detail), None) => {
+                format!("primary quota backend failed: {primary_detail}; local fallback failed")
+            }
+            (None, Some(fallback_detail)) => {
+                format!("local fallback failed after primary backend outage: {fallback_detail}")
+            }
+            (None, None) => "primary quota backend and local fallback both failed".to_string(),
+        }),
     }
 }
 
@@ -1243,16 +1411,21 @@ fn record_quota_backend_observation(
     detail: Option<String>,
     observed_at_unix_ms: u64,
 ) {
-    let availability = match decision {
-        QuotaDecision::Allowed(_) | QuotaDecision::Denied(_) | QuotaDecision::ShadowDenied(_) => {
-            QuotaBackendAvailability::Available
+    let degraded_reason = degraded_backend_health_reason(backend_mode);
+    let availability = if degraded_reason.is_some() {
+        QuotaBackendAvailability::Degraded
+    } else {
+        match decision {
+            QuotaDecision::Allowed(_)
+            | QuotaDecision::Denied(_)
+            | QuotaDecision::ShadowDenied(_) => QuotaBackendAvailability::Available,
+            QuotaDecision::FailedOpen(_) | QuotaDecision::FailedClosed(_) => {
+                QuotaBackendAvailability::Degraded
+            }
+            QuotaDecision::NotApplied => return,
         }
-        QuotaDecision::FailedOpen(_) | QuotaDecision::FailedClosed(_) => {
-            QuotaBackendAvailability::Degraded
-        }
-        QuotaDecision::NotApplied => return,
     };
-    let health_reason = quota_backend_health_reason(decision);
+    let health_reason = quota_backend_health_reason(decision, backend_mode);
 
     if let Ok(mut state) = quota_introspection_state().write() {
         state.backend_mode = Some(backend_mode.to_string());
@@ -1260,7 +1433,9 @@ fn record_quota_backend_observation(
         state.health_reason = health_reason;
         state.last_observed_at_unix_ms = Some(observed_at_unix_ms);
 
-        if let Some(snapshot) = quota_backend_error_snapshot(decision, detail, observed_at_unix_ms) {
+        if let Some(snapshot) =
+            quota_backend_error_snapshot(decision, backend_mode, detail, observed_at_unix_ms)
+        {
             state.recent_errors.insert(0, snapshot);
             if state.recent_errors.len() > QUOTA_RECENT_BACKEND_ERRORS_LIMIT {
                 state.recent_errors.truncate(QUOTA_RECENT_BACKEND_ERRORS_LIMIT);
@@ -1271,9 +1446,19 @@ fn record_quota_backend_observation(
 
 fn quota_backend_error_snapshot(
     decision: &QuotaDecision,
+    backend_mode: &str,
     detail: Option<String>,
     observed_at_unix_ms: u64,
 ) -> Option<QuotaBackendErrorSnapshot> {
+    if let Some(reason) = degraded_backend_deny_reason(backend_mode) {
+        return Some(QuotaBackendErrorSnapshot {
+            observed_at_unix_ms: Some(observed_at_unix_ms),
+            policy_name: quota_decision_policy_name(decision).map(ToOwned::to_owned),
+            reason: reason.slug().to_string(),
+            detail,
+        });
+    }
+
     match decision {
         QuotaDecision::FailedOpen(failure) | QuotaDecision::FailedClosed(failure) => {
             Some(QuotaBackendErrorSnapshot {
@@ -1331,6 +1516,7 @@ fn observe_quota_policy_outcome(
     let backend_mode = backend_mode.unwrap_or(runtime.backend.backend_kind());
     let decision_kind = quota_policy_decision_kind(decision);
     let reason = quota_policy_reason(decision);
+    let degraded_health_reason = degraded_backend_health_reason(backend_mode);
 
     if backend_observed {
         record_quota_backend_observation(
@@ -1350,7 +1536,7 @@ fn observe_quota_policy_outcome(
             backend_mode,
         );
         if backend_observed
-            && let Some(health_reason) = quota_backend_health_reason(decision)
+            && let Some(health_reason) = quota_backend_health_reason(decision, backend_mode)
         {
             metrics.record_quota_backend_health(backend_mode, health_reason);
         }
@@ -1358,8 +1544,9 @@ fn observe_quota_policy_outcome(
 
     let route = context.route.unwrap_or("unrouted");
     let reason_slug = reason.slug();
+    let degraded_reason = degraded_health_reason.map(QuotaBackendHealthReason::slug);
     let log_line = format!(
-        "quota policy outcome: upstream={} policy={} selector_dimensions={} backend_mode={} decision={} reason={} enforcement={}",
+        "quota policy outcome: upstream={} policy={} selector_dimensions={} backend_mode={} decision={} reason={} enforcement={} degraded_reason={}",
         route,
         policy_name,
         selector_dimensions,
@@ -1367,11 +1554,18 @@ fn observe_quota_policy_outcome(
         decision_kind.slug(),
         reason_slug,
         quota_enforcement_slug(runtime.enforcement),
+        degraded_reason.unwrap_or("none"),
     );
-    match decision_kind {
-        QuotaPolicyDecision::Denied | QuotaPolicyDecision::FailedClosed => warn!("{log_line}"),
-        QuotaPolicyDecision::FailedOpen | QuotaPolicyDecision::ShadowDenied => warn!("{log_line}"),
-        QuotaPolicyDecision::Allowed | QuotaPolicyDecision::NotApplied => debug!("{log_line}"),
+    if degraded_reason.is_some() {
+        warn!("{log_line}");
+    } else {
+        match decision_kind {
+            QuotaPolicyDecision::Denied | QuotaPolicyDecision::FailedClosed => warn!("{log_line}"),
+            QuotaPolicyDecision::FailedOpen | QuotaPolicyDecision::ShadowDenied => {
+                warn!("{log_line}")
+            }
+            QuotaPolicyDecision::Allowed | QuotaPolicyDecision::NotApplied => debug!("{log_line}"),
+        }
     }
 }
 
@@ -1411,7 +1605,14 @@ fn quota_policy_reason_from_deny_reason(reason: QuotaDenyReason) -> QuotaPolicyR
     }
 }
 
-fn quota_backend_health_reason(decision: &QuotaDecision) -> Option<QuotaBackendHealthReason> {
+fn quota_backend_health_reason(
+    decision: &QuotaDecision,
+    backend_mode: &str,
+) -> Option<QuotaBackendHealthReason> {
+    if let Some(reason) = degraded_backend_health_reason(backend_mode) {
+        return Some(reason);
+    }
+
     match decision {
         QuotaDecision::Allowed(_) | QuotaDecision::Denied(_) | QuotaDecision::ShadowDenied(_) => {
             Some(QuotaBackendHealthReason::Available)
@@ -1447,6 +1648,30 @@ fn quota_backend_health_reason_from_deny_reason(
 
 fn quota_enforcement_slug(enforcement: QuotaEnforcementMode) -> &'static str {
     enforcement.slug()
+}
+
+fn degraded_backend_health_reason(backend_mode: &str) -> Option<QuotaBackendHealthReason> {
+    degraded_backend_deny_reason(backend_mode).map(quota_backend_health_reason_from_deny_reason)
+}
+
+fn degraded_backend_deny_reason(backend_mode: &str) -> Option<QuotaDenyReason> {
+    let suffix = backend_mode
+        .rsplit_once(LOCAL_FALLBACK_BACKEND_SEPARATOR)
+        .map(|(_, suffix)| suffix)?;
+    QuotaDenyReason::from_slug(suffix)
+}
+
+fn quota_decision_policy_name(decision: &QuotaDecision) -> Option<&str> {
+    match decision {
+        QuotaDecision::Allowed(allowance) => Some(allowance.policy_name.as_str()),
+        QuotaDecision::ShadowDenied(denial) | QuotaDecision::Denied(denial) => {
+            Some(denial.policy_name.as_str())
+        }
+        QuotaDecision::FailedOpen(failure) | QuotaDecision::FailedClosed(failure) => {
+            failure.policy_name.as_deref()
+        }
+        QuotaDecision::NotApplied => None,
+    }
 }
 
 fn unix_now_ms() -> u64 {
@@ -1804,6 +2029,7 @@ mod tests {
                 command_timeout: Duration::from_millis(100),
                 max_inflight: 64,
             },
+            local_fallback: None,
             policies: vec![RuntimeQuotaPolicy {
                 name: "tenant-quota".to_string(),
                 route_allowlist: vec!["api".to_string()],
@@ -1853,6 +2079,7 @@ mod tests {
             backend: RawQuotaCounterBackend::InMemory {
                 key_prefix: "spooky:quota".to_string(),
             },
+            local_fallback: None,
             policies: vec![DistributedQuotaPolicy {
                 name: "client-quota".to_string(),
                 route_allowlist: vec![" public ".to_string()],
@@ -1905,6 +2132,107 @@ mod tests {
         let _backend = runtime
             .distributed_store()
             .expect("quota runtime should build generic backend");
+    }
+
+    fn sample_counter_request(policy_name: &str, composite_key: &str) -> QuotaCounterEvaluationRequest {
+        QuotaCounterEvaluationRequest {
+            policy_name: policy_name.to_string(),
+            composite_key: QuotaCompositeKey {
+                policy_name: policy_name.to_string(),
+                key: composite_key.to_string(),
+                labels: QuotaIdentityLabels {
+                    route: Some("api".to_string()),
+                    tenant: Some("acme".to_string()),
+                    token: None,
+                    client: None,
+                },
+                dimensions: QuotaSelectorDimensions {
+                    route: true,
+                    tenant: true,
+                    token: false,
+                    client: false,
+                },
+            },
+            burst: Some(QuotaWindowPolicy {
+                requests: 2,
+                window: Duration::from_secs(1),
+            }),
+            sustained: Some(QuotaWindowPolicy {
+                requests: 5,
+                window: Duration::from_secs(60),
+            }),
+            cost: 1,
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn degraded_quota_backend_uses_local_fallback_for_outage_failures() {
+        let primary = Arc::new(UnavailableDistributedQuotaCounterStore::new(
+            QuotaCounterBackendError {
+                policy_name: None,
+                composite_key: None,
+                kind: QuotaCounterBackendErrorKind::Timeout,
+                detail: Some("redis timed out".to_string()),
+            },
+        )) as SharedDistributedQuotaCounterBackend;
+        let fallback = Arc::new(InMemoryDistributedQuotaCounterStore::bounded(
+            "spooky:quota:fallback",
+            16,
+        ));
+        let backend = DegradedQuotaCounterBackend::new(primary, "redis", fallback);
+
+        let outcome = backend
+            .evaluate(sample_counter_request(
+                "tenant-quota",
+                "policy=12:tenant-quota|route=3:api|tenant=4:acme|",
+            ))
+            .await
+            .expect("timeout failures should degrade into local fallback evaluation");
+
+        assert_eq!(outcome.decision, QuotaCounterEvaluationDecision::Allowed);
+        assert_eq!(
+            outcome.backend_metadata.backend_kind,
+            "redis_local_fallback_backend_timeout"
+        );
+        assert_eq!(
+            outcome.backend_metadata.protocol_version,
+            format!(
+                "{}+{}",
+                LOCAL_FALLBACK_PROTOCOL_VERSION,
+                memory::IN_MEMORY_QUOTA_PROTOCOL_VERSION
+            )
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn degraded_quota_backend_does_not_fallback_for_non_outage_errors() {
+        let primary = Arc::new(UnavailableDistributedQuotaCounterStore::new(
+            QuotaCounterBackendError {
+                policy_name: None,
+                composite_key: None,
+                kind: QuotaCounterBackendErrorKind::Error,
+                detail: Some("redis script protocol mismatch".to_string()),
+            },
+        )) as SharedDistributedQuotaCounterBackend;
+        let fallback = Arc::new(InMemoryDistributedQuotaCounterStore::bounded(
+            "spooky:quota:fallback",
+            16,
+        ));
+        let backend = DegradedQuotaCounterBackend::new(primary, "redis", fallback);
+
+        let err = backend
+            .evaluate(sample_counter_request(
+                "tenant-quota",
+                "policy=12:tenant-quota|route=3:api|tenant=4:acme|",
+            ))
+            .await
+            .expect_err("non-outage backend errors must not fall back locally");
+
+        assert_eq!(err.kind, QuotaCounterBackendErrorKind::Error);
+        assert_eq!(
+            err.detail.as_deref(),
+            Some("redis script protocol mismatch")
+        );
     }
 
     #[test]

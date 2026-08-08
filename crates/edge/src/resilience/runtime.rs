@@ -12,7 +12,6 @@ use crate::resilience::{
     connect::{connect_authority_port, normalize_connect_authority},
     quota::{
         QuotaCounterBackendError, QuotaRuntime, SharedDistributedQuotaCounterBackend,
-        UnavailableDistributedQuotaCounterStore,
     },
     retry_budget::RetryBudget,
     route_queue::RouteQueueLimiter,
@@ -68,14 +67,13 @@ impl RuntimeResilience {
         let scoped_rate_limits = Arc::new(ScopedRateLimiters::new(&config.scoped_rate_limits));
         let quota = Arc::new(QuotaRuntime::from_resilience_config(config));
         let mut quota_backend_initialization_error = None;
-        let quota_backend = quota.enabled.then(|| match quota.distributed_store() {
-            Ok(backend) => backend,
-            Err(error) => {
-                quota_backend_initialization_error = Some(error.clone());
-                Arc::new(UnavailableDistributedQuotaCounterStore::new(error))
-                    as SharedDistributedQuotaCounterBackend
-            }
-        });
+        let quota_backend = if quota.enabled {
+            let (backend, initialization_error) = quota.enforcement_backend();
+            quota_backend_initialization_error = initialization_error;
+            Some(backend)
+        } else {
+            None
+        };
         let cb = &config.circuit_breaker;
         let circuit_breakers = Arc::new(CircuitBreakers::new(
             cb.enabled,
@@ -198,14 +196,13 @@ impl RuntimeResilience {
         ));
         let quota = Arc::new(QuotaRuntime::from_rate_limit_policies(rate_limit_policy));
         let mut quota_backend_initialization_error = None;
-        let quota_backend = quota.enabled.then(|| match quota.distributed_store() {
-            Ok(backend) => backend,
-            Err(error) => {
-                quota_backend_initialization_error = Some(error.clone());
-                Arc::new(UnavailableDistributedQuotaCounterStore::new(error))
-                    as SharedDistributedQuotaCounterBackend
-            }
-        });
+        let quota_backend = if quota.enabled {
+            let (backend, initialization_error) = quota.enforcement_backend();
+            quota_backend_initialization_error = initialization_error;
+            Some(backend)
+        } else {
+            None
+        };
         let circuit_breakers = Arc::new(CircuitBreakers::new(
             admission_policy.circuit_breaker.enabled,
             admission_policy.circuit_breaker.failure_threshold,

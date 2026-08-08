@@ -287,6 +287,7 @@ impl ScopedRateLimiters {
                 backend: QuotaCounterBackend::InMemory {
                     key_prefix: LEGACY_SCOPED_KEY_PREFIX.to_string(),
                 },
+                local_fallback: None,
                 policies: rules.iter().map(|rule| rule.quota_policy()).collect(),
             }
         });

@@ -4,8 +4,8 @@ use super::{RuntimeRequestKeySpec, config_invalid, normalize_optional_string};
 use crate::{
     config::{
         DistributedQuotaPolicy, DistributedQuotaSelector, DistributedQuotaSelectorSource,
-        DistributedQuotaWindow, QuotaCounterBackend, QuotaEnforcementMode, QuotaPolicyConfig,
-        Resilience,
+        DistributedQuotaWindow, QuotaCounterBackend, QuotaEnforcementMode,
+        QuotaLocalFallbackConfig, QuotaPolicyConfig, Resilience,
     },
     runtime::RuntimeConfigError,
 };
@@ -54,6 +54,33 @@ pub enum RuntimeQuotaCounterBackend {
         command_timeout: Duration,
         max_inflight: usize,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeQuotaLocalFallback {
+    pub key_prefix: String,
+    pub max_entries: usize,
+}
+
+impl RuntimeQuotaLocalFallback {
+    fn normalize(config: &QuotaLocalFallbackConfig) -> Result<Self, RuntimeConfigError> {
+        let key_prefix = config.key_prefix.trim();
+        if key_prefix.is_empty() {
+            return Err(config_invalid(
+                "resilience.quota.local_fallback.key_prefix must be non-empty",
+            ));
+        }
+        if config.max_entries == 0 {
+            return Err(config_invalid(
+                "resilience.quota.local_fallback.max_entries must be greater than 0",
+            ));
+        }
+
+        Ok(Self {
+            key_prefix: key_prefix.to_string(),
+            max_entries: config.max_entries,
+        })
+    }
 }
 
 impl RuntimeQuotaCounterBackend {
@@ -325,6 +352,7 @@ pub struct RuntimeQuotaPolicySet {
     pub enforcement: RuntimeQuotaEnforcementMode,
     pub backend_failure_policy: RuntimeQuotaBackendFailurePolicy,
     pub backend: RuntimeQuotaCounterBackend,
+    pub local_fallback: Option<RuntimeQuotaLocalFallback>,
     pub policies: Vec<RuntimeQuotaPolicy>,
 }
 
@@ -335,6 +363,16 @@ impl RuntimeQuotaPolicySet {
 
     fn normalize_config(config: &QuotaPolicyConfig) -> Result<Self, RuntimeConfigError> {
         let backend = RuntimeQuotaCounterBackend::normalize(&config.backend)?;
+        let local_fallback = config
+            .local_fallback
+            .as_ref()
+            .map(RuntimeQuotaLocalFallback::normalize)
+            .transpose()?;
+        if local_fallback.is_some() && !matches!(backend, RuntimeQuotaCounterBackend::Redis { .. }) {
+            return Err(config_invalid(
+                "resilience.quota.local_fallback is only supported when backend.kind=redis",
+            ));
+        }
         let mut seen_names = HashSet::new();
         let mut seen_matchers = HashSet::new();
         let mut policies = Vec::with_capacity(config.policies.len());
@@ -370,6 +408,7 @@ impl RuntimeQuotaPolicySet {
             enforcement: config.enforcement.into(),
             backend_failure_policy: config.backend_failure_policy.into(),
             backend,
+            local_fallback,
             policies,
         })
     }
@@ -462,7 +501,8 @@ fn runtime_request_key_spec_label(spec: &RuntimeRequestKeySpec) -> String {
 mod tests {
     use super::*;
     use crate::config::{
-        QuotaBackendFailurePolicy, QuotaCounterBackend, QuotaEnforcementMode, QuotaPolicyConfig,
+        QuotaBackendFailurePolicy, QuotaCounterBackend, QuotaEnforcementMode,
+        QuotaLocalFallbackConfig, QuotaPolicyConfig,
         Resilience,
     };
 
@@ -511,6 +551,10 @@ mod tests {
                 command_timeout_ms: 100,
                 max_inflight: 128,
             },
+            local_fallback: Some(QuotaLocalFallbackConfig {
+                key_prefix: " spooky:quota:fallback ".to_string(),
+                max_entries: 256,
+            }),
             policies: vec![valid_quota_policy()],
         };
 
@@ -538,6 +582,13 @@ mod tests {
             }
             RuntimeQuotaCounterBackend::InMemory { .. } => panic!("expected redis backend"),
         }
+        assert_eq!(
+            runtime.local_fallback,
+            Some(RuntimeQuotaLocalFallback {
+                key_prefix: "spooky:quota:fallback".to_string(),
+                max_entries: 256,
+            })
+        );
 
         let policy = runtime.policies.first().expect("normalized policy");
         assert_eq!(policy.name, "tenant-contract");
@@ -655,6 +706,51 @@ mod tests {
         assert_config_invalid(
             err,
             "resilience.quota.backend.command_timeout_ms must be greater than 0 for kind=redis",
+        );
+    }
+
+    #[test]
+    fn quota_policy_normalization_rejects_invalid_local_fallback_settings() {
+        let mut resilience = Resilience::default();
+        resilience.quota = QuotaPolicyConfig {
+            enabled: true,
+            local_fallback: Some(QuotaLocalFallbackConfig {
+                key_prefix: "spooky:quota:fallback".to_string(),
+                max_entries: 128,
+            }),
+            policies: vec![valid_quota_policy()],
+            ..QuotaPolicyConfig::default()
+        };
+
+        let err = RuntimeQuotaPolicySet::normalize(&resilience)
+            .expect_err("in-memory backend must reject local fallback");
+        assert_config_invalid(
+            err,
+            "resilience.quota.local_fallback is only supported when backend.kind=redis",
+        );
+
+        resilience.quota = QuotaPolicyConfig {
+            enabled: true,
+            backend: QuotaCounterBackend::Redis {
+                url: "redis://127.0.0.1:6379/0".to_string(),
+                key_prefix: "spooky:quota".to_string(),
+                connect_timeout_ms: 250,
+                command_timeout_ms: 100,
+                max_inflight: 128,
+            },
+            local_fallback: Some(QuotaLocalFallbackConfig {
+                key_prefix: "spooky:quota:fallback".to_string(),
+                max_entries: 0,
+            }),
+            policies: vec![valid_quota_policy()],
+            ..QuotaPolicyConfig::default()
+        };
+
+        let err = RuntimeQuotaPolicySet::normalize(&resilience)
+            .expect_err("zero local fallback capacity must fail");
+        assert_config_invalid(
+            err,
+            "resilience.quota.local_fallback.max_entries must be greater than 0",
         );
     }
 }

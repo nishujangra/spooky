@@ -46,13 +46,18 @@ struct EvaluatedWindow {
 
 pub struct InMemoryDistributedQuotaCounterStore {
     key_prefix: String,
+    max_entries: Option<usize>,
     buckets: Mutex<HashMap<String, InMemoryBucketState>>,
     time_source: Arc<TimeSource>,
 }
 
 impl InMemoryDistributedQuotaCounterStore {
     pub fn new(key_prefix: &str) -> Self {
-        Self::with_time_source(key_prefix, || unix_now_ms())
+        Self::with_limits_and_time_source(key_prefix, None, || unix_now_ms())
+    }
+
+    pub fn bounded(key_prefix: &str, max_entries: usize) -> Self {
+        Self::with_limits_and_time_source(key_prefix, Some(max_entries.max(1)), || unix_now_ms())
     }
 
     pub fn protocol_version(&self) -> &'static str {
@@ -67,8 +72,20 @@ impl InMemoryDistributedQuotaCounterStore {
     where
         F: Fn() -> u64 + Send + Sync + 'static,
     {
+        Self::with_limits_and_time_source(key_prefix, None, time_source)
+    }
+
+    fn with_limits_and_time_source<F>(
+        key_prefix: &str,
+        max_entries: Option<usize>,
+        time_source: F,
+    ) -> Self
+    where
+        F: Fn() -> u64 + Send + Sync + 'static,
+    {
         Self {
             key_prefix: key_prefix.trim().to_string(),
+            max_entries,
             buckets: Mutex::new(HashMap::new()),
             time_source: Arc::new(time_source),
         }
@@ -124,6 +141,20 @@ impl InMemoryDistributedQuotaCounterStore {
 
         let allowed = deny_reason.is_none();
         if allowed {
+            let additional_entries = evaluated
+                .iter()
+                .filter(|window| !buckets.contains_key(&window.spec.storage_key))
+                .count();
+            if let Some(max_entries) = self.max_entries
+                && buckets.len().saturating_add(additional_entries) > max_entries
+            {
+                return Err(QuotaCounterBackendError {
+                    policy_name: Some(request.policy_name.clone()),
+                    composite_key: Some(request.composite_key.key.clone()),
+                    kind: QuotaCounterBackendErrorKind::Unavailable,
+                    detail: Some("in-memory quota store capacity exhausted".to_string()),
+                });
+            }
             for window in &evaluated {
                 buckets.insert(
                     window.spec.storage_key.clone(),
@@ -412,5 +443,43 @@ mod tests {
         assert!(windows[0].storage_key.contains(":burst:1000:10000:"));
         assert!(windows[1].storage_key.contains(":sustained:60000:0:"));
         assert_eq!(windows[0].ttl_ms, 1_750);
+    }
+
+    #[test]
+    fn bounded_in_memory_backend_rejects_capacity_exhaustion() {
+        let store = InMemoryDistributedQuotaCounterStore::bounded("spooky:quota:fallback", 2);
+
+        let first = store
+            .evaluate_request(sample_request())
+            .expect("first composite key should fit within bounded fallback");
+        assert_eq!(first.decision, QuotaCounterEvaluationDecision::Allowed);
+
+        let err = store
+            .evaluate_request(QuotaCounterEvaluationRequest {
+                composite_key: QuotaCompositeKey {
+                    policy_name: "tenant-quota".to_string(),
+                    key: "policy=12:tenant-quota|route=7:private|tenant=4:beta|".to_string(),
+                    labels: QuotaIdentityLabels {
+                        route: Some("private".to_string()),
+                        tenant: Some("beta".to_string()),
+                        token: None,
+                        client: None,
+                    },
+                    dimensions: QuotaSelectorDimensions {
+                        route: true,
+                        tenant: true,
+                        token: false,
+                        client: false,
+                    },
+                },
+                ..sample_request()
+            })
+            .expect_err("bounded fallback must reject new keys beyond configured capacity");
+
+        assert_eq!(err.kind, QuotaCounterBackendErrorKind::Unavailable);
+        assert_eq!(
+            err.detail.as_deref(),
+            Some("in-memory quota store capacity exhausted")
+        );
     }
 }

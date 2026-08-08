@@ -33,7 +33,8 @@ pub use self::{
     },
     quota::{
         RuntimeQuotaBackendFailurePolicy, RuntimeQuotaCounterBackend,
-        RuntimeQuotaEnforcementMode, RuntimeQuotaPolicy, RuntimeQuotaPolicySet,
+        RuntimeQuotaEnforcementMode, RuntimeQuotaLocalFallback, RuntimeQuotaPolicy,
+        RuntimeQuotaPolicySet,
         RuntimeQuotaSelectorDimension, RuntimeQuotaSelectorMatcher, RuntimeQuotaWindow,
     },
     resilience::{RuntimeCircuitBreakerPolicy, RuntimeHedgingPolicy, RuntimeRetryBudgetPolicy},
