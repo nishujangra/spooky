@@ -1,5 +1,6 @@
-use std::{collections::HashSet, time::Duration};
+use std::{collections::HashSet, net::SocketAddr, time::Duration};
 
+use sha2::{Digest, Sha256};
 use spooky_config::{
     config::{
         DistributedQuotaPolicy as RawDistributedQuotaPolicy,
@@ -49,6 +50,79 @@ pub enum QuotaSelectorKeySpec {
     Query(String),
 }
 
+pub(crate) type QuotaHeaderLookup<'a> = dyn Fn(&str) -> Option<String> + 'a;
+
+#[derive(Clone, Copy)]
+pub(crate) struct QuotaIdentityContext<'a> {
+    pub route: Option<&'a str>,
+    pub method: &'a str,
+    pub path: &'a str,
+    pub authority: Option<&'a str>,
+    pub cid_key: Option<&'a str>,
+    pub client_addr: Option<SocketAddr>,
+    pub header_lookup: Option<&'a QuotaHeaderLookup<'a>>,
+}
+
+impl<'a> QuotaIdentityContext<'a> {
+    pub(crate) fn new(
+        route: Option<&'a str>,
+        method: &'a str,
+        path: &'a str,
+        authority: Option<&'a str>,
+        cid_key: Option<&'a str>,
+        client_addr: Option<SocketAddr>,
+        header_lookup: Option<&'a QuotaHeaderLookup<'a>>,
+    ) -> Self {
+        Self {
+            route,
+            method,
+            path,
+            authority,
+            cid_key,
+            client_addr,
+            header_lookup,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuotaIdentityDimension {
+    Route,
+    Tenant,
+    Token,
+    Client,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuotaIdentityLabels {
+    pub route: Option<String>,
+    pub tenant: Option<String>,
+    pub token: Option<String>,
+    pub client: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuotaCompositeKey {
+    pub policy_name: String,
+    pub key: String,
+    pub labels: QuotaIdentityLabels,
+    pub dimensions: QuotaSelectorDimensions,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuotaIdentityRejection {
+    pub policy_name: String,
+    pub dimension: QuotaIdentityDimension,
+    pub reason: QuotaDenyReason,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RequestKeyExtraction {
+    Found(String),
+    Missing,
+    Invalid,
+}
+
 impl From<&RuntimeRequestKeySpec> for QuotaSelectorKeySpec {
     fn from(value: &RuntimeRequestKeySpec) -> Self {
         match value {
@@ -91,6 +165,82 @@ impl QuotaSelectorMatcher {
             tenant: value.tenant.as_ref().map(QuotaSelectorKeySpec::from),
             token: value.token.as_ref().map(QuotaSelectorKeySpec::from),
             client: value.client.as_ref().map(QuotaSelectorKeySpec::from),
+        }
+    }
+
+    pub fn extract_identities(
+        &self,
+        policy_name: &str,
+        context: &QuotaIdentityContext<'_>,
+    ) -> Result<QuotaIdentityLabels, QuotaIdentityRejection> {
+        let route = if self.route {
+            Some(
+                normalize_route_identity(context.route).ok_or_else(|| QuotaIdentityRejection {
+                    policy_name: policy_name.to_string(),
+                    dimension: QuotaIdentityDimension::Route,
+                    reason: QuotaDenyReason::SelectorIdentityMissing,
+                })?,
+            )
+        } else {
+            None
+        };
+
+        let tenant = self.extract_dimension_identity(
+            policy_name,
+            QuotaIdentityDimension::Tenant,
+            self.tenant.as_ref(),
+            context,
+        )?;
+        let token = self.extract_dimension_identity(
+            policy_name,
+            QuotaIdentityDimension::Token,
+            self.token.as_ref(),
+            context,
+        )?;
+        let client = self.extract_dimension_identity(
+            policy_name,
+            QuotaIdentityDimension::Client,
+            self.client.as_ref(),
+            context,
+        )?;
+
+        Ok(QuotaIdentityLabels {
+            route,
+            tenant,
+            token,
+            client,
+        })
+    }
+
+    fn extract_dimension_identity(
+        &self,
+        policy_name: &str,
+        dimension: QuotaIdentityDimension,
+        spec: Option<&QuotaSelectorKeySpec>,
+        context: &QuotaIdentityContext<'_>,
+    ) -> Result<Option<String>, QuotaIdentityRejection> {
+        let Some(spec) = spec else {
+            return Ok(None);
+        };
+
+        let extracted = extract_quota_selector_key(spec, context);
+        let sensitive = quota_dimension_is_sensitive(dimension, spec);
+
+        match extracted {
+            RequestKeyExtraction::Found(value) => Ok(Some(stable_observable_identity_value(
+                &value,
+                sensitive,
+            ))),
+            RequestKeyExtraction::Missing => Err(QuotaIdentityRejection {
+                policy_name: policy_name.to_string(),
+                dimension,
+                reason: QuotaDenyReason::SelectorIdentityMissing,
+            }),
+            RequestKeyExtraction::Invalid => Err(QuotaIdentityRejection {
+                policy_name: policy_name.to_string(),
+                dimension,
+                reason: QuotaDenyReason::SelectorIdentityInvalid,
+            }),
         }
     }
 }
@@ -342,6 +492,21 @@ impl QuotaRuntime {
     }
 }
 
+impl QuotaPolicyRuntime {
+    pub fn composite_key(
+        &self,
+        context: &QuotaIdentityContext<'_>,
+    ) -> Result<QuotaCompositeKey, QuotaIdentityRejection> {
+        let labels = self.selector.extract_identities(&self.name, context)?;
+        Ok(QuotaCompositeKey {
+            policy_name: self.name.clone(),
+            key: compose_quota_key(&self.name, &labels),
+            dimensions: self.selector.dimensions(),
+            labels,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuotaDenyReason {
     BurstQuotaExhausted,
@@ -425,8 +590,238 @@ impl QuotaDecision {
     }
 }
 
+pub(crate) fn extract_runtime_request_key(
+    spec: &RuntimeRequestKeySpec,
+    context: &QuotaIdentityContext<'_>,
+) -> RequestKeyExtraction {
+    match spec {
+        RuntimeRequestKeySpec::Path => extract_path_value(context.path),
+        RuntimeRequestKeySpec::Authority => extract_authority_value(context.authority),
+        RuntimeRequestKeySpec::Method => extract_method_value(context.method),
+        RuntimeRequestKeySpec::Cid | RuntimeRequestKeySpec::StickyCid => {
+            extract_cid_value(context.cid_key)
+        }
+        RuntimeRequestKeySpec::PeerIp | RuntimeRequestKeySpec::ClientIp => {
+            extract_client_ip_value(context.client_addr)
+        }
+        RuntimeRequestKeySpec::BearerToken => extract_bearer_token_value(context.header_lookup),
+        RuntimeRequestKeySpec::Header(name) => extract_header_value(name, context.header_lookup),
+        RuntimeRequestKeySpec::Cookie(name) => extract_cookie_key_value(name, context.header_lookup),
+        RuntimeRequestKeySpec::Query(name) => extract_query_key_value(context.path, name),
+    }
+}
+
+fn extract_quota_selector_key(
+    spec: &QuotaSelectorKeySpec,
+    context: &QuotaIdentityContext<'_>,
+) -> RequestKeyExtraction {
+    match spec {
+        QuotaSelectorKeySpec::Path => extract_path_value(context.path),
+        QuotaSelectorKeySpec::Authority => extract_authority_value(context.authority),
+        QuotaSelectorKeySpec::Method => extract_method_value(context.method),
+        QuotaSelectorKeySpec::Cid | QuotaSelectorKeySpec::StickyCid => {
+            extract_cid_value(context.cid_key)
+        }
+        QuotaSelectorKeySpec::PeerIp | QuotaSelectorKeySpec::ClientIp => {
+            extract_client_ip_value(context.client_addr)
+        }
+        QuotaSelectorKeySpec::BearerToken => extract_bearer_token_value(context.header_lookup),
+        QuotaSelectorKeySpec::Header(name) => extract_header_value(name, context.header_lookup),
+        QuotaSelectorKeySpec::Cookie(name) => extract_cookie_key_value(name, context.header_lookup),
+        QuotaSelectorKeySpec::Query(name) => extract_query_key_value(context.path, name),
+    }
+}
+
+fn extract_path_value(path: &str) -> RequestKeyExtraction {
+    let path_only = path.split_once('?').map(|(value, _)| value).unwrap_or(path);
+    let normalized = path_only.trim();
+    if normalized.is_empty() {
+        RequestKeyExtraction::Missing
+    } else {
+        RequestKeyExtraction::Found(normalized.to_string())
+    }
+}
+
+fn extract_authority_value(authority: Option<&str>) -> RequestKeyExtraction {
+    let Some(authority) = authority.map(str::trim).filter(|value| !value.is_empty()) else {
+        return RequestKeyExtraction::Missing;
+    };
+    RequestKeyExtraction::Found(authority.to_string())
+}
+
+fn extract_method_value(method: &str) -> RequestKeyExtraction {
+    let normalized = method.trim();
+    if normalized.is_empty() {
+        RequestKeyExtraction::Missing
+    } else {
+        RequestKeyExtraction::Found(normalized.to_ascii_uppercase())
+    }
+}
+
+fn extract_cid_value(cid_key: Option<&str>) -> RequestKeyExtraction {
+    let Some(cid_key) = cid_key.map(str::trim).filter(|value| !value.is_empty()) else {
+        return RequestKeyExtraction::Missing;
+    };
+    RequestKeyExtraction::Found(cid_key.to_string())
+}
+
+fn extract_client_ip_value(client_addr: Option<SocketAddr>) -> RequestKeyExtraction {
+    let Some(client_addr) = client_addr else {
+        return RequestKeyExtraction::Missing;
+    };
+    RequestKeyExtraction::Found(client_addr.ip().to_string())
+}
+
+fn extract_bearer_token_value(
+    header_lookup: Option<&QuotaHeaderLookup<'_>>,
+) -> RequestKeyExtraction {
+    let Some(raw) = header_lookup.and_then(|lookup| lookup(http::header::AUTHORIZATION.as_str()))
+    else {
+        return RequestKeyExtraction::Missing;
+    };
+
+    let raw = raw.trim();
+    let Some(split) = raw.find(char::is_whitespace) else {
+        return RequestKeyExtraction::Invalid;
+    };
+    let (scheme, rest) = raw.split_at(split);
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return RequestKeyExtraction::Invalid;
+    }
+    let token = rest.trim_start();
+    if token.is_empty() {
+        return RequestKeyExtraction::Invalid;
+    }
+    RequestKeyExtraction::Found(token.to_string())
+}
+
+fn extract_header_value(
+    name: &str,
+    header_lookup: Option<&QuotaHeaderLookup<'_>>,
+) -> RequestKeyExtraction {
+    let Some(value) = header_lookup.and_then(|lookup| lookup(name)) else {
+        return RequestKeyExtraction::Missing;
+    };
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        return RequestKeyExtraction::Missing;
+    }
+    RequestKeyExtraction::Found(normalized.to_string())
+}
+
+fn extract_cookie_key_value(
+    cookie_name: &str,
+    header_lookup: Option<&QuotaHeaderLookup<'_>>,
+) -> RequestKeyExtraction {
+    let Some(cookie_header) =
+        header_lookup.and_then(|lookup| lookup(http::header::COOKIE.as_str()))
+    else {
+        return RequestKeyExtraction::Missing;
+    };
+
+    for pair in cookie_header.split(';') {
+        let part = pair.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let Some((name, value)) = part.split_once('=') else {
+            continue;
+        };
+        if !name.trim().eq_ignore_ascii_case(cookie_name) {
+            continue;
+        }
+        let value = value.trim();
+        if value.is_empty() {
+            return RequestKeyExtraction::Missing;
+        }
+        return RequestKeyExtraction::Found(value.to_string());
+    }
+
+    RequestKeyExtraction::Missing
+}
+
+fn extract_query_key_value(path: &str, param: &str) -> RequestKeyExtraction {
+    let Some((_, query)) = path.split_once('?') else {
+        return RequestKeyExtraction::Missing;
+    };
+
+    for pair in query.split('&') {
+        let entry = pair.trim();
+        if entry.is_empty() {
+            continue;
+        }
+        let Some((name, value)) = entry.split_once('=') else {
+            continue;
+        };
+        if !name.eq_ignore_ascii_case(param) {
+            continue;
+        }
+        if value.is_empty() {
+            return RequestKeyExtraction::Missing;
+        }
+        return RequestKeyExtraction::Found(value.to_string());
+    }
+
+    RequestKeyExtraction::Missing
+}
+
+fn quota_dimension_is_sensitive(
+    dimension: QuotaIdentityDimension,
+    spec: &QuotaSelectorKeySpec,
+) -> bool {
+    matches!(dimension, QuotaIdentityDimension::Token) || matches!(spec, QuotaSelectorKeySpec::BearerToken)
+}
+
+fn stable_observable_identity_value(value: &str, sensitive: bool) -> String {
+    let normalized = value.trim();
+    if !sensitive {
+        return normalized.to_string();
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(normalized.as_bytes());
+    let digest = hasher.finalize();
+    format!("sha256:{digest:x}")
+}
+
+fn normalize_route_identity(route: Option<&str>) -> Option<String> {
+    route
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+fn compose_quota_key(policy_name: &str, labels: &QuotaIdentityLabels) -> String {
+    let mut key = String::new();
+    append_key_component(&mut key, "policy", policy_name);
+    if let Some(route) = labels.route.as_deref() {
+        append_key_component(&mut key, "route", route);
+    }
+    if let Some(tenant) = labels.tenant.as_deref() {
+        append_key_component(&mut key, "tenant", tenant);
+    }
+    if let Some(token) = labels.token.as_deref() {
+        append_key_component(&mut key, "token", token);
+    }
+    if let Some(client) = labels.client.as_deref() {
+        append_key_component(&mut key, "client", client);
+    }
+    key
+}
+
+fn append_key_component(output: &mut String, label: &str, value: &str) {
+    output.push_str(label);
+    output.push('=');
+    output.push_str(&value.len().to_string());
+    output.push(':');
+    output.push_str(value);
+    output.push('|');
+}
+
 #[cfg(test)]
 mod tests {
+    use std::{collections::HashMap, net::SocketAddr};
+
     use super::*;
     use spooky_config::{
         config::{
@@ -442,6 +837,30 @@ mod tests {
             RuntimeQuotaSelectorMatcher, RuntimeQuotaWindow, RuntimeRequestKeySpec,
         },
     };
+
+    fn identity_context_with_headers(
+        route: Option<&'static str>,
+        method: &'static str,
+        path: &'static str,
+        authority: Option<&'static str>,
+        cid_key: Option<&'static str>,
+        client_addr: Option<SocketAddr>,
+        headers: HashMap<String, String>,
+    ) -> QuotaIdentityContext<'static> {
+        let leaked = Box::leak(Box::new(headers));
+        let lookup = Box::leak(Box::new(move |name: &str| {
+            leaked.get(&name.to_ascii_lowercase()).cloned()
+        }));
+        QuotaIdentityContext::new(
+            route,
+            method,
+            path,
+            authority,
+            cid_key,
+            client_addr,
+            Some(lookup),
+        )
+    }
 
     #[test]
     fn quota_deny_reason_slugs_are_stable() {
@@ -600,5 +1019,187 @@ mod tests {
         });
         assert!(!allowed.is_denied());
         assert_eq!(allowed.deny_reason(), None);
+    }
+
+    #[test]
+    fn quota_identity_extraction_builds_stable_composite_keys() {
+        let policy = QuotaPolicyRuntime {
+            name: "tenant-quota".to_string(),
+            route_allowlist: HashSet::from(["api".to_string()]),
+            selector: QuotaSelectorMatcher {
+                route: true,
+                tenant: Some(QuotaSelectorKeySpec::Header("x-tenant-id".to_string())),
+                token: Some(QuotaSelectorKeySpec::BearerToken),
+                client: Some(QuotaSelectorKeySpec::ClientIp),
+            },
+            burst: Some(QuotaWindowPolicy {
+                requests: 100,
+                window: Duration::from_secs(1),
+            }),
+            sustained: Some(QuotaWindowPolicy {
+                requests: 1000,
+                window: Duration::from_secs(60),
+            }),
+        };
+        let context = identity_context_with_headers(
+            Some("api"),
+            "POST",
+            "/v1/payments?tenant=acme",
+            Some("api.example.com"),
+            None,
+            Some("203.0.113.10:443".parse().expect("client addr")),
+            HashMap::from([
+                ("authorization".to_string(), "Bearer secret-token".to_string()),
+                ("x-tenant-id".to_string(), "acme".to_string()),
+            ]),
+        );
+
+        let composite = policy
+            .composite_key(&context)
+            .expect("quota identities should resolve");
+
+        assert_eq!(composite.policy_name, "tenant-quota");
+        assert_eq!(composite.labels.route.as_deref(), Some("api"));
+        assert_eq!(composite.labels.tenant.as_deref(), Some("acme"));
+        assert_eq!(composite.labels.client.as_deref(), Some("203.0.113.10"));
+        assert!(
+            composite
+                .labels
+                .token
+                .as_deref()
+                .is_some_and(|value| value.starts_with("sha256:")),
+            "token-derived identities must be hashed before reuse"
+        );
+        assert_eq!(
+            composite.key,
+            format!(
+                "policy=12:tenant-quota|route=3:api|tenant=4:acme|token={}:{}|client=12:203.0.113.10|",
+                composite
+                    .labels
+                    .token
+                    .as_ref()
+                    .expect("hashed token label")
+                    .len(),
+                composite.labels.token.as_ref().expect("hashed token label")
+            )
+        );
+    }
+
+    #[test]
+    fn quota_identity_extraction_rejects_missing_and_invalid_selector_values() {
+        let policy = QuotaPolicyRuntime {
+            name: "tenant-quota".to_string(),
+            route_allowlist: HashSet::new(),
+            selector: QuotaSelectorMatcher {
+                route: true,
+                tenant: Some(QuotaSelectorKeySpec::Header("x-tenant-id".to_string())),
+                token: Some(QuotaSelectorKeySpec::BearerToken),
+                client: None,
+            },
+            burst: Some(QuotaWindowPolicy {
+                requests: 10,
+                window: Duration::from_secs(1),
+            }),
+            sustained: None,
+        };
+
+        let missing_tenant = identity_context_with_headers(
+            Some("api"),
+            "GET",
+            "/v1",
+            Some("api.example.com"),
+            None,
+            None,
+            HashMap::from([(
+                "authorization".to_string(),
+                "Bearer token-1".to_string(),
+            )]),
+        );
+        let err = policy
+            .composite_key(&missing_tenant)
+            .expect_err("missing tenant header must reject");
+        assert_eq!(err.dimension, QuotaIdentityDimension::Tenant);
+        assert_eq!(err.reason, QuotaDenyReason::SelectorIdentityMissing);
+
+        let invalid_token = identity_context_with_headers(
+            Some("api"),
+            "GET",
+            "/v1",
+            Some("api.example.com"),
+            None,
+            None,
+            HashMap::from([
+                ("authorization".to_string(), "Basic abc123".to_string()),
+                ("x-tenant-id".to_string(), "acme".to_string()),
+            ]),
+        );
+        let err = policy
+            .composite_key(&invalid_token)
+            .expect_err("invalid bearer token must reject");
+        assert_eq!(err.dimension, QuotaIdentityDimension::Token);
+        assert_eq!(err.reason, QuotaDenyReason::SelectorIdentityInvalid);
+    }
+
+    #[test]
+    fn runtime_request_key_extraction_covers_canonical_identity_sources() {
+        let context = identity_context_with_headers(
+            Some("api"),
+            "post",
+            "/v1/payments?tenant=acme",
+            Some("api.example.com"),
+            Some("cid-123"),
+            Some("203.0.113.10:443".parse().expect("client addr")),
+            HashMap::from([
+                ("authorization".to_string(), "Bearer token-1".to_string()),
+                ("cookie".to_string(), "session=s123; theme=dark".to_string()),
+                ("x-client-id".to_string(), "client-a".to_string()),
+            ]),
+        );
+
+        assert_eq!(
+            extract_runtime_request_key(&RuntimeRequestKeySpec::Path, &context),
+            RequestKeyExtraction::Found("/v1/payments".to_string())
+        );
+        assert_eq!(
+            extract_runtime_request_key(&RuntimeRequestKeySpec::Authority, &context),
+            RequestKeyExtraction::Found("api.example.com".to_string())
+        );
+        assert_eq!(
+            extract_runtime_request_key(&RuntimeRequestKeySpec::Method, &context),
+            RequestKeyExtraction::Found("POST".to_string())
+        );
+        assert_eq!(
+            extract_runtime_request_key(&RuntimeRequestKeySpec::Cid, &context),
+            RequestKeyExtraction::Found("cid-123".to_string())
+        );
+        assert_eq!(
+            extract_runtime_request_key(&RuntimeRequestKeySpec::ClientIp, &context),
+            RequestKeyExtraction::Found("203.0.113.10".to_string())
+        );
+        assert_eq!(
+            extract_runtime_request_key(&RuntimeRequestKeySpec::BearerToken, &context),
+            RequestKeyExtraction::Found("token-1".to_string())
+        );
+        assert_eq!(
+            extract_runtime_request_key(
+                &RuntimeRequestKeySpec::Cookie("session".to_string()),
+                &context
+            ),
+            RequestKeyExtraction::Found("s123".to_string())
+        );
+        assert_eq!(
+            extract_runtime_request_key(
+                &RuntimeRequestKeySpec::Query("tenant".to_string()),
+                &context
+            ),
+            RequestKeyExtraction::Found("acme".to_string())
+        );
+        assert_eq!(
+            extract_runtime_request_key(
+                &RuntimeRequestKeySpec::Header("x-client-id".to_string()),
+                &context
+            ),
+            RequestKeyExtraction::Found("client-a".to_string())
+        );
     }
 }

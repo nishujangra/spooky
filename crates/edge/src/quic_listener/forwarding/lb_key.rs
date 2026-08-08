@@ -1,6 +1,9 @@
 use spooky_config::runtime::{RuntimeLoadBalancingStrategy, RuntimeRequestKeySpec};
 
 use super::*;
+use crate::resilience::quota::{
+    QuotaIdentityContext, RequestKeyExtraction, extract_runtime_request_key,
+};
 
 struct LbKeyRequestParts<'a> {
     method: &'a str,
@@ -129,39 +132,19 @@ impl QUICListener {
         lb_key_spec: &RuntimeRequestKeySpec,
         request: &LbKeyRequestParts<'_>,
     ) -> Option<String> {
-        match lb_key_spec {
-            RuntimeRequestKeySpec::Path => {
-                let path_only = request
-                    .path
-                    .split_once('?')
-                    .map(|(p, _)| p)
-                    .unwrap_or(request.path);
-                Some(path_only.to_string())
-            }
-            RuntimeRequestKeySpec::Authority => request.authority.map(str::to_string),
-            RuntimeRequestKeySpec::Method => Some(request.method.to_string()),
-            RuntimeRequestKeySpec::Cid | RuntimeRequestKeySpec::StickyCid => {
-                request.cid_key.map(str::to_string)
-            }
-            RuntimeRequestKeySpec::PeerIp | RuntimeRequestKeySpec::ClientIp => {
-                request.client_addr.map(|addr| addr.ip().to_string())
-            }
-            RuntimeRequestKeySpec::BearerToken => {
-                let raw = request
-                    .header_lookup
-                    .and_then(|lookup| lookup(http::header::AUTHORIZATION.as_str()))?;
-                Self::bearer_token_from_authorization_value(&raw)
-            }
-            RuntimeRequestKeySpec::Header(key_name) => {
-                request.header_lookup.and_then(|lookup| lookup(key_name))
-            }
-            RuntimeRequestKeySpec::Cookie(cookie_name) => {
-                let cookie_header = request
-                    .header_lookup
-                    .and_then(|lookup| lookup(http::header::COOKIE.as_str()))?;
-                extract_cookie_value(cookie_header.as_str(), cookie_name)
-            }
-            RuntimeRequestKeySpec::Query(param) => extract_query_param(request.path, param),
+        let context = QuotaIdentityContext::new(
+            None,
+            request.method,
+            request.path,
+            request.authority,
+            request.cid_key,
+            request.client_addr,
+            request.header_lookup,
+        );
+
+        match extract_runtime_request_key(lb_key_spec, &context) {
+            RequestKeyExtraction::Found(value) => Some(value),
+            RequestKeyExtraction::Missing | RequestKeyExtraction::Invalid => None,
         }
     }
 
