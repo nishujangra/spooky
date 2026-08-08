@@ -950,6 +950,25 @@
             
             <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="operations/distributed-quota/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative h-[30px] w-fit overflow-visible border border-transparent text-[0.8rem] font-medium after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+        Distributed Quota
+        
+
+        
+
+        
+
+        
+    </a>
+</li>
+            
+            
+            
+            <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="operations/runbook/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative h-[30px] w-fit overflow-visible border border-transparent text-[0.8rem] font-medium after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -1482,6 +1501,10 @@
 <td>Per-crate responsibilities, inter-crate boundaries, key types</td>
 </tr>
 <tr>
+<td><a href="architecture/quota-policy-contract/">Distributed Quota Contract</a></td>
+<td>Semantic contract for quota semantics, selector composition, and distributed counter behavior</td>
+</tr>
+<tr>
 <td><a href="development/codebase-map/">Codebase Map</a></td>
 <td>Current crate/module map and where major logic lives</td>
 </tr>
@@ -1519,6 +1542,10 @@
 <tr>
 <td><a href="operations/overview/">Operations Overview</a></td>
 <td>Operator map for deployment, sizing, tuning, and failure handling</td>
+</tr>
+<tr>
+<td><a href="operations/distributed-quota/">Distributed Quota</a></td>
+<td>Distributed quota policy examples, Redis setup, degraded-mode guidance, and operator interpretation</td>
 </tr>
 <tr>
 <td><a href="operations/runbook/">Runbook</a></td>
@@ -2014,6 +2041,12 @@ curl -k https://127.0.0.1:9902/ready
                         <a class="text-2xl font-medium" href="deployment/migration/">
                             
                             Migration
+                            
+                        </a>
+                        
+                        <a class="text-2xl font-medium" href="operations/distributed-quota/">
+                            
+                            Distributed Quota
                             
                         </a>
                         

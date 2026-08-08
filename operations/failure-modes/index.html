@@ -950,6 +950,25 @@
             
             <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../distributed-quota/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative h-[30px] w-fit overflow-visible border border-transparent text-[0.8rem] font-medium after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+        Distributed Quota
+        
+
+        
+
+        
+
+        
+    </a>
+</li>
+            
+            
+            
+            <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../runbook/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative h-[30px] w-fit overflow-visible border border-transparent text-[0.8rem] font-medium after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -1451,6 +1470,11 @@
 <ul>
 <li>policy denied the request path</li>
 </ul>
+<p>Quota note:</p>
+<ul>
+<li>this is not the normal distributed quota exhaustion status</li>
+<li>treat 403 as route or request policy denial, not as quota contract enforcement</li>
+</ul>
 <h2 id="405">405</h2>
 <p>Typical reason:</p>
 <ul>
@@ -1488,11 +1512,27 @@
 <li>upstream timeout</li>
 <li>response-body cap breach</li>
 <li>temporary backend unavailability</li>
+<li>distributed quota backend failure under <code>fail_closed</code></li>
 </ul>
 <p>Interpretation:</p>
 <ul>
 <li>503 in Spooky can mean either self-protection or upstream failure insulation</li>
+<li>distributed quota <code>fail_closed</code> also uses 503, but with quota-specific body
+  text and runtime-state evidence</li>
 <li>always inspect the body text, logs, and overload metrics before assuming one cause</li>
+</ul>
+<h2 id="429">429</h2>
+<p>Typical reasons:</p>
+<ul>
+<li><code>burst_quota_exhausted</code></li>
+<li><code>sustained_quota_exhausted</code></li>
+<li>selector-derived quota denial</li>
+</ul>
+<p>Interpretation:</p>
+<ul>
+<li>429 is the normal distributed quota contract status</li>
+<li>treat it as contract enforcement, not overload</li>
+<li>use quota metrics and runtime snapshot fields before changing overload knobs</li>
 </ul>
 <h2 id="silent-drop-behaviors">Silent Drop Behaviors</h2>
 <p>Some invalid or non-actionable traffic is dropped rather than converted into a rich HTTP response.</p>
@@ -1798,6 +1838,12 @@
                             
                         </a>
                         
+                        <a class="text-2xl font-medium" href="../distributed-quota/">
+                            
+                            Distributed Quota
+                            
+                        </a>
+                        
                         <a class="text-2xl font-medium" href="../runbook/">
                             
                             Runbook
@@ -2019,6 +2065,14 @@
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#503');">
             503
+        </a>
+        
+
+        
+        <a href="#429"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#429');">
+            429
         </a>
         
 

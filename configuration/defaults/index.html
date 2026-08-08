@@ -950,6 +950,25 @@
             
             <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
     <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
+        data-size="default" href="../../operations/distributed-quota/"
+        class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative h-[30px] w-fit overflow-visible border border-transparent text-[0.8rem] font-medium after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
+
+        
+        Distributed Quota
+        
+
+        
+
+        
+
+        
+    </a>
+</li>
+            
+            
+            
+            <li data-slot="sidebar-menu-item" data-sidebar="menu-item" class="group/menu-item relative">
+    <a data-slot="sidebar-menu-button" data-active="false" data-sidebar="menu-button"
         data-size="default" href="../../operations/runbook/"
         class="peer/menu-button flex items-center gap-2 rounded-md p-2 text-left ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground relative h-[30px] w-fit overflow-visible border border-transparent text-[0.8rem] font-medium after:absolute after:inset-x-0 after:-inset-y-1 after:z-0 after:rounded-md data-[active=true]:border-accent data-[active=true]:bg-accent 3xl:fixed:w-full 3xl:fixed:max-w-48">
 
@@ -2235,6 +2254,73 @@
 </tr>
 </tbody>
 </table></div>
+<h3 id="distributed-quota">Distributed Quota</h3>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Default</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>resilience.quota.enabled</code></td>
+<td><code>false</code></td>
+<td>Distributed quota is off by default</td>
+</tr>
+<tr>
+<td><code>resilience.quota.enforcement</code></td>
+<td><code>enforce</code></td>
+<td>Enforced unless explicitly set to <code>shadow</code></td>
+</tr>
+<tr>
+<td><code>resilience.quota.backend_failure_policy</code></td>
+<td><code>fail_closed</code></td>
+<td>Backend failures deny by default when quota is enabled</td>
+</tr>
+<tr>
+<td><code>resilience.quota.backend.kind</code></td>
+<td><code>in_memory</code></td>
+<td>Local in-memory backend is the default base backend</td>
+</tr>
+<tr>
+<td><code>resilience.quota.backend.key_prefix</code></td>
+<td><code>"spooky:quota"</code></td>
+<td>Default counter key prefix</td>
+</tr>
+<tr>
+<td><code>resilience.quota.backend.connect_timeout_ms</code></td>
+<td><code>250</code></td>
+<td>Redis only</td>
+</tr>
+<tr>
+<td><code>resilience.quota.backend.command_timeout_ms</code></td>
+<td><code>100</code></td>
+<td>Redis only</td>
+</tr>
+<tr>
+<td><code>resilience.quota.backend.max_inflight</code></td>
+<td><code>1024</code></td>
+<td>Redis only</td>
+</tr>
+<tr>
+<td><code>resilience.quota.local_fallback</code></td>
+<td><code>null</code></td>
+<td>No degraded local fallback unless configured explicitly</td>
+</tr>
+<tr>
+<td><code>resilience.quota.local_fallback.key_prefix</code></td>
+<td><code>"spooky:quota:fallback"</code></td>
+<td>Default fallback key prefix when fallback is enabled</td>
+</tr>
+<tr>
+<td><code>resilience.quota.policies</code></td>
+<td><code>[]</code></td>
+<td>Quota stays inert until explicit policies are configured</td>
+</tr>
+</tbody>
+</table></div>
 <h3 id="watchdog">Watchdog</h3>
 <div class="table-wrapper"><table>
 <thead>
@@ -2813,6 +2899,12 @@
                             
                         </a>
                         
+                        <a class="text-2xl font-medium" href="../../operations/distributed-quota/">
+                            
+                            Distributed Quota
+                            
+                        </a>
+                        
                         <a class="text-2xl font-medium" href="../../operations/runbook/">
                             
                             Runbook
@@ -3111,6 +3203,12 @@
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#brownout');">
             Brownout
+        </a>
+        
+        <a href="#distributed-quota"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#distributed-quota');">
+            Distributed Quota
         </a>
         
         <a href="#watchdog"
