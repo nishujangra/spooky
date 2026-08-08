@@ -1210,7 +1210,10 @@ mod tests {
                 QuotaPolicyReason::BurstQuotaExhausted.slug(),
                 "burst_quota_exhausted"
             );
-            assert_eq!(QuotaPolicyReason::BackendUnavailable.slug(), "backend_unavailable");
+            assert_eq!(
+                QuotaPolicyReason::BackendUnavailable.slug(),
+                "backend_unavailable"
+            );
             assert_eq!(QuotaBackendHealthReason::Available.slug(), "available");
             assert_eq!(QuotaBackendHealthReason::Timeout.slug(), "timeout");
         }

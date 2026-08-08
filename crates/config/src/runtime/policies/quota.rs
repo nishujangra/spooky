@@ -368,7 +368,8 @@ impl RuntimeQuotaPolicySet {
             .as_ref()
             .map(RuntimeQuotaLocalFallback::normalize)
             .transpose()?;
-        if local_fallback.is_some() && !matches!(backend, RuntimeQuotaCounterBackend::Redis { .. }) {
+        if local_fallback.is_some() && !matches!(backend, RuntimeQuotaCounterBackend::Redis { .. })
+        {
             return Err(config_invalid(
                 "resilience.quota.local_fallback is only supported when backend.kind=redis",
             ));
@@ -502,8 +503,7 @@ mod tests {
     use super::*;
     use crate::config::{
         QuotaBackendFailurePolicy, QuotaCounterBackend, QuotaEnforcementMode,
-        QuotaLocalFallbackConfig, QuotaPolicyConfig,
-        Resilience,
+        QuotaLocalFallbackConfig, QuotaPolicyConfig, Resilience,
     };
 
     fn assert_config_invalid(err: RuntimeConfigError, expected: impl AsRef<str>) {

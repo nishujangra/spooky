@@ -10,9 +10,7 @@ use crate::resilience::{
     brownout::BrownoutController,
     circuit_breaker::CircuitBreakers,
     connect::{connect_authority_port, normalize_connect_authority},
-    quota::{
-        QuotaCounterBackendError, QuotaRuntime, SharedDistributedQuotaCounterBackend,
-    },
+    quota::{QuotaCounterBackendError, QuotaRuntime, SharedDistributedQuotaCounterBackend},
     retry_budget::RetryBudget,
     route_queue::RouteQueueLimiter,
     scoped_rate_limit::ScopedRateLimiters,

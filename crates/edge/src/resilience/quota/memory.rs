@@ -219,7 +219,10 @@ impl InMemoryDistributedQuotaCounterStore {
 }
 
 impl DistributedQuotaCounterBackend for InMemoryDistributedQuotaCounterStore {
-    fn evaluate<'a>(&'a self, request: QuotaCounterEvaluationRequest) -> QuotaCounterEvalFuture<'a> {
+    fn evaluate<'a>(
+        &'a self,
+        request: QuotaCounterEvaluationRequest,
+    ) -> QuotaCounterEvalFuture<'a> {
         Box::pin(async move { self.evaluate_request(request) })
     }
 }
@@ -232,7 +235,9 @@ fn build_window_specs(
     let mut windows = Vec::new();
 
     if let Some(window) = request.burst.as_ref() {
-        windows.push(build_window_spec(key_prefix, request, "burst", window, now_ms));
+        windows.push(build_window_spec(
+            key_prefix, request, "burst", window, now_ms,
+        ));
     }
     if let Some(window) = request.sustained.as_ref() {
         windows.push(build_window_spec(
@@ -373,7 +378,11 @@ mod tests {
             Some(1)
         );
         assert_eq!(
-            first.counter.sustained.as_ref().map(|window| window.consumed),
+            first
+                .counter
+                .sustained
+                .as_ref()
+                .map(|window| window.consumed),
             Some(1)
         );
 
@@ -398,7 +407,11 @@ mod tests {
             Some(2)
         );
         assert_eq!(
-            denied.counter.sustained.as_ref().map(|window| window.consumed),
+            denied
+                .counter
+                .sustained
+                .as_ref()
+                .map(|window| window.consumed),
             Some(2),
             "denied evaluations must not partially increment sustained state"
         );
@@ -568,7 +581,11 @@ mod tests {
             QuotaCounterEvaluationDecision::Denied(QuotaDenyReason::SustainedQuotaExhausted)
         );
         assert_eq!(
-            denied.counter.sustained.as_ref().map(|window| window.consumed),
+            denied
+                .counter
+                .sustained
+                .as_ref()
+                .map(|window| window.consumed),
             Some(3)
         );
     }

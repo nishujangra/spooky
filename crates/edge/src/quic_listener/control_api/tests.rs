@@ -7,12 +7,11 @@ use log::LevelFilter;
 use spooky_config::{
     config::{
         Backend, ClientAuth, Config as SpookyConfigConfig, ControlApiAuditSink,
-        ControlApiBearerToken, ControlApiClientAuthMode, ControlApiRole,
-        DistributedQuotaPolicy, DistributedQuotaSelector, DistributedQuotaSelectorSource,
-        DistributedQuotaWindow, JwksStartupBehavior, JwtAlgorithm, JwtAuth, Listen,
-        LoadBalancing, Log, LogFormat, Observability, Performance,
-        QuotaBackendFailurePolicy, QuotaCounterBackend, QuotaEnforcementMode, Resilience,
-        RouteMatch, Security, Tls, Upstream, UpstreamTls,
+        ControlApiBearerToken, ControlApiClientAuthMode, ControlApiRole, DistributedQuotaPolicy,
+        DistributedQuotaSelector, DistributedQuotaSelectorSource, DistributedQuotaWindow,
+        JwksStartupBehavior, JwtAlgorithm, JwtAuth, Listen, LoadBalancing, Log, LogFormat,
+        Observability, Performance, QuotaBackendFailurePolicy, QuotaCounterBackend,
+        QuotaEnforcementMode, Resilience, RouteMatch, Security, Tls, Upstream, UpstreamTls,
     },
     runtime::{RuntimeConfig, RuntimeJwtVerificationKey},
 };
@@ -2633,7 +2632,10 @@ async fn control_api_runtime_snapshot_exposes_quota_policy_and_backend_status() 
     assert_eq!(payload["quota"]["enforcement"], "shadow");
     assert_eq!(payload["quota"]["backend_failure_policy"], "fail_open");
     assert_eq!(payload["quota"]["active_backend"], "redis");
-    assert_eq!(payload["quota"]["backend_status"]["availability"], "degraded");
+    assert_eq!(
+        payload["quota"]["backend_status"]["availability"],
+        "degraded"
+    );
     assert_eq!(payload["quota"]["backend_status"]["degraded"], true);
     assert_eq!(payload["quota"]["backend_status"]["health_reason"], "error");
 

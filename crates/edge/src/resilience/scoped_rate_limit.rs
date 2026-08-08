@@ -130,14 +130,16 @@ impl ScopedRateLimitRule {
     }
 
     fn allow(&self, key: &str) -> bool {
-        self.evaluate_bucket(key, 1).is_some_and(|evaluation| evaluation.allowed)
+        self.evaluate_bucket(key, 1)
+            .is_some_and(|evaluation| evaluation.allowed)
     }
 
     fn evaluate_request(
         &self,
         request: QuotaCounterEvaluationRequest,
     ) -> Result<QuotaCounterEvaluationOutcome, QuotaCounterBackendError> {
-        let Some(evaluation) = self.evaluate_bucket(&request.composite_key.key, request.cost) else {
+        let Some(evaluation) = self.evaluate_bucket(&request.composite_key.key, request.cost)
+        else {
             return Err(QuotaCounterBackendError {
                 policy_name: Some(request.policy_name),
                 composite_key: Some(request.composite_key.key),
@@ -147,10 +149,7 @@ impl ScopedRateLimitRule {
         };
 
         let limit = u64::from(self.burst.max(1));
-        let remaining = evaluation
-            .remaining_tokens
-            .floor()
-            .clamp(0.0, limit as f64) as u64;
+        let remaining = evaluation.remaining_tokens.floor().clamp(0.0, limit as f64) as u64;
         let consumed = limit.saturating_sub(remaining);
         let counter = QuotaCounterResult {
             burst: Some(QuotaWindowUsage {
@@ -327,7 +326,10 @@ impl ScopedRateLimiters {
 }
 
 impl DistributedQuotaCounterBackend for ScopedRateLimiters {
-    fn evaluate<'a>(&'a self, request: QuotaCounterEvaluationRequest) -> QuotaCounterEvalFuture<'a> {
+    fn evaluate<'a>(
+        &'a self,
+        request: QuotaCounterEvaluationRequest,
+    ) -> QuotaCounterEvalFuture<'a> {
         Box::pin(async move {
             let Some(rule) = self.rules_by_name.get(&request.policy_name).cloned() else {
                 return Err(QuotaCounterBackendError {

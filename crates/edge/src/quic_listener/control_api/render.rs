@@ -7,17 +7,19 @@ use spooky_config::runtime::RuntimeJwtAuth;
 use spooky_lb::health::HealthFailureReason;
 
 use super::{state::ControlApiState, *};
-use crate::runtime::{
-    activation::GenerationHistoryEntry,
-    backend::state::{
-        BackendHealthState, BackendLifecycleInventorySnapshot, BackendMembershipState,
-        BackendPoolPlacementSnapshot,
+use crate::{
+    resilience::quota::{
+        QuotaBackendErrorSnapshot, QuotaBackendStatusSnapshot, QuotaPolicyIntrospectionSnapshot,
+        QuotaSelectorIntrospectionSnapshot, QuotaWindowIntrospectionSnapshot,
     },
-    bundle::RuntimeGenerationRecord,
-};
-use crate::resilience::quota::{
-    QuotaBackendErrorSnapshot, QuotaBackendStatusSnapshot, QuotaPolicyIntrospectionSnapshot,
-    QuotaSelectorIntrospectionSnapshot, QuotaWindowIntrospectionSnapshot,
+    runtime::{
+        activation::GenerationHistoryEntry,
+        backend::state::{
+            BackendHealthState, BackendLifecycleInventorySnapshot, BackendMembershipState,
+            BackendPoolPlacementSnapshot,
+        },
+        bundle::RuntimeGenerationRecord,
+    },
 };
 
 /// Map a backend health-failure reason to the canonical control-plane token.
@@ -670,7 +672,9 @@ impl ControlApiQuotaPolicyPayload {
             name: snapshot.name,
             route_allowlist: snapshot.route_allowlist,
             selector: ControlApiQuotaSelectorPayload::from_snapshot(snapshot.selector),
-            burst: snapshot.burst.map(ControlApiQuotaWindowPayload::from_snapshot),
+            burst: snapshot
+                .burst
+                .map(ControlApiQuotaWindowPayload::from_snapshot),
             sustained: snapshot
                 .sustained
                 .map(ControlApiQuotaWindowPayload::from_snapshot),

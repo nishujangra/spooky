@@ -1240,8 +1240,6 @@ impl QUICListener {
 mod tests {
     use std::time::UNIX_EPOCH;
 
-    use super::{auth::append_auth_request_headers, *};
-    use crate::runtime::connection::auth::PendingHeaderMutation;
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use boring::{
         bn::{BigNum, BigNumContext},
@@ -1263,6 +1261,9 @@ mod tests {
             RuntimeUpstreamPolicy,
         },
     };
+
+    use super::{auth::append_auth_request_headers, *};
+    use crate::runtime::connection::auth::PendingHeaderMutation;
 
     fn sample_pending_forward(headers: Vec<quiche::h3::Header>) -> PendingForward {
         PendingForward {

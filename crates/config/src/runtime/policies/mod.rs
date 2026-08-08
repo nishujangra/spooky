@@ -32,9 +32,8 @@ pub use self::{
         RuntimeRequestKeySpec,
     },
     quota::{
-        RuntimeQuotaBackendFailurePolicy, RuntimeQuotaCounterBackend,
-        RuntimeQuotaEnforcementMode, RuntimeQuotaLocalFallback, RuntimeQuotaPolicy,
-        RuntimeQuotaPolicySet,
+        RuntimeQuotaBackendFailurePolicy, RuntimeQuotaCounterBackend, RuntimeQuotaEnforcementMode,
+        RuntimeQuotaLocalFallback, RuntimeQuotaPolicy, RuntimeQuotaPolicySet,
         RuntimeQuotaSelectorDimension, RuntimeQuotaSelectorMatcher, RuntimeQuotaWindow,
     },
     resilience::{RuntimeCircuitBreakerPolicy, RuntimeHedgingPolicy, RuntimeRetryBudgetPolicy},

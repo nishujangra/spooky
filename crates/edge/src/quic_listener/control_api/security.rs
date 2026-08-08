@@ -1,10 +1,11 @@
 use std::{net::IpAddr, sync::Arc};
 
-use super::audit::ControlApiAdminAuditEmitter;
 use spooky_config::config::{
     ControlApi as ControlApiConfig, ControlApiBearerToken, ControlApiClientAuthMode,
     ControlApiIdentitySource, ControlApiRole,
 };
+
+use super::audit::ControlApiAdminAuditEmitter;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(in crate::quic_listener) struct ControlApiSecurityPolicy {

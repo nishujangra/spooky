@@ -1775,9 +1775,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
-    use crate::observability::{
-        QuotaBackendHealthReason, QuotaPolicyDecision, QuotaPolicyReason,
-    };
+    use crate::observability::{QuotaBackendHealthReason, QuotaPolicyDecision, QuotaPolicyReason};
 
     #[test]
     fn prometheus_render_includes_jwt_and_jwks_observability_series() {
@@ -1838,15 +1836,12 @@ mod tests {
         assert!(rendered.contains(
             "spooky_quota_policy_outcomes_total{policy=\"tenant-write-quota\",decision=\"denied\",reason=\"burst_quota_exhausted\",selector_dimensions=\"route+tenant+token\",backend_mode=\"redis\"} 1"
         ));
-        assert!(
-            rendered.contains(
-                "spooky_quota_backend_health_total{backend_mode=\"redis\",reason=\"available\"} 1"
-            )
-        );
-        assert!(
-            rendered
-                .contains("spooky_quota_backend_health_total{backend_mode=\"redis\",reason=\"timeout\"} 1")
-        );
+        assert!(rendered.contains(
+            "spooky_quota_backend_health_total{backend_mode=\"redis\",reason=\"available\"} 1"
+        ));
+        assert!(rendered.contains(
+            "spooky_quota_backend_health_total{backend_mode=\"redis\",reason=\"timeout\"} 1"
+        ));
     }
 
     #[test]

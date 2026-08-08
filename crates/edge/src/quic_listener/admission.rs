@@ -46,9 +46,7 @@ use crate::{
     resilience::{
         adaptive_admission::AdaptivePermit,
         brownout::BrownoutController,
-        quota::{
-            QuotaDecision, QuotaDenyReason, QuotaIdentityContext, evaluate_admission_quota,
-        },
+        quota::{QuotaDecision, QuotaDenyReason, QuotaIdentityContext, evaluate_admission_quota},
         route_queue::{RouteQueuePermit, RouteQueueRejection},
         runtime::RuntimeResilience,
         scoped_rate_limit::ScopedRateLimiters,
@@ -277,13 +275,15 @@ pub(super) fn evaluate_scoped_rate_limit_policy(
         )
         .await
     }) {
-        QuotaDecision::Denied(denial) => AdmissionPolicyDecision::RateLimited(RateLimitedDecision {
-            rule_name: denial.policy_name,
-            route: route.to_string(),
-            status: StatusCode::TOO_MANY_REQUESTS,
-            body: b"request rate limited\n",
-            retry_after_seconds: denial.retry_after_seconds.unwrap_or(1).max(1),
-        }),
+        QuotaDecision::Denied(denial) => {
+            AdmissionPolicyDecision::RateLimited(RateLimitedDecision {
+                rule_name: denial.policy_name,
+                route: route.to_string(),
+                status: StatusCode::TOO_MANY_REQUESTS,
+                body: b"request rate limited\n",
+                retry_after_seconds: denial.retry_after_seconds.unwrap_or(1).max(1),
+            })
+        }
         QuotaDecision::NotApplied
         | QuotaDecision::Allowed(_)
         | QuotaDecision::ShadowDenied(_)
@@ -410,8 +410,7 @@ pub(super) fn execute_forwarding_post_auth_admission(
     global_inflight: Arc<Semaphore>,
     inflight_acquire_wait: Duration,
 ) -> PostAuthAdmissionExecution {
-    if let Some(rejection) =
-        evaluate_forwarding_post_auth_quota_policy(resilience, pending_forward)
+    if let Some(rejection) = evaluate_forwarding_post_auth_quota_policy(resilience, pending_forward)
     {
         return PostAuthAdmissionExecution::Rejected(rejection);
     }
@@ -528,7 +527,10 @@ fn evaluate_forwarding_post_auth_quota_policy(
     let handle = runtime_handle()?;
 
     let mut effective_headers = pending_forward.headers.as_ref().clone();
-    apply_auth_request_mutations(&mut effective_headers, &pending_forward.auth_header_mutations);
+    apply_auth_request_mutations(
+        &mut effective_headers,
+        &pending_forward.auth_header_mutations,
+    );
     let header_lookup = |name: &str| {
         effective_headers
             .iter()
@@ -540,7 +542,10 @@ fn evaluate_forwarding_post_auth_quota_policy(
         Some(pending_forward.upstream_name.as_ref()),
         pending_forward.method.as_ref(),
         pending_forward.path.as_ref(),
-        pending_forward.authority.as_deref().map(|value| value.as_ref()),
+        pending_forward
+            .authority
+            .as_deref()
+            .map(|value| value.as_ref()),
         None,
         Some(pending_forward.client_addr),
         Some(&header_lookup),
@@ -4133,9 +4138,10 @@ mod tests {
                 .clone()
                 .try_acquire()
                 .expect("held adaptive permit");
-            let pending_forward = test_pending_forward_for_api(vec![
-                quiche::h3::Header::new(b"x-tenant-id", b"tenant-a"),
-            ]);
+            let pending_forward = test_pending_forward_for_api(vec![quiche::h3::Header::new(
+                b"x-tenant-id",
+                b"tenant-a",
+            )]);
 
             let result = execute_post_auth_for_api(
                 &resilience,
@@ -4200,9 +4206,10 @@ mod tests {
                 .clone()
                 .try_acquire()
                 .expect("held adaptive permit");
-            let pending_forward = test_pending_forward_for_api(vec![
-                quiche::h3::Header::new(b"x-tenant-id", b"tenant-a"),
-            ]);
+            let pending_forward = test_pending_forward_for_api(vec![quiche::h3::Header::new(
+                b"x-tenant-id",
+                b"tenant-a",
+            )]);
 
             let result = execute_post_auth_for_api(
                 &resilience,

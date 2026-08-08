@@ -27,21 +27,20 @@ use spooky_config::{
         RuntimeQuotaPolicy as ConfigRuntimeQuotaPolicy,
         RuntimeQuotaPolicySet as ConfigRuntimeQuotaPolicySet,
         RuntimeQuotaSelectorMatcher as ConfigRuntimeQuotaSelectorMatcher,
-        RuntimeQuotaWindow as ConfigRuntimeQuotaWindow,
-        RuntimeRequestKeySpec,
+        RuntimeQuotaWindow as ConfigRuntimeQuotaWindow, RuntimeRequestKeySpec,
     },
 };
 
 use crate::{
-    observability::{QuotaBackendHealthReason, QuotaPolicyDecision, QuotaPolicyReason},
     Metrics,
+    observability::{QuotaBackendHealthReason, QuotaPolicyDecision, QuotaPolicyReason},
 };
 
 mod memory;
 mod redis;
 
-pub use memory::{InMemoryDistributedQuotaCounterStore, IN_MEMORY_QUOTA_PROTOCOL_VERSION};
-pub use redis::{RedisDistributedQuotaCounterStore, REDIS_QUOTA_PROTOCOL_VERSION};
+pub use memory::{IN_MEMORY_QUOTA_PROTOCOL_VERSION, InMemoryDistributedQuotaCounterStore};
+pub use redis::{REDIS_QUOTA_PROTOCOL_VERSION, RedisDistributedQuotaCounterStore};
 
 const LOCAL_FALLBACK_PROTOCOL_VERSION: &str = "degraded-local-fallback/v1";
 const LOCAL_FALLBACK_BACKEND_SEPARATOR: &str = "_local_fallback_";
@@ -163,7 +162,8 @@ pub type QuotaCounterEvalFuture<'a> = Pin<
 /// Implementations should not split this into independent reads and writes, which would admit
 /// request races between burst and sustained counters under concurrent load.
 pub trait DistributedQuotaCounterBackend: Send + Sync {
-    fn evaluate<'a>(&'a self, request: QuotaCounterEvaluationRequest) -> QuotaCounterEvalFuture<'a>;
+    fn evaluate<'a>(&'a self, request: QuotaCounterEvaluationRequest)
+    -> QuotaCounterEvalFuture<'a>;
 }
 
 pub type SharedDistributedQuotaCounterBackend = Arc<dyn DistributedQuotaCounterBackend>;
@@ -254,7 +254,10 @@ impl UnavailableDistributedQuotaCounterStore {
 }
 
 impl DistributedQuotaCounterBackend for UnavailableDistributedQuotaCounterStore {
-    fn evaluate<'a>(&'a self, request: QuotaCounterEvaluationRequest) -> QuotaCounterEvalFuture<'a> {
+    fn evaluate<'a>(
+        &'a self,
+        request: QuotaCounterEvaluationRequest,
+    ) -> QuotaCounterEvalFuture<'a> {
         let mut error = self.error.clone();
         if error.policy_name.is_none() {
             error.policy_name = Some(request.policy_name);
@@ -288,7 +291,10 @@ impl DegradedQuotaCounterBackend {
 }
 
 impl DistributedQuotaCounterBackend for DegradedQuotaCounterBackend {
-    fn evaluate<'a>(&'a self, request: QuotaCounterEvaluationRequest) -> QuotaCounterEvalFuture<'a> {
+    fn evaluate<'a>(
+        &'a self,
+        request: QuotaCounterEvaluationRequest,
+    ) -> QuotaCounterEvalFuture<'a> {
         Box::pin(async move {
             match self.primary.evaluate(request.clone()).await {
                 Ok(outcome) => Ok(outcome),
@@ -307,9 +313,10 @@ impl DistributedQuotaCounterBackend for DegradedQuotaCounterBackend {
                             );
                             Ok(fallback_outcome)
                         }
-                        Err(fallback_error) => {
-                            Err(combine_primary_and_fallback_error(primary_error, fallback_error))
-                        }
+                        Err(fallback_error) => Err(combine_primary_and_fallback_error(
+                            primary_error,
+                            fallback_error,
+                        )),
                     }
                 }
                 Err(primary_error) => Err(primary_error),
@@ -436,10 +443,9 @@ impl QuotaSelectorMatcher {
         let sensitive = quota_dimension_is_sensitive(dimension, spec);
 
         match extracted {
-            RequestKeyExtraction::Found(value) => Ok(Some(stable_observable_identity_value(
-                &value,
-                sensitive,
-            ))),
+            RequestKeyExtraction::Found(value) => {
+                Ok(Some(stable_observable_identity_value(&value, sensitive)))
+            }
             RequestKeyExtraction::Missing => Err(QuotaIdentityRejection {
                 policy_name: policy_name.to_string(),
                 dimension,
@@ -559,7 +565,10 @@ impl QuotaPolicyRuntime {
             route_allowlist: value.route_allowlist.iter().cloned().collect(),
             selector: QuotaSelectorMatcher::from_runtime(&value.selector),
             burst: value.burst.as_ref().map(QuotaWindowPolicy::from_runtime),
-            sustained: value.sustained.as_ref().map(QuotaWindowPolicy::from_runtime),
+            sustained: value
+                .sustained
+                .as_ref()
+                .map(QuotaWindowPolicy::from_runtime),
         }
     }
 
@@ -579,7 +588,10 @@ impl QuotaPolicyRuntime {
         }
     }
 
-    pub fn counter_request(&self, composite_key: QuotaCompositeKey) -> QuotaCounterEvaluationRequest {
+    pub fn counter_request(
+        &self,
+        composite_key: QuotaCompositeKey,
+    ) -> QuotaCounterEvaluationRequest {
         QuotaCounterEvaluationRequest {
             policy_name: self.name.clone(),
             composite_key,
@@ -748,7 +760,9 @@ impl QuotaCounterBackend {
         }
     }
 
-    pub fn in_memory_store(&self) -> Result<Option<Arc<InMemoryDistributedQuotaCounterStore>>, QuotaCounterBackendError> {
+    pub fn in_memory_store(
+        &self,
+    ) -> Result<Option<Arc<InMemoryDistributedQuotaCounterStore>>, QuotaCounterBackendError> {
         match self {
             Self::InMemory { key_prefix } => Ok(Some(Arc::new(
                 InMemoryDistributedQuotaCounterStore::new(key_prefix),
@@ -815,7 +829,9 @@ impl QuotaRuntime {
         Self::from_raw_config(&config.quota)
     }
 
-    pub fn from_rate_limit_policies(rate_limit_policy: &spooky_config::runtime::RuntimeRateLimitPolicy) -> Self {
+    pub fn from_rate_limit_policies(
+        rate_limit_policy: &spooky_config::runtime::RuntimeRateLimitPolicy,
+    ) -> Self {
         Self::from_runtime_policy_set(&rate_limit_policy.quota)
     }
 
@@ -924,7 +940,8 @@ impl QuotaRuntime {
         self.policies
             .iter()
             .map(|policy| {
-                let mut route_allowlist = policy.route_allowlist.iter().cloned().collect::<Vec<_>>();
+                let mut route_allowlist =
+                    policy.route_allowlist.iter().cloned().collect::<Vec<_>>();
                 route_allowlist.sort();
                 QuotaPolicyIntrospectionSnapshot {
                     name: policy.name.clone(),
@@ -947,7 +964,10 @@ impl QuotaRuntime {
                             .as_ref()
                             .map(QuotaSelectorKeySpec::descriptor),
                     },
-                    burst: policy.burst.as_ref().map(QuotaWindowPolicy::introspection_snapshot),
+                    burst: policy
+                        .burst
+                        .as_ref()
+                        .map(QuotaWindowPolicy::introspection_snapshot),
                     sustained: policy
                         .sustained
                         .as_ref()
@@ -1073,10 +1093,7 @@ impl QuotaDenyReason {
     }
 }
 
-fn local_fallback_backend_mode(
-    primary_backend_kind: &str,
-    reason: QuotaDenyReason,
-) -> String {
+fn local_fallback_backend_mode(primary_backend_kind: &str, reason: QuotaDenyReason) -> String {
     format!(
         "{}{}{}",
         primary_backend_kind,
@@ -1359,17 +1376,15 @@ fn quota_rejection_decision(
     }
 }
 
-fn quota_retry_after_seconds(
-    reason: QuotaDenyReason,
-    counter: &QuotaCounterResult,
-) -> Option<u32> {
+fn quota_retry_after_seconds(reason: QuotaDenyReason, counter: &QuotaCounterResult) -> Option<u32> {
     let reset_after = match reason {
         QuotaDenyReason::BurstQuotaExhausted => {
             counter.burst.as_ref().and_then(|window| window.reset_after)
         }
-        QuotaDenyReason::SustainedQuotaExhausted => {
-            counter.sustained.as_ref().and_then(|window| window.reset_after)
-        }
+        QuotaDenyReason::SustainedQuotaExhausted => counter
+            .sustained
+            .as_ref()
+            .and_then(|window| window.reset_after),
         QuotaDenyReason::SelectorIdentityMissing
         | QuotaDenyReason::SelectorIdentityInvalid
         | QuotaDenyReason::BackendTimeout
@@ -1377,9 +1392,9 @@ fn quota_retry_after_seconds(
         | QuotaDenyReason::BackendError => None,
     }?;
 
-    let rounded = reset_after.as_secs().saturating_add(u64::from(
-        reset_after.subsec_nanos() > 0,
-    ));
+    let rounded = reset_after
+        .as_secs()
+        .saturating_add(u64::from(reset_after.subsec_nanos() > 0));
     Some(rounded.max(1).min(u64::from(u32::MAX)) as u32)
 }
 
@@ -1438,7 +1453,9 @@ fn record_quota_backend_observation(
         {
             state.recent_errors.insert(0, snapshot);
             if state.recent_errors.len() > QUOTA_RECENT_BACKEND_ERRORS_LIMIT {
-                state.recent_errors.truncate(QUOTA_RECENT_BACKEND_ERRORS_LIMIT);
+                state
+                    .recent_errors
+                    .truncate(QUOTA_RECENT_BACKEND_ERRORS_LIMIT);
             }
         }
     }
@@ -1504,14 +1521,15 @@ fn observe_quota_policy_outcome(
             QuotaDecision::NotApplied => None,
         })
         .unwrap_or("unmatched");
-    let selector_dimensions = policy
-        .map(|value| value.selector.dimensions())
-        .unwrap_or(QuotaSelectorDimensions {
-            route: false,
-            tenant: false,
-            token: false,
-            client: false,
-        });
+    let selector_dimensions =
+        policy
+            .map(|value| value.selector.dimensions())
+            .unwrap_or(QuotaSelectorDimensions {
+                route: false,
+                tenant: false,
+                token: false,
+                client: false,
+            });
     let selector_dimensions = selector_dimensions.slug();
     let backend_mode = backend_mode.unwrap_or(runtime.backend.backend_kind());
     let decision_kind = quota_policy_decision_kind(decision);
@@ -1697,7 +1715,9 @@ pub(crate) fn extract_runtime_request_key(
         }
         RuntimeRequestKeySpec::BearerToken => extract_bearer_token_value(context.header_lookup),
         RuntimeRequestKeySpec::Header(name) => extract_header_value(name, context.header_lookup),
-        RuntimeRequestKeySpec::Cookie(name) => extract_cookie_key_value(name, context.header_lookup),
+        RuntimeRequestKeySpec::Cookie(name) => {
+            extract_cookie_key_value(name, context.header_lookup)
+        }
         RuntimeRequestKeySpec::Query(name) => extract_query_key_value(context.path, name),
     }
 }
@@ -1950,7 +1970,6 @@ fn append_key_component(output: &mut String, label: &str, value: &str) {
 mod tests {
     use std::{collections::HashMap, net::SocketAddr};
 
-    use super::*;
     use spooky_config::{
         config::{
             DistributedQuotaPolicy, DistributedQuotaSelector, DistributedQuotaSelectorSource,
@@ -1965,6 +1984,8 @@ mod tests {
             RuntimeQuotaSelectorMatcher, RuntimeQuotaWindow, RuntimeRequestKeySpec,
         },
     };
+
+    use super::*;
 
     fn identity_context_with_headers(
         route: Option<&'static str>,
@@ -2114,7 +2135,10 @@ mod tests {
             Some(QuotaSelectorKeySpec::ClientIp)
         );
         assert_eq!(
-            runtime.policies[0].burst.as_ref().map(|window| window.requests),
+            runtime.policies[0]
+                .burst
+                .as_ref()
+                .map(|window| window.requests),
             Some(25)
         );
         assert!(
@@ -2134,7 +2158,10 @@ mod tests {
             .expect("quota runtime should build generic backend");
     }
 
-    fn sample_counter_request(policy_name: &str, composite_key: &str) -> QuotaCounterEvaluationRequest {
+    fn sample_counter_request(
+        policy_name: &str,
+        composite_key: &str,
+    ) -> QuotaCounterEvaluationRequest {
         QuotaCounterEvaluationRequest {
             policy_name: policy_name.to_string(),
             composite_key: QuotaCompositeKey {
@@ -2295,7 +2322,10 @@ mod tests {
             None,
             Some("203.0.113.10:443".parse().expect("client addr")),
             HashMap::from([
-                ("authorization".to_string(), "Bearer secret-token".to_string()),
+                (
+                    "authorization".to_string(),
+                    "Bearer secret-token".to_string(),
+                ),
                 ("x-tenant-id".to_string(), "acme".to_string()),
             ]),
         );
@@ -2356,10 +2386,7 @@ mod tests {
             Some("api.example.com"),
             None,
             None,
-            HashMap::from([(
-                "authorization".to_string(),
-                "Bearer token-1".to_string(),
-            )]),
+            HashMap::from([("authorization".to_string(), "Bearer token-1".to_string())]),
         );
         let err = policy
             .composite_key(&missing_tenant)
@@ -2581,9 +2608,7 @@ mod tests {
         let outcome = QuotaCounterEvaluationOutcome {
             matched_policy: "tenant-quota".to_string(),
             composite_key,
-            decision: QuotaCounterEvaluationDecision::Denied(
-                QuotaDenyReason::BurstQuotaExhausted,
-            ),
+            decision: QuotaCounterEvaluationDecision::Denied(QuotaDenyReason::BurstQuotaExhausted),
             counter: QuotaCounterResult {
                 burst: Some(QuotaWindowUsage {
                     limit: 50,
@@ -2594,8 +2619,7 @@ mod tests {
                     bucket_started_at_unix_ms: Some(1_700_000_000_000),
                     reset_at_unix_ms: Some(1_700_000_001_000),
                     storage_key: Some(
-                        "spooky:quota:qv1:12:tenant-quota:burst:1000:1700000000000:abc"
-                            .to_string(),
+                        "spooky:quota:qv1:12:tenant-quota:burst:1000:1700000000000:abc".to_string(),
                     ),
                 }),
                 sustained: Some(QuotaWindowUsage {
@@ -2629,7 +2653,11 @@ mod tests {
             Some(50)
         );
         assert_eq!(
-            outcome.counter.sustained.as_ref().map(|window| window.remaining),
+            outcome
+                .counter
+                .sustained
+                .as_ref()
+                .map(|window| window.remaining),
             Some(180)
         );
     }

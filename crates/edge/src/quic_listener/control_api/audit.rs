@@ -5,6 +5,7 @@ use serde::Serialize;
 use spooky_config::config::{
     ControlApi as ControlApiConfig, ControlApiAuditFormat, ControlApiAuditSink,
 };
+use spooky_utils::logger::CONTROL_API_AUDIT_LOG_TARGET;
 
 use super::{
     admin_auth::ControlApiRoute,
@@ -13,7 +14,6 @@ use super::{
     *,
 };
 use crate::REQUEST_ID_COUNTER;
-use spooky_utils::logger::CONTROL_API_AUDIT_LOG_TARGET;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(in crate::quic_listener) struct ControlApiAdminAuditEmitter {

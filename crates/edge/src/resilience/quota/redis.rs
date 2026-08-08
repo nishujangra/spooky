@@ -180,7 +180,9 @@ impl RedisDistributedQuotaCounterStore {
     ) -> Result<QuotaCounterEvaluationOutcome, QuotaCounterBackendError> {
         let policy_name = request.policy_name.clone();
         let composite_key = request.composite_key.key.clone();
-        let _permit = self.acquire_inflight_permit(&policy_name, &composite_key).await?;
+        let _permit = self
+            .acquire_inflight_permit(&policy_name, &composite_key)
+            .await?;
         let now_ms = unix_now_ms();
         let windows = build_window_specs(&self.key_prefix, &request, now_ms);
 
@@ -219,20 +221,21 @@ impl RedisDistributedQuotaCounterStore {
             command.arg(window.ttl_ms as i64);
         }
 
-        let response: Vec<String> = timeout(self.command_timeout, command.query_async(&mut connection))
-            .await
-            .map_err(|_| QuotaCounterBackendError {
-                policy_name: Some(policy_name.clone()),
-                composite_key: Some(composite_key.clone()),
-                kind: QuotaCounterBackendErrorKind::Timeout,
-                detail: Some("redis quota evaluation timed out".to_string()),
-            })?
-            .map_err(|error| QuotaCounterBackendError {
-                policy_name: Some(policy_name.clone()),
-                composite_key: Some(composite_key.clone()),
-                kind: classify_redis_error(&error),
-                detail: Some(error.to_string()),
-            })?;
+        let response: Vec<String> =
+            timeout(self.command_timeout, command.query_async(&mut connection))
+                .await
+                .map_err(|_| QuotaCounterBackendError {
+                    policy_name: Some(policy_name.clone()),
+                    composite_key: Some(composite_key.clone()),
+                    kind: QuotaCounterBackendErrorKind::Timeout,
+                    detail: Some("redis quota evaluation timed out".to_string()),
+                })?
+                .map_err(|error| QuotaCounterBackendError {
+                    policy_name: Some(policy_name.clone()),
+                    composite_key: Some(composite_key.clone()),
+                    kind: classify_redis_error(&error),
+                    detail: Some(error.to_string()),
+                })?;
 
         parse_eval_response(request, &response)
     }
@@ -287,7 +290,10 @@ impl RedisDistributedQuotaCounterStore {
 }
 
 impl DistributedQuotaCounterBackend for RedisDistributedQuotaCounterStore {
-    fn evaluate<'a>(&'a self, request: QuotaCounterEvaluationRequest) -> QuotaCounterEvalFuture<'a> {
+    fn evaluate<'a>(
+        &'a self,
+        request: QuotaCounterEvaluationRequest,
+    ) -> QuotaCounterEvalFuture<'a> {
         Box::pin(async move { self.evaluate_request(request).await })
     }
 }
@@ -493,12 +499,14 @@ fn parse_u64_field(
     field: &str,
     request: &QuotaCounterEvaluationRequest,
 ) -> Result<u64, QuotaCounterBackendError> {
-    value.parse::<u64>().map_err(|error| QuotaCounterBackendError {
-        policy_name: Some(request.policy_name.clone()),
-        composite_key: Some(request.composite_key.key.clone()),
-        kind: QuotaCounterBackendErrorKind::Error,
-        detail: Some(format!("invalid redis quota field {field}: {error}")),
-    })
+    value
+        .parse::<u64>()
+        .map_err(|error| QuotaCounterBackendError {
+            policy_name: Some(request.policy_name.clone()),
+            composite_key: Some(request.composite_key.key.clone()),
+            kind: QuotaCounterBackendErrorKind::Error,
+            detail: Some(format!("invalid redis quota field {field}: {error}")),
+        })
 }
 
 fn composite_key_digest(value: &str) -> String {
@@ -592,8 +600,16 @@ mod tests {
 
         assert_eq!(windows.len(), 2);
         assert!(windows[0].storage_key.starts_with("spooky:quota:qv1:"));
-        assert!(windows[0].storage_key.contains(":burst:1000:1700000000000:"));
-        assert!(windows[1].storage_key.contains(":sustained:60000:1699999980000:"));
+        assert!(
+            windows[0]
+                .storage_key
+                .contains(":burst:1000:1700000000000:")
+        );
+        assert!(
+            windows[1]
+                .storage_key
+                .contains(":sustained:60000:1699999980000:")
+        );
         assert_eq!(windows[0].ttl_ms, 1_875);
     }
 
@@ -638,9 +654,16 @@ mod tests {
             outcome.backend_metadata.protocol_version,
             REDIS_QUOTA_PROTOCOL_VERSION
         );
-        assert_eq!(outcome.backend_metadata.evaluated_at_unix_ms, Some(1_700_000_000_125));
         assert_eq!(
-            outcome.counter.burst.as_ref().and_then(|window| window.storage_key.as_deref()),
+            outcome.backend_metadata.evaluated_at_unix_ms,
+            Some(1_700_000_000_125)
+        );
+        assert_eq!(
+            outcome
+                .counter
+                .burst
+                .as_ref()
+                .and_then(|window| window.storage_key.as_deref()),
             Some("spooky:quota:qv1:12:tenant-quota:burst:1000:1700000000000:abc")
         );
         assert_eq!(
@@ -690,7 +713,11 @@ mod tests {
             Some(7)
         );
         assert_eq!(
-            outcome.counter.sustained.as_ref().map(|window| window.consumed),
+            outcome
+                .counter
+                .sustained
+                .as_ref()
+                .map(|window| window.consumed),
             Some(129)
         );
     }

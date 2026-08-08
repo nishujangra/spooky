@@ -1006,8 +1006,7 @@ impl QuotaPolicyConfig {
                 }
                 if *max_inflight == 0 {
                     return Err(
-                        "resilience.quota.backend.max_inflight must be > 0 for kind=redis"
-                            .into(),
+                        "resilience.quota.backend.max_inflight must be > 0 for kind=redis".into(),
                     );
                 }
             }
@@ -1069,14 +1068,10 @@ pub struct QuotaLocalFallbackConfig {
 impl QuotaLocalFallbackConfig {
     fn validate(&self) -> Result<(), String> {
         if self.key_prefix.trim().is_empty() {
-            return Err(
-                "resilience.quota.local_fallback.key_prefix must be non-empty".to_string(),
-            );
+            return Err("resilience.quota.local_fallback.key_prefix must be non-empty".to_string());
         }
         if self.max_entries == 0 {
-            return Err(
-                "resilience.quota.local_fallback.max_entries must be > 0".to_string(),
-            );
+            return Err("resilience.quota.local_fallback.max_entries must be > 0".to_string());
         }
         Ok(())
     }
@@ -1156,14 +1151,16 @@ impl DistributedQuotaPolicy {
         }
 
         if let Some(window) = &self.burst {
-            window.validate(
-                &format!("resilience.quota.policies['{}'].burst", policy_name),
-            )?;
+            window.validate(&format!(
+                "resilience.quota.policies['{}'].burst",
+                policy_name
+            ))?;
         }
         if let Some(window) = &self.sustained {
-            window.validate(
-                &format!("resilience.quota.policies['{}'].sustained", policy_name),
-            )?;
+            window.validate(&format!(
+                "resilience.quota.policies['{}'].sustained",
+                policy_name
+            ))?;
         }
 
         Ok(())
@@ -1757,11 +1754,10 @@ mod tests {
         ControlApiAuditSink, ControlApiAuth, ControlApiAuthorization, ControlApiClientAuthMode,
         ControlApiIpAllowlist, ControlApiRole, ControlApiTls, DistributedQuotaPolicy,
         DistributedQuotaSelector, DistributedQuotaSelectorSource, DistributedQuotaWindow,
-        ExternalAuth, ForwardedHeaderPolicy, JwtAuth, Listen, LoadBalancing, Log,
-        MetricsEndpoint, Performance, PrivilegeDrop, QuotaBackendFailurePolicy,
-        QuotaCounterBackend, QuotaEnforcementMode, QuotaLocalFallbackConfig,
-        QuotaPolicyConfig, Resilience, RouteAuth, RoutingTransparency, Tracing,
-        UpstreamHostPolicy, UpstreamTls, Watchdog,
+        ExternalAuth, ForwardedHeaderPolicy, JwtAuth, Listen, LoadBalancing, Log, MetricsEndpoint,
+        Performance, PrivilegeDrop, QuotaBackendFailurePolicy, QuotaCounterBackend,
+        QuotaEnforcementMode, QuotaLocalFallbackConfig, QuotaPolicyConfig, Resilience, RouteAuth,
+        RoutingTransparency, Tracing, UpstreamHostPolicy, UpstreamTls, Watchdog,
     };
     use crate::config::CURRENT_CONFIG_VERSION;
 
@@ -2077,7 +2073,10 @@ security:
             resilience.watchdog.restart_cooldown_ms,
             Resilience::default().watchdog.restart_cooldown_ms
         );
-        assert_eq!(resilience.quota.enabled, Resilience::default().quota.enabled);
+        assert_eq!(
+            resilience.quota.enabled,
+            Resilience::default().quota.enabled
+        );
         assert_eq!(
             resilience.quota.enforcement,
             Resilience::default().quota.enforcement

@@ -2,8 +2,10 @@ use std::sync::atomic::AtomicUsize;
 
 use super::{state::ControlApiPaths, *};
 use crate::{
-    quic_listener::control_api::security::ControlApiSecurityPolicy,
-    quic_listener::runtime_state::{ControlApiServiceCtx, ControlPlaneRuntimeView},
+    quic_listener::{
+        control_api::security::ControlApiSecurityPolicy,
+        runtime_state::{ControlApiServiceCtx, ControlPlaneRuntimeView},
+    },
     runtime::{
         backend::state::{BackendLifecycleInventorySnapshot, BackendLifecycleInventorySummary},
         bundle::{ActiveRuntimeGeneration, RuntimeBundleHandle},
