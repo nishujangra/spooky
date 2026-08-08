@@ -1,18 +1,21 @@
 # Distributed Quota And Advanced Rate-Limit Policy Contract
 
-This document defines the target contract for first-class distributed quota and
-advanced rate-limit policy in Spooky. It is intentionally a design contract,
-not a statement that the feature already ships today.
+This document defines the contract for first-class distributed quota and
+advanced rate-limit policy in Spooky.
 
-Current shipped behavior remains:
+The runtime now ships:
 
 - scoped per-instance rate limiting
-- admission and overload controls
-- brownout, queueing, and adaptive admission
+- distributed quota policy with route, tenant, token, and client selectors
+- burst and sustained quota contracts
+- Redis-backed distributed counters
+- explicit fail-open or fail-closed backend behavior
+- bounded local fallback when it is configured explicitly
 
-This document locks down the semantics that future implementation work must
-follow so config shape, admission behavior, metrics, and control-plane output do
-not drift while the feature is being built.
+Use [Distributed Quota](../operations/distributed-quota.md) for production
+configuration, rollout guidance, and operator interpretation. This page remains
+the semantic contract that config, admission behavior, metrics, and control API
+output must continue to follow.
 
 ## Goals
 

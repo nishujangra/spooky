@@ -15,6 +15,10 @@ Spooky exposes many counters, gauges, and labeled request families. Operators sh
 
 For the full catalog, see [Metrics Reference](../reference/metrics-reference.md).
 
+Distributed quota-specific interpretation lives in
+[Distributed Quota](distributed-quota.md). Use that page when you need to
+distinguish quota exhaustion, quota backend degradation, and overload shedding.
+
 ## Primary Production Domains
 
 The metrics surface is easiest to understand by domain.

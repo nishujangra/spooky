@@ -22,7 +22,7 @@ Spooky is an open-source HTTP/3 (QUIC) edge reverse proxy written in Rust that t
 |---|---|
 | [Architecture Overview](architecture/overview.md) | Design principles, data-plane topology, sharded ingress model |
 | [Component Breakdown](architecture/components.md) | Per-crate responsibilities, inter-crate boundaries, key types |
-| [Distributed Quota Contract](architecture/quota-policy-contract.md) | Planned contract for quota semantics, selector composition, and distributed counter behavior |
+| [Distributed Quota Contract](architecture/quota-policy-contract.md) | Semantic contract for quota semantics, selector composition, and distributed counter behavior |
 | [Codebase Map](development/codebase-map.md) | Current crate/module map and where major logic lives |
 | [Development Invariants](development/invariants.md) | Core runtime invariants, ownership assumptions, and rules the code depends on |
 | [Public API Surface Inventory](public-api-surface-inventory.md) | Current canonical public surfaces, hidden internals, and remaining intentional exports |
@@ -35,6 +35,7 @@ Spooky is an open-source HTTP/3 (QUIC) edge reverse proxy written in Rust that t
 | [Control API Reference](reference/control-api-reference.md) | Endpoint-by-endpoint control API contract |
 | [Metrics Reference](reference/metrics-reference.md) | Metric names, labels, and exported runtime signals |
 | [Operations Overview](operations/overview.md) | Operator map for deployment, sizing, tuning, and failure handling |
+| [Distributed Quota](operations/distributed-quota.md) | Distributed quota policy examples, Redis setup, degraded-mode guidance, and operator interpretation |
 | [Runbook](operations/runbook.md) | Day-2 operational procedures and troubleshooting flow |
 | [Failure Modes](operations/failure-modes.md) | Expected degraded behaviors and what they mean operationally |
 | [Sizing and Capacity](operations/sizing-and-capacity.md) | Capacity planning and scaling guidance |

@@ -19,6 +19,11 @@ Typical reason:
 
 - policy denied the request path
 
+Quota note:
+
+- this is not the normal distributed quota exhaustion status
+- treat 403 as route or request policy denial, not as quota contract enforcement
+
 ## 405
 
 Typical reason:
@@ -62,11 +67,28 @@ Typical reasons:
 - upstream timeout
 - response-body cap breach
 - temporary backend unavailability
+- distributed quota backend failure under `fail_closed`
 
 Interpretation:
 
 - 503 in Spooky can mean either self-protection or upstream failure insulation
+- distributed quota `fail_closed` also uses 503, but with quota-specific body
+  text and runtime-state evidence
 - always inspect the body text, logs, and overload metrics before assuming one cause
+
+## 429
+
+Typical reasons:
+
+- `burst_quota_exhausted`
+- `sustained_quota_exhausted`
+- selector-derived quota denial
+
+Interpretation:
+
+- 429 is the normal distributed quota contract status
+- treat it as contract enforcement, not overload
+- use quota metrics and runtime snapshot fields before changing overload knobs
 
 ## Silent Drop Behaviors
 

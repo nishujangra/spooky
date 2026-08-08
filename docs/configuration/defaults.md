@@ -242,6 +242,22 @@ These apply when a backend provides a `health_check` object and omits individual
 | `resilience.brownout.recover_inflight_percent` | `60` | Brownout exits with headroom |
 | `resilience.brownout.core_routes` | `[]` | No explicit core-route list by default |
 
+### Distributed Quota
+
+| Field | Default | Notes |
+| --- | --- | --- |
+| `resilience.quota.enabled` | `false` | Distributed quota is off by default |
+| `resilience.quota.enforcement` | `enforce` | Enforced unless explicitly set to `shadow` |
+| `resilience.quota.backend_failure_policy` | `fail_closed` | Backend failures deny by default when quota is enabled |
+| `resilience.quota.backend.kind` | `in_memory` | Local in-memory backend is the default base backend |
+| `resilience.quota.backend.key_prefix` | `"spooky:quota"` | Default counter key prefix |
+| `resilience.quota.backend.connect_timeout_ms` | `250` | Redis only |
+| `resilience.quota.backend.command_timeout_ms` | `100` | Redis only |
+| `resilience.quota.backend.max_inflight` | `1024` | Redis only |
+| `resilience.quota.local_fallback` | `null` | No degraded local fallback unless configured explicitly |
+| `resilience.quota.local_fallback.key_prefix` | `"spooky:quota:fallback"` | Default fallback key prefix when fallback is enabled |
+| `resilience.quota.policies` | `[]` | Quota stays inert until explicit policies are configured |
+
 ### Watchdog
 
 | Field | Default | Notes |
