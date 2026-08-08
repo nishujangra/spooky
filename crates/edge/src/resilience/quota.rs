@@ -23,8 +23,10 @@ use spooky_config::{
     },
 };
 
+mod memory;
 mod redis;
 
+pub use memory::{InMemoryDistributedQuotaCounterStore, IN_MEMORY_QUOTA_PROTOCOL_VERSION};
 pub use redis::{RedisDistributedQuotaCounterStore, REDIS_QUOTA_PROTOCOL_VERSION};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -127,6 +129,8 @@ pub type QuotaCounterEvalFuture<'a> = Pin<
 pub trait DistributedQuotaCounterBackend: Send + Sync {
     fn evaluate<'a>(&'a self, request: QuotaCounterEvaluationRequest) -> QuotaCounterEvalFuture<'a>;
 }
+
+pub type SharedDistributedQuotaCounterBackend = Arc<dyn DistributedQuotaCounterBackend>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuotaIdentityRejection {
@@ -466,6 +470,38 @@ impl QuotaCounterBackend {
             .map(|store| Some(Arc::new(store))),
         }
     }
+
+    pub fn in_memory_store(&self) -> Result<Option<Arc<InMemoryDistributedQuotaCounterStore>>, QuotaCounterBackendError> {
+        match self {
+            Self::InMemory { key_prefix } => Ok(Some(Arc::new(
+                InMemoryDistributedQuotaCounterStore::new(key_prefix),
+            ))),
+            Self::Redis { .. } => Ok(None),
+        }
+    }
+
+    pub fn distributed_store(
+        &self,
+    ) -> Result<SharedDistributedQuotaCounterBackend, QuotaCounterBackendError> {
+        match self {
+            Self::InMemory { key_prefix } => Ok(Arc::new(
+                InMemoryDistributedQuotaCounterStore::new(key_prefix),
+            )),
+            Self::Redis {
+                url,
+                key_prefix,
+                connect_timeout,
+                command_timeout,
+                max_inflight,
+            } => Ok(Arc::new(RedisDistributedQuotaCounterStore::new(
+                url,
+                key_prefix,
+                *connect_timeout,
+                *command_timeout,
+                *max_inflight,
+            )?)),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -546,6 +582,18 @@ impl QuotaRuntime {
         &self,
     ) -> Result<Option<Arc<RedisDistributedQuotaCounterStore>>, QuotaCounterBackendError> {
         self.backend.redis_store()
+    }
+
+    pub fn in_memory_store(
+        &self,
+    ) -> Result<Option<Arc<InMemoryDistributedQuotaCounterStore>>, QuotaCounterBackendError> {
+        self.backend.in_memory_store()
+    }
+
+    pub fn distributed_store(
+        &self,
+    ) -> Result<SharedDistributedQuotaCounterBackend, QuotaCounterBackendError> {
+        self.backend.distributed_store()
     }
 }
 
@@ -1124,6 +1172,21 @@ mod tests {
             runtime.policies[0].burst.as_ref().map(|window| window.requests),
             Some(25)
         );
+        assert!(
+            runtime
+                .in_memory_store()
+                .expect("in-memory quota backend should build")
+                .is_some()
+        );
+        assert!(
+            runtime
+                .redis_store()
+                .expect("in-memory quota backend should not fail redis lookup")
+                .is_none()
+        );
+        let _backend = runtime
+            .distributed_store()
+            .expect("quota runtime should build generic backend");
     }
 
     #[test]
