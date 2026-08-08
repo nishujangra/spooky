@@ -15,6 +15,10 @@ use crate::runtime::{
     },
     bundle::RuntimeGenerationRecord,
 };
+use crate::resilience::quota::{
+    QuotaBackendErrorSnapshot, QuotaBackendStatusSnapshot, QuotaPolicyIntrospectionSnapshot,
+    QuotaSelectorIntrospectionSnapshot, QuotaWindowIntrospectionSnapshot,
+};
 
 /// Map a backend health-failure reason to the canonical control-plane token.
 ///
@@ -59,6 +63,7 @@ struct ControlApiRuntimePayload {
     workers: ControlApiWorkerPayload,
     watchdog: ControlApiRuntimeWatchdogPayload,
     adaptive_admission: ControlApiAdaptiveAdmissionPayload,
+    quota: ControlApiQuotaPayload,
     auth: ControlApiAuthPayload,
     jwks: ControlApiJwksPayload,
     backends: ControlApiBackendInventoryPayload,
@@ -88,6 +93,66 @@ struct ControlApiAdaptiveAdmissionPayload {
     enabled: bool,
     current_limit: usize,
     inflight_percent: u8,
+}
+
+#[derive(Serialize)]
+struct ControlApiQuotaPayload {
+    enabled: bool,
+    enforcement: &'static str,
+    backend_failure_policy: &'static str,
+    active_backend: String,
+    backend_status: ControlApiQuotaBackendStatusPayload,
+    policies: Vec<ControlApiQuotaPolicyPayload>,
+}
+
+#[derive(Serialize)]
+struct ControlApiQuotaBackendStatusPayload {
+    availability: String,
+    degraded: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    health_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_observed_at_unix_ms: Option<u64>,
+    recent_errors: Vec<ControlApiQuotaBackendErrorPayload>,
+}
+
+#[derive(Serialize)]
+struct ControlApiQuotaBackendErrorPayload {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    observed_at_unix_ms: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    policy_name: Option<String>,
+    reason: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ControlApiQuotaPolicyPayload {
+    name: String,
+    route_allowlist: Vec<String>,
+    selector: ControlApiQuotaSelectorPayload,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    burst: Option<ControlApiQuotaWindowPayload>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sustained: Option<ControlApiQuotaWindowPayload>,
+}
+
+#[derive(Serialize)]
+struct ControlApiQuotaSelectorPayload {
+    route: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tenant: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    client: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ControlApiQuotaWindowPayload {
+    requests: u64,
+    window_secs: u64,
 }
 
 #[derive(Serialize)]
@@ -453,6 +518,10 @@ impl ControlApiRuntimePayload {
                 current_limit: resilience.adaptive_admission.current_limit(),
                 inflight_percent: resilience.adaptive_admission.inflight_percent(),
             },
+            quota: ControlApiQuotaPayload::from_runtime(
+                resilience.quota.as_ref(),
+                resilience.quota_backend_initialization_error.as_ref(),
+            ),
             auth: ControlApiAuthPayload {
                 providers: auth_providers,
                 jwt_validation_failures: metrics
@@ -543,6 +612,88 @@ impl ControlApiRuntimePayload {
                     generation: active.generation(),
                     config_path: active.startup().config_path.clone(),
                 }),
+        }
+    }
+}
+
+impl ControlApiQuotaPayload {
+    fn from_runtime(
+        runtime: &crate::resilience::quota::QuotaRuntime,
+        initialization_error: Option<&crate::resilience::quota::QuotaCounterBackendError>,
+    ) -> Self {
+        let backend_status = runtime.backend_status_snapshot(initialization_error);
+        Self {
+            enabled: runtime.enabled,
+            enforcement: runtime.enforcement.slug(),
+            backend_failure_policy: runtime.backend_failure_policy.slug(),
+            active_backend: backend_status.backend_mode.clone(),
+            backend_status: ControlApiQuotaBackendStatusPayload::from_snapshot(backend_status),
+            policies: runtime
+                .policy_snapshots()
+                .into_iter()
+                .map(ControlApiQuotaPolicyPayload::from_snapshot)
+                .collect(),
+        }
+    }
+}
+
+impl ControlApiQuotaBackendStatusPayload {
+    fn from_snapshot(snapshot: QuotaBackendStatusSnapshot) -> Self {
+        Self {
+            availability: snapshot.availability,
+            degraded: snapshot.degraded,
+            health_reason: snapshot.health_reason,
+            last_observed_at_unix_ms: snapshot.last_observed_at_unix_ms,
+            recent_errors: snapshot
+                .recent_errors
+                .into_iter()
+                .map(ControlApiQuotaBackendErrorPayload::from_snapshot)
+                .collect(),
+        }
+    }
+}
+
+impl ControlApiQuotaBackendErrorPayload {
+    fn from_snapshot(snapshot: QuotaBackendErrorSnapshot) -> Self {
+        Self {
+            observed_at_unix_ms: snapshot.observed_at_unix_ms,
+            policy_name: snapshot.policy_name,
+            reason: snapshot.reason,
+            detail: snapshot.detail,
+        }
+    }
+}
+
+impl ControlApiQuotaPolicyPayload {
+    fn from_snapshot(snapshot: QuotaPolicyIntrospectionSnapshot) -> Self {
+        Self {
+            name: snapshot.name,
+            route_allowlist: snapshot.route_allowlist,
+            selector: ControlApiQuotaSelectorPayload::from_snapshot(snapshot.selector),
+            burst: snapshot.burst.map(ControlApiQuotaWindowPayload::from_snapshot),
+            sustained: snapshot
+                .sustained
+                .map(ControlApiQuotaWindowPayload::from_snapshot),
+        }
+    }
+}
+
+impl ControlApiQuotaSelectorPayload {
+    fn from_snapshot(snapshot: QuotaSelectorIntrospectionSnapshot) -> Self {
+        Self {
+            route: snapshot.route,
+            tenant: snapshot.tenant,
+            token: snapshot.token,
+            client: snapshot.client,
+        }
+    }
+}
+
+impl ControlApiQuotaWindowPayload {
+    fn from_snapshot(snapshot: QuotaWindowIntrospectionSnapshot) -> Self {
+        Self {
+            requests: snapshot.requests,
+            window_secs: snapshot.window_secs,
         }
     }
 }

@@ -11,7 +11,7 @@ use crate::resilience::{
     circuit_breaker::CircuitBreakers,
     connect::{connect_authority_port, normalize_connect_authority},
     quota::{
-        QuotaRuntime, SharedDistributedQuotaCounterBackend,
+        QuotaCounterBackendError, QuotaRuntime, SharedDistributedQuotaCounterBackend,
         UnavailableDistributedQuotaCounterStore,
     },
     retry_budget::RetryBudget,
@@ -25,6 +25,7 @@ pub struct RuntimeResilience {
     pub scoped_rate_limits: Arc<ScopedRateLimiters>,
     pub quota: Arc<QuotaRuntime>,
     pub quota_backend: Option<SharedDistributedQuotaCounterBackend>,
+    pub quota_backend_initialization_error: Option<QuotaCounterBackendError>,
     pub circuit_breakers: Arc<CircuitBreakers>,
     pub retry_budget: Arc<RetryBudget>,
     pub brownout: Arc<BrownoutController>,
@@ -66,10 +67,14 @@ impl RuntimeResilience {
         ));
         let scoped_rate_limits = Arc::new(ScopedRateLimiters::new(&config.scoped_rate_limits));
         let quota = Arc::new(QuotaRuntime::from_resilience_config(config));
+        let mut quota_backend_initialization_error = None;
         let quota_backend = quota.enabled.then(|| match quota.distributed_store() {
             Ok(backend) => backend,
-            Err(error) => Arc::new(UnavailableDistributedQuotaCounterStore::new(error))
-                as SharedDistributedQuotaCounterBackend,
+            Err(error) => {
+                quota_backend_initialization_error = Some(error.clone());
+                Arc::new(UnavailableDistributedQuotaCounterStore::new(error))
+                    as SharedDistributedQuotaCounterBackend
+            }
         });
         let cb = &config.circuit_breaker;
         let circuit_breakers = Arc::new(CircuitBreakers::new(
@@ -132,6 +137,7 @@ impl RuntimeResilience {
             scoped_rate_limits,
             quota,
             quota_backend,
+            quota_backend_initialization_error,
             circuit_breakers,
             retry_budget,
             brownout,
@@ -191,10 +197,14 @@ impl RuntimeResilience {
                 .collect::<Vec<_>>(),
         ));
         let quota = Arc::new(QuotaRuntime::from_rate_limit_policies(rate_limit_policy));
+        let mut quota_backend_initialization_error = None;
         let quota_backend = quota.enabled.then(|| match quota.distributed_store() {
             Ok(backend) => backend,
-            Err(error) => Arc::new(UnavailableDistributedQuotaCounterStore::new(error))
-                as SharedDistributedQuotaCounterBackend,
+            Err(error) => {
+                quota_backend_initialization_error = Some(error.clone());
+                Arc::new(UnavailableDistributedQuotaCounterStore::new(error))
+                    as SharedDistributedQuotaCounterBackend
+            }
         });
         let circuit_breakers = Arc::new(CircuitBreakers::new(
             admission_policy.circuit_breaker.enabled,
@@ -263,6 +273,7 @@ impl RuntimeResilience {
             scoped_rate_limits,
             quota,
             quota_backend,
+            quota_backend_initialization_error,
             circuit_breakers,
             retry_budget,
             brownout,
