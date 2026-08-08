@@ -226,6 +226,7 @@ pub enum RejectionReason {
     AuthUnavailable,
     ValidationFailed,
     RateLimited,
+    QuotaDenied,
     Overloaded,
     RequestBodyNotAllowed,
     RequestBodyTooLarge,

@@ -530,7 +530,7 @@ impl From<RejectionReason> for RequestOutcomeReason {
             RejectionReason::ValidationFailed
             | RejectionReason::RequestBodyNotAllowed
             | RejectionReason::RequestBodyTooLarge => Self::ValidationRejected,
-            RejectionReason::RateLimited => Self::RateLimited,
+            RejectionReason::RateLimited | RejectionReason::QuotaDenied => Self::RateLimited,
             RejectionReason::Overloaded | RejectionReason::ResponsePrebufferCap => Self::Overloaded,
         }
     }
@@ -642,7 +642,7 @@ impl From<crate::runtime::connection::outcome::AdmissionOutcomeClass> for Admiss
         use crate::runtime::connection::outcome::AdmissionOutcomeClass as A;
         match outcome {
             A::AuthDenied => Self::AuthDenied,
-            A::RateLimited => Self::RateLimited,
+            A::RateLimited | A::QuotaDenied => Self::RateLimited,
             A::OverloadShed { .. } => Self::Overloaded,
             A::Failed { .. } => Self::PolicyRejected,
         }
@@ -939,6 +939,10 @@ mod tests {
                 RequestOutcomeReason::ValidationRejected
             );
             assert_eq!(
+                RequestOutcomeReason::from(RejectionReason::QuotaDenied),
+                RequestOutcomeReason::RateLimited
+            );
+            assert_eq!(
                 RequestOutcomeReason::from(RejectionReason::ResponsePrebufferCap),
                 RequestOutcomeReason::Overloaded
             );
@@ -1029,6 +1033,10 @@ mod tests {
                 AdmissionDecisionReason::RateLimited
             );
             assert_eq!(
+                AdmissionDecisionReason::from(AdmissionOutcomeClass::QuotaDenied),
+                AdmissionDecisionReason::RateLimited
+            );
+            assert_eq!(
                 AdmissionDecisionReason::from(AdmissionOutcomeClass::OverloadShed {
                     reason: Some(OverloadShedReason::GlobalInflight)
                 }),
@@ -1075,6 +1083,9 @@ mod tests {
             );
             assert_reason_surface_alignment(
                 AdmissionDecisionReason::from(AdmissionOutcomeClass::RateLimited).slug(),
+            );
+            assert_reason_surface_alignment(
+                AdmissionDecisionReason::from(AdmissionOutcomeClass::QuotaDenied).slug(),
             );
             assert_reason_surface_alignment(
                 AdmissionDecisionReason::from(AdmissionOutcomeClass::OverloadShed {

@@ -112,6 +112,7 @@ pub(crate) enum RejectionClass {
     AuthDenied,
     AuthUnavailable,
     RateLimited,
+    QuotaDenied,
     OverloadShed,
     ValidationPolicy,
 }
@@ -159,6 +160,7 @@ pub(crate) struct RequestOutcomeObservation<'a> {
 pub(crate) enum AdmissionOutcomeClass {
     AuthDenied,
     RateLimited,
+    QuotaDenied,
     OverloadShed { reason: Option<OverloadShedReason> },
     Failed { timed_out: bool },
 }
@@ -295,6 +297,11 @@ pub(crate) fn classify_admission_outcome(
             CanonicalRouteOutcome::RateLimited,
             None,
             Some(RejectionClass::RateLimited),
+        ),
+        AdmissionOutcomeClass::QuotaDenied => (
+            CanonicalRouteOutcome::RateLimited,
+            None,
+            Some(RejectionClass::QuotaDenied),
         ),
         AdmissionOutcomeClass::OverloadShed { reason } => (
             CanonicalRouteOutcome::OverloadShed,
@@ -495,7 +502,9 @@ fn infer_terminal_status(state: &TerminalState) -> Option<StatusCode> {
                 RejectionReason::ValidationFailed | RejectionReason::RequestBodyNotAllowed => {
                     StatusCode::BAD_REQUEST
                 }
-                RejectionReason::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+                RejectionReason::RateLimited | RejectionReason::QuotaDenied => {
+                    StatusCode::TOO_MANY_REQUESTS
+                }
                 RejectionReason::Overloaded | RejectionReason::ResponsePrebufferCap => {
                     StatusCode::SERVICE_UNAVAILABLE
                 }
@@ -548,6 +557,9 @@ pub(crate) fn classify_terminal_outcome(state: &TerminalState) -> RequestOutcome
             }
             RejectionReason::RateLimited => {
                 classify_admission_outcome(AdmissionOutcomeClass::RateLimited)
+            }
+            RejectionReason::QuotaDenied => {
+                classify_admission_outcome(AdmissionOutcomeClass::QuotaDenied)
             }
             RejectionReason::Overloaded | RejectionReason::ResponsePrebufferCap => {
                 classify_admission_outcome(AdmissionOutcomeClass::OverloadShed {

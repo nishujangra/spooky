@@ -45,11 +45,17 @@ use crate::{
     resilience::{
         adaptive_admission::AdaptivePermit,
         brownout::BrownoutController,
+        quota::{
+            QuotaDecision, QuotaDenyReason, QuotaIdentityContext, evaluate_admission_quota,
+        },
         route_queue::{RouteQueuePermit, RouteQueueRejection},
         runtime::RuntimeResilience,
         scoped_rate_limit::{ScopedRateLimitRule, ScopedRateLimiters},
     },
-    runtime::tasks::RuntimeTaskRegistry,
+    runtime::{
+        connection::{auth::apply_auth_request_mutations, request::PendingForward},
+        tasks::RuntimeTaskRegistry,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -107,6 +113,15 @@ pub(super) struct RateLimitedDecision {
     pub(super) retry_after_seconds: u32,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct QuotaRejectedDecision {
+    pub(super) policy_name: String,
+    pub(super) reason: QuotaDenyReason,
+    pub(super) status: StatusCode,
+    pub(super) body: &'static [u8],
+    pub(super) retry_after_seconds: Option<u32>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum OverloadDecisionReason {
     Brownout,
@@ -155,6 +170,7 @@ pub(super) struct PostAuthAdmissionReady {
 
 #[derive(Debug, Clone)]
 pub(super) enum PostAuthAdmissionRejection {
+    Quota(QuotaRejectedDecision),
     Overloaded(OverloadDecision),
     Failed(PostAuthAdmissionFailure),
 }
@@ -306,17 +322,68 @@ pub(super) fn admission_rejection_response(
     }
 }
 
+impl QuotaRejectedDecision {
+    fn from_quota_decision(decision: QuotaDecision) -> Option<Self> {
+        match decision {
+            QuotaDecision::Denied(denial) | QuotaDecision::ShadowDenied(denial) => Some(Self {
+                policy_name: denial.policy_name,
+                reason: denial.reason,
+                status: StatusCode::TOO_MANY_REQUESTS,
+                body: quota_response_body(denial.reason),
+                retry_after_seconds: denial.retry_after_seconds.map(|value| value.max(1)),
+            }),
+            QuotaDecision::FailedClosed(failure) => Some(Self {
+                policy_name: failure.policy_name.unwrap_or_else(|| "unknown".to_string()),
+                reason: failure.reason,
+                status: StatusCode::SERVICE_UNAVAILABLE,
+                body: quota_response_body(failure.reason),
+                retry_after_seconds: None,
+            }),
+            QuotaDecision::NotApplied
+            | QuotaDecision::Allowed(_)
+            | QuotaDecision::FailedOpen(_) => None,
+        }
+    }
+
+    pub(super) fn as_response(&self) -> AdmissionRejectionResponse {
+        AdmissionRejectionResponse {
+            status: self.status,
+            body: self.body,
+            www_authenticate: None,
+            retry_after_seconds: self.retry_after_seconds,
+        }
+    }
+}
+
+fn quota_response_body(reason: QuotaDenyReason) -> &'static [u8] {
+    match reason {
+        QuotaDenyReason::BurstQuotaExhausted => b"burst quota exhausted\n",
+        QuotaDenyReason::SustainedQuotaExhausted => b"sustained quota exhausted\n",
+        QuotaDenyReason::SelectorIdentityMissing => b"quota selector identity missing\n",
+        QuotaDenyReason::SelectorIdentityInvalid => b"quota selector identity invalid\n",
+        QuotaDenyReason::BackendTimeout => b"quota backend timed out\n",
+        QuotaDenyReason::BackendUnavailable => b"quota backend unavailable\n",
+        QuotaDenyReason::BackendError => b"quota backend error\n",
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn execute_forwarding_post_auth_admission(
     resilience: &RuntimeResilience,
-    upstream_name: &str,
+    pending_forward: &PendingForward,
     upstream_pool: Option<&Arc<RwLock<UpstreamPool>>>,
     backend_index: Option<usize>,
-    pending_forward_backend_index: usize,
     upstream_inflight: &HashMap<String, Arc<Semaphore>>,
     global_inflight: Arc<Semaphore>,
     inflight_acquire_wait: Duration,
 ) -> PostAuthAdmissionExecution {
+    if let Some(rejection) =
+        evaluate_forwarding_post_auth_quota_policy(resilience, pending_forward)
+    {
+        return PostAuthAdmissionExecution::Rejected(rejection);
+    }
+
+    let upstream_name = pending_forward.upstream_name.as_ref();
     let adaptive_permit = match resilience.adaptive_admission.try_acquire() {
         Some(permit) => permit,
         None => {
@@ -379,7 +446,7 @@ pub(super) fn execute_forwarding_post_auth_admission(
             }
         };
 
-    let backend_index = backend_index.unwrap_or(pending_forward_backend_index);
+    let backend_index = backend_index.unwrap_or(pending_forward.backend_index);
     let Some(upstream_pool) = upstream_pool.cloned() else {
         return PostAuthAdmissionExecution::Rejected(PostAuthAdmissionRejection::Failed(
             PostAuthAdmissionFailure {
@@ -418,6 +485,51 @@ pub(super) fn execute_forwarding_post_auth_admission(
         waited_for_global_permit,
         waited_for_upstream_permit,
     })
+}
+
+fn evaluate_forwarding_post_auth_quota_policy(
+    resilience: &RuntimeResilience,
+    pending_forward: &PendingForward,
+) -> Option<PostAuthAdmissionRejection> {
+    let backend = resilience.quota_backend.as_ref()?;
+    let handle = runtime_handle()?;
+
+    let mut effective_headers = pending_forward.headers.as_ref().clone();
+    apply_auth_request_mutations(&mut effective_headers, &pending_forward.auth_header_mutations);
+    let header_lookup = |name: &str| {
+        effective_headers
+            .iter()
+            .find(|header| header.name().eq_ignore_ascii_case(name.as_bytes()))
+            .and_then(|header| std::str::from_utf8(header.value()).ok())
+            .map(str::to_string)
+    };
+    let quota_context = QuotaIdentityContext::new(
+        Some(pending_forward.upstream_name.as_ref()),
+        pending_forward.method.as_ref(),
+        pending_forward.path.as_ref(),
+        pending_forward.authority.as_deref().map(|value| value.as_ref()),
+        None,
+        Some(pending_forward.client_addr),
+        Some(&header_lookup),
+    );
+
+    match handle.block_on(async {
+        evaluate_admission_quota(resilience.quota.as_ref(), backend.as_ref(), &quota_context).await
+    }) {
+        QuotaDecision::NotApplied | QuotaDecision::Allowed(_) | QuotaDecision::FailedOpen(_) => {
+            None
+        }
+        QuotaDecision::ShadowDenied(denial) => {
+            log::debug!(
+                "quota shadow deny observed: policy={} reason={}",
+                denial.policy_name,
+                denial.reason.slug()
+            );
+            None
+        }
+        denied => QuotaRejectedDecision::from_quota_decision(denied)
+            .map(PostAuthAdmissionRejection::Quota),
+    }
 }
 
 pub(super) fn try_acquire_owned_with_micro_wait(
@@ -3036,8 +3148,10 @@ mod tests {
     use http_body_util::Full;
     use spooky_config::{
         config::{
-            Backend, Config, ForwardedHeaderPolicy, HealthCheck, JwksStartupBehavior, JwtAlgorithm,
-            JwtAuth, Listen, LoadBalancing, Resilience, RouteAuth, RouteMatch, ScopedRateLimit,
+            Backend, Config, DistributedQuotaPolicy, DistributedQuotaSelector,
+            DistributedQuotaSelectorSource, DistributedQuotaWindow, ForwardedHeaderPolicy,
+            HealthCheck, JwksStartupBehavior, JwtAlgorithm, JwtAuth, Listen, LoadBalancing,
+            QuotaCounterBackend, Resilience, RouteAuth, RouteMatch, ScopedRateLimit,
             ScopedRateLimitScope, Tls, Upstream, UpstreamHostPolicy,
         },
         runtime::{RuntimeApiKeyAuth, RuntimeAuthPolicy, RuntimeConfig, RuntimeJwtAuth},
@@ -3546,8 +3660,13 @@ mod tests {
     mod post_auth_admission_execution {
         use super::*;
 
+        fn test_pending_forward_for_api(headers: Vec<quiche::h3::Header>) -> PendingForward {
+            PendingForward::sample_for_test(headers)
+        }
+
         fn execute_post_auth_for_api(
             resilience: &RuntimeResilience,
+            pending_forward: &PendingForward,
             upstream_pool: Option<&Arc<RwLock<UpstreamPool>>>,
             backend_index: Option<usize>,
             upstream_inflight: &HashMap<String, Arc<Semaphore>>,
@@ -3555,10 +3674,9 @@ mod tests {
         ) -> PostAuthAdmissionExecution {
             execute_forwarding_post_auth_admission(
                 resilience,
-                "api",
+                pending_forward,
                 upstream_pool,
                 backend_index,
-                0,
                 upstream_inflight,
                 global_inflight,
                 Duration::ZERO,
@@ -3580,9 +3698,11 @@ mod tests {
                 .clone()
                 .try_acquire()
                 .expect("held permit");
+            let pending_forward = test_pending_forward_for_api(vec![]);
 
             let result = execute_post_auth_for_api(
                 &resilience,
+                &pending_forward,
                 Some(&test_upstream_pool()),
                 Some(0),
                 &test_upstream_inflight(),
@@ -3615,8 +3735,10 @@ mod tests {
                 .clone()
                 .try_acquire("api")
                 .expect("route permit");
+            let pending_forward = test_pending_forward_for_api(vec![]);
             let route_result = execute_post_auth_for_api(
                 &route_cap,
+                &pending_forward,
                 Some(&test_upstream_pool()),
                 Some(0),
                 &test_upstream_inflight(),
@@ -3646,6 +3768,7 @@ mod tests {
                 .expect("global route permit");
             let global_result = execute_post_auth_for_api(
                 &global_cap,
+                &pending_forward,
                 Some(&test_upstream_pool()),
                 Some(0),
                 &test_upstream_inflight(),
@@ -3670,8 +3793,10 @@ mod tests {
                 .clone()
                 .try_acquire_owned()
                 .expect("global permit");
+            let pending_forward = test_pending_forward_for_api(vec![]);
             let global_result = execute_post_auth_for_api(
                 &resilience,
+                &pending_forward,
                 Some(&test_upstream_pool()),
                 Some(0),
                 &test_upstream_inflight(),
@@ -3697,6 +3822,7 @@ mod tests {
                 .expect("upstream permit");
             let upstream_result = execute_post_auth_for_api(
                 &resilience,
+                &pending_forward,
                 Some(&test_upstream_pool()),
                 Some(0),
                 &upstream_inflight,
@@ -3716,9 +3842,11 @@ mod tests {
         #[test]
         fn missing_upstream_limiter_preserves_overload_reason_in_failure_mapping() {
             let resilience = test_runtime_resilience(|_| {}, 8);
+            let pending_forward = test_pending_forward_for_api(vec![]);
 
             let result = execute_post_auth_for_api(
                 &resilience,
+                &pending_forward,
                 Some(&test_upstream_pool()),
                 Some(0),
                 &HashMap::new(),
@@ -3743,6 +3871,7 @@ mod tests {
         fn post_auth_admission_ready_result_reports_no_wait_when_permits_are_immediate() {
             let resilience = test_runtime_resilience(|_| {}, 8);
             let pool = test_upstream_pool();
+            let pending_forward = test_pending_forward_for_api(vec![]);
 
             let (permit, waited) =
                 try_acquire_owned_with_micro_wait(Arc::new(Semaphore::new(1)), Duration::ZERO)
@@ -3752,6 +3881,7 @@ mod tests {
 
             let result = execute_post_auth_for_api(
                 &resilience,
+                &pending_forward,
                 Some(&pool),
                 Some(0),
                 &test_upstream_inflight(),
@@ -3768,6 +3898,86 @@ mod tests {
                     panic!("expected successful admission without waits")
                 }
             }
+        }
+
+        #[test]
+        fn post_auth_admission_enforces_quota_before_overload_with_composite_identity() {
+            let resilience = test_runtime_resilience(
+                |config| {
+                    config.adaptive_admission.enabled = true;
+                    config.adaptive_admission.min_limit = 1;
+                    config.adaptive_admission.max_limit = Some(1);
+                    config.quota.enabled = true;
+                    config.quota.backend = QuotaCounterBackend::InMemory {
+                        key_prefix: "spooky:test:quota".to_string(),
+                    };
+                    config.quota.policies = vec![DistributedQuotaPolicy {
+                        name: "tenant-token-client-burst".to_string(),
+                        route_allowlist: vec!["api".to_string()],
+                        selector: DistributedQuotaSelector {
+                            route: true,
+                            tenant: Some(DistributedQuotaSelectorSource {
+                                key: "header:x-tenant-id".to_string(),
+                            }),
+                            token: Some(DistributedQuotaSelectorSource {
+                                key: "bearer_token".to_string(),
+                            }),
+                            client: Some(DistributedQuotaSelectorSource {
+                                key: "client_ip".to_string(),
+                            }),
+                        },
+                        burst: Some(DistributedQuotaWindow {
+                            requests: 1,
+                            window_secs: 1,
+                        }),
+                        sustained: None,
+                    }];
+                },
+                8,
+            );
+            let pending_forward = test_pending_forward_for_api(vec![
+                quiche::h3::Header::new(b"authorization", b"Bearer token-123"),
+                quiche::h3::Header::new(b"x-tenant-id", b"tenant-a"),
+            ]);
+
+            let first = execute_post_auth_for_api(
+                &resilience,
+                &pending_forward,
+                Some(&test_upstream_pool()),
+                Some(0),
+                &HashMap::from([(String::from("api"), Arc::new(Semaphore::new(2)))]),
+                Arc::new(Semaphore::new(2)),
+            );
+            assert!(matches!(first, PostAuthAdmissionExecution::Ready(_)));
+            drop(first);
+
+            let _adaptive_held = resilience
+                .adaptive_admission
+                .clone()
+                .try_acquire()
+                .expect("held adaptive permit");
+
+            let second = execute_post_auth_for_api(
+                &resilience,
+                &pending_forward,
+                Some(&test_upstream_pool()),
+                Some(0),
+                &HashMap::from([(String::from("api"), Arc::new(Semaphore::new(2)))]),
+                Arc::new(Semaphore::new(2)),
+            );
+
+            assert!(matches!(
+                second,
+                PostAuthAdmissionExecution::Rejected(PostAuthAdmissionRejection::Quota(
+                    QuotaRejectedDecision {
+                        policy_name,
+                        reason: QuotaDenyReason::BurstQuotaExhausted,
+                        status: StatusCode::TOO_MANY_REQUESTS,
+                        body: b"burst quota exhausted\n",
+                        retry_after_seconds: Some(1),
+                    }
+                )) if policy_name == "tenant-token-client-burst"
+            ));
         }
     }
 
