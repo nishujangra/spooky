@@ -539,23 +539,25 @@ mod tests {
 
     #[test]
     fn quota_policy_normalization_shapes_runtime_selector_backend_and_windows() {
-        let mut resilience = Resilience::default();
-        resilience.quota = QuotaPolicyConfig {
-            enabled: true,
-            enforcement: QuotaEnforcementMode::Shadow,
-            backend_failure_policy: QuotaBackendFailurePolicy::FailOpen,
-            backend: QuotaCounterBackend::Redis {
-                url: " redis://127.0.0.1:6379/0 ".to_string(),
-                key_prefix: " spooky:quota ".to_string(),
-                connect_timeout_ms: 250,
-                command_timeout_ms: 100,
-                max_inflight: 128,
+        let resilience = Resilience {
+            quota: QuotaPolicyConfig {
+                enabled: true,
+                enforcement: QuotaEnforcementMode::Shadow,
+                backend_failure_policy: QuotaBackendFailurePolicy::FailOpen,
+                backend: QuotaCounterBackend::Redis {
+                    url: " redis://127.0.0.1:6379/0 ".to_string(),
+                    key_prefix: " spooky:quota ".to_string(),
+                    connect_timeout_ms: 250,
+                    command_timeout_ms: 100,
+                    max_inflight: 128,
+                },
+                local_fallback: Some(QuotaLocalFallbackConfig {
+                    key_prefix: " spooky:quota:fallback ".to_string(),
+                    max_entries: 256,
+                }),
+                policies: vec![valid_quota_policy()],
             },
-            local_fallback: Some(QuotaLocalFallbackConfig {
-                key_prefix: " spooky:quota:fallback ".to_string(),
-                max_entries: 256,
-            }),
-            policies: vec![valid_quota_policy()],
+            ..Resilience::default()
         };
 
         let runtime = RuntimeQuotaPolicySet::normalize(&resilience).expect("quota policy");
@@ -687,18 +689,20 @@ mod tests {
 
     #[test]
     fn quota_policy_normalization_rejects_conflicting_backend_settings() {
-        let mut resilience = Resilience::default();
-        resilience.quota = QuotaPolicyConfig {
-            enabled: true,
-            backend: QuotaCounterBackend::Redis {
-                url: "redis://127.0.0.1:6379/0".to_string(),
-                key_prefix: "spooky:quota".to_string(),
-                connect_timeout_ms: 250,
-                command_timeout_ms: 0,
-                max_inflight: 128,
+        let resilience = Resilience {
+            quota: QuotaPolicyConfig {
+                enabled: true,
+                backend: QuotaCounterBackend::Redis {
+                    url: "redis://127.0.0.1:6379/0".to_string(),
+                    key_prefix: "spooky:quota".to_string(),
+                    connect_timeout_ms: 250,
+                    command_timeout_ms: 0,
+                    max_inflight: 128,
+                },
+                policies: vec![valid_quota_policy()],
+                ..QuotaPolicyConfig::default()
             },
-            policies: vec![valid_quota_policy()],
-            ..QuotaPolicyConfig::default()
+            ..Resilience::default()
         };
 
         let err = RuntimeQuotaPolicySet::normalize(&resilience)
@@ -711,15 +715,17 @@ mod tests {
 
     #[test]
     fn quota_policy_normalization_rejects_invalid_local_fallback_settings() {
-        let mut resilience = Resilience::default();
-        resilience.quota = QuotaPolicyConfig {
-            enabled: true,
-            local_fallback: Some(QuotaLocalFallbackConfig {
-                key_prefix: "spooky:quota:fallback".to_string(),
-                max_entries: 128,
-            }),
-            policies: vec![valid_quota_policy()],
-            ..QuotaPolicyConfig::default()
+        let mut resilience = Resilience {
+            quota: QuotaPolicyConfig {
+                enabled: true,
+                local_fallback: Some(QuotaLocalFallbackConfig {
+                    key_prefix: "spooky:quota:fallback".to_string(),
+                    max_entries: 128,
+                }),
+                policies: vec![valid_quota_policy()],
+                ..QuotaPolicyConfig::default()
+            },
+            ..Resilience::default()
         };
 
         let err = RuntimeQuotaPolicySet::normalize(&resilience)

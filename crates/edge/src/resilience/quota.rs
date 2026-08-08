@@ -2092,32 +2092,34 @@ mod tests {
 
     #[test]
     fn runtime_quota_converts_from_raw_resilience_config() {
-        let mut resilience = Resilience::default();
-        resilience.quota = RawQuotaPolicyConfig {
-            enabled: true,
-            enforcement: RawQuotaEnforcementMode::Enforce,
-            backend_failure_policy: RawQuotaBackendFailurePolicy::FailClosed,
-            backend: RawQuotaCounterBackend::InMemory {
-                key_prefix: "spooky:quota".to_string(),
-            },
-            local_fallback: None,
-            policies: vec![DistributedQuotaPolicy {
-                name: "client-quota".to_string(),
-                route_allowlist: vec![" public ".to_string()],
-                selector: DistributedQuotaSelector {
-                    route: false,
-                    tenant: None,
-                    token: None,
-                    client: Some(DistributedQuotaSelectorSource {
-                        key: "client_ip".to_string(),
-                    }),
+        let resilience = Resilience {
+            quota: RawQuotaPolicyConfig {
+                enabled: true,
+                enforcement: RawQuotaEnforcementMode::Enforce,
+                backend_failure_policy: RawQuotaBackendFailurePolicy::FailClosed,
+                backend: RawQuotaCounterBackend::InMemory {
+                    key_prefix: "spooky:quota".to_string(),
                 },
-                burst: Some(DistributedQuotaWindow {
-                    requests: 25,
-                    window_secs: 1,
-                }),
-                sustained: None,
-            }],
+                local_fallback: None,
+                policies: vec![DistributedQuotaPolicy {
+                    name: "client-quota".to_string(),
+                    route_allowlist: vec![" public ".to_string()],
+                    selector: DistributedQuotaSelector {
+                        route: false,
+                        tenant: None,
+                        token: None,
+                        client: Some(DistributedQuotaSelectorSource {
+                            key: "client_ip".to_string(),
+                        }),
+                    },
+                    burst: Some(DistributedQuotaWindow {
+                        requests: 25,
+                        window_secs: 1,
+                    }),
+                    sustained: None,
+                }],
+            },
+            ..Resilience::default()
         };
 
         let runtime = QuotaRuntime::from_resilience_config(&resilience);
