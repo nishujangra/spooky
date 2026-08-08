@@ -1,5 +1,13 @@
-use std::{collections::HashSet, future::Future, net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
+use std::{
+    collections::HashSet,
+    future::Future,
+    net::SocketAddr,
+    pin::Pin,
+    sync::{Arc, OnceLock, RwLock, Weak},
+    time::Duration,
+};
 
+use log::{debug, warn};
 use sha2::{Digest, Sha256};
 use spooky_config::{
     config::{
@@ -21,6 +29,11 @@ use spooky_config::{
         RuntimeQuotaWindow as ConfigRuntimeQuotaWindow,
         RuntimeRequestKeySpec,
     },
+};
+
+use crate::{
+    observability::{QuotaBackendHealthReason, QuotaPolicyDecision, QuotaPolicyReason},
+    Metrics,
 };
 
 mod memory;
@@ -132,6 +145,8 @@ pub trait DistributedQuotaCounterBackend: Send + Sync {
 }
 
 pub type SharedDistributedQuotaCounterBackend = Arc<dyn DistributedQuotaCounterBackend>;
+
+static QUOTA_METRICS_SINK: OnceLock<RwLock<Weak<Metrics>>> = OnceLock::new();
 
 #[derive(Debug, Clone)]
 pub struct UnavailableDistributedQuotaCounterStore {
@@ -301,6 +316,29 @@ pub struct QuotaSelectorDimensions {
     pub client: bool,
 }
 
+impl QuotaSelectorDimensions {
+    pub fn slug(self) -> String {
+        let mut parts = Vec::with_capacity(4);
+        if self.route {
+            parts.push("route");
+        }
+        if self.tenant {
+            parts.push("tenant");
+        }
+        if self.token {
+            parts.push("token");
+        }
+        if self.client {
+            parts.push("client");
+        }
+        if parts.is_empty() {
+            "none".to_string()
+        } else {
+            parts.join("+")
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuotaWindowPolicy {
     pub requests: u64,
@@ -440,6 +478,13 @@ pub enum QuotaCounterBackend {
 }
 
 impl QuotaCounterBackend {
+    pub fn backend_kind(&self) -> &'static str {
+        match self {
+            Self::InMemory { .. } => "in_memory",
+            Self::Redis { .. } => "redis",
+        }
+    }
+
     fn from_runtime(value: &ConfigRuntimeQuotaCounterBackend) -> Self {
         match value {
             ConfigRuntimeQuotaCounterBackend::InMemory { key_prefix } => Self::InMemory {
@@ -547,6 +592,12 @@ pub struct QuotaRuntime {
 }
 
 impl QuotaRuntime {
+    pub fn register_metrics(metrics: &Arc<Metrics>) {
+        if let Ok(mut sink) = quota_metrics_sink().write() {
+            *sink = Arc::downgrade(metrics);
+        }
+    }
+
     pub fn disabled() -> Self {
         Self {
             enabled: false,
@@ -832,7 +883,7 @@ pub async fn evaluate_admission_quota(
     let composite_key = match policy.composite_key(context) {
         Ok(key) => key,
         Err(rejection) => {
-            return quota_rejection_decision(
+            let decision = quota_rejection_decision(
                 runtime.enforcement,
                 QuotaDenial {
                     policy_name: rejection.policy_name,
@@ -841,16 +892,33 @@ pub async fn evaluate_admission_quota(
                     counter: None,
                 },
             );
+            observe_quota_policy_outcome(
+                runtime,
+                Some(policy),
+                context,
+                &decision,
+                false,
+                None,
+            );
+            return decision;
         }
     };
 
-    match backend.evaluate(policy.counter_request(composite_key)).await {
+    let backend_mode = runtime.backend.backend_kind();
+    let (decision, backend_observed, backend_mode) = match backend
+        .evaluate(policy.counter_request(composite_key))
+        .await
+    {
         Ok(outcome) => match outcome.decision {
-            QuotaCounterEvaluationDecision::Allowed => QuotaDecision::Allowed(QuotaAllowance {
-                policy_name: outcome.matched_policy,
-                counter: Some(outcome.counter),
-            }),
-            QuotaCounterEvaluationDecision::Denied(reason) => {
+            QuotaCounterEvaluationDecision::Allowed => (
+                QuotaDecision::Allowed(QuotaAllowance {
+                    policy_name: outcome.matched_policy,
+                    counter: Some(outcome.counter),
+                }),
+                true,
+                outcome.backend_metadata.backend_kind,
+            ),
+            QuotaCounterEvaluationDecision::Denied(reason) => (
                 quota_rejection_decision(
                     runtime.enforcement,
                     QuotaDenial {
@@ -859,22 +927,40 @@ pub async fn evaluate_admission_quota(
                         retry_after_seconds: quota_retry_after_seconds(reason, &outcome.counter),
                         counter: Some(outcome.counter),
                     },
-                )
-            }
+                ),
+                true,
+                outcome.backend_metadata.backend_kind,
+            ),
         },
-        Err(error) => match runtime.backend_failure_policy {
-            QuotaBackendFailurePolicy::FailOpen => QuotaDecision::FailedOpen(QuotaBackendFailure {
-                policy_name: error.policy_name.or_else(|| Some(policy.name.clone())),
-                reason: error.deny_reason(),
-            }),
-            QuotaBackendFailurePolicy::FailClosed => {
-                QuotaDecision::FailedClosed(QuotaBackendFailure {
-                    policy_name: error.policy_name.or_else(|| Some(policy.name.clone())),
-                    reason: error.deny_reason(),
-                })
-            }
-        },
-    }
+        Err(error) => (
+            match runtime.backend_failure_policy {
+                QuotaBackendFailurePolicy::FailOpen => {
+                    QuotaDecision::FailedOpen(QuotaBackendFailure {
+                        policy_name: error.policy_name.or_else(|| Some(policy.name.clone())),
+                        reason: error.deny_reason(),
+                    })
+                }
+                QuotaBackendFailurePolicy::FailClosed => {
+                    QuotaDecision::FailedClosed(QuotaBackendFailure {
+                        policy_name: error.policy_name.or_else(|| Some(policy.name.clone())),
+                        reason: error.deny_reason(),
+                    })
+                }
+            },
+            true,
+            backend_mode.to_string(),
+        ),
+    };
+
+    observe_quota_policy_outcome(
+        runtime,
+        Some(policy),
+        context,
+        &decision,
+        backend_observed,
+        Some(backend_mode.as_str()),
+    );
+    decision
 }
 
 fn quota_rejection_decision(
@@ -909,6 +995,148 @@ fn quota_retry_after_seconds(
         reset_after.subsec_nanos() > 0,
     ));
     Some(rounded.max(1).min(u64::from(u32::MAX)) as u32)
+}
+
+fn quota_metrics_sink() -> &'static RwLock<Weak<Metrics>> {
+    QUOTA_METRICS_SINK.get_or_init(|| RwLock::new(Weak::new()))
+}
+
+fn current_quota_metrics() -> Option<Arc<Metrics>> {
+    quota_metrics_sink()
+        .read()
+        .ok()
+        .and_then(|metrics| metrics.upgrade())
+}
+
+fn observe_quota_policy_outcome(
+    runtime: &QuotaRuntime,
+    policy: Option<&QuotaPolicyRuntime>,
+    context: &QuotaIdentityContext<'_>,
+    decision: &QuotaDecision,
+    backend_observed: bool,
+    backend_mode: Option<&str>,
+) {
+    let policy_name = policy
+        .map(|value| value.name.as_str())
+        .or_else(|| match decision {
+            QuotaDecision::Allowed(allowance) => Some(allowance.policy_name.as_str()),
+            QuotaDecision::Denied(denial) | QuotaDecision::ShadowDenied(denial) => {
+                Some(denial.policy_name.as_str())
+            }
+            QuotaDecision::FailedOpen(failure) | QuotaDecision::FailedClosed(failure) => {
+                failure.policy_name.as_deref()
+            }
+            QuotaDecision::NotApplied => None,
+        })
+        .unwrap_or("unmatched");
+    let selector_dimensions = policy
+        .map(|value| value.selector.dimensions())
+        .unwrap_or(QuotaSelectorDimensions {
+            route: false,
+            tenant: false,
+            token: false,
+            client: false,
+        });
+    let selector_dimensions = selector_dimensions.slug();
+    let backend_mode = backend_mode.unwrap_or(runtime.backend.backend_kind());
+    let decision_kind = quota_policy_decision_kind(decision);
+    let reason = quota_policy_reason(decision);
+
+    if let Some(metrics) = current_quota_metrics() {
+        metrics.record_quota_policy_outcome(
+            policy_name,
+            decision_kind,
+            reason,
+            &selector_dimensions,
+            backend_mode,
+        );
+        if backend_observed
+            && let Some(health_reason) = quota_backend_health_reason(decision)
+        {
+            metrics.record_quota_backend_health(backend_mode, health_reason);
+        }
+    }
+
+    let route = context.route.unwrap_or("unrouted");
+    let reason_slug = reason.slug();
+    let log_line = format!(
+        "quota policy outcome: upstream={} policy={} selector_dimensions={} backend_mode={} decision={} reason={} enforcement={}",
+        route,
+        policy_name,
+        selector_dimensions,
+        backend_mode,
+        decision_kind.slug(),
+        reason_slug,
+        quota_enforcement_slug(runtime.enforcement),
+    );
+    match decision_kind {
+        QuotaPolicyDecision::Denied | QuotaPolicyDecision::FailedClosed => warn!("{log_line}"),
+        QuotaPolicyDecision::FailedOpen | QuotaPolicyDecision::ShadowDenied => warn!("{log_line}"),
+        QuotaPolicyDecision::Allowed | QuotaPolicyDecision::NotApplied => debug!("{log_line}"),
+    }
+}
+
+fn quota_policy_decision_kind(decision: &QuotaDecision) -> QuotaPolicyDecision {
+    match decision {
+        QuotaDecision::NotApplied => QuotaPolicyDecision::NotApplied,
+        QuotaDecision::Allowed(_) => QuotaPolicyDecision::Allowed,
+        QuotaDecision::ShadowDenied(_) => QuotaPolicyDecision::ShadowDenied,
+        QuotaDecision::Denied(_) => QuotaPolicyDecision::Denied,
+        QuotaDecision::FailedOpen(_) => QuotaPolicyDecision::FailedOpen,
+        QuotaDecision::FailedClosed(_) => QuotaPolicyDecision::FailedClosed,
+    }
+}
+
+fn quota_policy_reason(decision: &QuotaDecision) -> QuotaPolicyReason {
+    match decision {
+        QuotaDecision::NotApplied => QuotaPolicyReason::NotApplied,
+        QuotaDecision::Allowed(_) => QuotaPolicyReason::Allowed,
+        QuotaDecision::ShadowDenied(denial) | QuotaDecision::Denied(denial) => {
+            quota_policy_reason_from_deny_reason(denial.reason)
+        }
+        QuotaDecision::FailedOpen(failure) | QuotaDecision::FailedClosed(failure) => {
+            quota_policy_reason_from_deny_reason(failure.reason)
+        }
+    }
+}
+
+fn quota_policy_reason_from_deny_reason(reason: QuotaDenyReason) -> QuotaPolicyReason {
+    match reason {
+        QuotaDenyReason::BurstQuotaExhausted => QuotaPolicyReason::BurstQuotaExhausted,
+        QuotaDenyReason::SustainedQuotaExhausted => QuotaPolicyReason::SustainedQuotaExhausted,
+        QuotaDenyReason::SelectorIdentityMissing => QuotaPolicyReason::SelectorIdentityMissing,
+        QuotaDenyReason::SelectorIdentityInvalid => QuotaPolicyReason::SelectorIdentityInvalid,
+        QuotaDenyReason::BackendTimeout => QuotaPolicyReason::BackendTimeout,
+        QuotaDenyReason::BackendUnavailable => QuotaPolicyReason::BackendUnavailable,
+        QuotaDenyReason::BackendError => QuotaPolicyReason::BackendError,
+    }
+}
+
+fn quota_backend_health_reason(decision: &QuotaDecision) -> Option<QuotaBackendHealthReason> {
+    match decision {
+        QuotaDecision::Allowed(_) | QuotaDecision::Denied(_) | QuotaDecision::ShadowDenied(_) => {
+            Some(QuotaBackendHealthReason::Available)
+        }
+        QuotaDecision::FailedOpen(failure) | QuotaDecision::FailedClosed(failure) => {
+            Some(match failure.reason {
+                QuotaDenyReason::BackendTimeout => QuotaBackendHealthReason::Timeout,
+                QuotaDenyReason::BackendUnavailable => QuotaBackendHealthReason::Unavailable,
+                QuotaDenyReason::BackendError => QuotaBackendHealthReason::Error,
+                QuotaDenyReason::BurstQuotaExhausted
+                | QuotaDenyReason::SustainedQuotaExhausted
+                | QuotaDenyReason::SelectorIdentityMissing
+                | QuotaDenyReason::SelectorIdentityInvalid => return None,
+            })
+        }
+        QuotaDecision::NotApplied => None,
+    }
+}
+
+fn quota_enforcement_slug(enforcement: QuotaEnforcementMode) -> &'static str {
+    match enforcement {
+        QuotaEnforcementMode::Shadow => "shadow",
+        QuotaEnforcementMode::Enforce => "enforce",
+    }
 }
 
 pub(crate) fn extract_runtime_request_key(

@@ -16,7 +16,7 @@ use tokio::sync::Semaphore;
 use crate::{
     constants::UDP_READ_TIMEOUT_MS,
     quic_listener::{ListenerRuntimeSettings, TokenBucket, runtime_state::PreparedListenerStartup},
-    resilience::runtime::RuntimeResilience,
+    resilience::{quota::QuotaRuntime, runtime::RuntimeResilience},
     routing::index::RouteIndex,
     runtime::{
         backend::{
@@ -81,6 +81,7 @@ impl QUICListener {
             .map_err(|err| ProxyError::Transport(err.to_string()))?;
         let shared_state = Arc::new(Self::build_shared_state(&runtime_config)?);
         Self::register_jwt_jwks_metrics(&Arc::clone(&shared_state.shared_services().metrics));
+        QuotaRuntime::register_metrics(&Arc::clone(&shared_state.shared_services().metrics));
         Self::initialize_jwks_startup(&runtime_config)?;
         let listener_config = runtime_config
             .listener_runtime_configs()

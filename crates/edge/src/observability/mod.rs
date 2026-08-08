@@ -89,6 +89,38 @@
 //! | `ValidationRejected` | `validation_rejected` |
 //! | `PolicyRejected` | `policy_rejected` |
 //!
+//! ## Quota policy — [`QuotaPolicyDecision`] / [`QuotaPolicyReason`]
+//!
+//! | decision enum value | slug |
+//! |---|---|
+//! | `Allowed` | `allowed` |
+//! | `Denied` | `denied` |
+//! | `ShadowDenied` | `shadow_denied` |
+//! | `FailedOpen` | `failed_open` |
+//! | `FailedClosed` | `failed_closed` |
+//! | `NotApplied` | `not_applied` |
+//!
+//! | reason enum value | slug |
+//! |---|---|
+//! | `Allowed` | `allowed` |
+//! | `NotApplied` | `not_applied` |
+//! | `BurstQuotaExhausted` | `burst_quota_exhausted` |
+//! | `SustainedQuotaExhausted` | `sustained_quota_exhausted` |
+//! | `SelectorIdentityMissing` | `selector_identity_missing` |
+//! | `SelectorIdentityInvalid` | `selector_identity_invalid` |
+//! | `BackendTimeout` | `backend_timeout` |
+//! | `BackendUnavailable` | `backend_unavailable` |
+//! | `BackendError` | `backend_error` |
+//!
+//! ## Quota backend health — [`QuotaBackendHealthReason`]
+//!
+//! | enum value | slug |
+//! |---|---|
+//! | `Available` | `available` |
+//! | `Timeout` | `timeout` |
+//! | `Unavailable` | `unavailable` |
+//! | `Error` | `error` |
+//!
 //! Overload cause ([`AdmissionOverloadCause`], the `spooky_overload_shed_by_reason_total{reason}`
 //! label): `brownout`, `adaptive_admission`, `route_cap`, `route_global_cap`,
 //! `global_inflight`, `upstream_inflight`, `backend_inflight`, `circuit_open`,
@@ -254,6 +286,40 @@ pub enum AdmissionOverloadCause {
     ConnectionCap,
 }
 
+/// The coarse result of a quota-policy evaluation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum QuotaPolicyDecision {
+    Allowed,
+    Denied,
+    ShadowDenied,
+    FailedOpen,
+    FailedClosed,
+    NotApplied,
+}
+
+/// The reason attached to a quota-policy evaluation result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum QuotaPolicyReason {
+    Allowed,
+    NotApplied,
+    BurstQuotaExhausted,
+    SustainedQuotaExhausted,
+    SelectorIdentityMissing,
+    SelectorIdentityInvalid,
+    BackendTimeout,
+    BackendUnavailable,
+    BackendError,
+}
+
+/// The health/error classification of a quota backend interaction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum QuotaBackendHealthReason {
+    Available,
+    Timeout,
+    Unavailable,
+    Error,
+}
+
 // ---------------------------------------------------------------------------
 // Stable string mapping layer (enum -> metric label / log value / control API)
 // ---------------------------------------------------------------------------
@@ -406,6 +472,46 @@ impl AdmissionOverloadCause {
             Self::RequestBufferCap => "request_buffer_cap",
             Self::ResponsePrebufferCap => "response_prebuffer_cap",
             Self::ConnectionCap => "connection_cap",
+        }
+    }
+}
+
+impl QuotaPolicyDecision {
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Allowed => "allowed",
+            Self::Denied => "denied",
+            Self::ShadowDenied => "shadow_denied",
+            Self::FailedOpen => "failed_open",
+            Self::FailedClosed => "failed_closed",
+            Self::NotApplied => "not_applied",
+        }
+    }
+}
+
+impl QuotaPolicyReason {
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Allowed => "allowed",
+            Self::NotApplied => "not_applied",
+            Self::BurstQuotaExhausted => "burst_quota_exhausted",
+            Self::SustainedQuotaExhausted => "sustained_quota_exhausted",
+            Self::SelectorIdentityMissing => "selector_identity_missing",
+            Self::SelectorIdentityInvalid => "selector_identity_invalid",
+            Self::BackendTimeout => "backend_timeout",
+            Self::BackendUnavailable => "backend_unavailable",
+            Self::BackendError => "backend_error",
+        }
+    }
+}
+
+impl QuotaBackendHealthReason {
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::Available => "available",
+            Self::Timeout => "timeout",
+            Self::Unavailable => "unavailable",
+            Self::Error => "error",
         }
     }
 }
@@ -789,6 +895,40 @@ mod tests {
                 ],
                 "AdmissionOverloadCause",
             );
+            assert_unique_slug_family(
+                &[
+                    QuotaPolicyDecision::Allowed.slug(),
+                    QuotaPolicyDecision::Denied.slug(),
+                    QuotaPolicyDecision::ShadowDenied.slug(),
+                    QuotaPolicyDecision::FailedOpen.slug(),
+                    QuotaPolicyDecision::FailedClosed.slug(),
+                    QuotaPolicyDecision::NotApplied.slug(),
+                ],
+                "QuotaPolicyDecision",
+            );
+            assert_unique_slug_family(
+                &[
+                    QuotaPolicyReason::Allowed.slug(),
+                    QuotaPolicyReason::NotApplied.slug(),
+                    QuotaPolicyReason::BurstQuotaExhausted.slug(),
+                    QuotaPolicyReason::SustainedQuotaExhausted.slug(),
+                    QuotaPolicyReason::SelectorIdentityMissing.slug(),
+                    QuotaPolicyReason::SelectorIdentityInvalid.slug(),
+                    QuotaPolicyReason::BackendTimeout.slug(),
+                    QuotaPolicyReason::BackendUnavailable.slug(),
+                    QuotaPolicyReason::BackendError.slug(),
+                ],
+                "QuotaPolicyReason",
+            );
+            assert_unique_slug_family(
+                &[
+                    QuotaBackendHealthReason::Available.slug(),
+                    QuotaBackendHealthReason::Timeout.slug(),
+                    QuotaBackendHealthReason::Unavailable.slug(),
+                    QuotaBackendHealthReason::Error.slug(),
+                ],
+                "QuotaBackendHealthReason",
+            );
         }
 
         #[test]
@@ -1063,6 +1203,19 @@ mod tests {
         }
 
         #[test]
+        fn quota_log_reason_literals_match_canonical_slugs() {
+            assert_eq!(QuotaPolicyDecision::Allowed.slug(), "allowed");
+            assert_eq!(QuotaPolicyDecision::ShadowDenied.slug(), "shadow_denied");
+            assert_eq!(
+                QuotaPolicyReason::BurstQuotaExhausted.slug(),
+                "burst_quota_exhausted"
+            );
+            assert_eq!(QuotaPolicyReason::BackendUnavailable.slug(), "backend_unavailable");
+            assert_eq!(QuotaBackendHealthReason::Available.slug(), "available");
+            assert_eq!(QuotaBackendHealthReason::Timeout.slug(), "timeout");
+        }
+
+        #[test]
         fn representative_reason_tokens_stay_aligned_across_metrics_logs_and_control_plane() {
             use crate::{
                 metrics::OverloadShedReason,
@@ -1093,6 +1246,9 @@ mod tests {
                 })
                 .slug(),
             );
+            assert_reason_surface_alignment(QuotaPolicyDecision::Denied.slug());
+            assert_reason_surface_alignment(QuotaPolicyReason::BackendError.slug());
+            assert_reason_surface_alignment(QuotaBackendHealthReason::Unavailable.slug());
 
             assert_eq!(
                 OverloadShedReason::GlobalInflight.reason_label(),

@@ -88,6 +88,54 @@ impl Metrics {
             self.request_rate_limited.load(Ordering::Relaxed)
         ));
 
+        out.push_str(
+            "# HELP spooky_quota_policy_outcomes_total Total quota policy outcomes grouped by policy, decision, reason, selector dimensions, and backend mode.\n",
+        );
+        out.push_str("# TYPE spooky_quota_policy_outcomes_total counter\n");
+        if let Ok(guard) = self.quota_policy_outcomes.read() {
+            let mut rows = guard.iter().collect::<Vec<_>>();
+            rows.sort_by(|(left, _), (right, _)| {
+                left.policy
+                    .cmp(&right.policy)
+                    .then(left.decision.cmp(&right.decision))
+                    .then(left.reason.cmp(&right.reason))
+                    .then(left.selector_dimensions.cmp(&right.selector_dimensions))
+                    .then(left.backend_mode.cmp(&right.backend_mode))
+            });
+            for (key, count) in rows {
+                out.push_str(&format!(
+                    "spooky_quota_policy_outcomes_total{{policy=\"{}\",decision=\"{}\",reason=\"{}\",selector_dimensions=\"{}\",backend_mode=\"{}\"}} {}\n",
+                    escape_prometheus_label(&key.policy),
+                    escape_prometheus_label(&key.decision),
+                    escape_prometheus_label(&key.reason),
+                    escape_prometheus_label(&key.selector_dimensions),
+                    escape_prometheus_label(&key.backend_mode),
+                    count
+                ));
+            }
+        }
+
+        out.push_str(
+            "# HELP spooky_quota_backend_health_total Total quota backend health/error observations grouped by backend mode and reason.\n",
+        );
+        out.push_str("# TYPE spooky_quota_backend_health_total counter\n");
+        if let Ok(guard) = self.quota_backend_health.read() {
+            let mut rows = guard.iter().collect::<Vec<_>>();
+            rows.sort_by(|(left, _), (right, _)| {
+                left.backend_mode
+                    .cmp(&right.backend_mode)
+                    .then(left.reason.cmp(&right.reason))
+            });
+            for (key, count) in rows {
+                out.push_str(&format!(
+                    "spooky_quota_backend_health_total{{backend_mode=\"{}\",reason=\"{}\"}} {}\n",
+                    escape_prometheus_label(&key.backend_mode),
+                    escape_prometheus_label(&key.reason),
+                    count
+                ));
+            }
+        }
+
         out.push_str("# HELP spooky_early_data_accepted Total requests accepted in early data.\n");
         out.push_str("# TYPE spooky_early_data_accepted counter\n");
         out.push_str(&format!(
