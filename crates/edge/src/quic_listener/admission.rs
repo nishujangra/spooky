@@ -29,6 +29,7 @@ use hyper::{
 };
 use hyper_rustls::HttpsConnectorBuilder;
 use hyper_util::client::legacy::{Client, connect::HttpConnector};
+use quiche::h3::NameValue;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use spooky_config::{

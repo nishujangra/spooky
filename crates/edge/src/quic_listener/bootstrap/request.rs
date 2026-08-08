@@ -1,6 +1,5 @@
 use std::{
     convert::Infallible,
-    net::SocketAddr,
     sync::{Arc, RwLock},
     time::Duration,
 };
