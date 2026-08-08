@@ -22,6 +22,7 @@ Spooky is an open-source HTTP/3 (QUIC) edge reverse proxy written in Rust that t
 |---|---|
 | [Architecture Overview](architecture/overview.md) | Design principles, data-plane topology, sharded ingress model |
 | [Component Breakdown](architecture/components.md) | Per-crate responsibilities, inter-crate boundaries, key types |
+| [Distributed Quota Contract](architecture/quota-policy-contract.md) | Planned contract for quota semantics, selector composition, and distributed counter behavior |
 | [Codebase Map](development/codebase-map.md) | Current crate/module map and where major logic lives |
 | [Development Invariants](development/invariants.md) | Core runtime invariants, ownership assumptions, and rules the code depends on |
 | [Public API Surface Inventory](public-api-surface-inventory.md) | Current canonical public surfaces, hidden internals, and remaining intentional exports |
