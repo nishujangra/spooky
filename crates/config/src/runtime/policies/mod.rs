@@ -8,6 +8,7 @@ mod admission;
 mod auth;
 mod backend;
 mod lb;
+mod quota;
 mod resilience;
 mod timeouts;
 mod transport;
@@ -29,6 +30,11 @@ pub use self::{
     lb::{
         RuntimeAlternateBackendPolicy, RuntimeLoadBalancingPolicy, RuntimeLoadBalancingStrategy,
         RuntimeRequestKeySpec,
+    },
+    quota::{
+        RuntimeQuotaBackendFailurePolicy, RuntimeQuotaCounterBackend,
+        RuntimeQuotaEnforcementMode, RuntimeQuotaPolicy, RuntimeQuotaPolicySet,
+        RuntimeQuotaSelectorDimension, RuntimeQuotaSelectorMatcher, RuntimeQuotaWindow,
     },
     resilience::{RuntimeCircuitBreakerPolicy, RuntimeHedgingPolicy, RuntimeRetryBudgetPolicy},
     timeouts::RuntimeTimeoutPolicy,
