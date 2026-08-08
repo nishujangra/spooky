@@ -1,6 +1,5 @@
 use std::{
     convert::Infallible,
-    net::SocketAddr,
     sync::{Arc, RwLock},
     time::Duration,
 };
@@ -436,24 +435,6 @@ fn internal_proxy_error_response(alt_svc: &str) -> Response<BoxBody<Bytes, Infal
     )
 }
 
-fn resolve_scoped_rate_limit_key_for_bootstrap(
-    rule: &crate::resilience::scoped_rate_limit::ScopedRateLimitRule,
-    upstream_name: &str,
-    intake: &BootstrapRequestIntake,
-    peer: SocketAddr,
-    lb_header_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Option<String> {
-    QUICListener::resolve_scoped_rate_limit_key(
-        rule,
-        upstream_name,
-        &intake.method,
-        &intake.path,
-        intake.authority.as_deref(),
-        peer,
-        Some(lb_header_lookup),
-    )
-}
-
 pub(in crate::quic_listener) fn evaluate_bootstrap_request_policy(
     input: BootstrapPolicyEvaluationInput<'_>,
 ) -> BootstrapTerminalResult<BootstrapPreparedRoute> {
@@ -500,21 +481,16 @@ pub(in crate::quic_listener) fn evaluate_bootstrap_request_policy(
             .adaptive_admission
             .inflight_percent(),
         &resolved.upstream_name,
+        input.intake.method.as_ref(),
+        &input.intake.path,
+        input.intake.authority.as_deref(),
+        input.request_ctx.peer,
         input
             .request_ctx
             .runtime
             .resilience
             .shed_retry_after_seconds,
         &input.request_ctx.runtime.resilience.scoped_rate_limits,
-        |rule| {
-            resolve_scoped_rate_limit_key_for_bootstrap(
-                rule,
-                &resolved.upstream_name,
-                input.intake,
-                input.request_ctx.peer,
-                &lb_header_lookup,
-            )
-        },
     );
     input
         .request_ctx

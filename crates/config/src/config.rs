@@ -704,6 +704,7 @@ pub struct Resilience {
     pub adaptive_admission: AdaptiveAdmission,
     pub route_queue: RouteQueue,
     pub scoped_rate_limits: Vec<ScopedRateLimit>,
+    pub quota: QuotaPolicyConfig,
     pub protocol: ProtocolPolicy,
     pub circuit_breaker: CircuitBreaker,
     pub hedging: Hedging,
@@ -808,23 +809,7 @@ impl Resilience {
                             rule_name
                         ));
                     };
-                    if !matches!(
-                        key_spec.trim().to_ascii_lowercase().as_str(),
-                        "path"
-                            | "authority"
-                            | "method"
-                            | "cid"
-                            | "sticky-cid"
-                            | "peer_ip"
-                            | "client_ip"
-                            | "bearer_token"
-                    ) && !key_spec.split_once(':').is_some_and(|(source, key_name)| {
-                        !key_name.trim().is_empty()
-                            && matches!(
-                                source.trim().to_ascii_lowercase().as_str(),
-                                "header" | "cookie" | "query"
-                            )
-                    }) {
+                    if !is_supported_request_key_spec(key_spec) {
                         return Err(format!(
                             "resilience.scoped_rate_limits['{}'].key must be a supported request key spec",
                             rule_name
@@ -833,24 +818,7 @@ impl Resilience {
                 }
                 ScopedRateLimitScope::Client | ScopedRateLimitScope::Token => {
                     if let Some(key_spec) = rule.key.as_deref()
-                        && !matches!(
-                            key_spec.trim().to_ascii_lowercase().as_str(),
-                            "path"
-                                | "authority"
-                                | "method"
-                                | "cid"
-                                | "sticky-cid"
-                                | "peer_ip"
-                                | "client_ip"
-                                | "bearer_token"
-                        )
-                        && !key_spec.split_once(':').is_some_and(|(source, key_name)| {
-                            !key_name.trim().is_empty()
-                                && matches!(
-                                    source.trim().to_ascii_lowercase().as_str(),
-                                    "header" | "cookie" | "query"
-                                )
-                        })
+                        && !is_supported_request_key_spec(key_spec)
                     {
                         return Err(format!(
                             "resilience.scoped_rate_limits['{}'].key must be a supported request key spec",
@@ -860,11 +828,32 @@ impl Resilience {
                 }
             }
         }
+        self.quota.validate()?;
         if self.hedging.enabled && self.hedging.delay_ms == 0 {
             return Err("resilience.hedging: delay_ms must be > 0 when hedging is enabled".into());
         }
         Ok(())
     }
+}
+
+fn is_supported_request_key_spec(spec: &str) -> bool {
+    matches!(
+        spec.trim().to_ascii_lowercase().as_str(),
+        "path"
+            | "authority"
+            | "method"
+            | "cid"
+            | "sticky-cid"
+            | "peer_ip"
+            | "client_ip"
+            | "bearer_token"
+    ) || spec.split_once(':').is_some_and(|(source, key_name)| {
+        !key_name.trim().is_empty()
+            && matches!(
+                source.trim().to_ascii_lowercase().as_str(),
+                "header" | "cookie" | "query"
+            )
+    })
 }
 
 impl Default for AdaptiveAdmission {
@@ -928,6 +917,312 @@ pub struct ScopedRateLimit {
 impl ScopedRateLimit {
     pub(crate) fn default_idle_ttl_secs() -> u64 {
         300
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum QuotaEnforcementMode {
+    Shadow,
+    #[default]
+    Enforce,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum QuotaBackendFailurePolicy {
+    FailOpen,
+    #[default]
+    FailClosed,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize, Clone)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct QuotaPolicyConfig {
+    pub enabled: bool,
+    pub enforcement: QuotaEnforcementMode,
+    pub backend_failure_policy: QuotaBackendFailurePolicy,
+    pub backend: QuotaCounterBackend,
+    pub local_fallback: Option<QuotaLocalFallbackConfig>,
+    pub policies: Vec<DistributedQuotaPolicy>,
+}
+
+impl QuotaPolicyConfig {
+    fn validate(&self) -> Result<(), String> {
+        for policy in &self.policies {
+            policy.validate()?;
+        }
+
+        match &self.backend {
+            QuotaCounterBackend::InMemory { key_prefix } => {
+                if key_prefix.trim().is_empty() {
+                    return Err(
+                        "resilience.quota.backend.key_prefix must be non-empty for kind=in_memory"
+                            .into(),
+                    );
+                }
+                if self.local_fallback.is_some() {
+                    return Err(
+                        "resilience.quota.local_fallback is only supported when backend.kind=redis"
+                            .into(),
+                    );
+                }
+            }
+            QuotaCounterBackend::Redis {
+                url,
+                key_prefix,
+                connect_timeout_ms,
+                command_timeout_ms,
+                max_inflight,
+            } => {
+                if url.trim().is_empty() {
+                    return Err(
+                        "resilience.quota.backend.url must be non-empty for kind=redis".into(),
+                    );
+                }
+                if key_prefix.trim().is_empty() {
+                    return Err(
+                        "resilience.quota.backend.key_prefix must be non-empty for kind=redis"
+                            .into(),
+                    );
+                }
+                if *connect_timeout_ms == 0 {
+                    return Err(
+                        "resilience.quota.backend.connect_timeout_ms must be > 0 for kind=redis"
+                            .into(),
+                    );
+                }
+                if *command_timeout_ms == 0 {
+                    return Err(
+                        "resilience.quota.backend.command_timeout_ms must be > 0 for kind=redis"
+                            .into(),
+                    );
+                }
+                if *max_inflight == 0 {
+                    return Err(
+                        "resilience.quota.backend.max_inflight must be > 0 for kind=redis".into(),
+                    );
+                }
+            }
+        }
+
+        if let Some(local_fallback) = &self.local_fallback {
+            local_fallback.validate()?;
+        }
+
+        if self.enabled && self.policies.is_empty() {
+            return Err("resilience.quota.policies must not be empty when quota is enabled".into());
+        }
+
+        Ok(())
+    }
+
+    fn default_key_prefix() -> String {
+        "spooky:quota".to_string()
+    }
+
+    fn default_connect_timeout_ms() -> u64 {
+        250
+    }
+
+    fn default_command_timeout_ms() -> u64 {
+        100
+    }
+
+    fn default_max_inflight() -> usize {
+        1024
+    }
+
+    fn default_local_fallback_key_prefix() -> String {
+        "spooky:quota:fallback".to_string()
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct QuotaLocalFallbackConfig {
+    #[serde(default = "QuotaPolicyConfig::default_local_fallback_key_prefix")]
+    pub key_prefix: String,
+    pub max_entries: usize,
+}
+
+impl QuotaLocalFallbackConfig {
+    fn validate(&self) -> Result<(), String> {
+        if self.key_prefix.trim().is_empty() {
+            return Err("resilience.quota.local_fallback.key_prefix must be non-empty".to_string());
+        }
+        if self.max_entries == 0 {
+            return Err("resilience.quota.local_fallback.max_entries must be > 0".to_string());
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum QuotaCounterBackend {
+    InMemory {
+        #[serde(default = "QuotaPolicyConfig::default_key_prefix")]
+        key_prefix: String,
+    },
+    Redis {
+        url: String,
+        #[serde(default = "QuotaPolicyConfig::default_key_prefix")]
+        key_prefix: String,
+        #[serde(default = "QuotaPolicyConfig::default_connect_timeout_ms")]
+        connect_timeout_ms: u64,
+        #[serde(default = "QuotaPolicyConfig::default_command_timeout_ms")]
+        command_timeout_ms: u64,
+        #[serde(default = "QuotaPolicyConfig::default_max_inflight")]
+        max_inflight: usize,
+    },
+}
+
+impl Default for QuotaCounterBackend {
+    fn default() -> Self {
+        Self::InMemory {
+            key_prefix: QuotaPolicyConfig::default_key_prefix(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct DistributedQuotaPolicy {
+    pub name: String,
+    #[serde(default)]
+    pub route_allowlist: Vec<String>,
+    #[serde(default)]
+    pub selector: DistributedQuotaSelector,
+    #[serde(default)]
+    pub burst: Option<DistributedQuotaWindow>,
+    #[serde(default)]
+    pub sustained: Option<DistributedQuotaWindow>,
+}
+
+impl DistributedQuotaPolicy {
+    fn validate(&self) -> Result<(), String> {
+        let policy_name = self.name.trim();
+        if policy_name.is_empty() {
+            return Err("resilience.quota.policies[].name must be non-empty".into());
+        }
+        if self
+            .route_allowlist
+            .iter()
+            .any(|route| route.trim().is_empty())
+        {
+            return Err(format!(
+                "resilience.quota.policies['{}'].route_allowlist must not contain empty values",
+                policy_name
+            ));
+        }
+        if !self.selector.has_dimension() {
+            return Err(format!(
+                "resilience.quota.policies['{}'].selector must include at least one dimension",
+                policy_name
+            ));
+        }
+        self.selector.validate(policy_name)?;
+
+        if self.burst.is_none() && self.sustained.is_none() {
+            return Err(format!(
+                "resilience.quota.policies['{}'] must define at least one of burst or sustained",
+                policy_name
+            ));
+        }
+
+        if let Some(window) = &self.burst {
+            window.validate(&format!(
+                "resilience.quota.policies['{}'].burst",
+                policy_name
+            ))?;
+        }
+        if let Some(window) = &self.sustained {
+            window.validate(&format!(
+                "resilience.quota.policies['{}'].sustained",
+                policy_name
+            ))?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct DistributedQuotaSelector {
+    pub route: bool,
+    pub tenant: Option<DistributedQuotaSelectorSource>,
+    pub token: Option<DistributedQuotaSelectorSource>,
+    pub client: Option<DistributedQuotaSelectorSource>,
+}
+
+impl DistributedQuotaSelector {
+    fn has_dimension(&self) -> bool {
+        self.route || self.tenant.is_some() || self.token.is_some() || self.client.is_some()
+    }
+
+    fn validate(&self, policy_name: &str) -> Result<(), String> {
+        if let Some(source) = &self.tenant {
+            source.validate(&format!(
+                "resilience.quota.policies['{}'].selector.tenant",
+                policy_name
+            ))?;
+        }
+        if let Some(source) = &self.token {
+            source.validate(&format!(
+                "resilience.quota.policies['{}'].selector.token",
+                policy_name
+            ))?;
+        }
+        if let Some(source) = &self.client {
+            source.validate(&format!(
+                "resilience.quota.policies['{}'].selector.client",
+                policy_name
+            ))?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct DistributedQuotaSelectorSource {
+    pub key: String,
+}
+
+impl DistributedQuotaSelectorSource {
+    fn validate(&self, field_path: &str) -> Result<(), String> {
+        if self.key.trim().is_empty() {
+            return Err(format!("{field_path}.key must be non-empty"));
+        }
+        if !is_supported_request_key_spec(&self.key) {
+            return Err(format!(
+                "{field_path}.key must be a supported request key spec"
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct DistributedQuotaWindow {
+    pub requests: u64,
+    pub window_secs: u64,
+}
+
+impl DistributedQuotaWindow {
+    fn validate(&self, field_path: &str) -> Result<(), String> {
+        if self.requests == 0 {
+            return Err(format!("{field_path}.requests must be > 0"));
+        }
+        if self.window_secs == 0 {
+            return Err(format!("{field_path}.window_secs must be > 0"));
+        }
+        Ok(())
     }
 }
 
@@ -1439,10 +1734,12 @@ mod tests {
     use super::{
         ApiKeyAuth, Config, ControlApi, ControlApiAudit, ControlApiAuditFormat,
         ControlApiAuditSink, ControlApiAuth, ControlApiAuthorization, ControlApiClientAuthMode,
-        ControlApiIpAllowlist, ControlApiRole, ControlApiTls, ExternalAuth, ForwardedHeaderPolicy,
-        JwtAuth, Listen, LoadBalancing, Log, MetricsEndpoint, Performance, PrivilegeDrop,
-        Resilience, RouteAuth, RoutingTransparency, Tracing, UpstreamHostPolicy, UpstreamTls,
-        Watchdog,
+        ControlApiIpAllowlist, ControlApiRole, ControlApiTls, DistributedQuotaPolicy,
+        DistributedQuotaSelector, DistributedQuotaSelectorSource, DistributedQuotaWindow,
+        ExternalAuth, ForwardedHeaderPolicy, JwtAuth, Listen, LoadBalancing, Log, MetricsEndpoint,
+        Performance, PrivilegeDrop, QuotaBackendFailurePolicy, QuotaCounterBackend,
+        QuotaEnforcementMode, QuotaLocalFallbackConfig, QuotaPolicyConfig, Resilience, RouteAuth,
+        RoutingTransparency, Tracing, UpstreamHostPolicy, UpstreamTls, Watchdog,
     };
     use crate::config::CURRENT_CONFIG_VERSION;
 
@@ -1758,6 +2055,18 @@ security:
             resilience.watchdog.restart_cooldown_ms,
             Resilience::default().watchdog.restart_cooldown_ms
         );
+        assert_eq!(
+            resilience.quota.enabled,
+            Resilience::default().quota.enabled
+        );
+        assert_eq!(
+            resilience.quota.enforcement,
+            Resilience::default().quota.enforcement
+        );
+        assert_eq!(
+            resilience.quota.backend_failure_policy,
+            Resilience::default().quota.backend_failure_policy
+        );
     }
 
     #[test]
@@ -1789,6 +2098,182 @@ security:
         assert_eq!(upstream_tls.ca_dir, None);
 
         assert_eq!(ExternalAuth::default_timeout_ms(), 1_000);
+    }
+
+    #[test]
+    fn quota_type_defaults_match_documented_contract() {
+        let quota: QuotaPolicyConfig =
+            serde_yaml::from_str("{}").expect("empty quota config should parse");
+
+        assert!(!quota.enabled);
+        assert_eq!(quota.enforcement, QuotaEnforcementMode::Enforce);
+        assert_eq!(
+            quota.backend_failure_policy,
+            QuotaBackendFailurePolicy::FailClosed
+        );
+        assert!(quota.local_fallback.is_none());
+        assert!(quota.policies.is_empty());
+        match quota.backend {
+            QuotaCounterBackend::InMemory { key_prefix } => {
+                assert_eq!(key_prefix, "spooky:quota");
+            }
+            QuotaCounterBackend::Redis { .. } => {
+                panic!("default quota backend must be in_memory");
+            }
+        }
+    }
+
+    #[test]
+    fn resilience_validate_accepts_well_formed_quota_policy() {
+        let resilience = Resilience {
+            quota: QuotaPolicyConfig {
+                enabled: true,
+                enforcement: QuotaEnforcementMode::Shadow,
+                backend_failure_policy: QuotaBackendFailurePolicy::FailOpen,
+                backend: QuotaCounterBackend::Redis {
+                    url: "redis://127.0.0.1:6379/0".to_string(),
+                    key_prefix: "spooky:quota".to_string(),
+                    connect_timeout_ms: 250,
+                    command_timeout_ms: 100,
+                    max_inflight: 128,
+                },
+                local_fallback: Some(QuotaLocalFallbackConfig {
+                    key_prefix: "spooky:quota:fallback".to_string(),
+                    max_entries: 512,
+                }),
+                policies: vec![DistributedQuotaPolicy {
+                    name: "tenant-burst".to_string(),
+                    route_allowlist: vec!["api".to_string()],
+                    selector: DistributedQuotaSelector {
+                        route: true,
+                        tenant: Some(DistributedQuotaSelectorSource {
+                            key: "header:x-tenant-id".to_string(),
+                        }),
+                        token: None,
+                        client: None,
+                    },
+                    burst: Some(DistributedQuotaWindow {
+                        requests: 100,
+                        window_secs: 1,
+                    }),
+                    sustained: Some(DistributedQuotaWindow {
+                        requests: 5000,
+                        window_secs: 60,
+                    }),
+                }],
+            },
+            ..Resilience::default()
+        };
+
+        resilience
+            .validate()
+            .expect("well-formed distributed quota config should validate");
+    }
+
+    #[test]
+    fn resilience_validate_rejects_invalid_quota_local_fallback_settings() {
+        let unsupported_backend = Resilience {
+            quota: QuotaPolicyConfig {
+                enabled: true,
+                local_fallback: Some(QuotaLocalFallbackConfig {
+                    key_prefix: "spooky:quota:fallback".to_string(),
+                    max_entries: 128,
+                }),
+                policies: vec![DistributedQuotaPolicy {
+                    name: "tenant-burst".to_string(),
+                    route_allowlist: vec!["api".to_string()],
+                    selector: DistributedQuotaSelector {
+                        route: true,
+                        tenant: Some(DistributedQuotaSelectorSource {
+                            key: "header:x-tenant-id".to_string(),
+                        }),
+                        token: None,
+                        client: None,
+                    },
+                    burst: Some(DistributedQuotaWindow {
+                        requests: 100,
+                        window_secs: 1,
+                    }),
+                    sustained: None,
+                }],
+                ..QuotaPolicyConfig::default()
+            },
+            ..Resilience::default()
+        };
+        assert_eq!(
+            unsupported_backend
+                .validate()
+                .expect_err("in-memory quota backend must reject local fallback"),
+            "resilience.quota.local_fallback is only supported when backend.kind=redis"
+        );
+
+        let invalid_capacity = Resilience {
+            quota: QuotaPolicyConfig {
+                enabled: true,
+                backend: QuotaCounterBackend::Redis {
+                    url: "redis://127.0.0.1:6379/0".to_string(),
+                    key_prefix: "spooky:quota".to_string(),
+                    connect_timeout_ms: 250,
+                    command_timeout_ms: 100,
+                    max_inflight: 128,
+                },
+                local_fallback: Some(QuotaLocalFallbackConfig {
+                    key_prefix: "spooky:quota:fallback".to_string(),
+                    max_entries: 0,
+                }),
+                policies: vec![DistributedQuotaPolicy {
+                    name: "tenant-burst".to_string(),
+                    route_allowlist: vec!["api".to_string()],
+                    selector: DistributedQuotaSelector {
+                        route: true,
+                        tenant: Some(DistributedQuotaSelectorSource {
+                            key: "header:x-tenant-id".to_string(),
+                        }),
+                        token: None,
+                        client: None,
+                    },
+                    burst: Some(DistributedQuotaWindow {
+                        requests: 100,
+                        window_secs: 1,
+                    }),
+                    sustained: None,
+                }],
+                ..QuotaPolicyConfig::default()
+            },
+            ..Resilience::default()
+        };
+        assert_eq!(
+            invalid_capacity
+                .validate()
+                .expect_err("zero local fallback capacity must be rejected"),
+            "resilience.quota.local_fallback.max_entries must be > 0"
+        );
+    }
+
+    #[test]
+    fn resilience_validate_rejects_quota_policy_without_selector_dimensions() {
+        let resilience = Resilience {
+            quota: QuotaPolicyConfig {
+                enabled: true,
+                policies: vec![DistributedQuotaPolicy {
+                    name: "missing-selector".to_string(),
+                    route_allowlist: Vec::new(),
+                    selector: DistributedQuotaSelector::default(),
+                    burst: Some(DistributedQuotaWindow {
+                        requests: 10,
+                        window_secs: 1,
+                    }),
+                    sustained: None,
+                }],
+                ..QuotaPolicyConfig::default()
+            },
+            ..Resilience::default()
+        };
+
+        let err = resilience
+            .validate()
+            .expect_err("selector-less quota policy must be rejected");
+        assert!(err.contains("selector must include at least one dimension"));
     }
 
     #[test]

@@ -721,9 +721,12 @@ mod tests {
             &brownout,
             0,
             "api",
+            "GET",
+            "/resource",
+            Some("api.example.com"),
+            "198.51.100.10:443".parse().expect("client addr"),
             1,
             &scoped_rate_limits,
-            |_| None,
         );
 
         assert!(matches!(

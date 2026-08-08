@@ -2,6 +2,9 @@
 
 This page collects complete deployment-oriented examples. Use it together with the [Configuration Reference](reference.md), which remains the canonical schema and semantics document.
 
+For distributed quota examples and migration guidance, see
+[Distributed Quota](../operations/distributed-quota.md).
+
 ## Example 1: Minimal Local Development
 
 ```yaml

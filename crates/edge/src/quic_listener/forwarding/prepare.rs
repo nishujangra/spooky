@@ -436,19 +436,12 @@ impl QUICListener {
                     &resilience.brownout,
                     resilience.adaptive_admission.inflight_percent(),
                     &upstream_name,
+                    method,
+                    path,
+                    authority,
+                    peer_address,
                     resilience.shed_retry_after_seconds,
                     &resilience.scoped_rate_limits,
-                    |rule| {
-                        Self::resolve_scoped_rate_limit_key(
-                            rule,
-                            &upstream_name,
-                            method,
-                            path,
-                            authority,
-                            peer_address,
-                            Some(&lb_header_lookup),
-                        )
-                    },
                 );
                 metrics.set_brownout_active(resilience.brownout.is_active());
                 let rejection_response = admission_rejection_response(&admission);

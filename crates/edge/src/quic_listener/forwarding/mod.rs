@@ -9,6 +9,7 @@ mod stream_progress;
 use std::convert::Infallible;
 
 use http_body_util::Full;
+#[cfg(test)]
 use spooky_config::config::ScopedRateLimitScope;
 use spooky_errors::ClassifiedUpstreamProxyError;
 
@@ -297,14 +298,47 @@ impl QUICListener {
             route_queue_permit,
         ) = match crate::quic_listener::admission::execute_forwarding_post_auth_admission(
             resilience,
-            &upstream_name,
+            pending_forward.as_ref(),
             req.upstream_pool.as_ref(),
             req.backend_index,
-            pending_forward.backend_index,
             exec_ctx.upstream_inflight,
             Arc::clone(&exec_ctx.global_inflight),
             exec_ctx.inflight_acquire_wait,
         ) {
+            crate::quic_listener::admission::PostAuthAdmissionExecution::Rejected(
+                crate::quic_listener::admission::PostAuthAdmissionRejection::Quota(decision),
+            ) => {
+                if decision.status == http::StatusCode::TOO_MANY_REQUESTS {
+                    metrics.inc_request_rate_limited();
+                }
+                let _ = observe_admission_outcome(
+                    metrics,
+                    RouteOutcomeTarget {
+                        route: &upstream_name,
+                    },
+                    Some(BackendOutcomeTarget {
+                        upstream: &upstream_name,
+                        backend_addr: Some(pending_forward.backend_addr.as_ref()),
+                        backend_index: Some(pending_forward.backend_index),
+                    }),
+                    req.start.elapsed(),
+                    decision.status,
+                    crate::runtime::connection::outcome::AdmissionOutcomeClass::QuotaDenied,
+                );
+                Self::send_admission_rejection_response(
+                    h3,
+                    quic,
+                    stream_id,
+                    &decision.as_response(),
+                )?;
+                req.mark_terminal_outcome_recorded();
+                terminalize_stream(
+                    req,
+                    TerminalReason::Rejected(RejectionReason::QuotaDenied),
+                    metrics,
+                );
+                return Ok(false);
+            }
             crate::quic_listener::admission::PostAuthAdmissionExecution::Ready(ready) => {
                 if ready.waited_for_global_permit {
                     metrics.inc_inflight_wait_admit_global();
@@ -1147,6 +1181,7 @@ impl QUICListener {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn resolve_scoped_rate_limit_key(
         rule: &crate::resilience::scoped_rate_limit::ScopedRateLimitRule,
         route: &str,
@@ -1205,8 +1240,6 @@ impl QUICListener {
 mod tests {
     use std::time::UNIX_EPOCH;
 
-    use super::{auth::append_auth_request_headers, *};
-    use crate::runtime::connection::auth::PendingHeaderMutation;
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use boring::{
         bn::{BigNum, BigNumContext},
@@ -1228,6 +1261,9 @@ mod tests {
             RuntimeUpstreamPolicy,
         },
     };
+
+    use super::{auth::append_auth_request_headers, *};
+    use crate::runtime::connection::auth::PendingHeaderMutation;
 
     fn sample_pending_forward(headers: Vec<quiche::h3::Header>) -> PendingForward {
         PendingForward {

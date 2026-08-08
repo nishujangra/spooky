@@ -10,6 +10,7 @@ use super::{
     spawn_supervised_async_task,
 };
 use crate::{
+    resilience::quota::QuotaRuntime,
     runtime::{bundle::RuntimeBundleHandle, shared_state::SharedRuntimeState},
     watchdog::{
         config::WatchdogRuntimeConfig,
@@ -65,6 +66,7 @@ impl QUICListener {
                 runtime.expected_workers(),
             );
             Self::register_jwt_jwks_metrics(&runtime.metrics());
+            QuotaRuntime::register_metrics(&runtime.metrics());
             let task_registry = runtime.generation_tasks();
             Self::spawn_backend_dns_refresh(
                 runtime.runtime_config(),

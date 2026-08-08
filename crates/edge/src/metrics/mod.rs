@@ -15,7 +15,10 @@ use spooky_errors::{
 };
 use spooky_lb::health::HealthFailureReason;
 
-use crate::runtime::activation::{RuntimeOperationOutcomeReason, RuntimeRejectionReason};
+use crate::{
+    observability::{QuotaBackendHealthReason, QuotaPolicyDecision, QuotaPolicyReason},
+    runtime::activation::{RuntimeOperationOutcomeReason, RuntimeRejectionReason},
+};
 
 pub struct Metrics {
     pub requests_total: AtomicU64,
@@ -127,6 +130,8 @@ pub struct Metrics {
     upstream_request_counts: RwLock<HashMap<UpstreamRequestCountKey, u64>>,
     backend_request_counts: RwLock<HashMap<BackendRequestCountKey, u64>>,
     upstream_request_latency: RwLock<HashMap<UpstreamRequestLatencyKey, RequestLatencyStats>>,
+    quota_policy_outcomes: RwLock<HashMap<QuotaPolicyOutcomeKey, u64>>,
+    quota_backend_health: RwLock<HashMap<QuotaBackendHealthKey, u64>>,
     downstream_tls_handshake_failures: RwLock<HashMap<DownstreamTlsHandshakeFailureKey, u64>>,
     downstream_tls_cert_selections: RwLock<HashMap<DownstreamTlsCertSelectionKey, u64>>,
     downstream_tls_alpn_negotiated: RwLock<HashMap<DownstreamTlsAlpnKey, u64>>,
@@ -194,6 +199,21 @@ pub(crate) struct BackendRequestCountKey {
 pub(crate) struct UpstreamRequestLatencyKey {
     pub(crate) upstream: String,
     pub(crate) outcome: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct QuotaPolicyOutcomeKey {
+    pub(crate) policy: String,
+    pub(crate) decision: String,
+    pub(crate) reason: String,
+    pub(crate) selector_dimensions: String,
+    pub(crate) backend_mode: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct QuotaBackendHealthKey {
+    pub(crate) backend_mode: String,
+    pub(crate) reason: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -585,6 +605,8 @@ impl Metrics {
             upstream_request_counts: RwLock::new(HashMap::new()),
             backend_request_counts: RwLock::new(HashMap::new()),
             upstream_request_latency: RwLock::new(HashMap::new()),
+            quota_policy_outcomes: RwLock::new(HashMap::new()),
+            quota_backend_health: RwLock::new(HashMap::new()),
             downstream_tls_handshake_failures: RwLock::new(HashMap::new()),
             downstream_tls_cert_selections: RwLock::new(HashMap::new()),
             downstream_tls_alpn_negotiated: RwLock::new(HashMap::new()),
@@ -640,6 +662,40 @@ impl Metrics {
 
     pub fn inc_request_rate_limited(&self) {
         self.request_rate_limited.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_quota_policy_outcome(
+        &self,
+        policy: &str,
+        decision: QuotaPolicyDecision,
+        reason: QuotaPolicyReason,
+        selector_dimensions: &str,
+        backend_mode: &str,
+    ) {
+        if let Ok(mut guard) = self.quota_policy_outcomes.write() {
+            let key = QuotaPolicyOutcomeKey {
+                policy: policy.to_string(),
+                decision: decision.slug().to_string(),
+                reason: reason.slug().to_string(),
+                selector_dimensions: selector_dimensions.to_string(),
+                backend_mode: backend_mode.to_string(),
+            };
+            *guard.entry(key).or_default() += 1;
+        }
+    }
+
+    pub fn record_quota_backend_health(
+        &self,
+        backend_mode: &str,
+        reason: QuotaBackendHealthReason,
+    ) {
+        if let Ok(mut guard) = self.quota_backend_health.write() {
+            let key = QuotaBackendHealthKey {
+                backend_mode: backend_mode.to_string(),
+                reason: reason.slug().to_string(),
+            };
+            *guard.entry(key).or_default() += 1;
+        }
     }
 
     pub fn inc_early_data_accepted(&self) {
@@ -1719,6 +1775,7 @@ mod tests {
     use std::time::Duration;
 
     use super::*;
+    use crate::observability::{QuotaBackendHealthReason, QuotaPolicyDecision, QuotaPolicyReason};
 
     #[test]
     fn prometheus_render_includes_jwt_and_jwks_observability_series() {
@@ -1759,5 +1816,56 @@ mod tests {
             "spooky_jwks_state{jwks_source_id=\"jwks:example\",state=\"refresh_failed_retained\"} 1"
         ));
         assert!(rendered.contains("spooky_jwks_active_keys{jwks_source_id=\"jwks:example\"} 2"));
+    }
+
+    #[test]
+    fn prometheus_render_includes_quota_observability_series() {
+        let metrics = Metrics::default();
+        metrics.record_quota_policy_outcome(
+            "tenant-write-quota",
+            QuotaPolicyDecision::Denied,
+            QuotaPolicyReason::BurstQuotaExhausted,
+            "route+tenant+token",
+            "redis",
+        );
+        metrics.record_quota_backend_health("redis", QuotaBackendHealthReason::Available);
+        metrics.record_quota_backend_health("redis", QuotaBackendHealthReason::Timeout);
+
+        let rendered = metrics.render_prometheus();
+
+        assert!(rendered.contains(
+            "spooky_quota_policy_outcomes_total{policy=\"tenant-write-quota\",decision=\"denied\",reason=\"burst_quota_exhausted\",selector_dimensions=\"route+tenant+token\",backend_mode=\"redis\"} 1"
+        ));
+        assert!(rendered.contains(
+            "spooky_quota_backend_health_total{backend_mode=\"redis\",reason=\"available\"} 1"
+        ));
+        assert!(rendered.contains(
+            "spooky_quota_backend_health_total{backend_mode=\"redis\",reason=\"timeout\"} 1"
+        ));
+    }
+
+    #[test]
+    fn prometheus_render_includes_degraded_quota_backend_modes() {
+        let metrics = Metrics::default();
+        metrics.record_quota_policy_outcome(
+            "tenant-write-quota",
+            QuotaPolicyDecision::Allowed,
+            QuotaPolicyReason::Allowed,
+            "route+tenant+client",
+            "redis_local_fallback_backend_timeout",
+        );
+        metrics.record_quota_backend_health(
+            "redis_local_fallback_backend_timeout",
+            QuotaBackendHealthReason::Timeout,
+        );
+
+        let rendered = metrics.render_prometheus();
+
+        assert!(rendered.contains(
+            "spooky_quota_policy_outcomes_total{policy=\"tenant-write-quota\",decision=\"allowed\",reason=\"allowed\",selector_dimensions=\"route+tenant+client\",backend_mode=\"redis_local_fallback_backend_timeout\"} 1"
+        ));
+        assert!(rendered.contains(
+            "spooky_quota_backend_health_total{backend_mode=\"redis_local_fallback_backend_timeout\",reason=\"timeout\"} 1"
+        ));
     }
 }

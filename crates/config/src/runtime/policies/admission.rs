@@ -1,7 +1,7 @@
 use std::{collections::HashMap, time::Duration};
 
 use super::{
-    config_invalid, normalize_optional_string,
+    RuntimeQuotaPolicySet, config_invalid, normalize_optional_string,
     resilience::{
         normalize_circuit_breaker_policy, normalize_hedging_policy, normalize_retry_budget_policy,
     },
@@ -225,6 +225,7 @@ pub struct RuntimeBrownoutPolicy {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RuntimeRateLimitPolicy {
     pub scoped_limits: Vec<RuntimeScopedRateLimitPolicy>,
+    pub quota: RuntimeQuotaPolicySet,
 }
 
 impl RuntimeRateLimitPolicy {
@@ -242,7 +243,10 @@ impl RuntimeRateLimitPolicy {
             scoped_limits.push(normalized);
         }
 
-        Ok(Self { scoped_limits })
+        Ok(Self {
+            scoped_limits,
+            quota: RuntimeQuotaPolicySet::normalize(resilience)?,
+        })
     }
 }
 

@@ -7,9 +7,11 @@ use log::LevelFilter;
 use spooky_config::{
     config::{
         Backend, ClientAuth, Config as SpookyConfigConfig, ControlApiAuditSink,
-        ControlApiBearerToken, ControlApiClientAuthMode, ControlApiRole, JwksStartupBehavior,
-        JwtAlgorithm, JwtAuth, Listen, LoadBalancing, Log, LogFormat, Observability, Performance,
-        Resilience, RouteMatch, Security, Tls, Upstream, UpstreamTls,
+        ControlApiBearerToken, ControlApiClientAuthMode, ControlApiRole, DistributedQuotaPolicy,
+        DistributedQuotaSelector, DistributedQuotaSelectorSource, DistributedQuotaWindow,
+        JwksStartupBehavior, JwtAlgorithm, JwtAuth, Listen, LoadBalancing, Log, LogFormat,
+        Observability, Performance, QuotaBackendFailurePolicy, QuotaCounterBackend,
+        QuotaEnforcementMode, Resilience, RouteMatch, Security, Tls, Upstream, UpstreamTls,
     },
     runtime::{RuntimeConfig, RuntimeJwtVerificationKey},
 };
@@ -2580,6 +2582,141 @@ async fn control_api_runtime_snapshot_renders_live_generation_listener_and_backe
             .len(),
         1
     );
+}
+
+#[tokio::test]
+async fn control_api_runtime_snapshot_exposes_quota_policy_and_backend_status() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let mut config = test_config(cert, key);
+    config.observability.control_api.enabled = true;
+    config.resilience.quota.enabled = true;
+    config.resilience.quota.enforcement = QuotaEnforcementMode::Shadow;
+    config.resilience.quota.backend_failure_policy = QuotaBackendFailurePolicy::FailOpen;
+    config.resilience.quota.backend = QuotaCounterBackend::Redis {
+        url: "://bad-redis-url".to_string(),
+        key_prefix: "spooky:test:quota".to_string(),
+        connect_timeout_ms: 250,
+        command_timeout_ms: 100,
+        max_inflight: 8,
+    };
+    config.resilience.quota.policies = vec![DistributedQuotaPolicy {
+        name: "tenant-contract".to_string(),
+        route_allowlist: vec!["api".to_string()],
+        selector: DistributedQuotaSelector {
+            route: true,
+            tenant: Some(DistributedQuotaSelectorSource {
+                key: "header:x-tenant-id".to_string(),
+            }),
+            token: Some(DistributedQuotaSelectorSource {
+                key: "bearer_token".to_string(),
+            }),
+            client: None,
+        },
+        burst: Some(DistributedQuotaWindow {
+            requests: 50,
+            window_secs: 1,
+        }),
+        sustained: Some(DistributedQuotaWindow {
+            requests: 500,
+            window_secs: 60,
+        }),
+    }];
+
+    let bundle = runtime_bundle_from_config("runtime.yaml", &config);
+    let (state, _) = runtime_bundle_control_api_state(bundle);
+
+    let payload = json_body(QUICListener::render_control_api_runtime_snapshot(&state)).await;
+
+    assert_eq!(payload["quota"]["enabled"], true);
+    assert_eq!(payload["quota"]["enforcement"], "shadow");
+    assert_eq!(payload["quota"]["backend_failure_policy"], "fail_open");
+    assert_eq!(payload["quota"]["active_backend"], "redis");
+    assert_eq!(
+        payload["quota"]["backend_status"]["availability"],
+        "degraded"
+    );
+    assert_eq!(payload["quota"]["backend_status"]["degraded"], true);
+    assert_eq!(payload["quota"]["backend_status"]["health_reason"], "error");
+
+    let recent_errors = payload["quota"]["backend_status"]["recent_errors"]
+        .as_array()
+        .expect("quota recent errors");
+    assert_eq!(recent_errors.len(), 1);
+    assert_eq!(recent_errors[0]["reason"], "backend_error");
+    assert!(
+        recent_errors[0]["detail"]
+            .as_str()
+            .map(|value| !value.is_empty())
+            .unwrap_or(false),
+        "quota backend initialization failure should surface a readable recent error"
+    );
+
+    let policies = payload["quota"]["policies"]
+        .as_array()
+        .expect("quota policies");
+    assert_eq!(policies.len(), 1);
+    assert_eq!(policies[0]["name"], "tenant-contract");
+    assert_eq!(policies[0]["route_allowlist"][0], "api");
+    assert_eq!(policies[0]["selector"]["route"], true);
+    assert_eq!(policies[0]["selector"]["tenant"], "header:x-tenant-id");
+    assert_eq!(policies[0]["selector"]["token"], "bearer_token");
+    assert_eq!(policies[0]["burst"]["requests"], 50);
+    assert_eq!(policies[0]["burst"]["window_secs"], 1);
+    assert_eq!(policies[0]["sustained"]["requests"], 500);
+    assert_eq!(policies[0]["sustained"]["window_secs"], 60);
+}
+
+#[tokio::test]
+async fn control_api_runtime_snapshot_renders_composite_quota_selector_dimensions() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let mut config = test_config(cert, key);
+    config.observability.control_api.enabled = true;
+    config.resilience.quota.enabled = true;
+    config.resilience.quota.backend = QuotaCounterBackend::InMemory {
+        key_prefix: "spooky:test:quota".to_string(),
+    };
+    config.resilience.quota.policies = vec![DistributedQuotaPolicy {
+        name: "tenant-client-contract".to_string(),
+        route_allowlist: vec!["api".to_string()],
+        selector: DistributedQuotaSelector {
+            route: true,
+            tenant: Some(DistributedQuotaSelectorSource {
+                key: "header:x-tenant-id".to_string(),
+            }),
+            token: None,
+            client: Some(DistributedQuotaSelectorSource {
+                key: "client_ip".to_string(),
+            }),
+        },
+        burst: Some(DistributedQuotaWindow {
+            requests: 25,
+            window_secs: 1,
+        }),
+        sustained: Some(DistributedQuotaWindow {
+            requests: 250,
+            window_secs: 60,
+        }),
+    }];
+
+    let bundle = runtime_bundle_from_config("runtime.yaml", &config);
+    let (state, _) = runtime_bundle_control_api_state(bundle);
+    let payload = json_body(QUICListener::render_control_api_runtime_snapshot(&state)).await;
+
+    assert_eq!(payload["quota"]["enabled"], true);
+    assert_eq!(payload["quota"]["active_backend"], "in_memory");
+    let policies = payload["quota"]["policies"]
+        .as_array()
+        .expect("quota policies");
+    assert_eq!(policies.len(), 1);
+    assert_eq!(policies[0]["name"], "tenant-client-contract");
+    assert_eq!(policies[0]["selector"]["route"], true);
+    assert_eq!(policies[0]["selector"]["tenant"], "header:x-tenant-id");
+    assert_eq!(policies[0]["selector"]["client"], "client_ip");
+    assert!(policies[0]["selector"]["token"].is_null());
+    assert_eq!(policies[0]["burst"]["requests"], 25);
+    assert_eq!(policies[0]["sustained"]["requests"], 250);
 }
 
 // Domain: watchdog/runtime ownership alignment across reload boundaries.

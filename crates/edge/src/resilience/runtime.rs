@@ -10,6 +10,7 @@ use crate::resilience::{
     brownout::BrownoutController,
     circuit_breaker::CircuitBreakers,
     connect::{connect_authority_port, normalize_connect_authority},
+    quota::{QuotaCounterBackendError, QuotaRuntime, SharedDistributedQuotaCounterBackend},
     retry_budget::RetryBudget,
     route_queue::RouteQueueLimiter,
     scoped_rate_limit::ScopedRateLimiters,
@@ -19,6 +20,9 @@ pub struct RuntimeResilience {
     pub adaptive_admission: Arc<AdaptiveAdmission>,
     pub route_queue: Arc<RouteQueueLimiter>,
     pub scoped_rate_limits: Arc<ScopedRateLimiters>,
+    pub quota: Arc<QuotaRuntime>,
+    pub quota_backend: Option<SharedDistributedQuotaCounterBackend>,
+    pub quota_backend_initialization_error: Option<QuotaCounterBackendError>,
     pub circuit_breakers: Arc<CircuitBreakers>,
     pub retry_budget: Arc<RetryBudget>,
     pub brownout: Arc<BrownoutController>,
@@ -59,6 +63,15 @@ impl RuntimeResilience {
             config.route_queue.caps.clone(),
         ));
         let scoped_rate_limits = Arc::new(ScopedRateLimiters::new(&config.scoped_rate_limits));
+        let quota = Arc::new(QuotaRuntime::from_resilience_config(config));
+        let mut quota_backend_initialization_error = None;
+        let quota_backend = if quota.enabled {
+            let (backend, initialization_error) = quota.enforcement_backend();
+            quota_backend_initialization_error = initialization_error;
+            Some(backend)
+        } else {
+            None
+        };
         let cb = &config.circuit_breaker;
         let circuit_breakers = Arc::new(CircuitBreakers::new(
             cb.enabled,
@@ -118,6 +131,9 @@ impl RuntimeResilience {
             adaptive_admission: admission,
             route_queue,
             scoped_rate_limits,
+            quota,
+            quota_backend,
+            quota_backend_initialization_error,
             circuit_breakers,
             retry_budget,
             brownout,
@@ -176,6 +192,15 @@ impl RuntimeResilience {
                 })
                 .collect::<Vec<_>>(),
         ));
+        let quota = Arc::new(QuotaRuntime::from_rate_limit_policies(rate_limit_policy));
+        let mut quota_backend_initialization_error = None;
+        let quota_backend = if quota.enabled {
+            let (backend, initialization_error) = quota.enforcement_backend();
+            quota_backend_initialization_error = initialization_error;
+            Some(backend)
+        } else {
+            None
+        };
         let circuit_breakers = Arc::new(CircuitBreakers::new(
             admission_policy.circuit_breaker.enabled,
             admission_policy.circuit_breaker.failure_threshold,
@@ -241,6 +266,9 @@ impl RuntimeResilience {
             adaptive_admission: admission,
             route_queue,
             scoped_rate_limits,
+            quota,
+            quota_backend,
+            quota_backend_initialization_error,
             circuit_breakers,
             retry_budget,
             brownout,

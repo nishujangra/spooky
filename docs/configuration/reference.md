@@ -9,6 +9,10 @@ This is the canonical configuration document for Spooky. It should answer four q
 
 Use [Configuration Defaults](defaults.md) for the exhaustive default inventory and [Configuration Examples](examples.md) for complete deployment patterns. Use this page when you need exact schema and semantics.
 
+For distributed quota policy examples, Redis backend posture, migration from
+legacy scoped rate limiting, and operator interpretation, see
+[Distributed Quota](../operations/distributed-quota.md).
+
 ## Scope Of This Reference
 
 This page covers:
