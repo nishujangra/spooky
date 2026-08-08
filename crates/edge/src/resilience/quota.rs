@@ -1,4 +1,4 @@
-use std::{collections::HashSet, future::Future, net::SocketAddr, pin::Pin, time::Duration};
+use std::{collections::HashSet, future::Future, net::SocketAddr, pin::Pin, sync::Arc, time::Duration};
 
 use sha2::{Digest, Sha256};
 use spooky_config::{
@@ -22,6 +22,10 @@ use spooky_config::{
         RuntimeRequestKeySpec,
     },
 };
+
+mod redis;
+
+pub use redis::{RedisDistributedQuotaCounterStore, REDIS_QUOTA_PROTOCOL_VERSION};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuotaEnforcementMode {
@@ -440,6 +444,28 @@ impl QuotaCounterBackend {
             },
         }
     }
+
+    pub fn redis_store(
+        &self,
+    ) -> Result<Option<Arc<RedisDistributedQuotaCounterStore>>, QuotaCounterBackendError> {
+        match self {
+            Self::InMemory { .. } => Ok(None),
+            Self::Redis {
+                url,
+                key_prefix,
+                connect_timeout,
+                command_timeout,
+                max_inflight,
+            } => RedisDistributedQuotaCounterStore::new(
+                url,
+                key_prefix,
+                *connect_timeout,
+                *command_timeout,
+                *max_inflight,
+            )
+            .map(|store| Some(Arc::new(store))),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -515,6 +541,12 @@ impl QuotaRuntime {
                 .collect(),
         }
     }
+
+    pub fn redis_store(
+        &self,
+    ) -> Result<Option<Arc<RedisDistributedQuotaCounterStore>>, QuotaCounterBackendError> {
+        self.backend.redis_store()
+    }
 }
 
 impl QuotaPolicyRuntime {
@@ -555,6 +587,19 @@ impl QuotaDenyReason {
             Self::BackendError => "backend_error",
         }
     }
+
+    pub fn from_slug(value: &str) -> Option<Self> {
+        match value {
+            "burst_quota_exhausted" => Some(Self::BurstQuotaExhausted),
+            "sustained_quota_exhausted" => Some(Self::SustainedQuotaExhausted),
+            "selector_identity_missing" => Some(Self::SelectorIdentityMissing),
+            "selector_identity_invalid" => Some(Self::SelectorIdentityInvalid),
+            "backend_timeout" => Some(Self::BackendTimeout),
+            "backend_unavailable" => Some(Self::BackendUnavailable),
+            "backend_error" => Some(Self::BackendError),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -564,6 +609,9 @@ pub struct QuotaWindowUsage {
     pub remaining: u64,
     pub window: Duration,
     pub reset_after: Option<Duration>,
+    pub bucket_started_at_unix_ms: Option<u64>,
+    pub reset_at_unix_ms: Option<u64>,
+    pub storage_key: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -595,11 +643,19 @@ pub enum QuotaCounterEvaluationDecision {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct QuotaCounterBackendMetadata {
+    pub backend_kind: String,
+    pub protocol_version: String,
+    pub evaluated_at_unix_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuotaCounterEvaluationOutcome {
     pub matched_policy: String,
     pub composite_key: QuotaCompositeKey,
     pub decision: QuotaCounterEvaluationDecision,
     pub counter: QuotaCounterResult,
+    pub backend_metadata: QuotaCounterBackendMetadata,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1387,6 +1443,12 @@ mod tests {
                     remaining: 0,
                     window: Duration::from_secs(1),
                     reset_after: Some(Duration::from_millis(750)),
+                    bucket_started_at_unix_ms: Some(1_700_000_000_000),
+                    reset_at_unix_ms: Some(1_700_000_001_000),
+                    storage_key: Some(
+                        "spooky:quota:qv1:12:tenant-quota:burst:1000:1700000000000:abc"
+                            .to_string(),
+                    ),
                 }),
                 sustained: Some(QuotaWindowUsage {
                     limit: 500,
@@ -1394,7 +1456,18 @@ mod tests {
                     remaining: 180,
                     window: Duration::from_secs(60),
                     reset_after: Some(Duration::from_secs(12)),
+                    bucket_started_at_unix_ms: Some(1_699_999_980_000),
+                    reset_at_unix_ms: Some(1_700_000_040_000),
+                    storage_key: Some(
+                        "spooky:quota:qv1:12:tenant-quota:sustained:60000:1699999980000:def"
+                            .to_string(),
+                    ),
                 }),
+            },
+            backend_metadata: QuotaCounterBackendMetadata {
+                backend_kind: "redis".to_string(),
+                protocol_version: REDIS_QUOTA_PROTOCOL_VERSION.to_string(),
+                evaluated_at_unix_ms: Some(1_700_000_000_250),
             },
         };
 
