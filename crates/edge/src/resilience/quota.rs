@@ -1270,14 +1270,54 @@ pub(crate) async fn evaluate_admission_quota(
         return QuotaDecision::NotApplied;
     };
 
-    let Some(policy) = runtime
+    // Every policy whose allowlist covers this route is a separate contract and
+    // must be evaluated. Stopping at the first match would let a broad policy
+    // mask a narrower one layered on the same route, so the narrower limit
+    // would validate at startup and appear in the control API while silently
+    // enforcing nothing.
+    let mut outcome = QuotaDecision::NotApplied;
+    let mut shadow_denial: Option<QuotaDecision> = None;
+
+    for policy in runtime
         .policies
         .iter()
-        .find(|policy| policy.applies_to_route(route))
-    else {
-        return QuotaDecision::NotApplied;
-    };
+        .filter(|policy| policy.applies_to_route(route))
+    {
+        match evaluate_quota_policy(runtime, backend, context, policy).await {
+            // A real denial is final: the request violated at least one
+            // contract, and no later policy can overturn that. Returning here
+            // also avoids charging the caller's remaining budgets for a request
+            // that is about to be rejected.
+            decision @ (QuotaDecision::Denied(_) | QuotaDecision::FailedClosed(_)) => {
+                return decision;
+            }
+            // Shadow mode must keep evaluating so every policy records an
+            // outcome — measuring one policy's blast radius is the whole point,
+            // and stopping early would under-count the rest. Keep the first
+            // would-deny as the reported cause.
+            decision @ QuotaDecision::ShadowDenied(_) => {
+                shadow_denial.get_or_insert(decision);
+            }
+            // Remember a real allowance so the caller sees it (and its counter)
+            // rather than NotApplied.
+            decision @ (QuotaDecision::Allowed(_) | QuotaDecision::FailedOpen(_)) => {
+                if !matches!(outcome, QuotaDecision::Allowed(_)) {
+                    outcome = decision;
+                }
+            }
+            QuotaDecision::NotApplied => {}
+        }
+    }
 
+    shadow_denial.unwrap_or(outcome)
+}
+
+async fn evaluate_quota_policy(
+    runtime: &QuotaRuntime,
+    backend: &dyn DistributedQuotaCounterBackend,
+    context: &QuotaIdentityContext<'_>,
+    policy: &QuotaPolicyRuntime,
+) -> QuotaDecision {
     let composite_key = match policy.composite_key(context) {
         Ok(key) => key,
         Err(rejection) => {
@@ -2262,6 +2302,166 @@ mod tests {
             err.detail.as_deref(),
             Some("redis script protocol mismatch")
         );
+    }
+
+    fn runtime_policy_set_with(
+        enforcement: RuntimeQuotaEnforcementMode,
+        policies: Vec<RuntimeQuotaPolicy>,
+    ) -> QuotaRuntime {
+        QuotaRuntime::from_runtime_policy_set(&RuntimeQuotaPolicySet {
+            enabled: true,
+            enforcement,
+            backend_failure_policy: RuntimeQuotaBackendFailurePolicy::FailClosed,
+            backend: RuntimeQuotaCounterBackend::InMemory {
+                key_prefix: "spooky:quota:test".to_string(),
+            },
+            local_fallback: None,
+            policies,
+        })
+    }
+
+    fn route_only_policy(name: &str, requests: u64) -> RuntimeQuotaPolicy {
+        RuntimeQuotaPolicy {
+            name: name.to_string(),
+            route_allowlist: vec!["api".to_string()],
+            selector: RuntimeQuotaSelectorMatcher {
+                route: true,
+                tenant: None,
+                token: None,
+                client: None,
+            },
+            burst: Some(RuntimeQuotaWindow {
+                requests,
+                window: Duration::from_secs(1),
+            }),
+            sustained: None,
+        }
+    }
+
+    fn tenant_policy(name: &str, requests: u64) -> RuntimeQuotaPolicy {
+        RuntimeQuotaPolicy {
+            name: name.to_string(),
+            route_allowlist: vec!["api".to_string()],
+            selector: RuntimeQuotaSelectorMatcher {
+                route: true,
+                tenant: Some(RuntimeRequestKeySpec::Header("x-tenant-id".to_string())),
+                token: None,
+                client: None,
+            },
+            burst: Some(RuntimeQuotaWindow {
+                requests,
+                window: Duration::from_secs(1),
+            }),
+            sustained: None,
+        }
+    }
+
+    /// A narrow policy layered on the same route as a broad one must still be
+    /// enforced. Evaluating only the first route match let the broad policy
+    /// mask the narrow one entirely, so a caller could exceed the narrow
+    /// contract — or skip it by omitting its selector header — while the
+    /// config validated and appeared in the control API.
+    #[tokio::test(flavor = "current_thread")]
+    async fn every_route_matching_policy_is_evaluated_not_just_the_first() {
+        // Broad policy first, narrow tenant policy second: the ordering that
+        // previously left the tenant contract dead.
+        let runtime = runtime_policy_set_with(
+            RuntimeQuotaEnforcementMode::Enforce,
+            vec![route_only_policy("broad", 100), tenant_policy("narrow", 2)],
+        );
+        let backend = InMemoryDistributedQuotaCounterStore::new("spooky:quota:test");
+
+        let context = identity_context_with_headers(
+            Some("api"),
+            "GET",
+            "/v1/items",
+            Some("api.example.com"),
+            None,
+            Some("203.0.113.10:443".parse().expect("client addr")),
+            HashMap::from([("x-tenant-id".to_string(), "acme".to_string())]),
+        );
+
+        // The narrow policy allows 2; the broad one allows 100.
+        for attempt in 1..=2 {
+            assert!(
+                matches!(
+                    evaluate_admission_quota(&runtime, &backend, &context).await,
+                    QuotaDecision::Allowed(_)
+                ),
+                "request {attempt} is within both contracts",
+            );
+        }
+
+        let decision = evaluate_admission_quota(&runtime, &backend, &context).await;
+        let QuotaDecision::Denied(denial) = decision else {
+            panic!("third request must be denied by the narrow policy, got {decision:?}");
+        };
+        assert_eq!(denial.policy_name, "narrow");
+        assert_eq!(denial.reason, QuotaDenyReason::BurstQuotaExhausted);
+    }
+
+    /// A request missing a policy's selector identity must be denied rather
+    /// than admitted by an earlier, broader policy that does not need it.
+    #[tokio::test(flavor = "current_thread")]
+    async fn missing_selector_identity_denies_even_when_a_broader_policy_allows() {
+        let runtime = runtime_policy_set_with(
+            RuntimeQuotaEnforcementMode::Enforce,
+            vec![route_only_policy("broad", 100), tenant_policy("narrow", 10)],
+        );
+        let backend = InMemoryDistributedQuotaCounterStore::new("spooky:quota:test");
+
+        // No x-tenant-id header at all.
+        let context = identity_context_with_headers(
+            Some("api"),
+            "GET",
+            "/v1/items",
+            Some("api.example.com"),
+            None,
+            Some("203.0.113.10:443".parse().expect("client addr")),
+            HashMap::new(),
+        );
+
+        let decision = evaluate_admission_quota(&runtime, &backend, &context).await;
+        let QuotaDecision::Denied(denial) = decision else {
+            panic!("missing tenant identity must not be admitted, got {decision:?}");
+        };
+        assert_eq!(denial.policy_name, "narrow");
+        assert_eq!(denial.reason, QuotaDenyReason::SelectorIdentityMissing);
+    }
+
+    /// Shadow mode must not stop at the first would-deny: every matching policy
+    /// still needs to record an outcome, otherwise sizing one policy hides the
+    /// blast radius of the others.
+    #[tokio::test(flavor = "current_thread")]
+    async fn shadow_mode_evaluates_all_policies_and_admits() {
+        let runtime = runtime_policy_set_with(
+            RuntimeQuotaEnforcementMode::Shadow,
+            vec![tenant_policy("narrow", 1), route_only_policy("broad", 100)],
+        );
+        let backend = InMemoryDistributedQuotaCounterStore::new("spooky:quota:test");
+
+        let context = identity_context_with_headers(
+            Some("api"),
+            "GET",
+            "/v1/items",
+            Some("api.example.com"),
+            None,
+            Some("203.0.113.10:443".parse().expect("client addr")),
+            HashMap::from([("x-tenant-id".to_string(), "acme".to_string())]),
+        );
+
+        assert!(matches!(
+            evaluate_admission_quota(&runtime, &backend, &context).await,
+            QuotaDecision::Allowed(_)
+        ));
+
+        // Second request exhausts the narrow policy, but shadow mode reports a
+        // would-deny rather than a denial.
+        let decision = evaluate_admission_quota(&runtime, &backend, &context).await;
+        let QuotaDecision::ShadowDenied(denial) = decision else {
+            panic!("shadow mode must report a would-deny, got {decision:?}");
+        };
+        assert_eq!(denial.policy_name, "narrow");
     }
 
     #[test]
