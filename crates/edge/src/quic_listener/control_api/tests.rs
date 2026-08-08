@@ -2665,6 +2665,58 @@ async fn control_api_runtime_snapshot_exposes_quota_policy_and_backend_status() 
     assert_eq!(policies[0]["sustained"]["window_secs"], 60);
 }
 
+#[tokio::test]
+async fn control_api_runtime_snapshot_renders_composite_quota_selector_dimensions() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let mut config = test_config(cert, key);
+    config.observability.control_api.enabled = true;
+    config.resilience.quota.enabled = true;
+    config.resilience.quota.backend = QuotaCounterBackend::InMemory {
+        key_prefix: "spooky:test:quota".to_string(),
+    };
+    config.resilience.quota.policies = vec![DistributedQuotaPolicy {
+        name: "tenant-client-contract".to_string(),
+        route_allowlist: vec!["api".to_string()],
+        selector: DistributedQuotaSelector {
+            route: true,
+            tenant: Some(DistributedQuotaSelectorSource {
+                key: "header:x-tenant-id".to_string(),
+            }),
+            token: None,
+            client: Some(DistributedQuotaSelectorSource {
+                key: "client_ip".to_string(),
+            }),
+        },
+        burst: Some(DistributedQuotaWindow {
+            requests: 25,
+            window_secs: 1,
+        }),
+        sustained: Some(DistributedQuotaWindow {
+            requests: 250,
+            window_secs: 60,
+        }),
+    }];
+
+    let bundle = runtime_bundle_from_config("runtime.yaml", &config);
+    let (state, _) = runtime_bundle_control_api_state(bundle);
+    let payload = json_body(QUICListener::render_control_api_runtime_snapshot(&state)).await;
+
+    assert_eq!(payload["quota"]["enabled"], true);
+    assert_eq!(payload["quota"]["active_backend"], "in_memory");
+    let policies = payload["quota"]["policies"]
+        .as_array()
+        .expect("quota policies");
+    assert_eq!(policies.len(), 1);
+    assert_eq!(policies[0]["name"], "tenant-client-contract");
+    assert_eq!(policies[0]["selector"]["route"], true);
+    assert_eq!(policies[0]["selector"]["tenant"], "header:x-tenant-id");
+    assert_eq!(policies[0]["selector"]["client"], "client_ip");
+    assert!(policies[0]["selector"]["token"].is_null());
+    assert_eq!(policies[0]["burst"]["requests"], 25);
+    assert_eq!(policies[0]["sustained"]["requests"], 250);
+}
+
 // Domain: watchdog/runtime ownership alignment across reload boundaries.
 #[test]
 fn reload_preserves_process_scoped_watchdog_and_dns_resolver() {

@@ -482,4 +482,94 @@ mod tests {
             Some("in-memory quota store capacity exhausted")
         );
     }
+
+    #[test]
+    fn in_memory_backend_enforces_sustained_window_after_burst_resets() {
+        let now_ms = Arc::new(AtomicU64::new(10_250));
+        let store =
+            InMemoryDistributedQuotaCounterStore::with_time_source("spooky:quota:sustained", {
+                let now_ms = Arc::clone(&now_ms);
+                move || now_ms.load(Ordering::Relaxed)
+            });
+
+        let policy = QuotaPolicyRuntime {
+            name: "tenant-quota".to_string(),
+            route_allowlist: HashSet::from(["api".to_string()]),
+            selector: QuotaSelectorMatcher {
+                route: true,
+                tenant: None,
+                token: None,
+                client: None,
+            },
+            burst: Some(QuotaWindowPolicy {
+                requests: 2,
+                window: Duration::from_secs(1),
+            }),
+            sustained: Some(QuotaWindowPolicy {
+                requests: 3,
+                window: Duration::from_secs(60),
+            }),
+        };
+        let composite_key = QuotaCompositeKey {
+            policy_name: "tenant-quota".to_string(),
+            key: "policy=12:tenant-quota|route=3:api|tenant=4:acme|".to_string(),
+            labels: QuotaIdentityLabels {
+                route: Some("api".to_string()),
+                tenant: Some("acme".to_string()),
+                token: None,
+                client: None,
+            },
+            dimensions: QuotaSelectorDimensions {
+                route: true,
+                tenant: true,
+                token: false,
+                client: false,
+            },
+        };
+        let request = policy.counter_request(composite_key);
+
+        assert_eq!(
+            store
+                .evaluate_request(request.clone())
+                .expect("first request")
+                .decision,
+            QuotaCounterEvaluationDecision::Allowed
+        );
+        assert_eq!(
+            store
+                .evaluate_request(request.clone())
+                .expect("second request")
+                .decision,
+            QuotaCounterEvaluationDecision::Allowed
+        );
+        assert_eq!(
+            store
+                .evaluate_request(request.clone())
+                .expect("third request must burst deny")
+                .decision,
+            QuotaCounterEvaluationDecision::Denied(QuotaDenyReason::BurstQuotaExhausted)
+        );
+
+        now_ms.store(11_250, Ordering::Relaxed);
+        assert_eq!(
+            store
+                .evaluate_request(request.clone())
+                .expect("fourth request after burst reset")
+                .decision,
+            QuotaCounterEvaluationDecision::Allowed
+        );
+
+        now_ms.store(12_250, Ordering::Relaxed);
+        let denied = store
+            .evaluate_request(request)
+            .expect("sustained exhaustion should return a decision");
+        assert_eq!(
+            denied.decision,
+            QuotaCounterEvaluationDecision::Denied(QuotaDenyReason::SustainedQuotaExhausted)
+        );
+        assert_eq!(
+            denied.counter.sustained.as_ref().map(|window| window.consumed),
+            Some(3)
+        );
+    }
 }

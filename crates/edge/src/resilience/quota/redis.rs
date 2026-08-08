@@ -652,4 +652,104 @@ mod tests {
             Some(1_700_000_040_000)
         );
     }
+
+    #[test]
+    fn redis_eval_response_parses_allowed_atomic_multi_window_updates() {
+        let request = sample_request();
+        let response = vec![
+            REDIS_QUOTA_PROTOCOL_VERSION.to_string(),
+            "allow".to_string(),
+            String::new(),
+            "1700000000125".to_string(),
+            "2".to_string(),
+            "burst".to_string(),
+            "50".to_string(),
+            "7".to_string(),
+            "43".to_string(),
+            "1000".to_string(),
+            "875".to_string(),
+            "1700000000000".to_string(),
+            "1700000001000".to_string(),
+            "spooky:quota:qv1:12:tenant-quota:burst:1000:1700000000000:abc".to_string(),
+            "sustained".to_string(),
+            "500".to_string(),
+            "129".to_string(),
+            "371".to_string(),
+            "60000".to_string(),
+            "59875".to_string(),
+            "1699999980000".to_string(),
+            "1700000040000".to_string(),
+            "spooky:quota:qv1:12:tenant-quota:sustained:60000:1699999980000:def".to_string(),
+        ];
+
+        let outcome = parse_eval_response(request, &response).expect("response should parse");
+
+        assert_eq!(outcome.decision, QuotaCounterEvaluationDecision::Allowed);
+        assert_eq!(
+            outcome.counter.burst.as_ref().map(|window| window.consumed),
+            Some(7)
+        );
+        assert_eq!(
+            outcome.counter.sustained.as_ref().map(|window| window.consumed),
+            Some(129)
+        );
+    }
+
+    #[test]
+    fn redis_eval_response_rejects_protocol_and_reason_contract_violations() {
+        let request = sample_request();
+
+        let protocol_mismatch = parse_eval_response(
+            request.clone(),
+            &[
+                "redis-fixed-window/v999".to_string(),
+                "allow".to_string(),
+                String::new(),
+                "1700000000125".to_string(),
+                "0".to_string(),
+            ],
+        )
+        .expect_err("protocol mismatch must fail");
+        assert_eq!(protocol_mismatch.kind, QuotaCounterBackendErrorKind::Error);
+        assert!(
+            protocol_mismatch
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("protocol mismatch"))
+        );
+
+        let unknown_reason = parse_eval_response(
+            request,
+            &[
+                REDIS_QUOTA_PROTOCOL_VERSION.to_string(),
+                "deny".to_string(),
+                "mystery_reason".to_string(),
+                "1700000000125".to_string(),
+                "0".to_string(),
+            ],
+        )
+        .expect_err("unknown deny reason must fail");
+        assert_eq!(unknown_reason.kind, QuotaCounterBackendErrorKind::Error);
+        assert!(
+            unknown_reason
+                .detail
+                .as_deref()
+                .is_some_and(|detail| detail.contains("unknown redis quota deny reason"))
+        );
+    }
+
+    #[test]
+    fn redis_error_classification_distinguishes_retryable_and_fatal_failures() {
+        let retryable = RedisError::from((RedisErrorKind::TryAgain, "retry later"));
+        assert_eq!(
+            classify_redis_error(&retryable),
+            QuotaCounterBackendErrorKind::Unavailable
+        );
+
+        let fatal = RedisError::from((RedisErrorKind::ResponseError, "bad lua response"));
+        assert_eq!(
+            classify_redis_error(&fatal),
+            QuotaCounterBackendErrorKind::Error
+        );
+    }
 }

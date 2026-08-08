@@ -2387,6 +2387,45 @@ mod tests {
     }
 
     #[test]
+    fn quota_policy_route_allowlist_scopes_composite_selector_matching() {
+        let policy = QuotaPolicyRuntime {
+            name: "tenant-quota".to_string(),
+            route_allowlist: HashSet::from(["payments".to_string()]),
+            selector: QuotaSelectorMatcher {
+                route: true,
+                tenant: Some(QuotaSelectorKeySpec::Header("x-tenant-id".to_string())),
+                token: None,
+                client: Some(QuotaSelectorKeySpec::ClientIp),
+            },
+            burst: Some(QuotaWindowPolicy {
+                requests: 100,
+                window: Duration::from_secs(1),
+            }),
+            sustained: None,
+        };
+
+        assert!(policy.applies_to_route("payments"));
+        assert!(!policy.applies_to_route("api"));
+
+        let context = identity_context_with_headers(
+            Some("payments"),
+            "POST",
+            "/v1/payments",
+            Some("api.example.com"),
+            None,
+            Some("203.0.113.10:443".parse().expect("client addr")),
+            HashMap::from([("x-tenant-id".to_string(), "acme".to_string())]),
+        );
+        let composite = policy
+            .composite_key(&context)
+            .expect("matching route should still build composite keys");
+
+        assert_eq!(composite.labels.route.as_deref(), Some("payments"));
+        assert_eq!(composite.labels.tenant.as_deref(), Some("acme"));
+        assert_eq!(composite.labels.client.as_deref(), Some("203.0.113.10"));
+    }
+
+    #[test]
     fn runtime_request_key_extraction_covers_canonical_identity_sources() {
         let context = identity_context_with_headers(
             Some("api"),

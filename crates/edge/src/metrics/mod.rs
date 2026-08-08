@@ -1848,4 +1848,29 @@ mod tests {
                 .contains("spooky_quota_backend_health_total{backend_mode=\"redis\",reason=\"timeout\"} 1")
         );
     }
+
+    #[test]
+    fn prometheus_render_includes_degraded_quota_backend_modes() {
+        let metrics = Metrics::default();
+        metrics.record_quota_policy_outcome(
+            "tenant-write-quota",
+            QuotaPolicyDecision::Allowed,
+            QuotaPolicyReason::Allowed,
+            "route+tenant+client",
+            "redis_local_fallback_backend_timeout",
+        );
+        metrics.record_quota_backend_health(
+            "redis_local_fallback_backend_timeout",
+            QuotaBackendHealthReason::Timeout,
+        );
+
+        let rendered = metrics.render_prometheus();
+
+        assert!(rendered.contains(
+            "spooky_quota_policy_outcomes_total{policy=\"tenant-write-quota\",decision=\"allowed\",reason=\"allowed\",selector_dimensions=\"route+tenant+client\",backend_mode=\"redis_local_fallback_backend_timeout\"} 1"
+        ));
+        assert!(rendered.contains(
+            "spooky_quota_backend_health_total{backend_mode=\"redis_local_fallback_backend_timeout\",reason=\"timeout\"} 1"
+        ));
+    }
 }

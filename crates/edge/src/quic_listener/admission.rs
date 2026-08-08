@@ -4091,6 +4091,141 @@ mod tests {
                 )) if policy_name == "tenant-token-client-burst"
             ));
         }
+
+        #[test]
+        fn post_auth_admission_fail_open_quota_backend_errors_preserve_overload_classification() {
+            let resilience = test_runtime_resilience(
+                |config| {
+                    config.adaptive_admission.enabled = true;
+                    config.adaptive_admission.min_limit = 1;
+                    config.adaptive_admission.max_limit = Some(1);
+                    config.quota.enabled = true;
+                    config.quota.backend_failure_policy = QuotaBackendFailurePolicy::FailOpen;
+                    config.quota.backend = QuotaCounterBackend::Redis {
+                        url: "://bad-redis-url".to_string(),
+                        key_prefix: "spooky:test:quota".to_string(),
+                        connect_timeout_ms: 250,
+                        command_timeout_ms: 100,
+                        max_inflight: 8,
+                    };
+                    config.quota.policies = vec![DistributedQuotaPolicy {
+                        name: "tenant-contract".to_string(),
+                        route_allowlist: vec!["api".to_string()],
+                        selector: DistributedQuotaSelector {
+                            route: true,
+                            tenant: Some(DistributedQuotaSelectorSource {
+                                key: "header:x-tenant-id".to_string(),
+                            }),
+                            token: None,
+                            client: None,
+                        },
+                        burst: Some(DistributedQuotaWindow {
+                            requests: 50,
+                            window_secs: 1,
+                        }),
+                        sustained: None,
+                    }];
+                },
+                8,
+            );
+            let _held = resilience
+                .adaptive_admission
+                .clone()
+                .try_acquire()
+                .expect("held adaptive permit");
+            let pending_forward = test_pending_forward_for_api(vec![
+                quiche::h3::Header::new(b"x-tenant-id", b"tenant-a"),
+            ]);
+
+            let result = execute_post_auth_for_api(
+                &resilience,
+                &pending_forward,
+                Some(&test_upstream_pool()),
+                Some(0),
+                &test_upstream_inflight(),
+                Arc::new(Semaphore::new(1)),
+            );
+
+            assert!(matches!(
+                result,
+                PostAuthAdmissionExecution::Rejected(PostAuthAdmissionRejection::Overloaded(
+                    OverloadDecision {
+                        reason: OverloadDecisionReason::AdaptiveAdmission,
+                        status: StatusCode::SERVICE_UNAVAILABLE,
+                        body: b"adaptive admission shed\n",
+                        ..
+                    }
+                ))
+            ));
+        }
+
+        #[test]
+        fn post_auth_admission_fail_closed_quota_backend_errors_reject_before_overload() {
+            let resilience = test_runtime_resilience(
+                |config| {
+                    config.adaptive_admission.enabled = true;
+                    config.adaptive_admission.min_limit = 1;
+                    config.adaptive_admission.max_limit = Some(1);
+                    config.quota.enabled = true;
+                    config.quota.backend_failure_policy = QuotaBackendFailurePolicy::FailClosed;
+                    config.quota.backend = QuotaCounterBackend::Redis {
+                        url: "://bad-redis-url".to_string(),
+                        key_prefix: "spooky:test:quota".to_string(),
+                        connect_timeout_ms: 250,
+                        command_timeout_ms: 100,
+                        max_inflight: 8,
+                    };
+                    config.quota.policies = vec![DistributedQuotaPolicy {
+                        name: "tenant-contract".to_string(),
+                        route_allowlist: vec!["api".to_string()],
+                        selector: DistributedQuotaSelector {
+                            route: true,
+                            tenant: Some(DistributedQuotaSelectorSource {
+                                key: "header:x-tenant-id".to_string(),
+                            }),
+                            token: None,
+                            client: None,
+                        },
+                        burst: Some(DistributedQuotaWindow {
+                            requests: 50,
+                            window_secs: 1,
+                        }),
+                        sustained: None,
+                    }];
+                },
+                8,
+            );
+            let _held = resilience
+                .adaptive_admission
+                .clone()
+                .try_acquire()
+                .expect("held adaptive permit");
+            let pending_forward = test_pending_forward_for_api(vec![
+                quiche::h3::Header::new(b"x-tenant-id", b"tenant-a"),
+            ]);
+
+            let result = execute_post_auth_for_api(
+                &resilience,
+                &pending_forward,
+                Some(&test_upstream_pool()),
+                Some(0),
+                &test_upstream_inflight(),
+                Arc::new(Semaphore::new(1)),
+            );
+
+            assert!(matches!(
+                result,
+                PostAuthAdmissionExecution::Rejected(PostAuthAdmissionRejection::Quota(
+                    QuotaRejectedDecision {
+                        policy_name,
+                        reason: QuotaDenyReason::BackendError,
+                        status: StatusCode::SERVICE_UNAVAILABLE,
+                        body: b"quota backend error\n",
+                        retry_after_seconds: None,
+                    }
+                )) if policy_name == "tenant-contract"
+            ));
+        }
     }
 
     #[tokio::test(flavor = "current_thread")]
