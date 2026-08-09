@@ -116,6 +116,38 @@ groups:
           sum without (status_class, outcome)
           (rate(spooky_backend_requests_total{outcome="backend_error"}[5m]))
 
+      - record: spooky:retry_attempts:rate5m
+        expr: >-
+          sum without (reason)
+          (rate(spooky_retry_attempts_total[5m]))
+
+      - record: spooky:retry_attempts_by_reason:rate5m
+        expr: >-
+          rate(spooky_retry_attempts_total[5m])
+
+      - record: spooky:retry_attempt_ratio:rate5m
+        expr: >-
+          spooky:retry_attempts:rate5m
+          / clamp_min(spooky:requests:rate5m, 0.000001)
+
+      - record: spooky:hedge_triggered:rate5m
+        expr: >-
+          rate(spooky_hedge_triggered_total[5m])
+
+      - record: spooky:hedge_wasted:rate5m
+        expr: >-
+          rate(spooky_hedge_wasted_total[5m])
+
+      - record: spooky:hedge_trigger_ratio:rate5m
+        expr: >-
+          spooky:hedge_triggered:rate5m
+          / clamp_min(spooky:requests:rate5m, 0.000001)
+
+      - record: spooky:hedge_waste_ratio:rate5m
+        expr: >-
+          spooky:hedge_wasted:rate5m
+          / clamp_min(spooky:hedge_triggered:rate5m, 0.000001)
+
       - record: spooky:external_auth_denials:rate5m
         expr: >-
           rate(spooky_external_auth_denied[5m])
@@ -158,6 +190,11 @@ groups:
         expr: >-
           rate(spooky_quota_backend_health_total[5m])
 
+      - record: spooky:quota_backend_degraded_events:rate5m
+        expr: >-
+          sum without (backend_mode, reason)
+          (rate(spooky_quota_backend_health_total{reason!="available"}[5m]))
+
       - record: spooky:tls_handshake_failures:rate5m
         expr: >-
           sum without (listener, reason)
@@ -198,6 +235,32 @@ groups:
       - record: spooky:watchdog_restart_requests:rate5m
         expr: >-
           rate(spooky_watchdog_restart_requests[5m])
+
+      - record: spooky:backend_dns_refresh_failures:rate5m
+        expr: >-
+          rate(spooky_backend_dns_refresh_failure_total[5m])
+
+      - record: spooky:backend_dns_refresh_successes:rate5m
+        expr: >-
+          rate(spooky_backend_dns_refresh_success_total[5m])
+
+      - record: spooky:backend_dns_refresh_failure_ratio:rate5m
+        expr: >-
+          spooky:backend_dns_refresh_failures:rate5m
+          / clamp_min(
+            spooky:backend_dns_refresh_failures:rate5m
+            + spooky:backend_dns_refresh_successes:rate5m,
+            0.000001
+          )
+
+      - record: spooky:brownout_active
+        expr: >-
+          max(spooky_brownout_active)
+
+      - record: spooky:tls_certificate_days_remaining_by_listener_server_name:min
+        expr: >-
+          min by (listener, server_name)
+          (spooky_downstream_tls_certificate_days_remaining)
 
   - name: spooky-slo-inputs
     interval: 30s
