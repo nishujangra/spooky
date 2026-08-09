@@ -20,6 +20,11 @@ groups:
           sum without (status_class)
           (rate(spooky_upstream_requests_total[5m]))
 
+      - record: spooky:requests_by_status_class:rate5m
+        expr: >-
+          sum without (upstream, outcome)
+          (rate(spooky_upstream_requests_total[5m]))
+
       - record: spooky:request_server_errors:rate5m
         expr: >-
           sum without (upstream, status_class, outcome)
