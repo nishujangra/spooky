@@ -264,6 +264,10 @@ fn attach_control_api_request_context<B>(
         .insert(super::admin_identity::ControlApiRequestContext {
             peer_addr: peer_addr.parse().expect("peer socket addr"),
             mtls_identity,
+            listener: None,
+            request_id: None,
+            trace_id: None,
+            span_id: None,
         });
 }
 
@@ -1487,6 +1491,7 @@ fn control_api_builds_mtls_identity_from_subject_role_mapping() {
         "127.0.0.1:9443".parse().expect("peer addr"),
         Some(std::slice::from_ref(&cert_der)),
         Some(&identity_source),
+        Some("edge-primary".to_string()),
     );
     let identity =
         QUICListener::build_admin_identity(Some(request_context), None, Some(&identity_source))
@@ -1504,6 +1509,41 @@ fn control_api_builds_mtls_identity_from_subject_role_mapping() {
     assert_eq!(
         identity.peer_addr.expect("peer addr").ip().to_string(),
         "127.0.0.1"
+    );
+}
+
+#[test]
+fn control_api_request_context_captures_operator_correlation_headers() {
+    let request_context = super::admin_identity::ControlApiRequestContext {
+        peer_addr: "127.0.0.1:9443".parse().expect("peer socket addr"),
+        mtls_identity: None,
+        listener: Some("edge-primary".to_string()),
+        request_id: None,
+        trace_id: None,
+        span_id: None,
+    };
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/admin/runtime")
+        .header(header::HeaderName::from_static("x-request-id"), "req-42")
+        .header(
+            header::HeaderName::from_static("traceparent"),
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        )
+        .body(())
+        .expect("control api request");
+
+    let request_context = QUICListener::augment_control_api_request_context(request_context, &req);
+
+    assert_eq!(request_context.listener.as_deref(), Some("edge-primary"));
+    assert_eq!(request_context.request_id.as_deref(), Some("req-42"));
+    assert_eq!(
+        request_context.trace_id.as_deref(),
+        Some("4bf92f3577b34da6a3ce929d0e0e4736")
+    );
+    assert_eq!(
+        request_context.span_id.as_deref(),
+        Some("00f067aa0ba902b7")
     );
 }
 

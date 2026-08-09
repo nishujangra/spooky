@@ -259,11 +259,13 @@ impl QUICListener {
             peer,
             tls_stream.get_ref().1.peer_certificates(),
             runtime_state.security.identity_source.as_ref(),
+            runtime_state.primary_listener_label.clone(),
         );
         let io = TokioIo::new(tls_stream);
         let service = service_fn(move |mut req: Request<Incoming>| {
             let state = state.clone();
-            let request_context = request_context.clone();
+            let request_context =
+                Self::augment_control_api_request_context(request_context.clone(), &req);
             async move {
                 req.extensions_mut().insert(request_context);
                 Ok::<_, hyper::Error>(Self::handle_control_api_request(req, &state).await)
