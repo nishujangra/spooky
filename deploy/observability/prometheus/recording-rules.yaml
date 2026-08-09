@@ -292,6 +292,23 @@ groups:
         expr: >-
           rate(spooky_downstream_tls_handshake_failure_total[5m])
 
+      - record: spooky:tls_certificate_selection_by_listener_selection:rate5m
+        expr: >-
+          rate(spooky_downstream_tls_certificate_selection_total[5m])
+
+      - record: spooky:tls_alpn_by_listener_protocol:rate5m
+        expr: >-
+          rate(spooky_downstream_tls_alpn_total[5m])
+
+      - record: spooky:upstream_tls_failures_by_backend_phase_reason:rate5m
+        expr: >-
+          rate(spooky_upstream_tls_failure_total[5m])
+
+      - record: spooky:upstream_tls_failures_by_backend:rate5m
+        expr: >-
+          sum by (backend)
+          (rate(spooky_upstream_tls_failure_total[5m]))
+
       - record: spooky:tls_handshake_attempts:rate5m
         expr: >-
           rate(spooky_downstream_tls_handshake_success_total[5m])
@@ -306,23 +323,60 @@ groups:
         expr: >-
           rate(spooky_control_api_connection_limit_drops[5m])
 
+      - record: spooky:runtime_validation_attempts:rate5m
+        expr: >-
+          rate(spooky_runtime_validation_attempts_total[5m])
+
+      - record: spooky:runtime_preview_attempts:rate5m
+        expr: >-
+          rate(spooky_runtime_preview_attempts_total[5m])
+
+      - record: spooky:runtime_activation_outcomes_by_result_reason:rate5m
+        expr: >-
+          rate(spooky_runtime_activation_total[5m])
+
+      - record: spooky:runtime_rollback_outcomes_by_result_reason:rate5m
+        expr: >-
+          rate(spooky_runtime_rollback_total[5m])
+
+      - record: spooky:runtime_rejections_by_reason:rate5m
+        expr: >-
+          rate(spooky_runtime_rejections_total[5m])
+
       - record: spooky:watchdog_degraded_windows:rate5m
         expr: >-
           rate(spooky_watchdog_degraded_windows[5m])
 
+      - record: spooky:watchdog_restart_hooks:rate5m
+        expr: >-
+          rate(spooky_watchdog_restart_hooks[5m])
+
+      - record: spooky:watchdog_restart_requests:rate5m
+        expr: >-
+          rate(spooky_watchdog_restart_requests[5m])
+
       - record: spooky:runtime_panics:rate5m
         expr: >-
           rate(spooky_runtime_panics[5m])
+
+      - record: spooky:control_plane_activity_events:rate5m
+        expr: >-
+          spooky:runtime_validation_attempts:rate5m
+          + spooky:runtime_preview_attempts:rate5m
+          + sum without (result, reason)
+            (spooky:runtime_activation_outcomes_by_result_reason:rate5m)
+          + sum without (result, reason)
+            (spooky:runtime_rollback_outcomes_by_result_reason:rate5m)
+          + sum without (reason)
+            (spooky:runtime_rejections_by_reason:rate5m)
+          + spooky:watchdog_restart_requests:rate5m
+          + spooky:watchdog_restart_hooks:rate5m
 
       - record: spooky:control_plane_error_events:rate5m
         expr: >-
           spooky:control_api_connection_limit_drops:rate5m
           + spooky:watchdog_degraded_windows:rate5m
           + spooky:runtime_panics:rate5m
-
-      - record: spooky:watchdog_restart_requests:rate5m
-        expr: >-
-          rate(spooky_watchdog_restart_requests[5m])
 
       - record: spooky:circuit_breaker_rejected:rate5m
         expr: >-
