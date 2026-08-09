@@ -836,14 +836,15 @@ mod tests {
             }
             JsonValue::Object(values) => {
                 for (key, value) in values {
-                    if key == "expr" && let Some(expr) = value.as_str() {
+                    if key == "expr"
+                        && let Some(expr) = value.as_str()
+                    {
                         exprs.push(expr.to_string());
                     }
                     collect_json_exprs(value, exprs);
                 }
             }
-            JsonValue::Null | JsonValue::Bool(_) | JsonValue::Number(_) | JsonValue::String(_) => {
-            }
+            JsonValue::Null | JsonValue::Bool(_) | JsonValue::Number(_) | JsonValue::String(_) => {}
         }
     }
 
@@ -856,14 +857,15 @@ mod tests {
             }
             YamlValue::Mapping(values) => {
                 for (key, value) in values {
-                    if key.as_str() == Some("expr") && let Some(expr) = value.as_str() {
+                    if key.as_str() == Some("expr")
+                        && let Some(expr) = value.as_str()
+                    {
                         exprs.push(expr.to_string());
                     }
                     collect_yaml_exprs(value, exprs);
                 }
             }
-            YamlValue::Null | YamlValue::Bool(_) | YamlValue::Number(_) | YamlValue::String(_) => {
-            }
+            YamlValue::Null | YamlValue::Bool(_) | YamlValue::Number(_) | YamlValue::String(_) => {}
             YamlValue::Tagged(tagged) => collect_yaml_exprs(&tagged.value, exprs),
         }
     }
@@ -891,10 +893,7 @@ mod tests {
             );
         }
 
-        for relative in [
-            "prometheus/recording-rules.yaml",
-            "prometheus/alerts.yaml",
-        ] {
+        for relative in ["prometheus/recording-rules.yaml", "prometheus/alerts.yaml"] {
             let path = root.join(relative);
             let source = fs::read_to_string(&path).expect("read Prometheus rule file");
             let value: YamlValue = serde_yaml::from_str(&source).expect("parse Prometheus yaml");

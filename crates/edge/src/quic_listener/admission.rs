@@ -3798,8 +3798,9 @@ mod tests {
     }
 
     mod post_auth_admission_execution {
-        use super::*;
         use spooky_config::config::QuotaBackendFailurePolicy;
+
+        use super::*;
 
         fn test_pending_forward_for_api(headers: Vec<quiche::h3::Header>) -> PendingForward {
             PendingForward::sample_for_test(headers)

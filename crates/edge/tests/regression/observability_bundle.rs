@@ -61,7 +61,10 @@ fn grafana_dashboards_parse_and_expose_required_contract_fields() {
             "{dashboard:?} must declare a human title"
         );
         assert!(
-            value.get("schemaVersion").and_then(JsonValue::as_u64).is_some(),
+            value
+                .get("schemaVersion")
+                .and_then(JsonValue::as_u64)
+                .is_some(),
             "{dashboard:?} must declare a Grafana schemaVersion"
         );
         assert!(
@@ -122,10 +125,7 @@ fn grafana_dashboards_parse_and_expose_required_contract_fields() {
 
 #[test]
 fn prometheus_rule_files_parse_and_expose_required_contract_fields() {
-    for relative in [
-        "prometheus/recording-rules.yaml",
-        "prometheus/alerts.yaml",
-    ] {
+    for relative in ["prometheus/recording-rules.yaml", "prometheus/alerts.yaml"] {
         let path = observability_root().join(relative);
         let source = fs::read_to_string(&path).expect("read Prometheus rules file");
         let value: YamlValue =
@@ -147,10 +147,7 @@ fn prometheus_rule_files_parse_and_expose_required_contract_fields() {
             let rules = group["rules"]
                 .as_sequence()
                 .unwrap_or_else(|| panic!("{path:?} contains a group without rules"));
-            assert!(
-                !rules.is_empty(),
-                "{path:?} contains an empty rule group"
-            );
+            assert!(!rules.is_empty(), "{path:?} contains an empty rule group");
 
             for rule in rules {
                 assert!(
