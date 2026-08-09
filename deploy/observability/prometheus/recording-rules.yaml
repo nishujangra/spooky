@@ -102,6 +102,10 @@ groups:
         expr: >-
           rate(spooky_overload_shed_by_reason_total[5m])
 
+      - record: spooky:inflight_wait_admit_by_scope:rate5m
+        expr: >-
+          rate(spooky_inflight_wait_admit_total[5m])
+
       - record: spooky:overload_shed_ratio:rate5m
         expr: >-
           spooky:overload_shed:rate5m
@@ -153,9 +157,22 @@ groups:
           spooky:hedge_wasted:rate5m
           / clamp_min(spooky:hedge_triggered:rate5m, 0.000001)
 
+      - record: spooky:external_auth_timeout:rate5m
+        expr: >-
+          rate(spooky_external_auth_timeout[5m])
+
+      - record: spooky:external_auth_error:rate5m
+        expr: >-
+          rate(spooky_external_auth_error[5m])
+
       - record: spooky:external_auth_denials:rate5m
         expr: >-
           rate(spooky_external_auth_denied[5m])
+
+      - record: spooky:external_auth_unavailable:rate5m
+        expr: >-
+          spooky:external_auth_timeout:rate5m
+          + spooky:external_auth_error:rate5m
 
       - record: spooky:jwt_auth_denials:rate5m
         expr: >-
@@ -180,6 +197,16 @@ groups:
         expr: >-
           sum without (policy, reason, selector_dimensions, backend_mode, decision)
           (rate(spooky_quota_policy_outcomes_total{decision="denied"}[5m]))
+
+      - record: spooky:quota_outcomes_by_decision:rate5m
+        expr: >-
+          sum without (policy, reason, selector_dimensions, backend_mode)
+          (rate(spooky_quota_policy_outcomes_total[5m]))
+
+      - record: spooky:quota_outcomes_by_policy_decision:rate5m
+        expr: >-
+          sum without (reason, selector_dimensions, backend_mode)
+          (rate(spooky_quota_policy_outcomes_total[5m]))
 
       - record: spooky:quota_denials_by_policy_reason_backend_mode:rate5m
         expr: >-
@@ -240,6 +267,14 @@ groups:
       - record: spooky:watchdog_restart_requests:rate5m
         expr: >-
           rate(spooky_watchdog_restart_requests[5m])
+
+      - record: spooky:circuit_breaker_rejected:rate5m
+        expr: >-
+          rate(spooky_circuit_breaker_rejected_total[5m])
+
+      - record: spooky:request_rate_limited:rate5m
+        expr: >-
+          rate(spooky_request_rate_limited[5m])
 
       - record: spooky:backend_dns_refresh_failures:rate5m
         expr: >-
