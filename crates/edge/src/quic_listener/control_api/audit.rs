@@ -575,23 +575,42 @@ mod tests {
         };
 
         let value = serde_json::to_value(&event).expect("serialize audit event");
-        assert_eq!(value["schema_version"], "v1");
-        assert_eq!(value["event_id"], "evt-1");
-        assert_eq!(value["event_type"], "runtime_reload");
-        assert_eq!(value["request_id"], "req-7");
-        assert_eq!(value["trace_id"], "4bf92f3577b34da6a3ce929d0e0e4736");
-        assert_eq!(value["span_id"], "00f067aa0ba902b7");
-        assert_eq!(value["listener"], "edge-primary");
-        assert_eq!(value["action"], "runtime_reload.attempt");
-        assert_eq!(value["result"], "success");
-        assert_eq!(value["actor"]["id"], "alice");
-        assert_eq!(value["actor"]["roles"][0], "operator");
-        assert_eq!(value["authn"]["mechanisms"][0], "bearer_token");
-        assert_eq!(value["generation"]["active_generation"], 7);
-        assert_eq!(value["generation"]["candidate_generation"], 8);
-        assert!(value.get("failure_class").is_none());
-        assert!(value.get("upstream").is_none());
-        assert!(value.get("backend").is_none());
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "schema_version": "v1",
+                "event_id": "evt-1",
+                "event_type": "runtime_reload",
+                "time_unix_ms": 42,
+                "request_id": "req-7",
+                "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+                "span_id": "00f067aa0ba902b7",
+                "listener": "edge-primary",
+                "actor": {
+                    "id": "alice",
+                    "roles": ["operator"],
+                    "authn_mechanisms": ["bearer_token"],
+                    "mtls_subject": "CN=alice"
+                },
+                "action": "runtime_reload.attempt",
+                "target": {
+                    "route": "/admin/runtime/reload",
+                    "resource": "control_api",
+                    "config_path": "/etc/spooky/config.yaml"
+                },
+                "generation": {
+                    "active_generation": 7,
+                    "candidate_generation": 8
+                },
+                "result": "success",
+                "reason": "operator_requested",
+                "peer_addr": "127.0.0.1:9999",
+                "authn": {
+                    "mechanisms": ["bearer_token"],
+                    "mtls_subject": "CN=alice"
+                }
+            })
+        );
     }
 
     #[test]

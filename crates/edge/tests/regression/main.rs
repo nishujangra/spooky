@@ -11,3 +11,4 @@
 
 mod hash;
 mod metrics;
+mod observability_bundle;
