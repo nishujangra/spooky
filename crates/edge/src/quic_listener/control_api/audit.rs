@@ -15,7 +15,7 @@ use super::{
 };
 use crate::REQUEST_ID_COUNTER;
 
-const ADMIN_AUDIT_SCHEMA_VERSION: &str = "v1";
+pub(super) const ADMIN_AUDIT_SCHEMA_VERSION: &str = "v1";
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(in crate::quic_listener) struct ControlApiAdminAuditEmitter {

@@ -1541,10 +1541,7 @@ fn control_api_request_context_captures_operator_correlation_headers() {
         request_context.trace_id.as_deref(),
         Some("4bf92f3577b34da6a3ce929d0e0e4736")
     );
-    assert_eq!(
-        request_context.span_id.as_deref(),
-        Some("00f067aa0ba902b7")
-    );
+    assert_eq!(request_context.span_id.as_deref(), Some("00f067aa0ba902b7"));
 }
 
 #[tokio::test]
@@ -2438,6 +2435,9 @@ async fn control_api_runtime_history_renders_recorded_generation_changes() {
 
     let payload = json_body(QUICListener::render_control_api_runtime_history(&state)).await;
     assert_eq!(payload["active_generation"], 1);
+    assert_eq!(payload["observability"]["contract_version"], "v1");
+    assert_eq!(payload["observability"]["audit_schema_version"], "v1");
+    assert_eq!(payload["observability"]["current_generation"], 1);
     assert_eq!(
         payload["retained_generations"].as_array().map(Vec::len),
         Some(3)
@@ -2472,6 +2472,24 @@ async fn control_api_runtime_history_renders_recorded_generation_changes() {
     assert_eq!(payload["retained_generations"][2]["has_bundle"], true);
     assert_eq!(payload["entries"].as_array().map(Vec::len), Some(1));
     assert_eq!(payload["entries"][0]["operation"], "activate");
+    assert_eq!(
+        payload["observability"]["recent_admin_actions"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        payload["observability"]["recent_admin_actions"][0]["kind"],
+        "activation_succeeded"
+    );
+    assert_eq!(
+        payload["observability"]["recent_admin_actions"][0]["operation"],
+        "activate"
+    );
+    assert_eq!(
+        payload["observability"]["recent_admin_actions"][0]["requested_by"],
+        "test"
+    );
 }
 
 #[tokio::test]
@@ -2705,6 +2723,66 @@ async fn control_api_runtime_snapshot_exposes_quota_policy_and_backend_status() 
     assert_eq!(policies[0]["burst"]["window_secs"], 1);
     assert_eq!(policies[0]["sustained"]["requests"], 500);
     assert_eq!(policies[0]["sustained"]["window_secs"], 60);
+    assert_eq!(payload["observability"]["contract_version"], "v1");
+    assert_eq!(payload["observability"]["audit_schema_version"], "v1");
+    assert_eq!(payload["observability"]["current_generation"], 0);
+    assert_eq!(
+        payload["observability"]["documentation"]["observability_contract"],
+        "docs/architecture/observability-contract.md"
+    );
+    assert_eq!(
+        payload["observability"]["documentation"]["control_plane_operations"],
+        "docs/operations/control-plane.md"
+    );
+    assert_eq!(
+        payload["observability"]["backend_health_summary"]["availability"],
+        "healthy"
+    );
+    assert_eq!(
+        payload["observability"]["backend_health_summary"]["placed_total"],
+        1
+    );
+    assert_eq!(
+        payload["observability"]["backend_health_summary"]["healthy"],
+        1
+    );
+    assert_eq!(
+        payload["observability"]["backend_health_summary"]["active_membership"],
+        1
+    );
+    assert_eq!(
+        payload["observability"]["quota_backend_health_summary"]["enabled"],
+        true
+    );
+    assert_eq!(
+        payload["observability"]["quota_backend_health_summary"]["active_backend"],
+        "redis"
+    );
+    assert_eq!(
+        payload["observability"]["quota_backend_health_summary"]["availability"],
+        "degraded"
+    );
+    assert_eq!(
+        payload["observability"]["quota_backend_health_summary"]["recent_error_count"],
+        1
+    );
+    assert_eq!(
+        payload["observability"]["recent_admin_actions"]
+            .as_array()
+            .map(Vec::len),
+        Some(0)
+    );
+    assert!(
+        payload["observability"]["dashboard_packages"]
+            .as_array()
+            .expect("dashboard package refs")
+            .iter()
+            .any(|entry| {
+                entry["dashboard_id"] == "control_plane"
+                    && entry["definition_path"] == "deploy/observability/grafana/control-plane.json"
+            }),
+        "runtime snapshot should link observability packages by stable definition path"
+    );
 }
 
 #[tokio::test]

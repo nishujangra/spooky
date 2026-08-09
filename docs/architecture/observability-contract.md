@@ -232,12 +232,39 @@ The runtime snapshot should describe the current active generation and shared op
 Important snapshot areas include:
 
 - active generation id and config path
+- observability package metadata and contract versions
 - worker expectations
 - watchdog state
 - adaptive admission state
 - backend lifecycle inventory
 - coarse metrics summary
 - listener TLS inventory
+
+### Observability package metadata
+
+The runtime snapshot is also the packaged entry point into observability for operators.
+
+The snapshot should expose:
+
+- the current active generation
+- the active observability contract version
+- the control-plane audit schema version
+- a backend health summary
+- a quota backend health summary
+- recent tracked admin/runtime actions when runtime history is available
+- stable references to shipped dashboard definition files
+- stable references to operator documentation files
+
+These references should point to repository-managed assets such as:
+
+- `deploy/observability/grafana/*.json`
+- `docs/architecture/observability-contract.md`
+- `docs/operations/control-plane.md`
+- `docs/operations/metrics-and-alerts.md`
+- `docs/operations/distributed-quota.md`
+
+This is intentionally not a UI URL contract. The control plane should expose stable
+package references that other operator tooling can map into local workflows.
 
 ### Backend snapshot meanings
 
