@@ -1,14 +1,16 @@
 # Observability Contract
 
-This document defines the stable observability contract for Spooky after the refactor work that centralized reason vocabularies, outcome recording, backend lifecycle snapshots, and control-plane runtime views.
+This document defines the stable observability contract for Spooky after the refactor work that centralized reason vocabularies, outcome recording, backend lifecycle snapshots, control-plane runtime views, and admin audit events.
 
 ## Purpose
 
-Spooky has three operator-facing observability surfaces:
+Spooky has five operator-facing observability surfaces:
 
 - Prometheus metrics
 - structured operational logs
+- OTLP traces
 - control API runtime snapshots
+- structured control-plane audit events
 
 These surfaces should describe the same events using the same vocabulary.
 
@@ -18,19 +20,47 @@ The source of truth for that vocabulary is:
 
 This file defines the canonical enums, stable slugs, and field names that all emitters should use.
 
+## Source Of Truth
+
+The source of truth is not a dashboard JSON file, alert rule, or one emitter implementation.
+
+The source of truth is the canonical vocabulary in:
+
+- `crates/edge/src/observability/mod.rs`
+
+Operator-packaged assets must be derived from that module's stable public meaning.
+
+The main source-of-truth enums and helper types are:
+
+- `RequestOutcomeReason`
+- `BackendHealthReason`
+- `RetryDecisionReason`
+- `HedgeDecisionReason`
+- `AdmissionDecisionReason`
+- `AdmissionOverloadCause`
+- `QuotaPolicyDecision`
+- `QuotaPolicyReason`
+- `QuotaBackendHealthReason`
+- `OperationalEventContext`
+- `MetricReasonLabels`
+
+If one of those enums changes, that is an observability contract change. Dashboard queries, alert rules, runbooks, and control-plane JSON examples must be reviewed together.
+
 ## Contract Rule
 
 One operational concept should have:
 
 - one canonical enum value
 - one canonical slug string
-- one consistent meaning across metrics, logs, and control API payloads
+- one consistent meaning across metrics, logs, traces, control API payloads, and audit events
 
 The contract exists to prevent drift such as:
 
 - one reason name in metrics
 - a different prose string in logs
 - a third serialized form in control-plane JSON
+- a fourth ad hoc field in audit events
+- a fifth trace attribute that cannot be joined back to the operator vocabulary
 
 ## Canonical Reason Families
 
@@ -53,9 +83,57 @@ That means the slug should be treated as the stable value for:
 
 - metric label values
 - structured log `reason=` values
+- trace span attributes describing the same reason
 - control API serialized fields
+- audit event `reason` values
 
 Changing a slug is an observability contract change, not a cosmetic refactor.
+
+## Operator Correlation Contract
+
+Operators need a stable path from an alert to a dashboard panel to an event log or audit record to a runtime snapshot.
+
+The default correlation field set is:
+
+- `request_id`
+- `trace_id`
+- `span_id`
+- `event_id`
+- `generation`
+- `listener`
+- `route`
+- `upstream`
+- `backend`
+- `reason`
+- `failure_class`
+- `policy`
+- `component`
+
+### Correlation field meanings
+
+- `request_id` identifies a request-path event when request-scoped logging or tracing exists
+- `trace_id` identifies the distributed trace carrying the request or control-plane action
+- `span_id` identifies the local operation within that trace
+- `event_id` identifies a discrete audit or operator-significant event
+- `generation` identifies the active or candidate runtime generation involved in a control-plane action
+- `listener` identifies the ingress or admin listener involved in the event
+- `route` is a route identity when route-specific visibility exists
+- `upstream` is the canonical traffic attribution field for request-path metrics and logs
+- `backend` is the selected backend identity
+- `reason` is the canonical reason slug from `crates/edge/src/observability/mod.rs`
+- `failure_class` is a coarse refinement axis where `reason` alone is not sufficient
+- `policy` identifies the named policy that produced a decision when policy attribution exists
+- `component` identifies the subsystem such as `admission`, `quota`, `tls`, `runtime`, or `control_api`
+
+### Surface expectations
+
+- metrics should use low-cardinality correlation dimensions only
+- logs should emit the canonical field names when the values are known
+- traces should carry the same canonical names as span attributes where request or control-plane tracing exists
+- control API snapshots should expose current state using the same identities and reason slugs
+- audit events should serialize the same actor, target, generation, and reason meaning used elsewhere
+
+Absence is better than fabricated values. If a field is not known, omit it rather than inventing placeholders.
 
 ## Structured Log Field Contract
 
@@ -81,6 +159,27 @@ These fields are rendered in stable `key=value` form and unset fields are omitte
 
 Do not invent new ad hoc field keys for the same concept if the canonical field already exists.
 
+## Trace Attribute Contract
+
+Tracing is a diagnostic surface, not a separate vocabulary.
+
+Where traces are emitted, span and event attributes should reuse the canonical names:
+
+- `request_id`
+- `trace_id`
+- `span_id`
+- `generation`
+- `listener`
+- `route`
+- `upstream`
+- `backend`
+- `reason`
+- `failure_class`
+- `policy`
+- `component`
+
+Trace attributes may include additional diagnostic detail, but canonical operator fields must keep the same names and meanings as logs, metrics, control API, and audit events.
+
 ## Metric Label Contract
 
 Reasoned metric emitters should use the canonical label model:
@@ -105,6 +204,24 @@ This is what allows dashboards to compare:
 - admission denials
 
 without each emitter choosing different label semantics.
+
+## Audit Event Contract
+
+The control-plane audit stream is part of the operator observability bundle, not a side channel.
+
+Audit events should use the same identities and reason vocabulary as other surfaces, with fields oriented around:
+
+- actor
+- action
+- target
+- generation
+- result
+- reason
+- event_id
+- peer address
+- authentication mechanism
+
+Audit events may include control-plane-specific context, but they should not redefine canonical reason values or resource identities already established elsewhere.
 
 ## Control API Snapshot Contract
 
@@ -151,6 +268,50 @@ That means runtime snapshot rendering should depend on:
 
 It should not reconstruct state by reaching into multiple unrelated listener internals.
 
+## Canonical Dimensions Versus Diagnostic Dimensions
+
+The operator bundle must distinguish between dimensions that are safe for dashboards and alerts and dimensions that belong only in logs, traces, or targeted investigation.
+
+### Canonical operator dimensions
+
+These are acceptable for stable metrics, dashboards, alerts, and control-plane summaries:
+
+- `upstream`
+- `backend`
+- `listener`
+- `protocol`
+- `status_class`
+- `outcome`
+- `reason`
+- `failure_class`
+- `policy`
+- `component`
+- `generation` when bounded to active or recent generations
+
+### High-cardinality diagnostic dimensions
+
+These should not be introduced as default metric labels or dashboard variables:
+
+- raw request path
+- user id
+- tenant id
+- token id
+- client ip
+- header values
+- query strings
+- certificate fingerprints for every request
+- arbitrary trace baggage
+- per-request nonce or session identifiers
+
+These belong in:
+
+- structured logs
+- trace attributes
+- audit events where operationally justified
+- control-plane detail views
+
+The rule is simple: if a dimension can grow with end-user traffic, it is diagnostic by default, not metric-facing by default.
+
 ## Metrics vs Logs vs Control API
 
 These surfaces serve different operational jobs.
@@ -171,6 +332,14 @@ Logs are for:
 - request-path and lifecycle debugging
 - understanding the exact reason a single action happened
 
+### Traces
+
+Traces are for:
+
+- cross-component timing analysis
+- causal sequencing within a single request or control-plane action
+- joining request-path latency with retry, hedge, auth, and backend sub-operations
+
 ### Control API snapshots
 
 Control API snapshots are for:
@@ -179,6 +348,15 @@ Control API snapshots are for:
 - rollout verification
 - backend and watchdog status inspection
 - runtime-generation confirmation
+
+### Audit events
+
+Audit events are for:
+
+- operator accountability
+- change history
+- security-relevant admin actions
+- correlating runtime changes with traffic or control-plane symptoms
 
 They should complement each other, not contradict each other.
 
@@ -201,6 +379,27 @@ Avoid introducing unbounded labels such as:
 - per-request trace tokens
 
 If a dimension is needed for debugging but not for alerting, prefer logs or control-plane snapshots over high-cardinality metrics.
+
+## Dashboard And Alert Compatibility Promise
+
+Shipped dashboards and alert rules are versioned operator assets that depend on this contract.
+
+Compatibility promises:
+
+- canonical metric names and canonical reason label values are treated as stable operator API
+- dashboard panels should depend on canonical metrics or recording rules built from canonical metrics
+- alert rules should depend on canonical metrics or recording rules, not prose log parsing
+- control-plane examples and runbooks should use the same reason slugs and field names as the code contract
+- additive fields are allowed when they do not change existing meanings
+- renaming a canonical slug, field key, or low-cardinality label is a breaking observability change
+
+When a breaking observability change is unavoidable:
+
+- update `crates/edge/src/observability/mod.rs`
+- update this contract document in the same change
+- update shipped dashboards and alerts in the same change
+- document migration notes for operators
+- avoid silent drift where old dashboards continue to query non-existent or semantically changed series
 
 ## Backend Lifecycle Observability
 
