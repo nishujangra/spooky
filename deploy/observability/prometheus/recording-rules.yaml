@@ -115,15 +115,45 @@ groups:
         expr: >-
           rate(spooky_backend_timeouts[5m])
 
+      - record: spooky:backend_errors:rate5m
+        expr: >-
+          rate(spooky_backend_errors[5m])
+
       - record: spooky:backend_timeout_ratio:rate5m
         expr: >-
           spooky:backend_timeouts:rate5m
+          / clamp_min(spooky:requests:rate5m, 0.000001)
+
+      - record: spooky:backend_error_ratio:rate5m
+        expr: >-
+          spooky:backend_errors:rate5m
           / clamp_min(spooky:requests:rate5m, 0.000001)
 
       - record: spooky:backend_errors_by_upstream_backend:rate5m
         expr: >-
           sum without (status_class, outcome)
           (rate(spooky_backend_requests_total{outcome="backend_error"}[5m]))
+
+      - record: spooky:health_checks_total:rate5m
+        expr: >-
+          rate(spooky_health_checks_total[5m])
+
+      - record: spooky:health_checks_success:rate5m
+        expr: >-
+          rate(spooky_health_checks_success[5m])
+
+      - record: spooky:health_checks_failure:rate5m
+        expr: >-
+          rate(spooky_health_checks_failure[5m])
+
+      - record: spooky:health_check_failure_ratio:rate5m
+        expr: >-
+          spooky:health_checks_failure:rate5m
+          / clamp_min(spooky:health_checks_total:rate5m, 0.000001)
+
+      - record: spooky:health_failures_by_reason:rate5m
+        expr: >-
+          rate(spooky_health_failures_total[5m])
 
       - record: spooky:retry_attempts:rate5m
         expr: >-
@@ -134,6 +164,10 @@ groups:
         expr: >-
           rate(spooky_retry_attempts_total[5m])
 
+      - record: spooky:retry_denied_by_reason:rate5m
+        expr: >-
+          rate(spooky_retry_denied_total[5m])
+
       - record: spooky:retry_attempt_ratio:rate5m
         expr: >-
           spooky:retry_attempts:rate5m
@@ -143,14 +177,36 @@ groups:
         expr: >-
           rate(spooky_hedge_triggered_total[5m])
 
+      - record: spooky:hedge_won:rate5m
+        expr: >-
+          rate(spooky_hedge_won_total[5m])
+
       - record: spooky:hedge_wasted:rate5m
         expr: >-
           rate(spooky_hedge_wasted_total[5m])
+
+      - record: spooky:hedge_primary_won_after_trigger:rate5m
+        expr: >-
+          rate(spooky_hedge_primary_won_after_trigger_total[5m])
+
+      - record: spooky:hedge_primary_late_samples:rate5m
+        expr: >-
+          rate(spooky_hedge_primary_late_samples_total[5m])
+
+      - record: spooky:hedge_primary_late_avg_ms:5m
+        expr: >-
+          rate(spooky_hedge_primary_late_ms_total[5m])
+          / clamp_min(spooky:hedge_primary_late_samples:rate5m, 0.000001)
 
       - record: spooky:hedge_trigger_ratio:rate5m
         expr: >-
           spooky:hedge_triggered:rate5m
           / clamp_min(spooky:requests:rate5m, 0.000001)
+
+      - record: spooky:hedge_win_ratio:rate5m
+        expr: >-
+          spooky:hedge_won:rate5m
+          / clamp_min(spooky:hedge_triggered:rate5m, 0.000001)
 
       - record: spooky:hedge_waste_ratio:rate5m
         expr: >-
@@ -283,6 +339,27 @@ groups:
       - record: spooky:backend_dns_refresh_successes:rate5m
         expr: >-
           rate(spooky_backend_dns_refresh_success_total[5m])
+
+      - record: spooky:backend_dns_address_set_changes:rate5m
+        expr: >-
+          rate(spooky_backend_dns_address_set_changes_total[5m])
+
+      - record: spooky:backend_client_rotation_events:rate5m
+        expr: >-
+          rate(spooky_backend_client_rotations_total[5m])
+
+      - record: spooky:backend_client_rotation_failures:rate5m
+        expr: >-
+          rate(spooky_backend_client_rotation_failures_total[5m])
+
+      - record: spooky:backend_client_rotations_by_backend:rate5m
+        expr: >-
+          rate(spooky_backend_client_rotations[5m])
+
+      - record: spooky:backend_connect_attempts_by_backend:rate5m
+        expr: >-
+          sum by (backend)
+          (rate(spooky_backend_connect_attempt_total[5m]))
 
       - record: spooky:backend_dns_refresh_failure_ratio:rate5m
         expr: >-
