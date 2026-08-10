@@ -132,7 +132,13 @@ groups:
       - record: spooky:backend_errors_by_upstream_backend:rate5m
         expr: >-
           sum without (status_class, outcome)
-          (rate(spooky_backend_requests_total{outcome="backend_error"}[5m]))
+          (
+            rate(
+              spooky_backend_requests_total{
+                outcome=~"failure|timeout|backend_error"
+              }[5m]
+            )
+          )
 
       - record: spooky:health_checks_total:rate5m
         expr: >-
