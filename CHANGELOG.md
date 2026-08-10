@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0-beta] - 2026-08-10
+
+### Added
+
+- Distributed quota policies under `resilience.quota` — cluster-wide request budgets enforced at admission, evaluated before forwarding. Disabled by default (`enabled: false`), so an unchanged 0.4.3 config engages none of this machinery.
+- Composite quota policies via `resilience.quota.policies[]`, each carrying a `name`, an optional `route_allowlist`, a `selector`, and one or both of a `burst` and `sustained` window (`requests`, `window_secs`). A policy's identity is the composite of its selected dimensions, so one policy can budget per tenant-and-route without collapsing distinct callers into a shared counter.
+- Quota identity extraction via `selector` — `route` (bool), plus `tenant`, `token`, and `client`, each resolved from a request `key`. `tenant`/`token` accept `header:*`, `cookie:*`, `query:*`, and `bearer_token`; `client` additionally accepts `peer_ip` and `client_ip`.
+- Redis-backed counter store (`resilience.quota.backend.kind: redis`) with `url`, `key_prefix` (default `spooky:quota`), `connect_timeout_ms` (default `250`), `command_timeout_ms` (default `100`), and `max_inflight` (default `1024`). Burst and sustained windows are incremented and tested in a single atomic Lua evaluation, so a request never charges one window and abandons the other.
+- In-memory counter backend (`kind: in_memory`, the default) for single-node deployments and tests, sharing the fixed-window semantics of the Redis path.
+- Bounded local fallback via `resilience.quota.local_fallback` (Redis backends only) with `key_prefix` and a required `max_entries`. Fallback engages only for outage-style failures — backend timeout and unavailability — and never for protocol, config, or logic errors, which stay hard failures rather than silently degrading to a weaker budget.
+- Enforcement modes via `resilience.quota.enforcement` — `shadow` records what would have been denied without blocking, `enforce` (default) rejects. Shadow mode lets a policy be sized against live traffic before it starts turning requests away.
+- Backend failure policy via `resilience.quota.backend_failure_policy` — `fail_closed` (default) rejects with `503` when the counter store is unreachable, `fail_open` admits. The default is fail-closed: an unreachable Redis stops enforcing budgets, and admitting unbounded traffic is the worse outcome.
+- Quota metrics — `spooky_quota_policy_outcomes_total{policy,decision,reason,selector_dimensions,backend_mode}` and `spooky_quota_backend_health_total{backend_mode,reason}`. Decisions are `allowed`, `denied`, `shadow_denied`, `failed_open`, `failed_closed`, and `not_applied`; degraded operation is visible in `backend_mode` as `<kind>_local_fallback_<reason>`, so running on fallback counters is distinguishable from running on the real backend.
+- Runtime introspection for quota — `GET /admin/runtime` gained a `quota` block carrying `enabled`, `enforcement`, `backend_failure_policy`, `active_backend`, a `backend_status` object (`availability`, `degraded`, `health_reason`, `last_observed_at_unix_ms`, `recent_errors[]`), and the resolved `policies[]` with their selectors and windows.
+- Documentation: `docs/architecture/quota-policy-contract.md` defines the policy semantics and decision model, and `docs/operations/distributed-quota.md` covers backend selection, degraded operation, and migration from scoped rate limiting.
+
+### Changed
+
+- Scoped rate limiting was rebuilt on the quota pipeline's evaluation contract. Buckets now evaluate a request cost and return remaining tokens with a computed `retry_after` derived from the token deficit and refill rate, replacing the previous boolean consume. Existing `resilience.scoped_rate_limits` configuration is unchanged and continues to behave as before.
+- A poisoned scoped rate-limit bucket lock is now reported as a backend unavailability rather than being treated as an implicit allow inside the bucket layer. The legacy scoped path still resolves that to fail-open, preserving its prior behavior.
+
+### Fixed
+
+- Every route-matching quota policy is evaluated, not only the first. Previously a route matched by more than one policy consumed only the first policy's budget — later policies validated at startup and appeared in the runtime snapshot while enforcing nothing, so a narrow policy layered after a broad one was silently dead. A denial now short-circuits so remaining budgets are not charged for a request that is about to be rejected, while shadow denials continue evaluating so each policy still records its outcome.
+- A request missing the identity a later policy selects on is denied with `selector_identity_missing` instead of being admitted by an earlier, broader policy that happened to match first.
+
+### Security
+
+- Quota enforcement is fail-closed by default. A counter-store outage rejects with `503` rather than admitting unmetered traffic, and local fallback is deliberately scoped to outages only — a misconfigured or protocol-mismatched backend fails hard instead of quietly enforcing a weaker, node-local budget.
+- Config validation rejects incoherent quota policy at startup: a `burst` window that is not shorter than its `sustained` window, a selector with no dimensions, zero-valued `requests` or `window_secs`, duplicate policy names, duplicate selector/window fingerprints, the same request key bound to two identity dimensions, `local_fallback` configured against a non-Redis backend, and `enabled: true` with no policies.
+
+### Compatibility
+
+- Purely additive for existing deployments. `resilience.quota` defaults to `enabled: false` with an empty `policies` list, so a 0.4.3 config runs unchanged and scoped rate limiting keeps working as before — it is not deprecated.
+- **One-way config compatibility.** `resilience.quota` and its nested structs use strict `deny_unknown_fields`: a 0.5.0 binary accepts a 0.4.3 config, but a 0.4.3 binary rejects any config carrying a `resilience.quota` block. Plan rollbacks accordingly.
+- Automation reading `GET /admin/runtime` sees a new top-level `quota` object, and metrics scrapers see two new counter families. Optional fields are omitted rather than emitted as null.
+
 ## [0.4.3-beta] - 2026-08-06
 
 ### Added
