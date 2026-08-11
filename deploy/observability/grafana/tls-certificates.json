@@ -120,7 +120,7 @@
       },
       "targets": [
         {
-          "expr": "100 * sum(spooky:tls_handshake_failure_ratio:rate5m)",
+          "expr": "(100 * sum(spooky:tls_handshake_failure_ratio:rate5m)) or vector(0)",
           "legendFormat": "failure ratio",
           "refId": "A"
         }
@@ -184,7 +184,7 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:tls_handshake_failures:rate5m)",
+          "expr": "sum(spooky:tls_handshake_failures:rate5m) or vector(0)",
           "legendFormat": "handshake failures",
           "refId": "A"
         }
