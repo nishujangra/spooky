@@ -22,8 +22,16 @@ struct Cli {
     #[arg(long, default_value = "/")]
     path: String,
 
+    #[arg(long, default_value = "GET")]
+    method: String,
+
     #[arg(long, default_value = "localhost")]
     host: String,
+
+    /// Additional request headers as `name=value`. Repeat to add more headers.
+    /// Pseudo-headers such as `:protocol=websocket` are supported.
+    #[arg(long = "header")]
+    headers: Vec<String>,
 
     #[arg(long)]
     insecure: bool,
@@ -73,6 +81,18 @@ fn emit_request_result(ok: bool, latency_ns: u128, report_latency: bool) {
 
 fn should_retry_request(attempts_started: usize, max_request_retries: usize) -> bool {
     attempts_started <= max_request_retries
+}
+
+fn parse_header_arg(header: &str) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let (name, value) = header
+        .split_once('=')
+        .ok_or_else(|| format!("invalid --header '{header}': expected name=value"))?;
+    let name = name.trim();
+    let value = value.trim();
+    if name.is_empty() {
+        return Err(format!("invalid --header '{header}': header name is empty"));
+    }
+    Ok((name.as_bytes().to_vec(), value.as_bytes().to_vec()))
 }
 
 fn open_connection(
@@ -169,6 +189,11 @@ fn run_client(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
     let mut last_error: Option<String> = None;
     let mut inflight: HashMap<u64, InflightRequest> = HashMap::new();
     let per_request_timeout = Duration::from_millis(cli.request_timeout_ms);
+    let extra_headers = cli
+        .headers
+        .iter()
+        .map(|header| parse_header_arg(header))
+        .collect::<Result<Vec<_>, _>>()?;
 
     // Kick off handshake packet(s).
     let _ = flush_egress(&mut conn, &socket, &mut out);
@@ -224,13 +249,18 @@ fn run_client(cli: &Cli) -> Result<(), Box<dyn std::error::Error>> {
                 let first_start_ref = request_started[request_id].get_or_insert_with(Instant::now);
                 let first_start = *first_start_ref;
 
-                let req = vec![
-                    quiche::h3::Header::new(b":method", b"GET"),
+                let mut req = vec![
+                    quiche::h3::Header::new(b":method", cli.method.as_bytes()),
                     quiche::h3::Header::new(b":scheme", b"https"),
                     quiche::h3::Header::new(b":authority", cli.host.as_bytes()),
                     quiche::h3::Header::new(b":path", cli.path.as_bytes()),
                     quiche::h3::Header::new(b"user-agent", b"spooky-h3-client"),
                 ];
+                req.extend(
+                    extra_headers
+                        .iter()
+                        .map(|(name, value)| quiche::h3::Header::new(name, value)),
+                );
 
                 match h3.send_request(&mut conn, &req, true) {
                     Ok(stream_id) => {
@@ -439,6 +469,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if cli.request_timeout_ms == 0 {
         return Err("--request-timeout-ms must be >= 1".into());
+    }
+
+    if cli.method.trim().is_empty() {
+        return Err("--method must not be empty".into());
     }
 
     run_client(&cli)
