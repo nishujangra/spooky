@@ -42,6 +42,21 @@
         "textFormat": "Successful runtime rollback observed from control-plane metrics. Use runtime history and admin audit events to identify the exact generation transition.",
         "titleFormat": "Runtime rollback",
         "type": "tags"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "enable": true,
+        "expr": "sum(increase(spooky_watchdog_degraded_windows[1m])) > 0",
+        "hide": false,
+        "iconColor": "rgba(255, 0, 0, 1)",
+        "name": "Watchdog Degraded",
+        "step": "60s",
+        "textFormat": "Watchdog degraded window observed. Correlate with runtime panics, connection-limit drops, and recent admin operations.",
+        "titleFormat": "Watchdog degraded",
+        "type": "tags"
       }
     ]
   },
@@ -730,6 +745,147 @@
       ],
       "title": "Control API Pressure and Error Events",
       "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 37
+      },
+      "id": 13,
+      "panels": [],
+      "title": "Operator Drilldown",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Activation plus rollback activity rate. This is the packaged control-plane change pressure view for rollout-heavy periods.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 3,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.02
+              },
+              {
+                "color": "red",
+                "value": 0.2
+              }
+            ]
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 38
+      },
+      "id": 14,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "sum(spooky:runtime_change_events:rate5m) or vector(0)",
+          "legendFormat": "runtime change events",
+          "refId": "A"
+        }
+      ],
+      "title": "Runtime Change Event Rate",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Failure-side runtime outcomes only. This tells operators whether deploy churn is benign or whether the control plane is actively struggling to apply changes.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "ops"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 18,
+        "x": 6,
+        "y": 38
+      },
+      "id": 15,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (result, reason) (spooky:runtime_activation_outcomes_by_result_reason:rate5m{result!=\"success\"})",
+          "legendFormat": "activate {{result}} / {{reason}}",
+          "refId": "A"
+        },
+        {
+          "expr": "sum by (result, reason) (spooky:runtime_rollback_outcomes_by_result_reason:rate5m{result!=\"success\"})",
+          "legendFormat": "rollback {{result}} / {{reason}}",
+          "refId": "B"
+        }
+      ],
+      "title": "Runtime Failure Outcomes",
+      "type": "timeseries"
     }
   ],
   "refresh": "30s",
@@ -769,6 +925,6 @@
   "timezone": "",
   "title": "Spooky Control-Plane Activity",
   "uid": "spooky-control-plane",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

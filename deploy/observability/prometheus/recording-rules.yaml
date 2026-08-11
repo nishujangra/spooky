@@ -45,6 +45,14 @@ groups:
           spooky:request_server_errors_by_upstream:rate5m
           / clamp_min(spooky:requests_by_upstream:rate5m, 0.000001)
 
+      - record: spooky:requests_by_upstream_success_ratio:rate5m
+        expr: >-
+          (
+            spooky:requests_by_upstream:rate5m
+            - spooky:request_server_errors_by_upstream:rate5m
+          )
+          / clamp_min(spooky:requests_by_upstream:rate5m, 0.000001)
+
       - record: spooky:request_latency_ms:p50_5m
         expr: >-
           histogram_quantile(
@@ -129,6 +137,11 @@ groups:
           spooky:backend_errors:rate5m
           / clamp_min(spooky:requests:rate5m, 0.000001)
 
+      - record: spooky:backend_failure_pressure:rate5m
+        expr: >-
+          spooky:backend_timeouts:rate5m
+          + spooky:backend_errors:rate5m
+
       - record: spooky:backend_errors_by_upstream_backend:rate5m
         expr: >-
           sum without (status_class, outcome)
@@ -174,9 +187,19 @@ groups:
         expr: >-
           rate(spooky_retry_denied_total[5m])
 
+      - record: spooky:retry_denials:rate5m
+        expr: >-
+          sum without (reason)
+          (rate(spooky_retry_denied_total[5m]))
+
       - record: spooky:retry_attempt_ratio:rate5m
         expr: >-
           spooky:retry_attempts:rate5m
+          / clamp_min(spooky:requests:rate5m, 0.000001)
+
+      - record: spooky:retry_denial_ratio:rate5m
+        expr: >-
+          spooky:retry_denials:rate5m
           / clamp_min(spooky:requests:rate5m, 0.000001)
 
       - record: spooky:hedge_triggered:rate5m
@@ -255,6 +278,13 @@ groups:
           spooky:auth_denials:rate5m
           / clamp_min(spooky:requests:rate5m, 0.000001)
 
+      - record: spooky:contract_rejects:rate5m
+        expr: >-
+          spooky:auth_denials:rate5m
+          + rate(spooky_request_rate_limited[5m])
+          + sum without (policy, reason, selector_dimensions, backend_mode, decision)
+            (rate(spooky_quota_policy_outcomes_total{decision="denied"}[5m]))
+
       - record: spooky:quota_denials:rate5m
         expr: >-
           sum without (policy, reason, selector_dimensions, backend_mode, decision)
@@ -280,6 +310,11 @@ groups:
           spooky:quota_denials:rate5m
           / clamp_min(spooky:requests:rate5m, 0.000001)
 
+      - record: spooky:contract_reject_ratio:rate5m
+        expr: >-
+          spooky:contract_rejects:rate5m
+          / clamp_min(spooky:requests:rate5m, 0.000001)
+
       - record: spooky:quota_backend_health_events_by_mode_reason:rate5m
         expr: >-
           rate(spooky_quota_backend_health_total[5m])
@@ -293,6 +328,10 @@ groups:
         expr: >-
           sum without (listener, reason)
           (rate(spooky_downstream_tls_handshake_failure_total[5m]))
+
+      - record: spooky:tls_handshake_successes:rate5m
+        expr: >-
+          rate(spooky_downstream_tls_handshake_success_total[5m])
 
       - record: spooky:tls_handshake_failures_by_listener_reason:rate5m
         expr: >-
@@ -344,6 +383,13 @@ groups:
       - record: spooky:runtime_rollback_outcomes_by_result_reason:rate5m
         expr: >-
           rate(spooky_runtime_rollback_total[5m])
+
+      - record: spooky:runtime_change_events:rate5m
+        expr: >-
+          sum without (result, reason)
+          (spooky:runtime_activation_outcomes_by_result_reason:rate5m)
+          + sum without (result, reason)
+          (spooky:runtime_rollback_outcomes_by_result_reason:rate5m)
 
       - record: spooky:runtime_rejections_by_reason:rate5m
         expr: >-

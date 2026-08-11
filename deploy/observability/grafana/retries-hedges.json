@@ -785,6 +785,157 @@
       ],
       "title": "Primary Late Sample Rate",
       "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 47
+      },
+      "id": 14,
+      "panels": [],
+      "title": "Operator Drilldown",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Retry denials are policy guardrails, not successful retries. A rising ratio means protection is engaging before retries can amplify backend distress.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1
+              },
+              {
+                "color": "red",
+                "value": 5
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 48
+      },
+      "id": 15,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "100 * sum(spooky:retry_denial_ratio:rate5m) or vector(0)",
+          "legendFormat": "retry denial ratio",
+          "refId": "A"
+        }
+      ],
+      "title": "Retry Denial Ratio",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Operator guardrail mix: retry attempts, retry denials, hedge triggers, and hedge waste. Read these together to understand whether resilience logic is helping or just adding work.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 18,
+        "x": 6,
+        "y": 48
+      },
+      "id": 16,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(spooky:retry_attempts:rate5m)",
+          "legendFormat": "retry attempts",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(spooky:retry_denials:rate5m)",
+          "legendFormat": "retry denials",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(spooky:hedge_triggered:rate5m)",
+          "legendFormat": "hedge triggered",
+          "refId": "C"
+        },
+        {
+          "expr": "sum(spooky:hedge_wasted:rate5m)",
+          "legendFormat": "hedge wasted",
+          "refId": "D"
+        }
+      ],
+      "title": "Retry and Hedge Guardrail Mix",
+      "type": "timeseries"
     }
   ],
   "refresh": "30s",
@@ -824,6 +975,6 @@
   "timezone": "",
   "title": "Spooky Retries and Hedges",
   "uid": "spooky-retries-hedges",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

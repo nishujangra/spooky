@@ -42,6 +42,36 @@
         "textFormat": "Successful runtime rollback observed from control-plane metrics. Use runtime history and admin audit events to identify the exact generation transition.",
         "titleFormat": "Runtime rollback",
         "type": "tags"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "enable": true,
+        "expr": "changes(spooky_brownout_active[1m]) > 0",
+        "hide": false,
+        "iconColor": "rgba(255, 99, 71, 1)",
+        "name": "Brownout State Changes",
+        "step": "60s",
+        "textFormat": "Brownout state changed. Correlate with overload shed reason, inflight pressure, and adaptive admission behavior.",
+        "titleFormat": "Brownout state change",
+        "type": "tags"
+      },
+      {
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "enable": true,
+        "expr": "sum(increase(spooky_quota_backend_health_total{reason!=\"available\"}[1m])) > 0",
+        "hide": false,
+        "iconColor": "rgba(255, 191, 0, 1)",
+        "name": "Quota Backend Degraded",
+        "step": "60s",
+        "textFormat": "Quota backend degraded activity observed. Correlate with backend mode, policy outcomes, and recent admin actions.",
+        "titleFormat": "Quota backend degraded",
+        "type": "tags"
       }
     ]
   },
@@ -582,7 +612,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (backend_mode, reason) (spooky:quota_backend_health_events_by_mode_reason:rate5m)",
+          "expr": "sum by (backend_mode, reason) (spooky:quota_backend_health_events_by_mode_reason:rate5m{backend_mode=~\"${quota_backend_mode:regex}\"})",
           "legendFormat": "{{backend_mode}} :: {{reason}}",
           "refId": "A"
         }
@@ -646,7 +676,7 @@
       },
       "targets": [
         {
-          "expr": "topk(12, sum by (policy, reason) (spooky:quota_denials_by_policy_reason_backend_mode:rate5m))",
+          "expr": "topk(12, sum by (policy, reason) (spooky:quota_denials_by_policy_reason_backend_mode:rate5m{policy=~\"${quota_policy:regex}\",backend_mode=~\"${quota_backend_mode:regex}\"}))",
           "legendFormat": "{{policy}} :: {{reason}}",
           "refId": "A"
         }
@@ -806,6 +836,211 @@
       ],
       "title": "Auth Contract Detail",
       "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 48
+      },
+      "id": 15,
+      "panels": [],
+      "title": "Operator Drilldown",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Contract rejections are auth denials, scoped rate limits, and quota denials. This excludes overload and backend-saturation decisions.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 2
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 49
+      },
+      "id": 16,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "100 * sum(spooky:contract_reject_ratio:rate5m) or vector(0)",
+          "legendFormat": "contract reject ratio",
+          "refId": "A"
+        }
+      ],
+      "title": "Contract Reject Ratio",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Explicit contract failure composition. Use this before looking at overload charts so contract semantics are not mistaken for capacity failures.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 9,
+        "x": 6,
+        "y": 49
+      },
+      "id": 17,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(spooky:auth_denials:rate5m)",
+          "legendFormat": "auth denied",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(spooky:request_rate_limited:rate5m)",
+          "legendFormat": "scoped rate limited",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(spooky:quota_denials:rate5m)",
+          "legendFormat": "quota denied",
+          "refId": "C"
+        }
+      ],
+      "title": "Contract Reject Composition",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Quota outcomes by configured policy. Use this to isolate the policy driving operator-visible quota behavior before diving into deny reasons.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 8,
+            "lineInterpolation": "linear",
+            "lineWidth": 2,
+            "showPoints": "never",
+            "spanNulls": true,
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            }
+          },
+          "unit": "reqps"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 9,
+        "x": 15,
+        "y": 49
+      },
+      "id": 18,
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (policy, decision) (spooky:quota_outcomes_by_policy_decision:rate5m{policy=~\"${quota_policy:regex}\"})",
+          "legendFormat": "{{policy}} :: {{decision}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Quota Outcomes by Policy",
+      "type": "timeseries"
     }
   ],
   "refresh": "30s",
@@ -835,6 +1070,70 @@
         "refresh": 1,
         "regex": "",
         "type": "datasource"
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": false,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "definition": "label_values(spooky_quota_policy_outcomes_total, policy)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Quota Policy",
+        "multi": true,
+        "name": "quota_policy",
+        "options": [],
+        "query": {
+          "qryType": 1,
+          "query": "label_values(spooky_quota_policy_outcomes_total, policy)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": false,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "definition": "label_values(spooky_quota_backend_health_total, backend_mode)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Quota Backend Mode",
+        "multi": true,
+        "name": "quota_backend_mode",
+        "options": [],
+        "query": {
+          "qryType": 1,
+          "query": "label_values(spooky_quota_backend_health_total, backend_mode)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
       }
     ]
   },
@@ -846,6 +1145,6 @@
   "timezone": "",
   "title": "Spooky Admission, Overload, Quota, and Auth",
   "uid": "spooky-admission-overload",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }

@@ -248,7 +248,7 @@
       },
       "targets": [
         {
-          "expr": "min(spooky:tls_certificate_days_remaining_by_listener_server_name:min)",
+          "expr": "min(spooky:tls_certificate_days_remaining_by_listener_server_name:min{listener=~\"${listener:regex}\",server_name=~\"${server_name:regex}\"})",
           "legendFormat": "minimum days remaining",
           "refId": "A"
         }
@@ -312,7 +312,7 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:upstream_tls_failures_by_backend:rate5m)",
+          "expr": "sum(spooky:upstream_tls_failures_by_backend:rate5m{backend=~\"${backend:regex}\"})",
           "legendFormat": "upstream tls failures",
           "refId": "A"
         }
@@ -371,7 +371,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (listener, reason) (spooky:tls_handshake_failures_by_listener_reason:rate5m)",
+          "expr": "sum by (listener, reason) (spooky:tls_handshake_failures_by_listener_reason:rate5m{listener=~\"${listener:regex}\"})",
           "legendFormat": "{{listener}} / {{reason}}",
           "refId": "A"
         }
@@ -430,7 +430,7 @@
       },
       "targets": [
         {
-          "expr": "topk(12, sum by (backend, phase, reason) (spooky:upstream_tls_failures_by_backend_phase_reason:rate5m))",
+          "expr": "topk(12, sum by (backend, phase, reason) (spooky:upstream_tls_failures_by_backend_phase_reason:rate5m{backend=~\"${backend:regex}\"}))",
           "legendFormat": "{{backend}} / {{phase}} / {{reason}}",
           "refId": "A"
         }
@@ -494,7 +494,7 @@
       },
       "targets": [
         {
-          "expr": "bottomk(12, spooky:tls_certificate_days_remaining_by_listener_server_name:min)",
+          "expr": "bottomk(12, spooky:tls_certificate_days_remaining_by_listener_server_name:min{listener=~\"${listener:regex}\",server_name=~\"${server_name:regex}\"})",
           "legendFormat": "{{listener}} / {{server_name}}",
           "refId": "A"
         }
@@ -553,7 +553,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (listener, selection) (spooky:tls_certificate_selection_by_listener_selection:rate5m)",
+          "expr": "sum by (listener, selection) (spooky:tls_certificate_selection_by_listener_selection:rate5m{listener=~\"${listener:regex}\"})",
           "legendFormat": "{{listener}} / {{selection}}",
           "refId": "A"
         }
@@ -625,13 +625,154 @@
       },
       "targets": [
         {
-          "expr": "sum by (listener, protocol) (spooky:tls_alpn_by_listener_protocol:rate5m)",
+          "expr": "sum by (listener, protocol) (spooky:tls_alpn_by_listener_protocol:rate5m{listener=~\"${listener:regex}\"})",
           "legendFormat": "{{listener}} / {{protocol}}",
           "refId": "A"
         }
       ],
       "title": "Negotiated ALPN by Listener",
       "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 37
+      },
+      "id": 12,
+      "panels": [],
+      "title": "Operator Drilldown",
+      "type": "row"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Downstream TLS success rate across the fleet. Read this beside failure reason distribution and certificate selection outcomes.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 2,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 95
+              },
+              {
+                "color": "green",
+                "value": 99
+              }
+            ]
+          },
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 0,
+        "y": 38
+      },
+      "id": 13,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto"
+      },
+      "targets": [
+        {
+          "expr": "(100 * (1 - sum(spooky:tls_handshake_failure_ratio:rate5m))) or vector(0)",
+          "legendFormat": "handshake success rate",
+          "refId": "A"
+        }
+      ],
+      "title": "Handshake Success Rate",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "description": "Certificate expiry queue filtered by listener and server name. This is the immediate operator view for rollover prioritization.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 14
+              },
+              {
+                "color": "green",
+                "value": 30
+              }
+            ]
+          },
+          "unit": "d"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 18,
+        "x": 6,
+        "y": 38
+      },
+      "id": 14,
+      "options": {
+        "displayMode": "gradient",
+        "minVizHeight": 16,
+        "minVizWidth": 8,
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true
+      },
+      "targets": [
+        {
+          "expr": "bottomk(12, spooky:tls_certificate_days_remaining_by_listener_server_name:min{listener=~\"${listener:regex}\",server_name=~\"${server_name:regex}\"})",
+          "legendFormat": "{{listener}} / {{server_name}}",
+          "refId": "A"
+        }
+      ],
+      "title": "Filtered Certificate Expiry Queue",
+      "type": "bargauge"
     }
   ],
   "refresh": "30s",
@@ -660,6 +801,102 @@
         "refresh": 1,
         "regex": "",
         "type": "datasource"
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": false,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "definition": "label_values(spooky_downstream_tls_handshake_failure_total, listener)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Listener",
+        "multi": true,
+        "name": "listener",
+        "options": [],
+        "query": {
+          "qryType": 1,
+          "query": "label_values(spooky_downstream_tls_handshake_failure_total, listener)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": false,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "definition": "label_values(spooky_upstream_tls_failure_total, backend)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Backend",
+        "multi": true,
+        "name": "backend",
+        "options": [],
+        "query": {
+          "qryType": 1,
+          "query": "label_values(spooky_upstream_tls_failure_total, backend)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "allValue": ".*",
+        "current": {
+          "selected": false,
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        },
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${datasource}"
+        },
+        "definition": "label_values(spooky_downstream_tls_certificate_days_remaining, server_name)",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Server Name",
+        "multi": true,
+        "name": "server_name",
+        "options": [],
+        "query": {
+          "qryType": 1,
+          "query": "label_values(spooky_downstream_tls_certificate_days_remaining, server_name)",
+          "refId": "PrometheusVariableQueryEditor-VariableQuery"
+        },
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
       }
     ]
   },
@@ -671,6 +908,6 @@
   "timezone": "",
   "title": "Spooky TLS Certificates and Handshakes",
   "uid": "spooky-tls-certificates",
-  "version": 1,
+  "version": 2,
   "weekStart": ""
 }
