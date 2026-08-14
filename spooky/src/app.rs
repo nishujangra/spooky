@@ -62,12 +62,10 @@ pub(crate) fn main_entry() {
         &config_yaml.log.file.path,
         config_yaml.log.format == spooky_config::config::LogFormat::Json,
     );
-    spooky_utils::telemetry::init::init_tracing(
-        config_yaml.observability.tracing.enabled,
-        &config_yaml.observability.tracing.service_name,
-        config_yaml.observability.tracing.otlp_endpoint.as_deref(),
-        config_yaml.observability.tracing.sample_ratio,
-    );
+    // NOTE: tracing is initialized inside the Tokio runtime (see `run`), not
+    // here. The OTLP tonic exporter spawns a background task while building its
+    // channel, which panics with "there is no reactor running" when constructed
+    // before the runtime exists.
     runtime_guard::install_panic_hook();
 
     let uid = unsafe { libc::getuid() };
@@ -125,6 +123,7 @@ pub(crate) fn main_entry() {
     runtime.block_on(run(
         runtime_config,
         config_yaml.log.clone(),
+        config_yaml.observability.tracing.clone(),
         uid,
         config_path,
     ));
@@ -133,9 +132,19 @@ pub(crate) fn main_entry() {
 async fn run(
     runtime_config: RuntimeConfig,
     log_config: spooky_config::config::Log,
+    tracing_config: spooky_config::config::Tracing,
     uid: libc::uid_t,
     config_path: String,
 ) {
+    // Must happen inside the runtime: the OTLP tonic exporter spawns a task on
+    // the current reactor while building its channel.
+    spooky_utils::telemetry::init::init_tracing(
+        tracing_config.enabled,
+        &tracing_config.service_name,
+        tracing_config.otlp_endpoint.as_deref(),
+        tracing_config.sample_ratio,
+    );
+
     let runtime_bundle =
         match QUICListener::build_runtime_bundle(config_path, log_config, &runtime_config) {
             Ok(bundle) => bundle,

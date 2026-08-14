@@ -8,12 +8,16 @@ use spooky_lb::health::HealthFailureReason;
 
 use super::{state::ControlApiState, *};
 use crate::{
+    quic_listener::control_api::audit::ADMIN_AUDIT_SCHEMA_VERSION,
     resilience::quota::{
         QuotaBackendErrorSnapshot, QuotaBackendStatusSnapshot, QuotaPolicyIntrospectionSnapshot,
         QuotaSelectorIntrospectionSnapshot, QuotaWindowIntrospectionSnapshot,
     },
     runtime::{
-        activation::GenerationHistoryEntry,
+        activation::{
+            GenerationChangeEvent, GenerationEventKind, GenerationHistoryEntry,
+            GenerationOperation, GenerationStatus,
+        },
         backend::state::{
             BackendHealthState, BackendLifecycleInventorySnapshot, BackendMembershipState,
             BackendPoolPlacementSnapshot,
@@ -21,6 +25,9 @@ use crate::{
         bundle::RuntimeGenerationRecord,
     },
 };
+
+const OBSERVABILITY_CONTRACT_VERSION: &str = "v1";
+const RECENT_ADMIN_ACTION_LIMIT: usize = 5;
 
 /// Map a backend health-failure reason to the canonical control-plane token.
 ///
@@ -66,6 +73,7 @@ struct ControlApiRuntimePayload {
     watchdog: ControlApiRuntimeWatchdogPayload,
     adaptive_admission: ControlApiAdaptiveAdmissionPayload,
     quota: ControlApiQuotaPayload,
+    observability: ControlApiObservabilityPayload,
     auth: ControlApiAuthPayload,
     jwks: ControlApiJwksPayload,
     backends: ControlApiBackendInventoryPayload,
@@ -155,6 +163,77 @@ struct ControlApiQuotaSelectorPayload {
 struct ControlApiQuotaWindowPayload {
     requests: u64,
     window_secs: u64,
+}
+
+#[derive(Serialize)]
+struct ControlApiObservabilityPayload {
+    contract_version: &'static str,
+    audit_schema_version: &'static str,
+    current_generation: Option<u64>,
+    documentation: ControlApiObservabilityDocumentationPayload,
+    dashboard_packages: Vec<ControlApiObservabilityDashboardPayload>,
+    backend_health_summary: ControlApiBackendHealthSummaryPayload,
+    quota_backend_health_summary: ControlApiQuotaBackendHealthSummaryPayload,
+    recent_admin_actions: Vec<ControlApiRecentAdminActionPayload>,
+}
+
+#[derive(Serialize)]
+struct ControlApiObservabilityDocumentationPayload {
+    observability_contract: &'static str,
+    control_plane_operations: &'static str,
+    metrics_and_alerts_operations: &'static str,
+    distributed_quota_operations: &'static str,
+}
+
+#[derive(Serialize)]
+struct ControlApiObservabilityDashboardPayload {
+    dashboard_id: &'static str,
+    definition_path: &'static str,
+    focus: &'static str,
+}
+
+#[derive(Serialize)]
+struct ControlApiBackendHealthSummaryPayload {
+    availability: &'static str,
+    placed_total: usize,
+    healthy: usize,
+    unhealthy: usize,
+    unknown: usize,
+    active_membership: usize,
+    suppressed_membership: usize,
+    removed_membership: usize,
+}
+
+#[derive(Serialize)]
+struct ControlApiQuotaBackendHealthSummaryPayload {
+    enabled: bool,
+    active_backend: String,
+    availability: String,
+    degraded: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    health_reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_observed_at_unix_ms: Option<u64>,
+    recent_error_count: usize,
+}
+
+#[derive(Serialize)]
+struct ControlApiRecentAdminActionPayload {
+    kind: GenerationEventKind,
+    operation: GenerationOperation,
+    generation: u64,
+    status: GenerationStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    config_version: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    requested_by: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    trigger_source: Option<String>,
+    requested_at_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    completed_at_ms: Option<u64>,
+    event_emitted_at_ms: u64,
+    summary: String,
 }
 
 #[derive(Serialize)]
@@ -314,6 +393,7 @@ struct ControlApiRuntimeGenerationPayload {
 #[derive(Serialize)]
 struct ControlApiRuntimeHistoryPayload {
     active_generation: u64,
+    observability: ControlApiObservabilityPayload,
     retained_generations: Vec<ControlApiRetainedGenerationPayload>,
     entries: Vec<GenerationHistoryEntry>,
 }
@@ -321,6 +401,7 @@ struct ControlApiRuntimeHistoryPayload {
 #[derive(Serialize)]
 struct ControlApiRuntimeHistoryGenerationPayload {
     generation: u64,
+    observability: ControlApiObservabilityPayload,
     retained_generation: ControlApiRetainedGenerationPayload,
     entries: Vec<GenerationHistoryEntry>,
 }
@@ -404,11 +485,25 @@ impl QUICListener {
         let Some(runtime_bundle_handle) = runtime_state.runtime_bundle_handle().cloned() else {
             return Self::control_api_not_found_response();
         };
+        let backend_inventory = runtime_state.snapshot_backend_inventory();
+        let backend_summary = backend_inventory.summary();
+        let quota_backend_status = runtime_state.resilience().quota.backend_status_snapshot(
+            runtime_state
+                .resilience()
+                .quota_backend_initialization_error
+                .as_ref(),
+        );
 
         Self::json_response(
             StatusCode::OK,
             ControlApiRuntimeHistoryPayload {
                 active_generation: runtime_bundle_handle.current_generation(),
+                observability: ControlApiObservabilityPayload::from_runtime_state(
+                    &runtime_state,
+                    &backend_inventory,
+                    &backend_summary,
+                    &quota_backend_status,
+                ),
                 retained_generations: runtime_bundle_handle
                     .generation_history()
                     .into_iter()
@@ -427,6 +522,14 @@ impl QUICListener {
         let Some(runtime_bundle_handle) = runtime_state.runtime_bundle_handle().cloned() else {
             return Self::control_api_not_found_response();
         };
+        let backend_inventory = runtime_state.snapshot_backend_inventory();
+        let backend_summary = backend_inventory.summary();
+        let quota_backend_status = runtime_state.resilience().quota.backend_status_snapshot(
+            runtime_state
+                .resilience()
+                .quota_backend_initialization_error
+                .as_ref(),
+        );
 
         let entries = runtime_bundle_handle
             .generation_change_history()
@@ -446,6 +549,12 @@ impl QUICListener {
             StatusCode::OK,
             ControlApiRuntimeHistoryGenerationPayload {
                 generation,
+                observability: ControlApiObservabilityPayload::from_runtime_state(
+                    &runtime_state,
+                    &backend_inventory,
+                    &backend_summary,
+                    &quota_backend_status,
+                ),
                 retained_generation: ControlApiRetainedGenerationPayload::from_record(record),
                 entries,
             },
@@ -475,6 +584,9 @@ impl ControlApiRuntimePayload {
         let listener_tls_store = state.listener_tls_store();
         let backend_inventory = state.snapshot_backend_inventory();
         let backend_summary = backend_inventory.summary();
+        let quota_backend_status = resilience
+            .quota
+            .backend_status_snapshot(resilience.quota_backend_initialization_error.as_ref());
         let jwks_sources = crate::quic_listener::admission::snapshot_runtime_jwks_sources(
             runtime.runtime_config(),
         );
@@ -520,9 +632,15 @@ impl ControlApiRuntimePayload {
                 current_limit: resilience.adaptive_admission.current_limit(),
                 inflight_percent: resilience.adaptive_admission.inflight_percent(),
             },
-            quota: ControlApiQuotaPayload::from_runtime(
+            quota: ControlApiQuotaPayload::from_snapshot(
                 resilience.quota.as_ref(),
-                resilience.quota_backend_initialization_error.as_ref(),
+                quota_backend_status.clone(),
+            ),
+            observability: ControlApiObservabilityPayload::from_runtime_state(
+                &state,
+                &backend_inventory,
+                &backend_summary,
+                &quota_backend_status,
             ),
             auth: ControlApiAuthPayload {
                 providers: auth_providers,
@@ -619,11 +737,10 @@ impl ControlApiRuntimePayload {
 }
 
 impl ControlApiQuotaPayload {
-    fn from_runtime(
+    fn from_snapshot(
         runtime: &crate::resilience::quota::QuotaRuntime,
-        initialization_error: Option<&crate::resilience::quota::QuotaCounterBackendError>,
+        backend_status: QuotaBackendStatusSnapshot,
     ) -> Self {
-        let backend_status = runtime.backend_status_snapshot(initialization_error);
         Self {
             enabled: runtime.enabled,
             enforcement: runtime.enforcement.slug(),
@@ -635,6 +752,81 @@ impl ControlApiQuotaPayload {
                 .into_iter()
                 .map(ControlApiQuotaPolicyPayload::from_snapshot)
                 .collect(),
+        }
+    }
+}
+
+impl ControlApiObservabilityPayload {
+    fn from_runtime_state(
+        state: &super::context::ControlApiServiceState,
+        backend_inventory: &BackendLifecycleInventorySnapshot,
+        backend_summary: &crate::runtime::backend::state::BackendLifecycleInventorySummary,
+        quota_backend_status: &QuotaBackendStatusSnapshot,
+    ) -> Self {
+        Self {
+            contract_version: OBSERVABILITY_CONTRACT_VERSION,
+            audit_schema_version: ADMIN_AUDIT_SCHEMA_VERSION,
+            current_generation: state
+                .generation
+                .as_ref()
+                .map(|generation| generation.generation()),
+            documentation: ControlApiObservabilityDocumentationPayload {
+                observability_contract: "docs/architecture/observability-contract.md",
+                control_plane_operations: "docs/operations/control-plane.md",
+                metrics_and_alerts_operations: "docs/operations/metrics-and-alerts.md",
+                distributed_quota_operations: "docs/operations/distributed-quota.md",
+            },
+            dashboard_packages: vec![
+                ControlApiObservabilityDashboardPayload {
+                    dashboard_id: "edge_traffic",
+                    definition_path: "deploy/observability/grafana/edge-traffic.json",
+                    focus: "edge traffic, status mix, and latency",
+                },
+                ControlApiObservabilityDashboardPayload {
+                    dashboard_id: "admission_overload",
+                    definition_path: "deploy/observability/grafana/admission-overload.json",
+                    focus: "admission, overload, quota, and auth outcomes",
+                },
+                ControlApiObservabilityDashboardPayload {
+                    dashboard_id: "backend_health",
+                    definition_path: "deploy/observability/grafana/backend-health.json",
+                    focus: "backend health, dns refresh, and client rotations",
+                },
+                ControlApiObservabilityDashboardPayload {
+                    dashboard_id: "retries_hedges",
+                    definition_path: "deploy/observability/grafana/retries-hedges.json",
+                    focus: "retry amplification and hedge effectiveness",
+                },
+                ControlApiObservabilityDashboardPayload {
+                    dashboard_id: "tls_certificates",
+                    definition_path: "deploy/observability/grafana/tls-certificates.json",
+                    focus: "tls handshake failures and certificate expiry",
+                },
+                ControlApiObservabilityDashboardPayload {
+                    dashboard_id: "control_plane",
+                    definition_path: "deploy/observability/grafana/control-plane.json",
+                    focus: "runtime activity, watchdog state, and control-plane health",
+                },
+            ],
+            backend_health_summary: ControlApiBackendHealthSummaryPayload::from_inventory(
+                backend_inventory,
+                *backend_summary,
+            ),
+            quota_backend_health_summary: ControlApiQuotaBackendHealthSummaryPayload::from_snapshot(
+                state.resilience().quota.enabled,
+                quota_backend_status,
+            ),
+            recent_admin_actions: state
+                .runtime_bundle_handle()
+                .map(|handle| {
+                    handle
+                        .generation_change_events()
+                        .into_iter()
+                        .take(RECENT_ADMIN_ACTION_LIMIT)
+                        .map(ControlApiRecentAdminActionPayload::from_event)
+                        .collect()
+                })
+                .unwrap_or_default(),
         }
     }
 }
@@ -651,6 +843,84 @@ impl ControlApiQuotaBackendStatusPayload {
                 .into_iter()
                 .map(ControlApiQuotaBackendErrorPayload::from_snapshot)
                 .collect(),
+        }
+    }
+}
+
+impl ControlApiBackendHealthSummaryPayload {
+    fn from_inventory(
+        inventory: &BackendLifecycleInventorySnapshot,
+        summary: crate::runtime::backend::state::BackendLifecycleInventorySummary,
+    ) -> Self {
+        let mut unhealthy = 0;
+        let mut unknown = 0;
+        let mut active_membership = 0;
+        let mut suppressed_membership = 0;
+        let mut removed_membership = 0;
+
+        for backend in &inventory.backends {
+            match backend.health {
+                BackendHealthState::Healthy => {}
+                BackendHealthState::Unhealthy { .. } => unhealthy += 1,
+                BackendHealthState::Unknown => unknown += 1,
+            }
+
+            match backend.membership {
+                BackendMembershipState::Active => active_membership += 1,
+                BackendMembershipState::Suppressed => suppressed_membership += 1,
+                BackendMembershipState::Removed => removed_membership += 1,
+            }
+        }
+
+        let availability = if summary.total_backends == 0 {
+            "empty"
+        } else if unhealthy == 0 && unknown == 0 {
+            "healthy"
+        } else {
+            "degraded"
+        };
+
+        Self {
+            availability,
+            placed_total: summary.total_backends,
+            healthy: summary.healthy_backends,
+            unhealthy,
+            unknown,
+            active_membership,
+            suppressed_membership,
+            removed_membership,
+        }
+    }
+}
+
+impl ControlApiQuotaBackendHealthSummaryPayload {
+    fn from_snapshot(enabled: bool, snapshot: &QuotaBackendStatusSnapshot) -> Self {
+        Self {
+            enabled,
+            active_backend: snapshot.backend_mode.clone(),
+            availability: snapshot.availability.clone(),
+            degraded: snapshot.degraded,
+            health_reason: snapshot.health_reason.clone(),
+            last_observed_at_unix_ms: snapshot.last_observed_at_unix_ms,
+            recent_error_count: snapshot.recent_errors.len(),
+        }
+    }
+}
+
+impl ControlApiRecentAdminActionPayload {
+    fn from_event(event: GenerationChangeEvent) -> Self {
+        Self {
+            kind: event.kind,
+            operation: event.entry.operation,
+            generation: event.entry.generation,
+            status: event.entry.status,
+            config_version: event.entry.config_version,
+            requested_by: event.entry.requested_by,
+            trigger_source: event.entry.trigger_source,
+            requested_at_ms: event.entry.requested_at_ms,
+            completed_at_ms: event.entry.completed_at_ms,
+            event_emitted_at_ms: event.emitted_at_ms,
+            summary: event.entry.summary,
         }
     }
 }

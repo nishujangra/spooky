@@ -209,6 +209,26 @@ This ensures:
 - restart and reload actions act on the same authoritative runtime handle
 - backend lifecycle state is rendered from one canonical inventory
 
+### Observability package entry point
+
+`GET /admin/runtime` and the runtime history reads are also the operator entry point into the
+packaged observability bundle.
+
+The runtime/control-plane views now expose:
+
+- current active generation
+- observability contract version
+- audit schema version
+- backend health summary
+- quota backend health summary
+- recent tracked admin/runtime actions when history exists
+- dashboard definition references
+- documentation references
+
+These references are repository asset paths, not UI URLs. Operators and automation should treat
+them as stable package identifiers that can be mapped into Grafana imports, runbooks, or internal
+control-plane tooling without assuming one frontend.
+
 ## Authentication and Access Model
 
 ### Control API

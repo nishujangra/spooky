@@ -46,6 +46,10 @@ pub(super) struct AdminIdentity {
 pub(super) struct ControlApiRequestContext {
     pub(super) peer_addr: SocketAddr,
     pub(super) mtls_identity: Option<AdminMtlsIdentity>,
+    pub(super) listener: Option<String>,
+    pub(super) request_id: Option<String>,
+    pub(super) trace_id: Option<String>,
+    pub(super) span_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -68,6 +72,7 @@ impl QUICListener {
         peer_addr: SocketAddr,
         peer_certificates: Option<&[CertificateDer<'static>]>,
         identity_source: Option<&ControlApiIdentitySourcePolicy>,
+        listener: Option<String>,
     ) -> ControlApiRequestContext {
         let mtls_identity = peer_certificates
             .and_then(|certs| certs.first())
@@ -75,7 +80,36 @@ impl QUICListener {
         ControlApiRequestContext {
             peer_addr,
             mtls_identity,
+            listener,
+            request_id: None,
+            trace_id: None,
+            span_id: None,
         }
+    }
+
+    pub(super) fn augment_control_api_request_context<B>(
+        mut context: ControlApiRequestContext,
+        req: &::http::Request<B>,
+    ) -> ControlApiRequestContext {
+        context.request_id = req
+            .headers()
+            .get("x-request-id")
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
+        if let Some((trace_id, span_id)) = req
+            .headers()
+            .get("traceparent")
+            .and_then(|value| value.to_str().ok())
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .and_then(parse_traceparent)
+        {
+            context.trace_id = Some(trace_id);
+            context.span_id = Some(span_id);
+        }
+        context
     }
 
     fn parse_admin_mtls_identity(

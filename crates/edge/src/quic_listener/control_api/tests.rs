@@ -264,6 +264,10 @@ fn attach_control_api_request_context<B>(
         .insert(super::admin_identity::ControlApiRequestContext {
             peer_addr: peer_addr.parse().expect("peer socket addr"),
             mtls_identity,
+            listener: None,
+            request_id: None,
+            trace_id: None,
+            span_id: None,
         });
 }
 
@@ -1487,6 +1491,7 @@ fn control_api_builds_mtls_identity_from_subject_role_mapping() {
         "127.0.0.1:9443".parse().expect("peer addr"),
         Some(std::slice::from_ref(&cert_der)),
         Some(&identity_source),
+        Some("edge-primary".to_string()),
     );
     let identity =
         QUICListener::build_admin_identity(Some(request_context), None, Some(&identity_source))
@@ -1505,6 +1510,38 @@ fn control_api_builds_mtls_identity_from_subject_role_mapping() {
         identity.peer_addr.expect("peer addr").ip().to_string(),
         "127.0.0.1"
     );
+}
+
+#[test]
+fn control_api_request_context_captures_operator_correlation_headers() {
+    let request_context = super::admin_identity::ControlApiRequestContext {
+        peer_addr: "127.0.0.1:9443".parse().expect("peer socket addr"),
+        mtls_identity: None,
+        listener: Some("edge-primary".to_string()),
+        request_id: None,
+        trace_id: None,
+        span_id: None,
+    };
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/admin/runtime")
+        .header(header::HeaderName::from_static("x-request-id"), "req-42")
+        .header(
+            header::HeaderName::from_static("traceparent"),
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+        )
+        .body(())
+        .expect("control api request");
+
+    let request_context = QUICListener::augment_control_api_request_context(request_context, &req);
+
+    assert_eq!(request_context.listener.as_deref(), Some("edge-primary"));
+    assert_eq!(request_context.request_id.as_deref(), Some("req-42"));
+    assert_eq!(
+        request_context.trace_id.as_deref(),
+        Some("4bf92f3577b34da6a3ce929d0e0e4736")
+    );
+    assert_eq!(request_context.span_id.as_deref(), Some("00f067aa0ba902b7"));
 }
 
 #[tokio::test]
@@ -2398,6 +2435,9 @@ async fn control_api_runtime_history_renders_recorded_generation_changes() {
 
     let payload = json_body(QUICListener::render_control_api_runtime_history(&state)).await;
     assert_eq!(payload["active_generation"], 1);
+    assert_eq!(payload["observability"]["contract_version"], "v1");
+    assert_eq!(payload["observability"]["audit_schema_version"], "v1");
+    assert_eq!(payload["observability"]["current_generation"], 1);
     assert_eq!(
         payload["retained_generations"].as_array().map(Vec::len),
         Some(3)
@@ -2432,6 +2472,104 @@ async fn control_api_runtime_history_renders_recorded_generation_changes() {
     assert_eq!(payload["retained_generations"][2]["has_bundle"], true);
     assert_eq!(payload["entries"].as_array().map(Vec::len), Some(1));
     assert_eq!(payload["entries"][0]["operation"], "activate");
+    assert_eq!(
+        payload["observability"]["recent_admin_actions"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+    assert_eq!(
+        payload["observability"]["recent_admin_actions"][0]["kind"],
+        "activation_succeeded"
+    );
+    assert_eq!(
+        payload["observability"]["recent_admin_actions"][0]["operation"],
+        "activate"
+    );
+    assert_eq!(
+        payload["observability"]["recent_admin_actions"][0]["requested_by"],
+        "test"
+    );
+}
+
+#[tokio::test]
+async fn control_api_runtime_history_observability_view_stays_stable_without_admin_actions() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+    let mut config = test_config(cert, key);
+    config.observability.control_api.enabled = true;
+    write_config_file(&config_path, &config);
+
+    let bundle = runtime_bundle_from_config(config_path.to_string_lossy().as_ref(), &config);
+    let (state, _) = runtime_bundle_control_api_state(bundle);
+
+    let payload = json_body(QUICListener::render_control_api_runtime_history(&state)).await;
+
+    assert_eq!(
+        payload["observability"],
+        serde_json::json!({
+            "contract_version": "v1",
+            "audit_schema_version": "v1",
+            "current_generation": 0,
+            "documentation": {
+                "observability_contract": "docs/architecture/observability-contract.md",
+                "control_plane_operations": "docs/operations/control-plane.md",
+                "metrics_and_alerts_operations": "docs/operations/metrics-and-alerts.md",
+                "distributed_quota_operations": "docs/operations/distributed-quota.md"
+            },
+            "dashboard_packages": [
+                {
+                    "dashboard_id": "edge_traffic",
+                    "definition_path": "deploy/observability/grafana/edge-traffic.json",
+                    "focus": "edge traffic, status mix, and latency"
+                },
+                {
+                    "dashboard_id": "admission_overload",
+                    "definition_path": "deploy/observability/grafana/admission-overload.json",
+                    "focus": "admission, overload, quota, and auth outcomes"
+                },
+                {
+                    "dashboard_id": "backend_health",
+                    "definition_path": "deploy/observability/grafana/backend-health.json",
+                    "focus": "backend health, dns refresh, and client rotations"
+                },
+                {
+                    "dashboard_id": "retries_hedges",
+                    "definition_path": "deploy/observability/grafana/retries-hedges.json",
+                    "focus": "retry amplification and hedge effectiveness"
+                },
+                {
+                    "dashboard_id": "tls_certificates",
+                    "definition_path": "deploy/observability/grafana/tls-certificates.json",
+                    "focus": "tls handshake failures and certificate expiry"
+                },
+                {
+                    "dashboard_id": "control_plane",
+                    "definition_path": "deploy/observability/grafana/control-plane.json",
+                    "focus": "runtime activity, watchdog state, and control-plane health"
+                }
+            ],
+            "backend_health_summary": {
+                "availability": "healthy",
+                "placed_total": 1,
+                "healthy": 1,
+                "unhealthy": 0,
+                "unknown": 0,
+                "active_membership": 1,
+                "suppressed_membership": 0,
+                "removed_membership": 0
+            },
+            "quota_backend_health_summary": {
+                "enabled": false,
+                "active_backend": "in_memory",
+                "availability": "disabled",
+                "degraded": false,
+                "recent_error_count": 0
+            },
+            "recent_admin_actions": []
+        })
+    );
 }
 
 #[tokio::test]
@@ -2665,6 +2803,71 @@ async fn control_api_runtime_snapshot_exposes_quota_policy_and_backend_status() 
     assert_eq!(policies[0]["burst"]["window_secs"], 1);
     assert_eq!(policies[0]["sustained"]["requests"], 500);
     assert_eq!(policies[0]["sustained"]["window_secs"], 60);
+    assert_eq!(
+        payload["observability"],
+        serde_json::json!({
+            "contract_version": "v1",
+            "audit_schema_version": "v1",
+            "current_generation": 0,
+            "documentation": {
+                "observability_contract": "docs/architecture/observability-contract.md",
+                "control_plane_operations": "docs/operations/control-plane.md",
+                "metrics_and_alerts_operations": "docs/operations/metrics-and-alerts.md",
+                "distributed_quota_operations": "docs/operations/distributed-quota.md"
+            },
+            "dashboard_packages": [
+                {
+                    "dashboard_id": "edge_traffic",
+                    "definition_path": "deploy/observability/grafana/edge-traffic.json",
+                    "focus": "edge traffic, status mix, and latency"
+                },
+                {
+                    "dashboard_id": "admission_overload",
+                    "definition_path": "deploy/observability/grafana/admission-overload.json",
+                    "focus": "admission, overload, quota, and auth outcomes"
+                },
+                {
+                    "dashboard_id": "backend_health",
+                    "definition_path": "deploy/observability/grafana/backend-health.json",
+                    "focus": "backend health, dns refresh, and client rotations"
+                },
+                {
+                    "dashboard_id": "retries_hedges",
+                    "definition_path": "deploy/observability/grafana/retries-hedges.json",
+                    "focus": "retry amplification and hedge effectiveness"
+                },
+                {
+                    "dashboard_id": "tls_certificates",
+                    "definition_path": "deploy/observability/grafana/tls-certificates.json",
+                    "focus": "tls handshake failures and certificate expiry"
+                },
+                {
+                    "dashboard_id": "control_plane",
+                    "definition_path": "deploy/observability/grafana/control-plane.json",
+                    "focus": "runtime activity, watchdog state, and control-plane health"
+                }
+            ],
+            "backend_health_summary": {
+                "availability": "healthy",
+                "placed_total": 1,
+                "healthy": 1,
+                "unhealthy": 0,
+                "unknown": 0,
+                "active_membership": 1,
+                "suppressed_membership": 0,
+                "removed_membership": 0
+            },
+            "quota_backend_health_summary": {
+                "enabled": true,
+                "active_backend": "redis",
+                "availability": "degraded",
+                "degraded": true,
+                "health_reason": "error",
+                "recent_error_count": 1
+            },
+            "recent_admin_actions": []
+        })
+    );
 }
 
 #[tokio::test]

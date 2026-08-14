@@ -15,6 +15,8 @@ use super::{
 };
 use crate::REQUEST_ID_COUNTER;
 
+pub(super) const ADMIN_AUDIT_SCHEMA_VERSION: &str = "v1";
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(in crate::quic_listener) struct ControlApiAdminAuditEmitter {
     pub(in crate::quic_listener) enabled: bool,
@@ -45,8 +47,22 @@ pub(in crate::quic_listener) enum ControlApiAdminAuditTarget {
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 pub(in crate::quic_listener) struct AdminAuditEvent {
+    pub(in crate::quic_listener) schema_version: &'static str,
+    pub(in crate::quic_listener) event_id: String,
     pub(in crate::quic_listener) event_type: AdminAuditEventType,
     pub(in crate::quic_listener) time_unix_ms: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::quic_listener) request_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::quic_listener) trace_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::quic_listener) span_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::quic_listener) listener: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::quic_listener) upstream: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::quic_listener) backend: Option<String>,
     pub(in crate::quic_listener) actor: AdminAuditActor,
     pub(in crate::quic_listener) action: AdminAuditAction,
     pub(in crate::quic_listener) target: AdminAuditTarget,
@@ -54,10 +70,24 @@ pub(in crate::quic_listener) struct AdminAuditEvent {
     pub(in crate::quic_listener) result: AdminAuditResult,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::quic_listener) reason: Option<String>,
-    pub(in crate::quic_listener) event_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(in crate::quic_listener) failure_class: Option<AdminAuditFailureClass>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(in crate::quic_listener) peer_addr: Option<String>,
     pub(in crate::quic_listener) authn: AdminAuditAuthn,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub(in crate::quic_listener) enum AdminAuditFailureClass {
+    Authentication,
+    Authorization,
+    SourcePolicy,
+    RequestValidation,
+    RuntimeConfig,
+    RuntimeState,
+    ListenerTls,
+    Watchdog,
 }
 
 #[allow(dead_code)]
@@ -203,20 +233,37 @@ impl QUICListener {
         if !emitter.enabled {
             return;
         }
+        let reason = reason
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned);
 
         let event = AdminAuditEvent {
+            schema_version: ADMIN_AUDIT_SCHEMA_VERSION,
+            event_id: format!(
+                "control-api-audit-{}",
+                REQUEST_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
+            ),
             event_type,
             time_unix_ms: crate::watchdog::time::now_millis(),
+            request_id: Self::control_api_audit_request_id(request_context),
+            trace_id: Self::control_api_audit_trace_id(request_context),
+            span_id: Self::control_api_audit_span_id(request_context),
+            listener: Self::control_api_audit_listener(request_context),
+            upstream: None,
+            backend: None,
             actor: AdminAuditActor::from_identity(identity),
             action,
             target,
             generation,
             result,
-            reason,
-            event_id: format!(
-                "control-api-audit-{}",
-                REQUEST_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
+            failure_class: Self::control_api_audit_failure_class(
+                event_type,
+                result,
+                reason.as_deref(),
             ),
+            reason,
             peer_addr: Self::control_api_audit_peer_addr(identity, request_context),
             authn: AdminAuditAuthn::from_identity(identity),
         };
@@ -372,6 +419,70 @@ impl QUICListener {
             .or_else(|| request_context.map(|context| context.peer_addr))
             .map(|addr| addr.to_string())
     }
+
+    fn control_api_audit_request_id(
+        request_context: Option<&ControlApiRequestContext>,
+    ) -> Option<String> {
+        request_context.and_then(|context| context.request_id.clone())
+    }
+
+    fn control_api_audit_trace_id(
+        request_context: Option<&ControlApiRequestContext>,
+    ) -> Option<String> {
+        request_context.and_then(|context| context.trace_id.clone())
+    }
+
+    fn control_api_audit_span_id(
+        request_context: Option<&ControlApiRequestContext>,
+    ) -> Option<String> {
+        request_context.and_then(|context| context.span_id.clone())
+    }
+
+    fn control_api_audit_listener(
+        request_context: Option<&ControlApiRequestContext>,
+    ) -> Option<String> {
+        request_context.and_then(|context| context.listener.clone())
+    }
+
+    fn control_api_audit_failure_class(
+        event_type: AdminAuditEventType,
+        result: AdminAuditResult,
+        reason: Option<&str>,
+    ) -> Option<AdminAuditFailureClass> {
+        if matches!(result, AdminAuditResult::Success) {
+            return None;
+        }
+
+        match reason {
+            Some("missing_authentication")
+            | Some("invalid_authorization_header")
+            | Some("invalid_bearer_token") => {
+                return Some(AdminAuditFailureClass::Authentication);
+            }
+            Some("insufficient_role") => {
+                return Some(AdminAuditFailureClass::Authorization);
+            }
+            Some("missing_peer_context") | Some("source_ip_not_allowed") => {
+                return Some(AdminAuditFailureClass::SourcePolicy);
+            }
+            Some("invalid_request_body") => {
+                return Some(AdminAuditFailureClass::RequestValidation);
+            }
+            _ => {}
+        }
+
+        match event_type {
+            AdminAuditEventType::Auth => Some(AdminAuditFailureClass::Authentication),
+            AdminAuditEventType::RuntimeSnapshot => Some(AdminAuditFailureClass::RuntimeState),
+            AdminAuditEventType::RuntimeValidate
+            | AdminAuditEventType::RuntimePreview
+            | AdminAuditEventType::RuntimeReload
+            | AdminAuditEventType::RuntimeActivate
+            | AdminAuditEventType::RuntimeRollback => Some(AdminAuditFailureClass::RuntimeConfig),
+            AdminAuditEventType::RuntimeRestart => Some(AdminAuditFailureClass::Watchdog),
+            AdminAuditEventType::CertReload => Some(AdminAuditFailureClass::ListenerTls),
+        }
+    }
 }
 
 impl ControlApiAdminAuditEmitter {
@@ -434,8 +545,16 @@ mod tests {
             mtls_san: vec!["spiffe://alice".to_string()],
         };
         let event = AdminAuditEvent {
+            schema_version: ADMIN_AUDIT_SCHEMA_VERSION,
+            event_id: "evt-1".to_string(),
             event_type: AdminAuditEventType::RuntimeReload,
             time_unix_ms: 42,
+            request_id: Some("req-7".to_string()),
+            trace_id: Some("4bf92f3577b34da6a3ce929d0e0e4736".to_string()),
+            span_id: Some("00f067aa0ba902b7".to_string()),
+            listener: Some("edge-primary".to_string()),
+            upstream: None,
+            backend: None,
             actor: AdminAuditActor::from_identity(Some(&identity)),
             action: AdminAuditAction::RuntimeReloadAttempt,
             target: AdminAuditTarget {
@@ -450,19 +569,75 @@ mod tests {
             },
             result: AdminAuditResult::Success,
             reason: Some("operator_requested".to_string()),
-            event_id: "evt-1".to_string(),
+            failure_class: None,
             peer_addr: Some("127.0.0.1:9999".to_string()),
             authn: AdminAuditAuthn::from_identity(Some(&identity)),
         };
 
         let value = serde_json::to_value(&event).expect("serialize audit event");
-        assert_eq!(value["event_type"], "runtime_reload");
-        assert_eq!(value["action"], "runtime_reload.attempt");
-        assert_eq!(value["result"], "success");
-        assert_eq!(value["actor"]["id"], "alice");
-        assert_eq!(value["actor"]["roles"][0], "operator");
-        assert_eq!(value["authn"]["mechanisms"][0], "bearer_token");
-        assert_eq!(value["generation"]["active_generation"], 7);
-        assert_eq!(value["generation"]["candidate_generation"], 8);
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "schema_version": "v1",
+                "event_id": "evt-1",
+                "event_type": "runtime_reload",
+                "time_unix_ms": 42,
+                "request_id": "req-7",
+                "trace_id": "4bf92f3577b34da6a3ce929d0e0e4736",
+                "span_id": "00f067aa0ba902b7",
+                "listener": "edge-primary",
+                "actor": {
+                    "id": "alice",
+                    "roles": ["operator"],
+                    "authn_mechanisms": ["bearer_token"],
+                    "mtls_subject": "CN=alice"
+                },
+                "action": "runtime_reload.attempt",
+                "target": {
+                    "route": "/admin/runtime/reload",
+                    "resource": "control_api",
+                    "config_path": "/etc/spooky/config.yaml"
+                },
+                "generation": {
+                    "active_generation": 7,
+                    "candidate_generation": 8
+                },
+                "result": "success",
+                "reason": "operator_requested",
+                "peer_addr": "127.0.0.1:9999",
+                "authn": {
+                    "mechanisms": ["bearer_token"],
+                    "mtls_subject": "CN=alice"
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn admin_audit_failure_class_serializes_low_cardinality_category() {
+        assert_eq!(
+            QUICListener::control_api_audit_failure_class(
+                AdminAuditEventType::RuntimeValidate,
+                AdminAuditResult::Failed,
+                Some("invalid_request_body"),
+            ),
+            Some(AdminAuditFailureClass::RequestValidation)
+        );
+        assert_eq!(
+            QUICListener::control_api_audit_failure_class(
+                AdminAuditEventType::Auth,
+                AdminAuditResult::Denied,
+                Some("invalid_bearer_token"),
+            ),
+            Some(AdminAuditFailureClass::Authentication)
+        );
+        assert_eq!(
+            QUICListener::control_api_audit_failure_class(
+                AdminAuditEventType::RuntimeRestart,
+                AdminAuditResult::Failed,
+                Some("watchdog_disabled"),
+            ),
+            Some(AdminAuditFailureClass::Watchdog)
+        );
     }
 }

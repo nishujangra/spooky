@@ -54,3 +54,4 @@ hyper.workspace = true
 hyper-util.workspace = true
 tokio.workspace = true
 libc.workspace = true
+serde_yaml.workspace = true
