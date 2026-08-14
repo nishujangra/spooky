@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1-beta] - 2026-08-14
+
+### Added
+
+- Packaged operator observability bundle under `deploy/observability/` — Prometheus recording rules (`prometheus/recording-rules.yaml`), production alert rules (`prometheus/alerts.yaml`), an SLO package (`slo/definitions.promql`, `slo/README.md`), and six Grafana dashboards (`grafana/edge-traffic.json`, `admission-overload.json`, `backend-health.json`, `retries-hedges.json`, `tls-certificates.json`, `control-plane.json`) covering traffic, admission, backend health, retries/hedges, TLS certificate expiry, quota, auth, and control-plane activity.
+- Canonical operator correlation fields on admin audit events — `event_id`, `schema_version`, `request_id`, `trace_id`, `span_id`, and `listener`, plus a stable `failure_class` (`authentication`, `authorization`, `source_policy`, `request_validation`, `runtime_config`, `runtime_state`, `listener_tls`, `watchdog`) attached to non-success events so failures can be grouped without parsing free-form reason strings.
+- `GET /admin/runtime` and the runtime history endpoints gained an `observability` block — contract version, audit schema version, current generation, backend and quota backend health summaries, recent tracked admin actions, and repository-relative dashboard/documentation references, so operators and automation have one canonical entry point into the packaged bundle.
+- `h3_client` now accepts `--method` (default `GET`) and repeatable `--header name=value` flags (including pseudo-headers such as `:protocol`), for exercising non-GET and header-sensitive observability traffic in the lab.
+- Documentation: `docs/operations/observability-bundle.md` documents the shipped dashboards, alerts, SLOs, and incident-correlation workflow; `docs/architecture/observability-contract.md` and `docs/operations/control-plane.md` document the audit schema and the new runtime `observability` block.
+
+### Changed
+
+- The Debian package's default `config.yaml` now ships the control API **disabled** (`observability.control_api.enabled: false`) with a placeholder-token comment block instead of an enabled control API with a literal `replace-with-strong-token` credential — a fresh install no longer boots with a live, weakly-credentialed admin surface.
+- The systemd unit (`packaging/deb/debian/spooky.service`) restarts with `Restart=always` instead of `Restart=on-failure`, adds `StartLimitIntervalSec=60`/`StartLimitBurst=5` under `[Unit]`, raises `LimitNOFILE=65535`, and tightens sandboxing (`ProtectKernelTunables`, `ProtectKernelModules`, `ProtectControlGroups`, `RestrictAddressFamilies`, `RestrictNamespaces`, `RestrictSUIDSGID`, `LockPersonality`); `/etc/spooky` is no longer in `ReadWritePaths`, so only `/var/log/spooky` stays writable.
+
+### Fixed
+
+- OTLP tracing is now initialized inside the Tokio runtime rather than before it. The OTLP tonic exporter spawns a background task while building its gRPC channel, which previously panicked with "there is no reactor running" whenever tracing was enabled.
+- Docker image builds and clippy warnings introduced during the observability bundle work.
+
+### Compatibility
+
+- Purely additive for existing deployments. The new `observability` block in `/admin/runtime` and the `audit.rs` event fields are additive JSON fields; existing consumers that don't read them are unaffected.
+- The Debian package's default config and systemd unit changes apply only to fresh installs/packages built from this version — existing deployed configs and units are not modified in place. Operators upgrading the package should review the new `spooky.service` sandboxing and `ReadWritePaths` restriction before rolling out, particularly if `resilience.watchdog.restart_command` or any in-process config write depends on `/etc/spooky` being writable.
+
 ## [0.5.0-beta] - 2026-08-10
 
 ### Added
