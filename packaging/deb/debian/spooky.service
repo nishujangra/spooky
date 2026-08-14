@@ -4,12 +4,24 @@ Documentation=https://github.com/Supernova-Labs-Org/spooky
 After=network-online.target
 Wants=network-online.target
 
+# Do not let a crash-loop hammer the host: 5 starts in 60s trips the limiter and
+# systemd gives up until an operator intervenes. These two keys belong in
+# [Unit], not [Service] — systemd ignores them silently in the wrong section.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
 [Service]
 Type=simple
 User=spooky
 Group=spooky
 ExecStart=/usr/bin/spooky --config /etc/spooky/config.yaml
-Restart=on-failure
+
+# Restart=always, not on-failure: spooky's own watchdog can decide to drain and
+# exit when it detects a wedged runtime, and that is a *clean* exit which
+# on-failure would refuse to restart — turning self-detected recovery into an
+# outage. Always-restart also covers long unattended runs where any exit at all
+# should bring the proxy back.
+Restart=always
 RestartSec=5s
 
 # Logs go to /var/log/spooky/spooky.log via config; also capture stderr to syslog
@@ -17,7 +29,13 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=spooky
 
-# Allow binding to privileged ports if needed via capabilities instead of root
+# File descriptors. The default (often 1024) is far too low for a QUIC proxy:
+# max_active_connections plus per-backend HTTP/2 pools can each want thousands.
+# A shell `ulimit -n` does NOT affect a systemd service — this is the only knob
+# that matters here.
+LimitNOFILE=65535
+
+# Allow binding privileged ports (e.g. 443) without running as root.
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
@@ -25,9 +43,41 @@ CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
-ReadWritePaths=/var/log/spooky /etc/spooky
 PrivateTmp=yes
 PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=no
+
+# Only the log directory needs to be writable. /etc/spooky stays read-only so a
+# compromised proxy cannot rewrite its own config (admin tokens, cert paths).
+# Note: this means the control API's cert *reload* works (it re-reads the files)
+# but nothing in-process can modify config on disk.
+ReadWritePaths=/var/log/spooky
+
+# ---------------------------------------------------------------------------
+# NOTE on resilience.watchdog.restart_command in config.yaml:
+#
+# NoNewPrivileges=yes blocks setuid binaries, so a restart_command that shells
+# out to `sudo systemctl restart spooky` CANNOT work under this unit. It will
+# fail silently every time.
+#
+# With Restart=always set above, the correct configuration is an EMPTY
+# restart_command — let the watchdog drain and exit, and let systemd restart it:
+#
+#     resilience:
+#       watchdog:
+#         enabled: true
+#         restart_command: []
+#
+# If you genuinely need the proxy to invoke systemctl itself, drop
+# NoNewPrivileges and grant a narrow sudoers rule — but prefer the above.
+# ---------------------------------------------------------------------------
 
 [Install]
 WantedBy=multi-user.target

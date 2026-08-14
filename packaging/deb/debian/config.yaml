@@ -51,10 +51,21 @@ observability:
     port: 9901
     path: "/metrics"
   control_api:
-    enabled: true
+    # Disabled by default: the control API exposes runtime mutation and restart,
+    # so it must not come up on a fresh install with a placeholder credential.
+    # To enable it, set a real token below (openssl rand -hex 32) and flip
+    # enabled to true. Prefer auth.bearer_tokens over the legacy auth_token
+    # field — the latter maps to a single admin-scoped identity with no RBAC.
+    enabled: false
     required: false
     address: "127.0.0.1"
     port: 9902
     health_path: "/health"
     ready_path: "/ready"
-    auth_token: "replace-with-strong-token"
+    # auth:
+    #   bearer_tokens:
+    #     - token: "GENERATE-ME"
+    #       role: admin
+    #       actor_id: "platform-admin"
+    # ip_allowlist:
+    #   cidrs: ["127.0.0.0/8", "::1/128"]
