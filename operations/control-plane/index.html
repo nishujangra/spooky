@@ -1671,6 +1671,23 @@
 <li>restart and reload actions act on the same authoritative runtime handle</li>
 <li>backend lifecycle state is rendered from one canonical inventory</li>
 </ul>
+<h3 id="observability-package-entry-point">Observability package entry point</h3>
+<p><code>GET /admin/runtime</code> and the runtime history reads are also the operator entry point into the
+packaged observability bundle.</p>
+<p>The runtime/control-plane views now expose:</p>
+<ul>
+<li>current active generation</li>
+<li>observability contract version</li>
+<li>audit schema version</li>
+<li>backend health summary</li>
+<li>quota backend health summary</li>
+<li>recent tracked admin/runtime actions when history exists</li>
+<li>dashboard definition references</li>
+<li>documentation references</li>
+</ul>
+<p>These references are repository asset paths, not UI URLs. Operators and automation should treat
+them as stable package identifiers that can be mapped into Grafana imports, runbooks, or internal
+control-plane tooling without assuming one frontend.</p>
 <h2 id="authentication-and-access-model">Authentication and Access Model</h2>
 <h3 id="control-api_1">Control API</h3>
 <p>Privileged control API routes must be authorized through the admin-plane security contract above.</p>
@@ -2271,6 +2288,14 @@
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#runtime-view-contract');">
             Runtime View Contract
         </a>
+        
+        
+        <a href="#observability-package-entry-point"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#observability-package-entry-point');">
+            Observability package entry point
+        </a>
+        
         
 
         

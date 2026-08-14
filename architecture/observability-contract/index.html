@@ -1428,13 +1428,15 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>This document defines the stable observability contract for Spooky after the refactor work that centralized reason vocabularies, outcome recording, backend lifecycle snapshots, and control-plane runtime views.</p>
+    <p>This document defines the stable observability contract for Spooky after the refactor work that centralized reason vocabularies, outcome recording, backend lifecycle snapshots, control-plane runtime views, and admin audit events.</p>
 <h2 id="purpose">Purpose</h2>
-<p>Spooky has three operator-facing observability surfaces:</p>
+<p>Spooky has five operator-facing observability surfaces:</p>
 <ul>
 <li>Prometheus metrics</li>
 <li>structured operational logs</li>
+<li>OTLP traces</li>
 <li>control API runtime snapshots</li>
+<li>structured control-plane audit events</li>
 </ul>
 <p>These surfaces should describe the same events using the same vocabulary.</p>
 <p>The source of truth for that vocabulary is:</p>
@@ -1442,18 +1444,42 @@
 <li><code>crates/edge/src/observability/mod.rs</code></li>
 </ul>
 <p>This file defines the canonical enums, stable slugs, and field names that all emitters should use.</p>
+<h2 id="source-of-truth">Source Of Truth</h2>
+<p>The source of truth is not a dashboard JSON file, alert rule, or one emitter implementation.</p>
+<p>The source of truth is the canonical vocabulary in:</p>
+<ul>
+<li><code>crates/edge/src/observability/mod.rs</code></li>
+</ul>
+<p>Operator-packaged assets must be derived from that module's stable public meaning.</p>
+<p>The main source-of-truth enums and helper types are:</p>
+<ul>
+<li><code>RequestOutcomeReason</code></li>
+<li><code>BackendHealthReason</code></li>
+<li><code>RetryDecisionReason</code></li>
+<li><code>HedgeDecisionReason</code></li>
+<li><code>AdmissionDecisionReason</code></li>
+<li><code>AdmissionOverloadCause</code></li>
+<li><code>QuotaPolicyDecision</code></li>
+<li><code>QuotaPolicyReason</code></li>
+<li><code>QuotaBackendHealthReason</code></li>
+<li><code>OperationalEventContext</code></li>
+<li><code>MetricReasonLabels</code></li>
+</ul>
+<p>If one of those enums changes, that is an observability contract change. Dashboard queries, alert rules, runbooks, and control-plane JSON examples must be reviewed together.</p>
 <h2 id="contract-rule">Contract Rule</h2>
 <p>One operational concept should have:</p>
 <ul>
 <li>one canonical enum value</li>
 <li>one canonical slug string</li>
-<li>one consistent meaning across metrics, logs, and control API payloads</li>
+<li>one consistent meaning across metrics, logs, traces, control API payloads, and audit events</li>
 </ul>
 <p>The contract exists to prevent drift such as:</p>
 <ul>
 <li>one reason name in metrics</li>
 <li>a different prose string in logs</li>
 <li>a third serialized form in control-plane JSON</li>
+<li>a fourth ad hoc field in audit events</li>
+<li>a fifth trace attribute that cannot be joined back to the operator vocabulary</li>
 </ul>
 <h2 id="canonical-reason-families">Canonical Reason Families</h2>
 <p>The main canonical reason families are:</p>
@@ -1472,9 +1498,54 @@
 <ul>
 <li>metric label values</li>
 <li>structured log <code>reason=</code> values</li>
+<li>trace span attributes describing the same reason</li>
 <li>control API serialized fields</li>
+<li>audit event <code>reason</code> values</li>
 </ul>
 <p>Changing a slug is an observability contract change, not a cosmetic refactor.</p>
+<h2 id="operator-correlation-contract">Operator Correlation Contract</h2>
+<p>Operators need a stable path from an alert to a dashboard panel to an event log or audit record to a runtime snapshot.</p>
+<p>The default correlation field set is:</p>
+<ul>
+<li><code>request_id</code></li>
+<li><code>trace_id</code></li>
+<li><code>span_id</code></li>
+<li><code>event_id</code></li>
+<li><code>generation</code></li>
+<li><code>listener</code></li>
+<li><code>route</code></li>
+<li><code>upstream</code></li>
+<li><code>backend</code></li>
+<li><code>reason</code></li>
+<li><code>failure_class</code></li>
+<li><code>policy</code></li>
+<li><code>component</code></li>
+</ul>
+<h3 id="correlation-field-meanings">Correlation field meanings</h3>
+<ul>
+<li><code>request_id</code> identifies a request-path event when request-scoped logging or tracing exists</li>
+<li><code>trace_id</code> identifies the distributed trace carrying the request or control-plane action</li>
+<li><code>span_id</code> identifies the local operation within that trace</li>
+<li><code>event_id</code> identifies a discrete audit or operator-significant event</li>
+<li><code>generation</code> identifies the active or candidate runtime generation involved in a control-plane action</li>
+<li><code>listener</code> identifies the ingress or admin listener involved in the event</li>
+<li><code>route</code> is a route identity when route-specific visibility exists</li>
+<li><code>upstream</code> is the canonical traffic attribution field for request-path metrics and logs</li>
+<li><code>backend</code> is the selected backend identity</li>
+<li><code>reason</code> is the canonical reason slug from <code>crates/edge/src/observability/mod.rs</code></li>
+<li><code>failure_class</code> is a coarse refinement axis where <code>reason</code> alone is not sufficient</li>
+<li><code>policy</code> identifies the named policy that produced a decision when policy attribution exists</li>
+<li><code>component</code> identifies the subsystem such as <code>admission</code>, <code>quota</code>, <code>tls</code>, <code>runtime</code>, or <code>control_api</code></li>
+</ul>
+<h3 id="surface-expectations">Surface expectations</h3>
+<ul>
+<li>metrics should use low-cardinality correlation dimensions only</li>
+<li>logs should emit the canonical field names when the values are known</li>
+<li>traces should carry the same canonical names as span attributes where request or control-plane tracing exists</li>
+<li>control API snapshots should expose current state using the same identities and reason slugs</li>
+<li>audit events should serialize the same actor, target, generation, and reason meaning used elsewhere</li>
+</ul>
+<p>Absence is better than fabricated values. If a field is not known, omit it rather than inventing placeholders.</p>
 <h2 id="structured-log-field-contract">Structured Log Field Contract</h2>
 <p>Operational logs should use the canonical <code>OperationalEventContext</code> field set.</p>
 <p>The canonical fields are:</p>
@@ -1495,6 +1566,24 @@
 <li>use <code>failure_class</code> when a coarse outcome still needs finer transport or rejection detail</li>
 </ul>
 <p>Do not invent new ad hoc field keys for the same concept if the canonical field already exists.</p>
+<h2 id="trace-attribute-contract">Trace Attribute Contract</h2>
+<p>Tracing is a diagnostic surface, not a separate vocabulary.</p>
+<p>Where traces are emitted, span and event attributes should reuse the canonical names:</p>
+<ul>
+<li><code>request_id</code></li>
+<li><code>trace_id</code></li>
+<li><code>span_id</code></li>
+<li><code>generation</code></li>
+<li><code>listener</code></li>
+<li><code>route</code></li>
+<li><code>upstream</code></li>
+<li><code>backend</code></li>
+<li><code>reason</code></li>
+<li><code>failure_class</code></li>
+<li><code>policy</code></li>
+<li><code>component</code></li>
+</ul>
+<p>Trace attributes may include additional diagnostic detail, but canonical operator fields must keep the same names and meanings as logs, metrics, control API, and audit events.</p>
 <h2 id="metric-label-contract">Metric Label Contract</h2>
 <p>Reasoned metric emitters should use the canonical label model:</p>
 <ul>
@@ -1517,12 +1606,28 @@
 <li>admission denials</li>
 </ul>
 <p>without each emitter choosing different label semantics.</p>
+<h2 id="audit-event-contract">Audit Event Contract</h2>
+<p>The control-plane audit stream is part of the operator observability bundle, not a side channel.</p>
+<p>Audit events should use the same identities and reason vocabulary as other surfaces, with fields oriented around:</p>
+<ul>
+<li>actor</li>
+<li>action</li>
+<li>target</li>
+<li>generation</li>
+<li>result</li>
+<li>reason</li>
+<li>event_id</li>
+<li>peer address</li>
+<li>authentication mechanism</li>
+</ul>
+<p>Audit events may include control-plane-specific context, but they should not redefine canonical reason values or resource identities already established elsewhere.</p>
 <h2 id="control-api-snapshot-contract">Control API Snapshot Contract</h2>
 <p>The control API is not just an admin action surface. It is also a runtime introspection contract.</p>
 <p>The runtime snapshot should describe the current active generation and shared operational state using the same meaning as logs and metrics.</p>
 <p>Important snapshot areas include:</p>
 <ul>
 <li>active generation id and config path</li>
+<li>observability package metadata and contract versions</li>
 <li>worker expectations</li>
 <li>watchdog state</li>
 <li>adaptive admission state</li>
@@ -1530,6 +1635,29 @@
 <li>coarse metrics summary</li>
 <li>listener TLS inventory</li>
 </ul>
+<h3 id="observability-package-metadata">Observability package metadata</h3>
+<p>The runtime snapshot is also the packaged entry point into observability for operators.</p>
+<p>The snapshot should expose:</p>
+<ul>
+<li>the current active generation</li>
+<li>the active observability contract version</li>
+<li>the control-plane audit schema version</li>
+<li>a backend health summary</li>
+<li>a quota backend health summary</li>
+<li>recent tracked admin/runtime actions when runtime history is available</li>
+<li>stable references to shipped dashboard definition files</li>
+<li>stable references to operator documentation files</li>
+</ul>
+<p>These references should point to repository-managed assets such as:</p>
+<ul>
+<li><code>deploy/observability/grafana/*.json</code></li>
+<li><code>docs/architecture/observability-contract.md</code></li>
+<li><code>docs/operations/control-plane.md</code></li>
+<li><code>docs/operations/metrics-and-alerts.md</code></li>
+<li><code>docs/operations/distributed-quota.md</code></li>
+</ul>
+<p>This is intentionally not a UI URL contract. The control plane should expose stable
+package references that other operator tooling can map into local workflows.</p>
 <h3 id="backend-snapshot-meanings">Backend snapshot meanings</h3>
 <p>Backend lifecycle payloads expose:</p>
 <ul>
@@ -1554,6 +1682,45 @@
 <li>watcher/coordinator state</li>
 </ul>
 <p>It should not reconstruct state by reaching into multiple unrelated listener internals.</p>
+<h2 id="canonical-dimensions-versus-diagnostic-dimensions">Canonical Dimensions Versus Diagnostic Dimensions</h2>
+<p>The operator bundle must distinguish between dimensions that are safe for dashboards and alerts and dimensions that belong only in logs, traces, or targeted investigation.</p>
+<h3 id="canonical-operator-dimensions">Canonical operator dimensions</h3>
+<p>These are acceptable for stable metrics, dashboards, alerts, and control-plane summaries:</p>
+<ul>
+<li><code>upstream</code></li>
+<li><code>backend</code></li>
+<li><code>listener</code></li>
+<li><code>protocol</code></li>
+<li><code>status_class</code></li>
+<li><code>outcome</code></li>
+<li><code>reason</code></li>
+<li><code>failure_class</code></li>
+<li><code>policy</code></li>
+<li><code>component</code></li>
+<li><code>generation</code> when bounded to active or recent generations</li>
+</ul>
+<h3 id="high-cardinality-diagnostic-dimensions">High-cardinality diagnostic dimensions</h3>
+<p>These should not be introduced as default metric labels or dashboard variables:</p>
+<ul>
+<li>raw request path</li>
+<li>user id</li>
+<li>tenant id</li>
+<li>token id</li>
+<li>client ip</li>
+<li>header values</li>
+<li>query strings</li>
+<li>certificate fingerprints for every request</li>
+<li>arbitrary trace baggage</li>
+<li>per-request nonce or session identifiers</li>
+</ul>
+<p>These belong in:</p>
+<ul>
+<li>structured logs</li>
+<li>trace attributes</li>
+<li>audit events where operationally justified</li>
+<li>control-plane detail views</li>
+</ul>
+<p>The rule is simple: if a dimension can grow with end-user traffic, it is diagnostic by default, not metric-facing by default.</p>
 <h2 id="metrics-vs-logs-vs-control-api">Metrics vs Logs vs Control API</h2>
 <p>These surfaces serve different operational jobs.</p>
 <h3 id="metrics">Metrics</h3>
@@ -1570,6 +1737,13 @@
 <li>request-path and lifecycle debugging</li>
 <li>understanding the exact reason a single action happened</li>
 </ul>
+<h3 id="traces">Traces</h3>
+<p>Traces are for:</p>
+<ul>
+<li>cross-component timing analysis</li>
+<li>causal sequencing within a single request or control-plane action</li>
+<li>joining request-path latency with retry, hedge, auth, and backend sub-operations</li>
+</ul>
 <h3 id="control-api-snapshots">Control API snapshots</h3>
 <p>Control API snapshots are for:</p>
 <ul>
@@ -1577,6 +1751,14 @@
 <li>rollout verification</li>
 <li>backend and watchdog status inspection</li>
 <li>runtime-generation confirmation</li>
+</ul>
+<h3 id="audit-events">Audit events</h3>
+<p>Audit events are for:</p>
+<ul>
+<li>operator accountability</li>
+<li>change history</li>
+<li>security-relevant admin actions</li>
+<li>correlating runtime changes with traffic or control-plane symptoms</li>
 </ul>
 <p>They should complement each other, not contradict each other.</p>
 <h2 id="cardinality-rules">Cardinality Rules</h2>
@@ -1596,6 +1778,25 @@
 <li>per-request trace tokens</li>
 </ul>
 <p>If a dimension is needed for debugging but not for alerting, prefer logs or control-plane snapshots over high-cardinality metrics.</p>
+<h2 id="dashboard-and-alert-compatibility-promise">Dashboard And Alert Compatibility Promise</h2>
+<p>Shipped dashboards and alert rules are versioned operator assets that depend on this contract.</p>
+<p>Compatibility promises:</p>
+<ul>
+<li>canonical metric names and canonical reason label values are treated as stable operator API</li>
+<li>dashboard panels should depend on canonical metrics or recording rules built from canonical metrics</li>
+<li>alert rules should depend on canonical metrics or recording rules, not prose log parsing</li>
+<li>control-plane examples and runbooks should use the same reason slugs and field names as the code contract</li>
+<li>additive fields are allowed when they do not change existing meanings</li>
+<li>renaming a canonical slug, field key, or low-cardinality label is a breaking observability change</li>
+</ul>
+<p>When a breaking observability change is unavoidable:</p>
+<ul>
+<li>update <code>crates/edge/src/observability/mod.rs</code></li>
+<li>update this contract document in the same change</li>
+<li>update shipped dashboards and alerts in the same change</li>
+<li>document migration notes for operators</li>
+<li>avoid silent drift where old dashboards continue to query non-existent or semantically changed series</li>
+</ul>
 <h2 id="backend-lifecycle-observability">Backend Lifecycle Observability</h2>
 <p>Backend health and refresh behavior should be visible consistently across surfaces.</p>
 <p>Important canonical concepts include:</p>
@@ -2098,6 +2299,14 @@
         
 
         
+        <a href="#source-of-truth"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#source-of-truth');">
+            Source Of Truth
+        </a>
+        
+
+        
         <a href="#contract-rule"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#contract-rule');">
@@ -2122,6 +2331,28 @@
         
 
         
+        <a href="#operator-correlation-contract"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#operator-correlation-contract');">
+            Operator Correlation Contract
+        </a>
+        
+        
+        <a href="#correlation-field-meanings"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#correlation-field-meanings');">
+            Correlation field meanings
+        </a>
+        
+        <a href="#surface-expectations"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#surface-expectations');">
+            Surface expectations
+        </a>
+        
+        
+
+        
         <a href="#structured-log-field-contract"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#structured-log-field-contract');">
@@ -2135,6 +2366,14 @@
             Practical meaning
         </a>
         
+        
+
+        
+        <a href="#trace-attribute-contract"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#trace-attribute-contract');">
+            Trace Attribute Contract
+        </a>
         
 
         
@@ -2154,12 +2393,26 @@
         
 
         
+        <a href="#audit-event-contract"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#audit-event-contract');">
+            Audit Event Contract
+        </a>
+        
+
+        
         <a href="#control-api-snapshot-contract"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#control-api-snapshot-contract');">
             Control API Snapshot Contract
         </a>
         
+        
+        <a href="#observability-package-metadata"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#observability-package-metadata');">
+            Observability package metadata
+        </a>
         
         <a href="#backend-snapshot-meanings"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
@@ -2175,6 +2428,28 @@
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#runtime-snapshot-boundaries');">
             Runtime Snapshot Boundaries
         </a>
+        
+
+        
+        <a href="#canonical-dimensions-versus-diagnostic-dimensions"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#canonical-dimensions-versus-diagnostic-dimensions');">
+            Canonical Dimensions Versus Diagnostic Dimensions
+        </a>
+        
+        
+        <a href="#canonical-operator-dimensions"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#canonical-operator-dimensions');">
+            Canonical operator dimensions
+        </a>
+        
+        <a href="#high-cardinality-diagnostic-dimensions"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#high-cardinality-diagnostic-dimensions');">
+            High-cardinality diagnostic dimensions
+        </a>
+        
         
 
         
@@ -2197,10 +2472,22 @@
             Logs
         </a>
         
+        <a href="#traces"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#traces');">
+            Traces
+        </a>
+        
         <a href="#control-api-snapshots"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#control-api-snapshots');">
             Control API snapshots
+        </a>
+        
+        <a href="#audit-events"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#audit-events');">
+            Audit events
         </a>
         
         
@@ -2210,6 +2497,14 @@
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#cardinality-rules');">
             Cardinality Rules
+        </a>
+        
+
+        
+        <a href="#dashboard-and-alert-compatibility-promise"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#dashboard-and-alert-compatibility-promise');">
+            Dashboard And Alert Compatibility Promise
         </a>
         
 
