@@ -25,10 +25,10 @@ Spooky is an HTTP/3 edge runtime and load balancer. It terminates QUIC at the ed
 
 Spooky is built to:
 
-- Terminating QUIC connections with TLS 1.3
-- Converting HTTP/3 streams to HTTP/2 requests
-- Distributing load across backend pools with active health checks
-- Routing requests based on path prefix and hostname patterns
+- terminate QUIC connections with TLS 1.3
+- convert HTTP/3 streams into upstream requests
+- distribute load across upstream backends with active health checks
+- route requests based on path prefix and hostname patterns
 
 ## Architecture
 
@@ -60,7 +60,7 @@ HTTP/3 Client → QUIC/TLS → Spooky Edge → HTTP/2 → Backend Servers
 **Routing**
 - Path prefix matching with longest-match selection
 - Host-based routing
-- Multiple upstream pools with independent configurations
+- Multiple upstreams with independent configurations
 
 **Health Management**
 - Active HTTP health checks with configurable intervals
@@ -163,7 +163,7 @@ Currently working:
 - HTTP/2 backend forwarding with connection pooling
 - Multiple load balancing algorithms
 - Active health checking with automatic recovery
-- Path and host-based routing with upstream pools
+- Path and host-based routing with named upstreams
 
 See [Release Maturity](../release-maturity.md) for beta scope and GA promotion criteria.
 

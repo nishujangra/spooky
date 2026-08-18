@@ -10,7 +10,7 @@ Spooky is not just a proxy binary. It is an operator-facing traffic layer for te
 
 - **Modern edge ingress**: native HTTP/3 over QUIC with a bootstrap HTTP/1.1 and HTTP/2 compatibility path.
 - **Clear traffic control**: routing, load balancing, admission, quota, overload protection, retries, hedging, and circuit breaking are explicit runtime concerns.
-- **Operator visibility**: metrics, logs, traces, control-plane views, audit events, dashboards, alerts, and SLO artifacts ship as one observability package.
+- **Operator visibility**: metrics, logs, traces, control API views, audit events, dashboards, alerts, and SLO artifacts ship as one observability package.
 - **Backend compatibility**: adopt modern client ingress without rewriting existing backend services.
 
 ## Built For Operators
@@ -32,7 +32,7 @@ Spooky gives teams one runtime to receive traffic, make explicit decisions, prot
 - routes requests by host and path
 - evaluates auth, quota, admission, and overload policy separately
 - executes upstream traffic through existing HTTP/1.1 or HTTP/2 backends
-- protects backend pools with health-aware resilience controls
+- protects upstream backends with health-aware resilience controls
 - exposes clear operational signals across metrics, logs, traces, control API, and audit
 
 ## Core Capabilities

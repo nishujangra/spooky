@@ -16,7 +16,7 @@ Use this section when you need to answer:
 - [Limitations](limitations.md) lists the current product boundaries directly.
 - [Configuration Reference](../configuration/reference.md) is the authoritative schema and runtime-semantics guide.
 - [TLS Setup](../configuration/tls.md) explains certificate and trust configuration.
-- [API Overview](../api/overview.md) summarizes the current operator-facing control and metrics endpoints.
+- [API Overview](../api/overview.md) summarizes the current operator-facing Control API and metrics endpoints.
 
 ## Use This Section For
 

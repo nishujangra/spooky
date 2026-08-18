@@ -114,9 +114,9 @@ Admission should produce typed policy results, not direct response I/O decisions
 
 Both QUIC forwarding and bootstrap compatibility code should route these checks through the same admission layer.
 
-## Step 3: External Auth and Auth Decisions
+## Step 3: Auth Decisions
 
-If external auth is configured, the request enters the shared auth-decision layer.
+If external auth is configured, the request enters the shared auth decision layer.
 
 This layer owns:
 
@@ -127,7 +127,7 @@ This layer owns:
 - header mutation validation and safety checks
 - OIDC helper checks where configured
 
-Ingress-specific code should only orchestrate the auth request and apply the shared decision result.
+Ingress-specific code should only orchestrate the auth request and apply the shared auth decision result.
 
 ## Step 4: Route Resolution and Backend Selection
 

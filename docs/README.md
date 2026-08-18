@@ -45,11 +45,11 @@ Spooky is a modern edge runtime for high-trust APIs. This documentation set is o
 | [Development Invariants](development/invariants.md) | Core runtime invariants, ownership assumptions, and rules the code depends on |
 | [Public API Surface Inventory](public-api-surface-inventory.md) | Current canonical public surfaces, hidden internals, and remaining intentional exports |
 
-### Control Plane and Operations — runtime control, observability, and failure handling
+### Control API and Operations — runtime control, observability, and failure handling
 
 | Document | What you'll find |
 |---|---|
-| [API Overview](api/overview.md) | Metrics endpoint and control-plane HTTP surfaces at a high level |
+| [API Overview](api/overview.md) | Metrics endpoint and Control API surfaces at a high level |
 | [Control API Reference](reference/control-api-reference.md) | Endpoint-by-endpoint control API contract |
 | [Metrics Reference](reference/metrics-reference.md) | Metric names, labels, and exported runtime signals |
 | [Operations Overview](operations/overview.md) | Operator map for deployment, sizing, tuning, and failure handling |
