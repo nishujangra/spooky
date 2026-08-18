@@ -97,7 +97,7 @@ These are architectural foundations rather than user-facing product features, bu
 | Global inflight limits | `Done` | Implemented |
 | Per-upstream inflight limits | `Done` | Implemented |
 | Per-backend inflight limits | `Done` | Implemented |
-| Rate limiting | `Done` | scoped local rules plus distributed quota policy with burst/sustained contracts and Redis-backed counters |
+| Rate limiting and quota | `Done` | scoped local rules plus distributed quota policy with burst/sustained contracts and Redis-backed counters |
 
 ## Control Plane And Discovery
 

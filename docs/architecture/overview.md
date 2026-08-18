@@ -2,7 +2,7 @@
 
 ## Introduction
 
-Spooky is an HTTP/3 edge proxy and load balancer implemented in Rust. It terminates QUIC connections at the edge and forwards HTTP requests to HTTP/2 backend servers, enabling modern HTTP/3 clients to communicate with existing HTTP/2 infrastructure without requiring backend modifications.
+Spooky is an HTTP/3 edge runtime and load balancer implemented in Rust. It terminates QUIC at the edge, runs a bootstrap HTTP/1.1 and HTTP/2 compatibility path for downstream clients that are not using native HTTP/3, and forwards upstream traffic through scheme-driven HTTP/2 or HTTP/1.1 transport without requiring backend rewrites.
 
 ## Design Principles
 
@@ -26,7 +26,7 @@ Simple to deploy and operate:
 - Single binary deployment
 - YAML-based configuration with validation
 - Graceful shutdown with connection draining
-- Hot configuration reload (planned)
+- Generation-based runtime reload, staged activation, and rollback for runtime-managed settings
 - Comprehensive metrics and logging
 
 ### Modularity
@@ -51,43 +51,44 @@ Clear separation of concerns across crate boundaries:
 │             Spooky Edge                  │
 │                                          │
 │  ┌────────────────────────────────┐     │
-│  │  QUIC Listener (quiche)        │     │
-│  │  - Connection management       │     │
-│  │  - Stream multiplexing         │     │
+│  │  Ingress Layer                 │     │
+│  │  - HTTP/3 over QUIC            │     │
+│  │  - bootstrap HTTP/1.1 + HTTP/2 │     │
 │  │  - TLS termination             │     │
 │  └───────────┬────────────────────┘     │
 │              │                           │
 │  ┌───────────▼────────────────────┐     │
-│  │  Protocol Bridge               │     │
-│  │  - HTTP/3 → HTTP/2 conversion  │     │
-│  │  - Header normalization        │     │
-│  │  - Streaming body via ChannelBody (mpsc-backed)        │     │
+│  │  Request Policy Path           │     │
+│  │  - Intake and admission        │     │
+│  │  - Auth and route resolution   │     │
+│  │  - Outcome classification      │     │
 │  └───────────┬────────────────────┘     │
 │              │                           │
 │  ┌───────────▼────────────────────┐     │
-│  │  Router & Load Balancer        │     │
-│  │  - Path/host matching          │     │
-│  │  - Upstream selection          │     │
-│  │  - Health tracking             │     │
+│  │  Upstream Execution            │     │
+│  │  - H1 / H2 request building    │     │
+│  │  - Backend selection           │     │
+│  │  - Health and resilience       │     │
 │  └───────────┬────────────────────┘     │
 │              │                           │
 │  ┌───────────▼────────────────────┐     │
-│  │  HTTP/2 Connection Pool        │     │
-│  │  - Connection reuse            │     │
-│  │  - Request forwarding          │     │
-│  │  - Per-frame response streaming                        │     │
+│  │  Transport Layer               │     │
+│  │  - HTTP/2 pool for HTTPS       │     │
+│  │  - HTTP/1.1 pool for HTTP      │     │
+│  │  - Streaming response handling │     │
 │  └───────────┬────────────────────┘     │
 └──────────────┼──────────────────────────┘
-               │ HTTP/2
+               │ HTTP/2 or HTTP/1.1
                ▼
-       ┌───────────────┐
-       │ Backend Pool  │
-       └───────────────┘
+       ┌────────────────┐
+       │ Upstream       │
+       │ Backends       │
+       └────────────────┘
 ```
 
 ### Data Plane and Control Plane
 
-The architecture separates data plane operations (request forwarding) from control plane operations (configuration, health checks, metrics):
+The architecture separates data plane operations (request forwarding) from control plane operations (configuration activation, health checks, runtime views, and metrics):
 
 **Data Plane:**
 - QUIC packet processing
@@ -97,11 +98,11 @@ The architecture separates data plane operations (request forwarding) from contr
 - Response streaming
 
 **Control Plane:**
-- Configuration loading and validation
+- Configuration loading, validation, preview, activation, and rollback
 - Health check execution
-- Backend state management
-- Metrics collection
-- Connection lifecycle management
+- Backend state and runtime-generation views
+- Metrics, readiness, and control API services
+- Watchdog and restart coordination
 
 This separation ensures that control plane operations do not block request processing on the hot path.
 
@@ -128,18 +129,18 @@ For each incoming HTTP/3 stream:
 ### 3. Routing and Backend Selection
 
 Once request headers are available:
-1. Router matches request path and host against upstream pool routes
+1. Router matches request path and host against upstream routes
 2. Longest matching path prefix wins for overlapping routes
 3. Host-based routing is applied if configured
-4. Selected upstream pool's load balancing strategy is invoked
+4. Selected upstream's load-balancing strategy is invoked
 5. Backend index is selected from healthy backends only
-6. Backend address is retrieved from pool
+6. Backend address is retrieved from the selected upstream
 
-### 4. Protocol Translation
+### 4. Request Building and Protocol Translation
 
 Before forwarding to backend:
 1. HTTP/3 pseudo-headers (:method, :path, :authority) are extracted
-2. HTTP/2 request is built with proper URI and method
+2. A canonical upstream request is built with proper URI and method
 3. Regular headers are copied, filtering hop-by-hop headers
 4. Content-Length is set based on body size
 5. Host header is ensured (using authority or backend address)
@@ -147,16 +148,17 @@ Before forwarding to backend:
 ### 5. Backend Forwarding
 
 Request is sent to selected backend:
-1. HTTP/2 connection pool provides connection for backend address
-2. Semaphore-based flow control limits concurrent requests per backend
-3. Request is sent over HTTP/2 connection
-4. Timeout is enforced at the transport layer
-5. Backend response is awaited
+1. The runtime selects HTTP/2 transport for `https://` backends and HTTP/1.1 transport for `http://` backends
+2. The appropriate connection pool provides a connection for the backend address
+3. Semaphore-based flow control limits concurrent requests per backend
+4. Request is sent over the selected upstream connection
+5. Timeout is enforced at the transport layer
+6. Backend response is awaited
 
 ### 6. Response Handling
 
 Backend response is processed:
-1. HTTP/2 response is received from backend
+1. An upstream HTTP/2 or HTTP/1.1 response is received from the backend
 2. Status code and headers are extracted
 3. Response is written back to HTTP/3 stream
 4. Body is streamed to client per frame via incremental `h3.send_body` calls
@@ -196,7 +198,7 @@ Spooky uses Tokio as its asynchronous runtime:
 
 Shared state is managed carefully:
 - `Arc<T>` for shared ownership (including `Arc<Metrics>` shared across all workers)
-- `RwLock<T>` for mutable shared state (upstream pools)
+- `RwLock<T>` for mutable shared state (upstreams and backend lifecycle state)
 - `AtomicU64` for lock-free counters (metrics)
 - A `RuntimeBundleHandle` provides an atomically swappable snapshot of runtime state, enabling
   config hot reload without restarting the process
@@ -289,7 +291,7 @@ Configuration validation occurs before runtime:
 2. TLS certificate/key file existence checks
 3. Backend address format validation
 4. Load balancing mode validation
-5. Route conflict detection (planned)
+5. Route conflict detection hardening and broader validation ergonomics
 
 ### Runtime Behavior
 

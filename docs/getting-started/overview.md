@@ -49,7 +49,7 @@ HTTP/3 Client → QUIC/TLS → Spooky Edge → HTTP/2 → Backend Servers
 **Protocol Support**
 - HTTP/3 and QUIC (RFC 9114, RFC 9000)
 - TLS 1.3 with certificate chain validation
-- HTTP/2 backend connectivity
+- Scheme-driven upstream connectivity: HTTP/2 for `https://` backends and HTTP/1.1 for `http://` backends
 
 **Load Balancing**
 - Random distribution
@@ -160,10 +160,10 @@ curl --http3-only -k \
 Currently working:
 
 - QUIC termination and HTTP/3 support
-- HTTP/2 backend forwarding with connection pooling
+- upstream HTTP/2 forwarding for `https://` backends and HTTP/1.1 forwarding for `http://` backends
 - Multiple load balancing algorithms
 - Active health checking with automatic recovery
-- Path and host-based routing with named upstreams
+- Path, host, and method-aware routing with named upstreams
 
 See [Release Maturity](../release-maturity.md) for beta scope and GA promotion criteria.
 

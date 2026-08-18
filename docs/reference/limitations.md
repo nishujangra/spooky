@@ -13,7 +13,8 @@ This page lists the most important current product limits so operators and contr
 - Full configuration hot reload exists for runtime-managed settings, but some startup-owned changes still require a restart.
 - Dynamic route updates are not implemented as a first-class runtime feature outside config reload.
 - Dynamic upstream membership changes are limited to DNS refresh rather than a richer control-plane API.
-- There is no transactional apply, generation diff, rollback, or staged config activation model.
+- Runtime activation is generation-based and supports validate, preview, activate, history, and rollback flows, but it is still file-backed rather than a granular per-object mutation API.
+- Retained runtime generations are bounded rather than preserved indefinitely for deep history or fleet-wide change analysis.
 
 ## Protocol Limits
 

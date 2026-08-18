@@ -11,7 +11,7 @@ Spooky is **not yet a fully mature general-purpose reverse proxy platform**. The
 - config hot reload covers most runtime settings, including live `log.level` changes, but not all: log format/file settings, tracing config, control-plane thread counts, and listener removal/bind-address changes still require a restart
 - upstream forwarding is scheme-driven: HTTP/2 for `https://` backends, HTTP/1.1 for `http://` backends
 - dynamic control-plane capability is file-reload based, not a granular per-object mutation API
-- auth is limited to API key, local JWT (`HS256`/`RS256`/`ES256`, with static keys or JWKS), and per-upstream external auth (HTTP/OIDC); there is no generic policy engine or rate-limiting framework
+- auth is limited to API key, local JWT (`HS256`/`RS256`/`ES256`, with static keys or JWKS), and per-upstream external auth (HTTP/OIDC); there is no generic policy engine
 - service discovery is limited to DNS refresh rather than a richer orchestration-native model
 
 ## Production-Ready Today
@@ -32,6 +32,7 @@ The following areas are considered strong enough for controlled production use:
 - Prometheus metrics and control-plane health/readiness/runtime endpoints
 - per-upstream API key and local JWT authentication (`HS256`/`RS256`/`ES256`, static PEM/JWK keys or background-refreshed JWKS), with scope/role checks
 - per-upstream async external auth (HTTP subrequest or OIDC discovery/introspection), non-blocking against the H3 loop, with configurable fail-open/fail-closed behavior and response-header allowlisting
+- scoped rate limiting plus distributed quota enforcement with burst/sustained contracts and Redis-backed counters
 
 ## Production-Capable With Caveats
 
@@ -52,10 +53,8 @@ These areas are usable, but their surrounding operational model is not yet as ma
 The following gaps are the most important reasons Spooky is not yet at general-availability maturity:
 
 - config reload cannot change log format/file settings, tracing config, or control-plane thread counts, and cannot remove/rebind listeners, without a restart (`log.level` reloads live)
-- no transactional config apply, staged activation, or rollback API
 - no upstream HTTP/3 forwarding mode
 - no broad request mirroring, canary traffic splitting, or advanced traffic policy engine
-- no first-class rate limiting framework
 - no interactive OIDC login/session-cookie flows, or generic RBAC/policy engine beyond scope/role checks on JWT claims
 - no broad plugin or extension system
 - no orchestration-native service discovery beyond DNS polling
@@ -81,11 +80,11 @@ Do not position Spooky today as:
 
 The most important gates before calling the project broadly production-grade are:
 
-1. Transactional config apply: staged activation, config-diff visibility, and a rollback API on top of the existing reload endpoint (base config hot reload — including live route and upstream updates — already ships).
-2. Live reconfiguration of the remaining restart-only settings (log format/file, tracing config, thread counts, listener removal/bind changes; `log.level` already reloads live).
+1. Live reconfiguration of the remaining restart-only settings (log format/file, tracing config, thread counts, listener removal/bind changes; `log.level` already reloads live).
+2. Longer-horizon validation of staged activation, rollback, and retained runtime history under real operational churn.
 3. Refactoring of the oversized edge runtime into smaller subsystems.
 4. Fuzzing and deeper parser/protocol hardening.
-5. First-class rate limiting and a generic policy engine (auth now covers API key, local JWT with JWKS, and external/OIDC checks).
+5. A broader policy engine beyond the current scoped rate limiting, quota, auth, and overload surfaces.
 6. Better operator guidance for rollout, recovery, and ongoing operations.
 
 ## Related Pages
