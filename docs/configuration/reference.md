@@ -1,11 +1,13 @@
 # Configuration Reference
 
-This is the canonical configuration document for Spooky. It should answer four questions for every setting:
+This is the canonical configuration document for Spooky. It should answer these questions for every major configuration area:
 
-- what field exists
-- what values it accepts
-- what its default is
-- what runtime behavior it changes
+- what the section is for
+- what fields exist
+- what values are allowed
+- what the defaults are
+- what runtime behavior the settings change
+- what operators should be careful about
 
 Use [Configuration Defaults](defaults.md) for the exhaustive default inventory and [Configuration Examples](examples.md) for complete deployment patterns. Use this page when you need exact schema and semantics.
 
@@ -85,6 +87,18 @@ If the raw YAML is accepted, the rest of the system should not need to reinterpr
 - Read [TLS Setup](tls.md) before configuring production certificates or private trust roots.
 - Read [Production Readiness](../operations/production-readiness.md) if you are deciding whether the current operational model fits your rollout requirements.
 
+## Configuration Reading Map
+
+Use this quick map before diving into field tables:
+
+| Goal | Page |
+| --- | --- |
+| Copy a working template | [Configuration Examples](examples.md) |
+| Check what happens when a field is omitted | [Configuration Defaults](defaults.md) |
+| Understand exact field semantics | this page |
+| Configure certificates and trust | [TLS Setup](tls.md) |
+| Understand rollout and restart implications | [Production Deployment](../deployment/production.md) and [Production Readiness](../operations/production-readiness.md) |
+
 ## Configuration File Format
 
 Spooky uses YAML configuration loaded with:
@@ -141,6 +155,14 @@ log:
 | `resilience` | No | Admission, queueing, circuit breaker, retry, brownout, and protocol policy |
 | `observability` | No | Metrics, control API, tracing, and related surfaces |
 | `security` | No | Privilege-drop behavior |
+
+## Common Top-Level Mistakes
+
+- configuring `listeners[]` and then expecting the top-level `listen` block to stay active at runtime
+- using backend shorthand when cleartext `http://` was intended
+- exposing the Control API on a non-loopback address without strong access controls
+- turning off upstream certificate verification without treating it as an explicit break-glass choice
+- increasing inflight, body, or queue limits without validating backend and host capacity
 
 ## Runtime Normalization And Precedence
 
@@ -443,6 +465,12 @@ The expected downstream contract is:
 
 Configures the listening interface for incoming client connections. HTTP/3 requires TLS configuration.
 
+Use this section when you need to decide:
+
+- where Spooky binds
+- which TLS identity it serves
+- whether one listener or multiple listeners are needed
+
 ### Properties
 
 | Property | Type | Required | Default | Description |
@@ -567,9 +595,23 @@ listeners:
 
 Each listener entry shares the same upstream routing table — route matching, load balancing, and health checks are global across all listeners.
 
+### Common Mistakes
+
+- assuming `listeners[]` adds to the top-level `listen` block instead of replacing it at runtime
+- providing only `cert` or only `key` in the legacy pair
+- expecting certificate reload to change active connections rather than only future handshakes
+- forgetting that listener changes can still cross restart boundaries depending on bind topology
+
 ## Upstream Configuration
 
-Upstream pools define groups of backend servers with routing rules and load balancing strategies. Each upstream pool is identified by a unique name and contains routing criteria, load balancing configuration, and backend definitions.
+Upstreams define groups of backends with routing rules and load-balancing strategies. Each upstream is identified by a unique name and contains route criteria, load-balancing configuration, and backend definitions.
+
+Use this section when you need to decide:
+
+- how requests match a route
+- which upstream handles which traffic
+- how backend addresses and health checks are defined
+- how host and forwarded-header policy are applied
 
 ### Structure
 
@@ -594,7 +636,7 @@ upstream:
 
 ### Route Matching
 
-Route matching determines which upstream pool handles a request. Routes are evaluated by longest-prefix matching across all configured upstreams, selecting the route with the most specific (longest) path prefix.
+Route matching determines which upstream handles a request. Routes are evaluated by longest-prefix matching across all configured upstreams, selecting the route with the most specific (longest) path prefix.
 
 #### RouteMatch Properties
 
@@ -690,7 +732,7 @@ Each backend represents an upstream server that can handle requests.
 **Address format notes:**
 - `host:port` or `host` — shorthand, treated as `https://host:port` (port defaults to `443`)
 - `https://host[:port]` — TLS upstream; port defaults to `443` if omitted
-- `http://host[:port]` — cleartext HTTP/1.1 upstream; port defaults to `80` if omitted. Mixed `http://` and `https://` backends are supported within the same upstream pool.
+- `http://host[:port]` — cleartext HTTP/1.1 upstream; port defaults to `80` if omitted. Mixed `http://` and `https://` backends are supported within the same upstream.
 
 #### Health Check Configuration
 
@@ -867,6 +909,20 @@ Verification semantics:
 - `strict_sni: false` disables only the SNI extension; verification still remains enabled unless `verify_certificates: false`.
 - `verify_certificates: false` disables upstream certificate validation entirely.
 
+### Operational Implications
+
+- Route specificity matters more than declaration order. The longest matching path prefix wins.
+- Backend address scheme changes runtime transport behavior. `https://` selects HTTP/2 transport; `http://` selects HTTP/1.1 transport.
+- Health checks are optional. If you omit them, a backend stays eligible unless passive health signals or other runtime behavior remove it.
+- `host_policy` and `forwarded_headers` directly affect what upstream applications see.
+
+### Common Mistakes
+
+- forgetting the `http://` prefix for local or cleartext backends and accidentally opting into HTTPS defaults
+- creating overlapping routes without understanding the longest-prefix and tie-break rules
+- treating backend `id` as cosmetic only even though it appears in logs, metrics, and runtime views
+- using `forwarded_headers.preserve` on untrusted edge traffic
+
 #### Examples
 
 ```yaml
@@ -903,7 +959,7 @@ upstream:
 
 ## Load Balancing Configuration
 
-Load balancing determines how requests are distributed across healthy backends within an upstream pool. Each pool configures its own strategy independently.
+Load balancing determines how requests are distributed across healthy backends within an upstream. Each upstream configures its own strategy independently.
 
 ### Properties
 
@@ -989,6 +1045,18 @@ upstream:
 - Use `least-connections` when backend load varies significantly across requests
 - Use `latency-aware` when you want faster backends to absorb more traffic
 - Use `sticky-cid` for QUIC-connection affinity without application-level stickiness keys
+
+### Operational Implications
+
+- `round-robin` and `random` are the easiest to reason about for initial rollouts.
+- `consistent-hash` and `sticky-cid` improve affinity but make membership changes more visible to clients.
+- `least-connections` and `latency-aware` depend more heavily on live runtime signals and should be paired with good observability.
+
+### Common Mistakes
+
+- picking `consistent-hash` without a stable key that matches application behavior
+- expecting backend `weight` to influence algorithms that currently ignore weights
+- using `sticky-cid` to solve application-layer affinity problems that should use explicit request keys
 
 ### Examples
 
@@ -1077,6 +1145,18 @@ log:
     path: /tmp/spooky-trace.log
 ```
 
+### Operational Implications
+
+- `log.level` reloads live, but log sink shape such as file output and format remains startup-owned.
+- `json` is the safer default for production log pipelines.
+- file logging adds local disk-management responsibility; stderr or journald avoids that at the cost of external collection requirements.
+
+### Common Mistakes
+
+- enabling file logging without rotation
+- using trace-level logging for sustained production traffic
+- assuming format changes apply through live runtime activation
+
 ## Performance Configuration
 
 Controls resource limits, tuning knobs, and connection-flood protection. All fields are optional and fall back to sane defaults.
@@ -1159,9 +1239,27 @@ performance:
   new_connections_burst: 2000
 ```
 
+### Operational Implications
+
+- `worker_threads`, `reuseport`, and shard settings shape how ingress work spreads across cores.
+- inflight limits, timeouts, and body caps define overload behavior as much as raw performance.
+- DNS refresh and connection-pool settings affect how quickly backend changes are observed.
+
+### Common Mistakes
+
+- raising inflight limits without validating backend capacity and timeout posture
+- setting very high body caps without thinking about memory pressure
+- enabling aggressive multi-worker tuning before baseline observability is in place
+
 ## Resilience Configuration
 
 Controls retry budgets, circuit breaking, hedging, adaptive admission, brownout shedding, route queuing, protocol policy, and the worker watchdog. All fields are optional and fall back to production-tuned defaults.
+
+Use this section when you need to decide:
+
+- how Spooky protects itself and its backends under pressure
+- which retry and hedge behaviors are allowed
+- what request-shape rules are enforced before backend execution
 
 ### adaptive_admission
 
@@ -1360,9 +1458,28 @@ resilience:
       - "payments_pool"
 ```
 
+### Operational Implications
+
+- `adaptive_admission`, `brownout`, `route_queue`, and inflight caps interact as one overload-control surface.
+- retry, hedging, and circuit breaking can protect latency or amplify backend pressure depending on how they are tuned.
+- quota and scoped rate limiting are policy-contract features; they should not be interpreted as overload behavior.
+
+### Common Mistakes
+
+- leaving `brownout.core_routes` empty and unintentionally shedding all routes during brownout
+- enabling hedging without understanding replay safety and backend amplification
+- treating retry budgets as a substitute for backend reliability work
+- mixing quota expectations with overload tuning
+
 ## Observability Endpoint Hardening
 
 When enabling `observability.metrics` or `observability.control_api`, keep endpoints on loopback unless you intentionally expose them behind network controls.
+
+Use this section when you need to decide:
+
+- where metrics and the Control API should bind
+- how much runtime control to expose
+- how strongly the admin surface must be protected
 
 ### Metrics Endpoint
 
@@ -1401,6 +1518,12 @@ Use structured command execution:
 - `resilience.watchdog.restart_command`: array, where index `0` is executable and remaining entries are arguments.
 
 Legacy `resilience.watchdog.restart_hook` is deprecated and rejected by validation.
+
+### Common Mistakes
+
+- exposing the Control API on `0.0.0.0` for convenience
+- assuming health and readiness endpoints are enough protection for admin-plane exposure
+- using the legacy reload shortcut when staged validate/preview/activate flows are the safer operational path
 
 ## Configuration Validation
 

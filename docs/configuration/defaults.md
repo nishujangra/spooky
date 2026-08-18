@@ -9,6 +9,16 @@ Use it when you need to answer two questions quickly:
 
 This page reflects the defaults defined in `crates/config/src/default.rs` and the `Default`-backed config structs in `crates/config/src/config.rs`.
 
+## When To Use This Page
+
+Use this page when you need to answer:
+
+- what happens if a field is omitted
+- whether a behavior is explicit or inherited by default
+- which defaults are safe enough to keep for an initial rollout
+
+Use [Configuration Reference](reference.md) when you need exact field semantics and validation rules. Use [Configuration Examples](examples.md) when you need working end-to-end templates.
+
 ## How Defaults Work
 
 Spooky applies defaults in three different ways:
@@ -24,6 +34,12 @@ Examples:
 - `observability.control_api.enabled` defaults to `false`
 - `observability.control_api.auth_token` defaults to `null`
 - if you set `observability.control_api.enabled: true`, validation then requires `auth_token`
+
+## Common Mistakes
+
+- assuming `null` and omission mean the same thing for every nested field
+- assuming defaults make a section production-safe without reviewing operational implications
+- reading defaults without also checking whether a related feature becomes required when enabled
 
 ## Important Non-Defaults
 

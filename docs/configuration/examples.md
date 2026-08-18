@@ -5,6 +5,27 @@ This page collects complete deployment-oriented examples. Use it together with t
 For distributed quota examples and migration guidance, see
 [Distributed Quota](../operations/distributed-quota.md).
 
+## How To Use These Examples
+
+Use these examples as starting points, not as copy-paste truth for every environment.
+
+- start with the smallest example that matches your deployment shape
+- change addresses, certificates, and admin credentials first
+- validate operational implications before promoting a local example into production
+
+## Example Selection Guide
+
+| If you need... | Start with... |
+| --- | --- |
+| a local first run | Example 1 |
+| one upstream in production | Example 2 |
+| multiple upstreams with different routing | Example 3 |
+| multiple listeners with different bind identities | Example 4 |
+| downstream client certificate auth | Example 5 |
+| a private CA for upstream trust | Example 6 |
+| static asymmetric JWT verification | Example 7 |
+| remote JWKS validation | Example 8 |
+
 ## Example 1: Minimal Local Development
 
 ```yaml
@@ -31,6 +52,10 @@ upstream_tls:
 ```
 
 Use this shape for local iteration only. It opts into cleartext upstream traffic explicitly with `http://`.
+
+Common mistake:
+
+- copying this example into production without restoring upstream TLS verification and stronger admin-surface protection
 
 ## Example 2: Single-Upstream Production
 
@@ -86,6 +111,11 @@ observability:
     auth_token: "replace-with-strong-token"
 ```
 
+Use this when:
+
+- one upstream handles most traffic
+- you want the simplest host deployment that is still production-oriented
+
 ## Example 3: Multi-Upstream Production
 
 ```yaml
@@ -137,6 +167,11 @@ load_balancing:
   type: round-robin
 ```
 
+Use this when:
+
+- different hosts or paths must route to different upstreams
+- the application needs different load-balancing strategies per upstream
+
 ## Example 4: Multi-Listener Deployment
 
 ```yaml
@@ -174,6 +209,10 @@ upstream:
 ```
 
 The top-level `listen` field is always required by the schema. When `listeners[]` is non-empty, runtime normalization uses `listeners[]` and the top-level `listen` block is superseded.
+
+Common mistake:
+
+- expecting the top-level `listen` block to stay active alongside `listeners[]`
 
 ## Example 5: Bootstrap Listener Client Auth
 
@@ -229,6 +268,11 @@ upstream:
       - id: "backend1"
         address: "backend.private.example:8443"
 ```
+
+Use this when:
+
+- the upstream certificate chain is not rooted in the public Web PKI
+- one deployment needs stricter trust control than public default CA bundles
 
 ## Example 7: Static RS256 And ES256 JWT Keys
 
@@ -343,17 +387,17 @@ token signed by a trusted key is accepted, so set them in production.
 Both reject tokens while keys are missing; they differ only in whether the process
 starts at all.
 
-## Example 9: Current Reload Stance
+## Example 9: Runtime Activation And Reload Posture
 
-Spooky supports **full configuration hot reload** via `POST /admin/runtime/reload`, alongside
-certificate-only reload for new handshakes. When planning operations:
+Spooky supports generation-based validation, preview, activation, rollback, and certificate-only reload. When planning operations:
 
-- use full config reload (`/admin/runtime/reload`) for route, upstream, backend, timeout, limit,
-  resilience-policy, and `log.level` changes — these apply live via an atomic runtime swap, no restart
-- use cert reload (`/admin/runtime/reload-certs`) for listener certificate replacement
-- plan a drain-and-restart workflow only for log format/file settings, tracing config, control-plane
-  thread counts, and listener removal or bind-address changes, which the reload endpoint rejects
-- keep rollback and staged rollout procedures ready
+- use `POST /admin/runtime/validate` to check a candidate configuration
+- use `POST /admin/runtime/preview` to see the staged diff without touching the running runtime
+- use `POST /admin/runtime/activate` to commit a runtime-managed config change
+- use `POST /admin/runtime/rollback` to return to a retained runtime generation
+- use `POST /admin/runtime/reload-certs` for listener certificate replacement on new handshakes
+- use the legacy `POST /admin/runtime/reload` shortcut only when you intentionally want the older direct-apply behavior without preview
+- plan a drain-and-restart workflow only for log format/file settings, tracing config, control-plane thread counts, and listener removal or bind-address changes
 
 ## Related Pages
 

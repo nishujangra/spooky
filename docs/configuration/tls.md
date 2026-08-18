@@ -1,10 +1,17 @@
 # TLS Configuration
 
-Guide for configuring TLS certificates for HTTP/3 connections in Spooky.
+This page explains how to configure downstream TLS certificates and upstream trust behavior in Spooky.
 
 ## Overview
 
 HTTP/3 uses QUIC as its transport protocol, which requires TLS 1.3 for encryption and authentication. Spooky requires valid TLS certificates to establish secure connections with clients.
+
+Use this page when you need to answer:
+
+- what certificate and key formats Spooky accepts
+- how to configure one or many TLS identities on a listener
+- how to set file paths and permissions safely
+- what TLS changes require reload versus restart
 
 ## Requirements
 
@@ -167,10 +174,14 @@ listen:
   protocol: http3
   port: 9889
   address: "0.0.0.0"
-  tls:
-    cert: "/path/to/certificate.pem"
-    key: "/path/to/private-key.pem"
+tls:
+  cert: "/path/to/certificate.pem"
+  key: "/path/to/private-key.pem"
 ```
+
+Operational implication:
+
+- if you do not configure a valid certificate and key, Spooky will fail before serving traffic
 
 ### Path Specifications
 
@@ -242,6 +253,11 @@ Fallback behavior details:
 - If the client sends an SNI hostname that is not present in `listen.tls.certificates`, Spooky serves the default identity rather than rejecting the handshake.
 - Startup rejects any `listen.tls.certificates[].server_name` mapping whose configured certificate SANs do not cover that hostname.
 
+Common mistakes:
+
+- expecting wildcard lookup behavior from `server_name` entries instead of from certificate SANs
+- forgetting that one default identity is still needed for non-SNI or unmatched-SNI handshakes
+
 ## File Permissions and Security
 
 ### Recommended Permissions
@@ -269,6 +285,11 @@ drwx------ 2 spooky spooky 4096 Dec 15 10:00 .
 -rw-r--r-- 1 spooky spooky 1234 Dec 15 10:00 server.crt
 -rw------- 1 spooky spooky 1704 Dec 15 10:00 server.key
 ```
+
+Operational implications:
+
+- key readability must match the runtime user model; overly strict permissions can block startup
+- overly broad permissions create unnecessary key-exposure risk
 
 ### Security Best Practices
 
