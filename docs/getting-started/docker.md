@@ -72,7 +72,7 @@ docker compose -f packaging/docker/docker-compose.yml up -d --build
 
 ```bash
 # Health check
-curl -k https://127.0.0.1:9902/health
+curl -k --http1.1 https://127.0.0.1:9902/health
 
 # Metrics
 curl http://127.0.0.1:9901/metrics

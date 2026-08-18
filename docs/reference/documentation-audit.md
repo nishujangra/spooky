@@ -85,7 +85,7 @@ Some files currently live in legacy sections such as `development/`, `howto/`, `
 | `docs/protocols/http3.md` | strict reference | Protocol-specific behavior reference. |
 | `docs/protocols/quic.md` | strict reference | Transport behavior and terminology reference. |
 | `docs/public-api-surface-inventory.md` | strict reference | Exact public/exported surface inventory. |
-| `docs/reference/control-api-reference.md` | API and control plane | Endpoint-by-endpoint admin API reference. |
+| `docs/reference/control-api-reference.md` | API and control plane | Endpoint-by-endpoint Control API reference. |
 | `docs/reference/feature-matrix.md` | strict reference | Supported, partial, and missing capability inventory. |
 | `docs/reference/limitations.md` | strict reference | Current product limits. |
 | `docs/reference/metrics-reference.md` | observability | Exact exported metrics and labels. |

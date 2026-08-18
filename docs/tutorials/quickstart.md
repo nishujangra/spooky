@@ -132,7 +132,7 @@ hello from backend
 In another terminal:
 
 ```bash
-curl -sk https://127.0.0.1:9902/health
+curl -sk --http1.1 https://127.0.0.1:9902/health
 ```
 
 Expected response:

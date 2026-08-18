@@ -389,6 +389,7 @@ sudo certbot renew
 
 # Reload listener certificates for new handshakes
 curl -X POST \
+  --http1.1 \
   -H "Authorization: Bearer ${SPOOKY_CONTROL_API_TOKEN}" \
   https://127.0.0.1:9902/admin/runtime/reload-certs
 ```
@@ -412,6 +413,7 @@ sudo chmod 600 /etc/spooky/certs/server.key
 
 # Reload listener certificates for new handshakes
 curl -X POST \
+  --http1.1 \
   -H "Authorization: Bearer ${SPOOKY_CONTROL_API_TOKEN}" \
   https://127.0.0.1:9902/admin/runtime/reload-certs
 

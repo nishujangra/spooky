@@ -250,13 +250,13 @@ If `observability.control_api.enabled=true`:
 
 ```bash
 # Liveness — is the process alive?
-curl -k https://127.0.0.1:9902/health
+curl -k --http1.1 https://127.0.0.1:9902/health
 
 # Readiness — is Spooky ready to serve traffic?
-curl -k https://127.0.0.1:9902/ready
+curl -k --http1.1 https://127.0.0.1:9902/ready
 
 # Runtime info (requires auth token)
-curl -k -H "Authorization: Bearer <token>" https://127.0.0.1:9902/admin/runtime
+curl -k --http1.1 -H "Authorization: Bearer <token>" https://127.0.0.1:9902/admin/runtime
 ```
 
 ---

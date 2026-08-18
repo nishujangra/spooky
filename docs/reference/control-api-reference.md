@@ -419,7 +419,7 @@ Minimum role:
 Example:
 
 ```bash
-curl -k --http1.1 -X POST https://127.0.0.1:9890/admin/runtime/rollback \
+curl -k --http1.1 -X POST https://127.0.0.1:9902/admin/runtime/rollback \
   -H "Authorization: Bearer <token>" \
   -H "content-type: application/json" \
   -d '{"target_generation": 3}'
@@ -523,14 +523,14 @@ Optional request body:
 Example:
 
 ```bash
-curl -k --http1.1 -X POST https://127.0.0.1:9890/admin/runtime/reload \
+curl -k --http1.1 -X POST https://127.0.0.1:9902/admin/runtime/reload \
   -H "Authorization: Bearer <token>"
 ```
 
 Activating an alternate config file:
 
 ```bash
-curl -k --http1.1 -X POST https://127.0.0.1:9890/admin/runtime/reload \
+curl -k --http1.1 -X POST https://127.0.0.1:9902/admin/runtime/reload \
   -H "Authorization: Bearer <token>" \
   -H "content-type: application/json" \
   -d '{"config_path": "/etc/spooky/canary.yaml"}'

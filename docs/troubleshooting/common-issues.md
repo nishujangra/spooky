@@ -458,7 +458,7 @@ Also capture:
 - the exact time window of the incident
 - the caller, tenant, route, upstream, backend, or generation involved
 
-## Related Reference
+## Related Pages
 
 - [Operations Overview](../operations/overview.md)
 - [Runbook](../operations/runbook.md)

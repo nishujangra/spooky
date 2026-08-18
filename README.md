@@ -209,7 +209,7 @@ Recommended deep links:
 
 - [Architecture Overview](docs/architecture/overview.md)
 - [Request Lifecycle](docs/architecture/request-lifecycle.md)
-- [Transport Boundaries](docs/architecture/transport.md)
+- [Transport Boundary](docs/architecture/transport.md)
 - [Quota Policy Contract](docs/architecture/quota-policy-contract.md)
 - [Observability Contract](docs/architecture/observability-contract.md)
 - [Control API Reference](docs/reference/control-api-reference.md)

@@ -404,13 +404,14 @@ observability:
 
 Check readiness:
 ```bash
-curl -k https://127.0.0.1:9902/ready
-curl -k https://127.0.0.1:9902/health
+curl -k --http1.1 https://127.0.0.1:9902/ready
+curl -k --http1.1 https://127.0.0.1:9902/health
 ```
 
 Reload listener certificates without restarting the process:
 ```bash
 curl -X POST \
+  --http1.1 \
   -H 'Authorization: Bearer replace-with-strong-token' \
   https://127.0.0.1:9902/admin/runtime/reload-certs
 ```
@@ -439,10 +440,12 @@ sudo chown -R spooky:spooky /etc/spooky /var/log/spooky
 
 ## Validating Your Config
 
-Spooky runs full validation on startup and exits with a clear error message. To validate without starting:
+Spooky runs full validation on startup and exits with a clear error message. There is no standalone `--validate` flag.
+
+To validate a config safely, start Spooky with the candidate file in a controlled environment and confirm it reaches the listening state without exiting. Stop it after you confirm startup succeeded:
 
 ```bash
-spooky --config /etc/spooky/config.yaml --validate
+spooky --config /etc/spooky/config.yaml
 ```
 
 Common validation errors and fixes:

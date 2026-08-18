@@ -193,7 +193,7 @@ no traffic, remove it and decommission the old proxy.
 
 ## Things That Don't Translate Directly
 
-The following NGINX and Envoy features have no equivalent in Spooky v0.1.x. This is not a complete long-term roadmap statement — it is a description of what is absent right now. Plan around these gaps before starting a migration.
+The following NGINX and Envoy features have no equivalent in Spooky today. This is not a complete long-term roadmap statement — it is a description of what is absent right now. Plan around these gaps before starting a migration.
 
 **NGINX dynamic modules (ModSecurity, gzip, Brotli, etc.)** are not available. Spooky has no module system and no request/response body processing pipeline. If you rely on ModSecurity for WAF rules, you must keep a WAF in the chain — either in front of Spooky or as a sidecar on the backend. For gzip/Brotli: serve pre-compressed assets from your origin, or keep an NGINX instance in the chain for compression.
 
@@ -201,11 +201,11 @@ The following NGINX and Envoy features have no equivalent in Spooky v0.1.x. This
 
 **Lua scripting and WASM filters** are not supported. Envoy's Lua filter and WASM extension model, and NGINX's `lua-nginx-module`, have no equivalent in Spooky. Any per-request logic (custom header inspection, A/B routing logic, request signing) must move to the application layer or to a middleware service in front of Spooky.
 
-**URL rewriting** (`rewrite` in NGINX, `regex_rewrite` in Envoy route config) is not available in v0.1.x. Spooky forwards requests to upstreams with the path unchanged. Workaround: handle path normalization at the origin, or keep NGINX in the chain for routes that require rewriting.
+**URL rewriting** (`rewrite` in NGINX, `regex_rewrite` in Envoy route config) is not available today. Spooky forwards requests to upstreams with the path unchanged. Workaround: handle path normalization at the origin, or keep NGINX in the chain for routes that require rewriting.
 
 **Response header manipulation** (`add_header`, `proxy_hide_header`, `more_set_headers` in NGINX; `response_headers_to_add` in Envoy) is not available. Spooky passes response headers from the upstream to the client unmodified. Workaround: set headers at the origin service, or use a thin middleware layer (e.g., a simple HTTP wrapper service) for routes where specific headers are required.
 
-**Per-IP rate limiting** (`limit_req_zone` / `limit_conn_zone` in NGINX; rate limit filter in Envoy). Spooky has scoped rate limiting (`resilience.scoped_rate_limits`) keyed by route, client, tenant, or token, plus global and per-upstream admission control — but not the full breadth of NGINX/Envoy rate-limit expressions, and no distributed/cross-instance rate limiting. For advanced or cross-instance throttling, place a dedicated rate-limiting layer (e.g., a Redis-backed rate limiter, or a cloud provider's WAF/shield service) in front of Spooky, or keep NGINX in the chain for routes that require per-IP throttling.
+**Per-IP rate limiting** (`limit_req_zone` / `limit_conn_zone` in NGINX; rate limit filter in Envoy). Spooky has scoped rate limiting (`resilience.scoped_rate_limits`) keyed by route, client, tenant, or token, plus distributed quota policy for cross-instance contract enforcement. What it does not have is the full breadth of NGINX or Envoy rate-limit expressions, or a first-class per-IP throttling surface equivalent to those products. For routes that require detailed per-IP throttling, keep a dedicated rate-limiting layer (for example, a Redis-backed limiter or a cloud WAF/shield service) in front of Spooky, or keep NGINX in the chain for those paths.
 
 ---
 
@@ -223,7 +223,7 @@ Before starting any migration, verify that your old proxy's binary, config files
 systemctl stop spooky
 ```
 
-This immediately stops Spooky from accepting new connections. In-flight QUIC connections will close when they hit the QUIC idle timeout (the default idle timeout in Spooky v0.1.x applies; check your config's `quic.idle_timeout` if you have set it explicitly). TCP connections that were in progress will be dropped.
+This immediately stops Spooky from accepting new connections. In-flight QUIC connections will close when they hit the configured QUIC idle timeout. TCP connections that were in progress will be dropped.
 
 **Step 3: Start your old proxy.**
 

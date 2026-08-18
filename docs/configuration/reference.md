@@ -29,11 +29,13 @@ Default coverage now lives on [Configuration Defaults](defaults.md) so the full 
 
 This page does not change the current product behavior:
 
-- configuration hot reload is supported via `POST /admin/runtime/reload`: the full config is
-  re-read, validated, and applied through an atomic runtime swap (routes, upstreams, backends,
-  timeouts, limits, resilience policies, and `log.level`). Only log format/file settings, tracing
-  config, control-plane thread counts, and listener removal / bind-address changes still require a
-  restart.
+- configuration hot reload is supported through the staged `POST /admin/runtime/validate`,
+  `POST /admin/runtime/preview`, and `POST /admin/runtime/activate` flow. The legacy
+  `POST /admin/runtime/reload` shortcut still exists, but it bypasses preview. Runtime-managed
+  changes are re-read, validated, and applied through an atomic runtime swap (routes, upstreams,
+  backends, timeouts, limits, resilience policies, and `log.level`). Only log format/file
+  settings, tracing config, control-plane thread counts, and listener removal / bind-address
+  changes still require a restart.
 - certificate reload (`POST /admin/runtime/reload-certs`) covers new handshakes only
 - backend transport is scheme-driven: `https://` backends use HTTP/2, `http://` backends use HTTP/1.1
 
