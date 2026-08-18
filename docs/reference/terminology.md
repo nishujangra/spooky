@@ -1,8 +1,23 @@
 # Terminology
 
-This page standardizes the core terms used across the docs.
+Use this page as the source of truth for reader-facing product terms.
 
-Use these definitions and preferred phrases consistently in product-reference pages.
+## Quick Lookup
+
+| Need | Term |
+| --- | --- |
+| downstream ingress socket and TLS identity | `listener` |
+| named routing target | `upstream` |
+| single origin endpoint inside an upstream | `backend` |
+| request match conditions | `route` |
+| request policy gate before backend execution | `admission` |
+| contract-style request limiting | `quota` |
+| runtime self-protection under pressure | `overload` |
+| privileged admin HTTP surface | `Control API` |
+| operator-facing history of admin actions | `audit` |
+| atomically swapped active runtime version | `runtime generation` |
+
+Use these definitions and preferred phrases consistently across product-reference pages.
 
 | Term | Meaning |
 | --- | --- |
@@ -43,6 +58,19 @@ Use these phrases consistently unless a page is quoting a metric name, config ke
 | `control plane` | `control-plane services` for the general system every time | use `control plane` for the broader management layer; use `Control API` for the HTTP admin surface. |
 | `audit` | `audit log` as the only term | `audit` covers the event stream and operator history more cleanly. |
 | `runtime generation` | `generation` alone on first mention | spell out the full phrase on first mention for clarity. |
+
+## Search Aliases
+
+These aliases are common search terms, but they are not the preferred product wording:
+
+| Search term | Canonical term |
+| --- | --- |
+| admin API | `Control API` |
+| origin server | `backend` |
+| routing rule | `route` |
+| rate limiting, when the meaning is contract exhaustion | `quota` |
+| degraded mode, when the meaning is selective overload shedding | `brownout` |
+| config version swap | `runtime generation` |
 
 ## Writing Style
 

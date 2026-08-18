@@ -1,6 +1,17 @@
 # Limitations
 
-This page lists the most important current product limits so operators and contributors do not have to infer them from scattered documents.
+Use this page for current hard product limits and non-goals.
+
+## Quick Lookup
+
+| If you need to check | Start here |
+| --- | --- |
+| restart boundaries and runtime history limits | [Configuration And Control Plane Limits](#configuration-and-control-plane-limits) |
+| protocol gaps | [Protocol Limits](#protocol-limits) |
+| traffic-policy gaps | [Traffic-Management Limits](#traffic-management-limits) |
+| auth, RBAC, OIDC, or audit limits | [Security And Policy Limits](#security-and-policy-limits) |
+| platform integration gaps | [Platform And Ecosystem Limits](#platform-and-ecosystem-limits) |
+| current engineering constraints | [Engineering Limits](#engineering-limits) |
 
 ## Architectural Limits
 
@@ -58,23 +69,6 @@ This page lists the most important current product limits so operators and contr
 - The central edge runtime remains concentrated in a very large module.
 - This increases change risk and makes long-term feature growth harder.
 - Some docs and operational guidance still need tighter separation between stable behavior and future intent.
-
-## What These Limits Mean In Practice
-
-Spooky is a strong candidate when:
-
-- HTTP/3 edge performance and correctness are primary goals
-- the upstream environment speaks HTTP/2 (`https://` backends) or HTTP/1.1 (`http://` backends), or a mix of both
-- the deployment can tolerate occasional restarts for startup-owned config changes
-- the deployment does not require rich traffic policy or auth gateway features
-
-Spooky is a poor fit today when:
-
-- every config field must be live-reloadable with no restart boundary
-- upstream protocol breadth is required
-- advanced API gateway behavior is required
-- a rich dynamic control plane is expected
-- a plugin/filter ecosystem is required
 
 ## Related Pages
 

@@ -1,20 +1,33 @@
 # Feature Matrix
 
-This matrix describes the current feature surface from the source tree as it exists today.
+Use this page to check whether a feature is implemented, partially implemented, or missing.
 
-Legend:
+Status legend:
 
-- `Done`: implemented and clearly present in the codebase
-- `Partial`: implemented with important caveats or limited scope
+- `Done`: implemented and supported in the current product
+- `Partial`: implemented with important limits or caveats
 - `Missing`: not implemented as a first-class feature
 
-## Refactor Foundations
+## Quick Lookup
 
-These are architectural foundations rather than user-facing product features, but they now materially define how the codebase behaves and how future work should be added.
+| If you need to check | Start here |
+| --- | --- |
+| protocol support | [Protocols](#protocols) |
+| route matching | [Routing](#routing) |
+| balancing strategy | [Load Balancing](#load-balancing) |
+| TLS or trust behavior | [TLS And Trust](#tls-and-trust) |
+| resilience and protection features | [Resilience And Safety](#resilience-and-safety) |
+| runtime control and discovery | [Control Plane And Discovery](#control-plane-and-discovery) |
+| auth, policy, and platform features | [Policy, Security, And Platform Features](#policy-security-and-platform-features) |
+| observability and packaging | [Observability And Ops](#observability-and-ops) |
+
+## Runtime Foundations
+
+These items are not user-facing features, but they are important product foundations.
 
 | Area | Status | Notes |
 | --- | --- | --- |
-| Request admission and policy evaluation | `Done` | Shared admission flow covers auth checks, scoped rate limits, brownout, overload, and rejection mapping |
+| Request admission and policy evaluation | `Done` | Shared flow covers auth, scoped rate limits, quota, brownout, overload, and rejection mapping |
 | Route resolution and backend selection pipeline | `Done` | Shared route match, upstream lookup, LB strategy, backend selection, and resolution telemetry flow |
 | Canonical load-balancing key resolution | `Done` | Cookie/query/header/bearer/CID/peer-IP extraction plus shared fallback behavior |
 | Shared upstream error classification | `Done` | Timeout/transport/TLS/protocol normalization with shared health and retry interpretation |
@@ -25,7 +38,7 @@ These are architectural foundations rather than user-facing product features, bu
 | Unified backend lifecycle model | `Done` | DNS refresh, health observations, request feedback, pool placement, and lifecycle snapshots are coordinated |
 | Canonical transport façade | `Done` | Edge depends on transport execution contract instead of H1/H2 pool details |
 | Listener/runtime façade split | `Done` | `quic_listener` and bootstrap paths are decomposed into orchestration-oriented modules |
-| Public API and visibility hardening | `Done` | Canonical crate façades and reduced accidental exports across edge, config, bridge, lb, transport, and errors |
+| Public API and visibility hardening | `Done` | Canonical crate facades and reduced accidental exports across edge, config, bridge, lb, transport, and errors |
 
 ## Protocols
 
@@ -97,7 +110,7 @@ These are architectural foundations rather than user-facing product features, bu
 | Global inflight limits | `Done` | Implemented |
 | Per-upstream inflight limits | `Done` | Implemented |
 | Per-backend inflight limits | `Done` | Implemented |
-| Rate limiting and quota | `Done` | scoped local rules plus distributed quota policy with burst/sustained contracts and Redis-backed counters |
+| Rate limiting and quota | `Done` | Scoped local rules plus distributed quota policy with burst and sustained contracts and Redis-backed counters |
 
 ## Control Plane And Discovery
 
@@ -109,7 +122,7 @@ These are architectural foundations rather than user-facing product features, bu
 | Restart endpoint | `Done` | Implemented |
 | Cert reload endpoint | `Done` | Implemented |
 | Full config hot reload | `Partial` | Broad runtime swap exists; startup-owned settings and bind/topology changes still require restart or explicit compatibility handling |
-| Dynamic route updates | `Done via config reload` | routing index rebuilt + swapped |
+| Dynamic route updates | `Partial` | Supported through runtime activation or reload, not through a dedicated per-route mutation API |
 | Dynamic upstream membership API | `Missing` | No first-class API |
 | DNS refresh | `Done` | Implemented for hostname-based backends |
 | Rich service discovery | `Missing` | No Kubernetes/xDS/Consul-class discovery |
@@ -124,8 +137,8 @@ These are architectural foundations rather than user-facing product features, bu
 | JWT validation | `Done` | Local `HS256`/`RS256`/`ES256` validation, per-upstream; explicit algorithm allowlist |
 | JWKS key sources | `Done` | Static PEM/JWK keys or remote JWKS URL, background refresh, rollover overlap, last-known-good retention |
 | RBAC / policy engine | `Partial` | Scope/role requirements enforced against JWT claims only |
-| External auth integration | `Done` | Async HTTP subrequest per upstream; non-blocking, fail-open/fail-closed configurable |
-| OIDC / auth gateway | `Partial` | Discovery + token introspection; no interactive login/session-cookie flows. Local signature validation is available via JWT `jwks_url` |
+| External auth integration | `Done` | Async HTTP subrequest per upstream with fail-open or fail-closed behavior |
+| OIDC / auth gateway | `Partial` | Discovery and token introspection only; no interactive login or session-cookie flows. Local signature validation is available through JWT `jwks_url` |
 | WAF capabilities | `Missing` | Not implemented |
 | Plugin / extension model | `Missing` | Not implemented |
 
@@ -140,28 +153,12 @@ These are architectural foundations rather than user-facing product features, bu
 | Admin-plane RBAC | `Done` | `viewer` / `operator` / `admin` enforced per control API route; `401` and `403` are distinct |
 | Control API mTLS | `Done` | `disabled` / `optional` / `required`, with a client verifier scoped to the control API endpoint |
 | Admin audit event stream | `Done` | Stable JSON schema over a dedicated log target or file sink; attempt/result pairs for mutating actions |
-| Admin source-IP allowlisting | `Done` | CIDR gate evaluated before credential validation; TCP peer address only |
+| Admin source-IP allowlisting | `Done` | CIDR gate runs before credential validation; TCP peer address only |
 | OTLP tracing hooks | `Done` | Optional |
 | Packaging for Docker | `Done` | Present |
 | Packaging for Debian/systemd | `Done` | Present |
 | Benchmark suite | `Done` | Dedicated crate and scripts |
-| Production runbook maturity | `Partial` | Present, but should be expanded and tightened |
-
-## Practical Summary
-
-Spooky is strongest today as:
-
-- an HTTP/3-first edge proxy
-- a deterministic routing and balancing layer with scheme-driven H1/H2 upstream transport
-- a proxy with strong resource-bound and teardown behavior
-- a codebase with shared policy/runtime boundaries in place across request path, runtime ownership, backend lifecycle, transport, and observability
-
-Spooky is not yet strongest as:
-
-- a general-purpose legacy protocol proxy
-- a dynamic fleet-managed control-plane-driven proxy
-- a fully featured API gateway
-- a highly extensible filter platform
+| Production runbook maturity | `Partial` | Present, but still being tightened |
 
 ## Related Pages
 

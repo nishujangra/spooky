@@ -1,30 +1,24 @@
 # Metrics Reference
 
-This page documents the major built-in Prometheus metrics families exposed by Spooky and how operators should use them.
+Use this page to look up exported metric families, labels, and meanings.
 
-## Use This Page With
+## Quick Lookup
 
-- [Observability Operator Bundle](../operations/observability-bundle.md) for the packaged dashboards, alerts, and SLO views
-- [Metrics and Alerts](../operations/metrics-and-alerts.md) for domain-level interpretation
-- [Control API Reference](control-api-reference.md) when you need current runtime state rather than trend
+| If you need to check | Start here |
+| --- | --- |
+| request volume, outcomes, and status classes | [Core Request Metrics](#core-request-metrics) and [Request Breakdown Metrics](#request-breakdown-metrics) |
+| latency families | [Latency Metrics](#latency-metrics) |
+| overload, brownout, and circuit protection | [Overload And Admission Metrics](#overload-and-admission-metrics) |
+| quota decisions and backend health | [Quota Metrics](#quota-metrics) |
+| retries and hedges | [Retry And Hedging Metrics](#retry-and-hedging-metrics) |
+| downstream or upstream TLS | [TLS Metrics](#tls-metrics) |
+| control-plane or runtime generation signals | [Control Plane And Runtime Metrics](#control-plane-and-runtime-metrics) |
 
 ## Endpoint
 
 - method: `GET`
 - path: configurable by `observability.metrics.path`
 - default path: `/metrics`
-
-## Read Metrics In This Order
-
-When something is wrong, the fastest operator path is usually:
-
-1. request and latency families
-2. overload and quota families
-3. backend health and timeout families
-4. retry and hedge families
-5. TLS and control-plane families
-
-Metrics tell you trend and rate. The Control API tells you current runtime state.
 
 ## Canonical Label Rules
 
@@ -264,31 +258,6 @@ Use these when:
 - the active generation may differ across nodes
 - watchdog activity might be driving drain or restart behavior
 
-## Golden Signals To Watch First
-
-- request success/failure counters
-- request totals by upstream and backend outcome
-- upstream request latency histogram percentiles from PromQL
-- route latency percentiles
-- overload shed counts by reason
-- backend timeout and backend error counters
-- active connections
-- request buffered bytes
-- downstream handshake failures
-- quota policy outcomes and quota backend health when 429s or fail-open or fail-closed behavior rises
-- runtime activation, runtime rollback, and runtime rejection families when control-plane workflows are involved
-
-## First Alerts To Add
-
-- `sum by (upstream) (rate(spooky_upstream_requests_total{status_class="5xx"}[5m]))`
-- `sum by (backend) (rate(spooky_backend_requests_total{outcome="backend_error"}[5m]))`
-- `histogram_quantile(0.95, sum by (le, upstream) (rate(spooky_upstream_request_latency_ms_bucket[5m])))`
-- sustained growth in `spooky_overload_shed_by_reason_total`
-- rising `spooky_backend_timeouts`
-- rising `spooky_downstream_tls_handshake_failure_total`
-- unexpectedly high `spooky_request_buffered_bytes`
-- any sustained `spooky_runtime_panics`
-
 ## Metrics To Control API Workflow
 
 Use this fast path when the metrics tell you the class of problem but not the live state:
@@ -305,7 +274,7 @@ Use this fast path when the metrics tell you the class of problem but not the li
 
 ## Related Pages
 
-- [Control API Reference](control-api-reference.md)
 - [Observability Operator Bundle](../operations/observability-bundle.md)
 - [Metrics and Alerts](../operations/metrics-and-alerts.md)
+- [Control API Reference](control-api-reference.md)
 - [Operations Runbook](../operations/runbook.md)
