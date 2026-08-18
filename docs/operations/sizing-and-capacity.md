@@ -1,89 +1,112 @@
 # Sizing And Capacity
 
-This page documents how to think about Spooky sizing. Exact safe numbers must still be validated against your own traffic shape.
+This page explains how to size Spooky nodes and how to think about safe concurrency. Exact numbers must be validated against your own workload.
 
-## Capacity Inputs That Matter
+## Inputs That Matter Most
+
+Safe capacity depends primarily on:
 
 - concurrent downstream connections
 - concurrent in-flight requests
-- request and response body sizes
-- percentage of long-lived streams
 - backend latency distribution
-- number of distinct upstreams and backends
-- enabled observability and logging volume
+- request and response body sizes
+- percentage of long-lived or streaming traffic
+- number of distinct routes, upstreams, and backends
+- enabled logging, metrics, tracing, auth, quota, retry, and hedge policy
+
+## Start With a Traffic Model
+
+Before tuning limits, write down:
+
+1. expected steady-state requests per second
+2. expected peak requests per second
+3. expected concurrent connections
+4. longest common request and response durations
+5. largest realistic request and response sizes
+6. backend p95 and p99 latency under load
+
+Without that model, capacity tuning becomes guesswork.
 
 ## CPU Guidance
 
 Use more CPU when you expect:
 
 - high QUIC handshake churn
-- many concurrent active streams
 - heavy TLS activity
-- many latency-sensitive routing decisions
-- lots of slow-stream and timeout management
+- many active concurrent streams
+- many routes with latency-sensitive traffic
+- aggressive retry, hedge, auth, or quota evaluation volume
 
-Start with:
+Reasonable starting points:
 
-- small rollout: 2 to 4 cores
-- serious production edge node: 4 to 8 cores
-- high-throughput nodes: validate upward from there with real load
+- small controlled rollout: 2 to 4 cores
+- serious production node: 4 to 8 cores
+- higher-throughput nodes: scale upward only after workload validation
 
 ## Memory Guidance
 
-Memory use is strongly shaped by:
+Memory use is driven mainly by:
 
 - active connection count
 - inflight request count
-- request buffering under slow upstream conditions
-- unknown-length response prebuffering
-- configured body-size caps
+- buffered request bodies
+- buffered or prebuffered response bodies
+- long-lived streams during drain or overload
+- body-size caps and queue caps
 
-Do not size memory only from idle or smoke-test behavior. Validate under:
+Do not size memory from idle behavior or smoke tests. Validate under:
 
-- high connection churn
-- large request bodies
-- streaming responses
-- overload conditions
-- brownout or queueing conditions
+- peak connection churn
+- slow backends
+- large bodies
+- streaming traffic
+- overload and brownout conditions
 
-## Worker And Shard Guidance
+## Concurrency Guidance
 
-- start with one worker per core as a baseline
-- increase packet sharding only when you have evidence the extra dispatch layer helps
-- use reuseport for multi-worker deployments
-- enable worker pinning only after measuring benefit on the target host
+The important question is not only "how many requests can the node accept" but also "how many should it admit before self-protection is healthier than continuing."
 
-## Limit Tuning Guidance
-
-Treat these as capacity controls, not just feature toggles:
+Treat these as protection boundaries, not throughput goals:
 
 - `global_inflight_limit`
 - `per_upstream_inflight_limit`
 - `per_backend_inflight_limit`
 - `max_active_connections`
-- `max_request_body_bytes`
-- `max_response_body_bytes`
 - `request_buffer_global_cap_bytes`
+- body-size limits
 
-Increase them only after validating:
+If you increase them, confirm:
 
-- memory headroom
-- tail latency
-- overload recovery behavior
-- backend tolerance for the higher concurrency
+- node memory still has headroom
+- backend latency does not collapse
+- overload recovery is still fast
+- tail latency does not become unacceptable
 
-## Operational Rule
+## Worker And Shard Guidance
 
-If you need to raise limits to stop 503s, first determine whether:
+- start with one worker per core
+- add packet sharding only when packet-rate pressure or worker imbalance justifies it
+- use `SO_REUSEPORT` style multi-worker ingress as the baseline deployment model
+- enable worker pinning only after testing on the production host class
 
-- the limits are genuinely too low
-- the backend fleet is unhealthy
-- the routing policy is concentrating load incorrectly
-- the system is correctly shedding to protect itself
+## When 503s Appear
 
-## Recommended Practice
+If you see 503s, do not immediately widen limits.
 
-- establish a known-good baseline config
-- benchmark and soak-test from that baseline
-- change one high-impact limit at a time
-- record resulting latency, memory, and shed behavior
+First decide whether the cause is:
+
+- overload shedding
+- backend timeout or backend failure
+- quota backend failure under fail-closed policy
+- mis-sized concurrency limits
+- routing concentration on too few backends
+
+The answer determines whether you should add capacity, fix backends, adjust policy, or change limits.
+
+## Recommended Capacity Process
+
+1. Establish a known-good baseline config.
+2. Benchmark and soak-test from that baseline.
+3. Increase one high-impact limit at a time.
+4. Record latency, memory, shed rate, and backend health effects.
+5. Re-run validation after enabling more advanced features such as quota, retries, hedging, or heavier auth paths.

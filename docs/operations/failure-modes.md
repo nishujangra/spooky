@@ -1,82 +1,33 @@
 # Failure Modes And Status Codes
 
-This page documents the major operator-visible failure classes and how they typically surface.
+This page documents the main operator-visible failure classes and how to interpret them.
 
-## 400
+## Read Failures in the Right Order
 
-Typical reason:
+When a request fails, decide in this order:
 
-- malformed or unsupported request semantics
+1. Was it a request-shape or policy rejection?
+2. Was it quota enforcement?
+3. Was it overload self-protection?
+4. Was it upstream transport failure or timeout?
+5. Was it a genuine upstream application response?
 
-Examples:
+Do not collapse these classes into one generic "proxy error."
 
-- upgrade-style request semantics on paths that do not support them
-- invalid request shape after validation
+## Common Status Codes
 
-## 403
+| Status | Typical meaning | Operator interpretation |
+|---|---|---|
+| `400` | malformed or unsupported request shape | client or ingress semantics problem |
+| `403` | route or request policy denial | not normal quota exhaustion |
+| `405` | method policy denial | route policy mismatch |
+| `408` | request body stalled past idle timeout | slow or broken client body upload |
+| `413` | request body exceeded configured cap | policy or client size issue |
+| `429` | quota contract exhausted | contract enforcement, not overload |
+| `502` | upstream transport or bridge failure before a valid backend response | backend connectivity, TLS, or protocol execution issue |
+| `503` | overload shed, timeout insulation, temporary backend unavailability, or fail-closed quota backend failure | inspect reason and metrics before acting |
 
-Typical reason:
-
-- policy denied the request path
-
-Quota note:
-
-- this is not the normal distributed quota exhaustion status
-- treat 403 as route or request policy denial, not as quota contract enforcement
-
-## 405
-
-Typical reason:
-
-- method policy blocked the request
-
-## 408
-
-Typical reason:
-
-- client request body stalled beyond the configured idle timeout
-
-## 413
-
-Typical reason:
-
-- request body exceeded configured request-body limits
-
-## 500-Class Upstream Responses
-
-Typical reason:
-
-- upstream returned a genuine 5xx response
-
-Interpretation:
-
-- this is usually a backend behavior signal, not necessarily a proxy-generated fault
-
-## 502
-
-Typical reason:
-
-- upstream transport or bridge-level failure before a valid backend response could be served
-
-## 503
-
-Typical reasons:
-
-- overload shedding
-- queue-cap overflow
-- upstream timeout
-- response-body cap breach
-- temporary backend unavailability
-- distributed quota backend failure under `fail_closed`
-
-Interpretation:
-
-- 503 in Spooky can mean either self-protection or upstream failure insulation
-- distributed quota `fail_closed` also uses 503, but with quota-specific body
-  text and runtime-state evidence
-- always inspect the body text, logs, and overload metrics before assuming one cause
-
-## 429
+## 429: Quota Contract Failure
 
 Typical reasons:
 
@@ -86,25 +37,54 @@ Typical reasons:
 
 Interpretation:
 
-- 429 is the normal distributed quota contract status
-- treat it as contract enforcement, not overload
-- use quota metrics and runtime snapshot fields before changing overload knobs
+- this is the normal distributed quota contract response
+- treat it as quota enforcement, not overload
+- inspect quota policy outcomes and quota backend health before tuning inflight limits
 
-## Silent Drop Behaviors
+## 503: Do Not Assume One Cause
 
-Some invalid or non-actionable traffic is dropped rather than converted into a rich HTTP response.
+In Spooky, `503` can mean:
+
+- overload shedding
+- queue-cap or buffer-cap protection
+- upstream timeout insulation
+- temporary backend unavailability
+- fail-closed quota backend failure
+
+Operator rule:
+
+- inspect the body text, logs, and metrics first
+- check overload metrics and quota-backend health separately
+- do not widen limits until you know whether the system is protecting itself correctly
+
+## Genuine Upstream 5xx Responses
+
+If the upstream returned a real 5xx response, that is usually a backend signal rather than a proxy-generated failure.
+
+Check:
+
+- backend error distribution
+- per-upstream latency
+- backend health transitions
+- recent backend deploys or dependency failures
+
+## Silent Drop Cases
+
+Some traffic is dropped rather than turned into a rich HTTP response.
 
 Examples include:
 
-- malformed packet cases before a request lifecycle exists
-- new connection attempts during draining
+- malformed packets before a request lifecycle exists
+- new connection attempts during drain
 - packets for unknown connections in certain QUIC states
 
-## Stream Reset Versus HTTP Error Response
+These are visible through observability and lifecycle signals rather than always through an HTTP status code.
+
+## Stream Reset Versus HTTP Error
 
 Spooky deliberately distinguishes between:
 
-- returning a terminal HTTP response such as 408, 413, or 503
-- resetting a stream when transport semantics or teardown behavior require it
+- returning an HTTP response such as `408`, `413`, `429`, or `503`
+- resetting or terminating a stream when protocol or teardown semantics require it
 
-This distinction matters for clients and should be considered during incident analysis.
+This matters during client debugging and incident analysis. A missing HTTP status does not automatically mean the failure was invisible; it may have happened before a stable request-response boundary existed.

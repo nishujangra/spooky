@@ -1,8 +1,24 @@
-Spooky is an open-source HTTP/3 (QUIC) edge reverse proxy written in Rust that terminates QUIC connections and forwards traffic to HTTP/2 backends.
+Spooky is a modern edge runtime for high-trust APIs. This documentation set is organized so readers can quickly answer five questions:
+
+- what Spooky is
+- where to start
+- where to deploy and operate it
+- where to troubleshoot issues
+- where exact product reference lives
 
 ---
 
-## Where to start
+## Start Here
+
+| Goal | Go to |
+| --- | --- |
+| Understand the product | [README](../README.md) and [Getting Started Overview](getting-started/overview.md) |
+| Install and run Spooky | [Getting Started](getting-started/overview.md) |
+| Prepare for deployment | [Operations Overview](operations/overview.md) and [Production Deployment](deployment/production.md) |
+| Troubleshoot issues | [Common Issues](troubleshooting/common-issues.md) and [Runbook](operations/runbook.md) |
+| Find exact supported behavior | [Reference Overview](reference/overview.md) |
+
+## Documentation Paths
 
 ### Operator — install, configure, run in production
 
@@ -14,24 +30,31 @@ Spooky is an open-source HTTP/3 (QUIC) edge reverse proxy written in Rust that t
 | [TLS Setup](configuration/tls.md) | Certificate generation, mTLS client auth, key ownership and permissions |
 | [Production Deployment](deployment/production.md) | Systemd unit, privilege drop, sysctl tuning, canary rollout guidance |
 | [Production Readiness](operations/production-readiness.md) | Canonical statement of what is production-ready today and what still blocks GA |
+| [Operations Overview](operations/overview.md) | Main entry point for deployment, rollout, observability, and failure handling |
+| [Troubleshooting](troubleshooting/common-issues.md) | Symptom-driven diagnostics and operator checks |
 | [Limitations](reference/limitations.md) | The current hard product limits, without marketing language |
 
 ### Architecture — understand the runtime and subsystem ownership
 
 | Document | What you'll find |
 |---|---|
-| [Architecture Overview](architecture/overview.md) | Design principles, data-plane topology, sharded ingress model |
+| [Architecture Overview](architecture/overview.md) | Architecture entry point, shared product flow, ingress model, and runtime boundaries |
+| [Request Lifecycle](architecture/request-lifecycle.md) | Canonical flow from intake through admission, routing, transport, and outcome recording |
+| [Bootstrap vs QUIC](architecture/bootstrap-vs-quic.md) | Exact boundary between the native HTTP/3 path and the compatibility ingress path |
+| [Transport Boundary](architecture/transport.md) | What transport owns, what edge owns, and how H1/H2 execution stays hidden behind one facade |
+| [Backend Lifecycle](architecture/backend-lifecycle.md) | Backend identity, resolution, health, membership, and operator-visible lifecycle state |
+| [Runtime Generation Model](architecture/runtime-generation.md) | How runtime reload, active generations, and shared services work |
 | [Component Breakdown](architecture/components.md) | Per-crate responsibilities, inter-crate boundaries, key types |
 | [Distributed Quota Contract](architecture/quota-policy-contract.md) | Semantic contract for quota semantics, selector composition, and distributed counter behavior |
 | [Codebase Map](development/codebase-map.md) | Current crate/module map and where major logic lives |
 | [Development Invariants](development/invariants.md) | Core runtime invariants, ownership assumptions, and rules the code depends on |
 | [Public API Surface Inventory](public-api-surface-inventory.md) | Current canonical public surfaces, hidden internals, and remaining intentional exports |
 
-### Control Plane and Operations — runtime control, observability, and failure handling
+### Control API and Operations — runtime control, observability, and failure handling
 
 | Document | What you'll find |
 |---|---|
-| [API Overview](api/overview.md) | Metrics endpoint and control-plane HTTP surfaces at a high level |
+| [API Overview](api/overview.md) | Metrics endpoint and Control API surfaces at a high level |
 | [Control API Reference](reference/control-api-reference.md) | Endpoint-by-endpoint control API contract |
 | [Metrics Reference](reference/metrics-reference.md) | Metric names, labels, and exported runtime signals |
 | [Operations Overview](operations/overview.md) | Operator map for deployment, sizing, tuning, and failure handling |
@@ -64,9 +87,9 @@ Spooky is an open-source HTTP/3 (QUIC) edge reverse proxy written in Rust that t
 
 | Document | What you'll find |
 |---|---|
+| [Reference Overview](reference/overview.md) | Main entry point for exact behavior, product limits, and authoritative reference pages |
 | [Configuration Reference](configuration/reference.md) | Authoritative schema reference for every configuration block |
 | [Feature Matrix](reference/feature-matrix.md) | Strict feature-by-feature inventory of what is done, partial, and missing |
-| [Reference Overview](reference/overview.md) | Index of the strict reference material and product limits |
 | [Roadmap](roadmap.md) | Planned features, GA exit criteria, known limitations |
 | [Changelog](changelog.md) | Version history with added, fixed, and changed entries |
 
@@ -88,66 +111,20 @@ Controlled production rollout is supported. See [release-maturity.md](release-ma
 
 ## Quick reference
 
-### Minimal working config
+If you are in a hurry:
 
-```yaml
-version: 1
+- first run: [getting-started/overview.md](getting-started/overview.md)
+- production deployment: [deployment/production.md](deployment/production.md)
+- incident response: [operations/runbook.md](operations/runbook.md)
+- troubleshooting: [troubleshooting/common-issues.md](troubleshooting/common-issues.md)
+- exact support surface: [reference/feature-matrix.md](reference/feature-matrix.md)
 
-listen:
-  address: "0.0.0.0"
-  port: 9889
-  tls:
-    cert: /etc/spooky/certs/fullchain.pem
-    key: /etc/spooky/certs/privkey.pem
+For the canonical examples and exact commands:
 
-upstream:
-  default:
-    route:
-      path_prefix: "/"
-    backends:
-      - id: backend1
-        address: "127.0.0.1:8080"
-        health_check:
-          path: "/health"
-          interval: 5000
-```
-
-Backends are verified HTTPS by default. To forward to a cleartext HTTP backend, set `upstream_tls.verify_certificates: false` and be aware that a warning is logged at startup. The full schema is in [configuration/reference.md](configuration/reference.md).
-
-### Common commands
-
-**Start the proxy:**
-```bash
-spooky --config /etc/spooky/config.yaml
-```
-
-**Test an HTTP/3 connection** (requires curl built with HTTP/3 support):
-```bash
-curl --http3-only -k \
-  --resolve proxy.example.com:9889:127.0.0.1 \
-  https://proxy.example.com:9889/health
-```
-
-**Check health and readiness** (control API, default port 9902):
-```bash
-curl -k https://127.0.0.1:9902/health
-curl -k https://127.0.0.1:9902/ready
-```
-
-### Log levels
-
-Spooky accepts both its own names and the standard equivalents in `log.level` or `RUST_LOG`.
-
-| Spooky name | Standard equivalent | Verbosity |
-|---|---|---|
-| `whisper` | `trace` | Everything, including internal QUIC events |
-| `haunt` | `debug` | Per-request routing, backend selection, health transitions |
-| `spooky` | `info` | Startup, shutdown, configuration summary (default) |
-| `scream` | `warn` | Recoverable errors, degraded-mode events |
-| `poltergeist` | `error` | Fatal or unrecoverable conditions |
-| `silence` | `off` | No output |
-
-Set per-crate verbosity with `RUST_LOG` (e.g., `RUST_LOG=spooky_edge=haunt,info`). Output format is controlled by `log.format: plain | json`.
+- working config snippets: [configuration/examples.md](configuration/examples.md)
+- full config semantics: [configuration/reference.md](configuration/reference.md)
+- Control API and metrics examples: [api/overview.md](api/overview.md)
+- log levels and logging config: [configuration/reference.md](configuration/reference.md#logging-configuration)
 
 ---
 

@@ -1,60 +1,113 @@
 # Operations Runbook
 
-This page is the operator quick-reference for common high-signal failure modes and maintenance actions.
+This page is the operator quick-reference for common production changes and high-signal failure scenarios.
 
 ## Before You Touch Production
 
-- keep a tested rollback path
-- know whether the change requires cert reload or drain-and-restart
-- know where metrics, logs, and control API endpoints are exposed
-- keep a traffic-reduction plan ready before making invasive changes
+Confirm all of the following:
+
+- rollback target is known
+- binary rollback path is known
+- you know whether the change is runtime-managed, cert-only, or restart-required
+- Control API, metrics, and logs are reachable from the operator path
+- a traffic-reduction or instance-removal plan is ready
+
+## Standard Change Workflows
+
+### Runtime-managed config change
+
+Use this for routes, upstreams, backends, timeouts, resilience, quota, and similar live-reloadable runtime domains.
+
+1. Render the candidate config.
+2. `POST /admin/runtime/validate`
+3. `POST /admin/runtime/preview`
+4. `POST /admin/runtime/activate`
+5. Verify the active generation and runtime history.
+6. Watch latency, backend health, overload, quota, and auth outcomes before expanding rollout.
+
+### Certificate-only change
+
+1. Write new cert material with correct permissions.
+2. Verify expiry and SAN coverage.
+3. `POST /admin/runtime/reload-certs`
+4. Confirm new handshakes present the new certificate.
+5. Keep the previous cert material until verification is complete.
+
+### Restart-required change or binary upgrade
+
+1. Remove or drain one node from traffic.
+2. Apply the change or replace the binary.
+3. Restart the node.
+4. Verify health, readiness, metrics, and key dashboards.
+5. Reintroduce the node only after it is stable.
+6. Repeat node by node or slice by slice.
 
 ## Scenario: Rising 503 Rate
 
 Check:
 
 - `spooky_overload_shed_by_reason_total`
-- route latency metrics
+- quota backend health and quota outcome series
+- route latency and backend timeout signals
 - active connections and inflight pressure
-- backend health state
-- recent config or backend changes
+- recent config, backend, or deploy changes
 
 Likely causes:
 
-- global or scoped inflight limits reached
-- route queue cap exceeded
-- upstream or backend overload
+- overload self-protection
 - backend timeout surge
+- temporary backend unavailability
+- fail-closed quota backend failure
 
 Immediate actions:
 
-1. Determine whether the 503s are overload-generated or upstream-generated.
-2. Reduce traffic or shed non-critical traffic first.
+1. Decide whether the 503s are overload, quota-backend, or upstream-failure related.
+2. Reduce demand or remove non-critical traffic first.
 3. Verify backend health and recent latency changes.
-4. Roll back the most recent risky config change if the spike correlates with change timing.
+4. Roll back the most recent risky change if the spike correlates strongly with it.
+
+## Scenario: Rising 429 Rate
+
+Check:
+
+- quota policy outcome metrics
+- matched policy identifiers
+- quota backend health
+- recent traffic-shape changes by tenant, token, client, or route
+
+Interpretation:
+
+- this is contract enforcement, not overload
+- do not widen inflight or brownout settings to fix a quota-contract problem
+
+Immediate actions:
+
+1. Confirm the affected selector dimensions.
+2. Confirm whether burst or sustained windows are being exhausted.
+3. Verify whether the rise is expected traffic growth, abuse, or mis-sized quota policy.
 
 ## Scenario: Handshake Failures Or Client Connection Failures
 
 Check:
 
-- downstream TLS metrics
-- ALPN selection metrics
-- certificate expiry/selection metrics
-- listener cert/key presence and permissions
+- downstream TLS and handshake metrics
+- certificate-expiry and certificate-selection signals
+- ALPN-related behavior
+- listener certificate paths and permissions
 
 Likely causes:
 
-- invalid or expired certificate material
-- wrong SNI mapping
-- missing client certificate in required-client-cert mode
-- client-side protocol mismatch
+- expired or wrong certificate material
+- wrong hostname coverage
+- missing client certificate where required
+- client protocol mismatch
 
 Immediate actions:
 
-1. Verify the listener is presenting the expected certificate.
-2. Verify whether failures are concentrated on one hostname or all hostnames.
-3. If only certificate material changed, use the certificate reload path when appropriate.
-4. If listener routing or policy changed, prefer drain-and-restart with rollback readiness.
+1. Verify the listener presents the expected certificate.
+2. Determine whether the failures are isolated to one listener or hostname.
+3. If only cert material changed, use cert reload.
+4. If the issue involves listener bind or startup-owned changes, use the restart path.
 
 ## Scenario: Backend Timeout Surge
 
@@ -68,137 +121,94 @@ Check:
 Likely causes:
 
 - unhealthy backend pool
-- sudden backend latency regression
-- connection establishment failures
-- under-sized backend fleet
+- backend latency regression
+- network or TLS establishment issues
+- too much concurrency against a weak backend tier
 
 Immediate actions:
 
-1. Confirm whether the issue is localized to one upstream or all traffic.
-2. Remove or isolate failing backends if health signals are clear.
+1. Confirm whether the issue is local to one upstream or broad.
+2. Remove or isolate obviously failing backends if health signals are clear.
 3. Reduce concurrency pressure if the proxy is amplifying backend collapse.
-4. Roll back recent backend or network changes first, not just proxy config.
+4. Roll back recent backend or network changes before widening limits.
 
 ## Scenario: Control API Or Metrics Endpoint Unavailable
 
 Check:
 
-- bind address and port config
+- bind address and port settings
 - local firewall rules
-- listener startup logs
-- whether endpoints are configured as required or optional
+- startup logs
+- whether the endpoints are required in the config
 
 Immediate actions:
 
-1. Confirm whether the process is healthy but only the admin plane is down.
-2. If admin endpoints are `required: true`, treat startup failure as intentional protection.
-3. If admin endpoints are `required: false`, decide whether to fail closed operationally and restart into a safer config.
-
-## Scenario: Cert Rotation
-
-Safe approach:
-
-1. Place new cert and key material with correct permissions.
-2. Validate hostname coverage and expiry before activation.
-3. Use certificate reload for listener cert replacement.
-4. Verify new handshakes present the new certificate.
-5. Keep previous material until verification is complete.
-
-## Scenario: Route Or Upstream Change
-
-Current operational model:
-
-- certificate-only changes can use cert reload
-- route, upstream, timeout, and policy changes should be treated as drain-and-restart changes
-
-Recommended sequence:
-
-1. Validate config offline.
-2. Stage on a canary node or bounded traffic slice.
-3. Drain and restart one instance at a time.
-4. Watch error rate, route latency, health transitions, and shed counters.
-5. Expand only after the canary stays stable.
+1. Determine whether the data plane is healthy but the admin plane is down.
+2. If the admin surface is required and failed to bind, treat that as intentional startup protection.
+3. If the admin surface is optional and unavailable, decide whether to restart into a safer posture.
 
 ## Scenario: JWT Rejections Or Stale JWKS State
 
-First, find out whether the problem is the tokens or the keys:
+Find out whether the problem is the tokens or the key source:
 
-1. Check `GET /admin/runtime` and read `jwks.sources[]` and `auth.providers[]`.
-2. Read `cache_state`. `fresh` or `stale` means keys are loading; `empty_unusable`
-   means no usable keys and every JWT request is being rejected.
-3. Compare `last_refresh_attempt_unix_seconds` with `last_refresh_success_unix_seconds`.
-   A recent attempt with an old success means refreshes are failing — read
-   `last_failure_reason`.
-4. Read `auth.jwt_validation_failures[]` for the dominant rejection reason.
+1. Read `GET /admin/runtime` and inspect the JWT and JWKS state.
+2. Check cache freshness and refresh timestamps.
+3. Read the dominant JWT validation failure reasons.
+4. Confirm whether the issue is a rotated `kid`, stale JWKS state, issuer mismatch, or token expiry.
 
-What the common reasons mean:
+What common reasons usually mean:
 
-| Reason | Cause |
-| --- | --- |
-| `key_source_unavailable` | JWKS never loaded or aged past the staleness window |
-| `missing_verification_key` | Token's `kid` is not in the cached set; check whether the issuer rotated early |
-| `algorithm_not_allowed` | Token `alg` is outside `allowed_algorithms` |
-| `issuer_mismatch` / `audience_mismatch` | Token is valid but issued for a different issuer or audience |
-| `token_expired` | Ordinary client-side expiry, not a server problem |
-| `ambiguous_verification_key` | Two configured keys resolve to the same `kid` |
+| Reason | Meaning |
+|---|---|
+| `key_source_unavailable` | no usable verification key source |
+| `missing_verification_key` | token `kid` not present in the cached key set |
+| `algorithm_not_allowed` | token algorithm not allowed by config |
+| `issuer_mismatch` or `audience_mismatch` | token valid for some other audience or issuer |
+| `token_expired` | normal token expiry |
 
 Recovery:
 
-- if the issuer rotated early, an unknown `kid` already triggers a rate-limited
-  background refresh — wait one refresh interval before intervening
-- if refreshes are failing, verify the endpoint is reachable over HTTPS from the
-  proxy host; keys keep validating until `jwks_stale_if_error_secs` elapses
-- if state is `empty_unusable`, treat it as an auth outage for that upstream
-- avoid restarting a node with `require_ready` while the issuer is down: it will
-  fail to boot rather than start degraded
-
-### Rotation Cadence And Refresh Intervals
-
-- keep `jwks_refresh_interval_secs` (default `300`) well below the issuer's rotation
-  interval so new keys are cached before tokens signed with them arrive
-- keep `jwks_cache_ttl_secs` (default `900`) at roughly three refresh intervals so a
-  single failed refresh does not immediately mark the set stale
-- `jwks_stale_if_error_secs` (default `3600`) is the outage budget: how long
-  last-known-good keys keep working while refreshes fail. It also sets the overlap
-  window during which a key dropped from the JWKS stays valid
-- overlap old and new keys in the published JWKS for at least one full
-  `jwks_cache_ttl_secs` when rotating
-
-### Alerts Worth Adding
-
-- `spooky_jwks_state{state="empty_unusable"} == 1` — auth outage for that upstream, page
-- `spooky_jwks_age_seconds` above `jwks_cache_ttl_secs` — refreshes are not landing
-- `rate(spooky_jwks_refresh_failure_total[15m]) > 0` sustained — issuer or network problem
-- `rate(spooky_jwks_unknown_kid_total[5m])` rising — likely an unannounced rotation
-- `rate(spooky_jwt_validation_failures_total{reason="key_source_unavailable"}[5m]) > 0` —
-  requests are being rejected for key-availability reasons rather than bad tokens
+- wait one refresh interval if an issuer rotated early
+- verify HTTPS reachability to the JWKS endpoint from the proxy host
+- treat `empty_unusable` as an auth outage for that upstream
+- avoid relying on restart as the primary fix for an upstream issuer outage
 
 ## Scenario: Brownout Or Overload Triggering
 
 Check:
 
 - overload shed counters by reason
-- brownout state transitions
+- brownout activation state
 - active connections
-- inflight metrics versus configured caps
+- inflight pressure versus configured caps
 
 Actions:
 
-1. Confirm whether the system is protecting itself correctly rather than failing unexpectedly.
+1. Confirm whether self-protection is behaving correctly.
 2. Preserve core traffic first.
-3. Reduce demand or increase backend capacity before simply widening limits.
-4. Avoid increasing caps blindly without memory and latency validation.
+3. Reduce demand or add backend capacity before simply widening limits.
+4. Avoid increasing caps blindly without memory and tail-latency validation.
 
-## Scenario: Draining For Deploy Or Maintenance
+## Scenario: Drain For Deploy Or Maintenance
 
-1. Stop sending new traffic to the instance.
-2. Trigger drain-aware restart workflow.
-3. Watch for completion before hard termination whenever possible.
-4. Use the configured forced-drain timeout only as a safety boundary, not as the primary shutdown path.
+1. Stop routing new traffic to the node if your traffic manager supports it.
+2. Use the drain-aware restart workflow.
+3. Watch drain progress and readiness.
+4. Use the configured forced-drain timeout only as a safety boundary.
+
+If drain repeatedly times out:
+
+- inspect long-lived streams
+- inspect shutdown drain timeout
+- inspect watchdog drain-grace configuration
+- inspect whether traffic removal from the upstream load balancer is happening soon enough
 
 ## After Any Incident
 
-- record what metric or symptom first signaled the issue
-- record whether the proxy was the root cause or the reflector of backend failure
-- record what config or dependency changed
-- add or tighten alerts and runbook steps for the same class of issue
+Record:
+
+- the first signal that surfaced the issue
+- whether the proxy was the root cause or a reflector of backend failure
+- what changed immediately beforehand
+- whether the failure was quota, overload, auth, transport, or upstream application behavior
+- what alert, dashboard, or runbook step should be tightened before the next occurrence

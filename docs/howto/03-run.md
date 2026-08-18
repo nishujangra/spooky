@@ -2,6 +2,8 @@
 
 This guide covers running Spooky directly, as a systemd service, and in Docker — including startup validation, graceful shutdown, and health checking.
 
+For the fastest first successful request, use [Quickstart](../tutorials/quickstart.md) or [Docker Installation](../getting-started/docker.md) first. This page is the broader run-mode reference once you already have a working config.
+
 ---
 
 ## Prerequisites
@@ -40,13 +42,14 @@ cargo build --release
 spooky --config /etc/spooky/config.yaml
 ```
 
-### Validate config without starting (Current version of spooky does not support validate flag) (planned feature)
+### Validate by startup on a safe host or staging instance
 
-```bash
-spooky --config /etc/spooky/config.yaml --validate
-```
+Spooky validates its config during startup. There is no standalone `--validate` flag.
 
-Spooky exits 0 on success, 1 on validation failure, with a descriptive error message.
+Use one of these approaches:
+
+- start Spooky against the candidate config on a non-production host and stop it after successful startup
+- use the Control API staged flow: `POST /admin/runtime/validate`, `/preview`, then `/activate`
 
 ### Foreground with debug logging (development)
 
@@ -106,7 +109,7 @@ sudo setcap cap_net_bind_service=+ep /usr/bin/spooky
 ### Copy your config and certificates
 
 ```bash
-sudo cp config/config.reverse.yaml /etc/spooky/config.yaml
+sudo cp /path/to/your/config.yaml /etc/spooky/config.yaml
 sudo cp certs/fullchain.pem /etc/spooky/certs/fullchain.pem
 sudo cp certs/privkey.pem   /etc/spooky/certs/privkey.pem
 sudo chown spooky:spooky /etc/spooky/certs/*
@@ -168,10 +171,8 @@ sudo journalctl -u spooky -f
 ### Graceful reload (after cert renewal)
 
 ```bash
-# Signal spooky to reload (currently triggers restart)
-sudo systemctl reload spooky
-
-# Or full restart
+# Prefer the staged Control API flow for runtime-managed config changes.
+# Use a full restart only when the change touches restart-required settings.
 sudo systemctl restart spooky
 ```
 
@@ -249,13 +250,13 @@ If `observability.control_api.enabled=true`:
 
 ```bash
 # Liveness — is the process alive?
-curl -k https://127.0.0.1:9902/health
+curl -k --http1.1 https://127.0.0.1:9902/health
 
 # Readiness — is Spooky ready to serve traffic?
-curl -k https://127.0.0.1:9902/ready
+curl -k --http1.1 https://127.0.0.1:9902/ready
 
 # Runtime info (requires auth token)
-curl -k -H "Authorization: Bearer <token>" https://127.0.0.1:9902/admin/runtime
+curl -k --http1.1 -H "Authorization: Bearer <token>" https://127.0.0.1:9902/admin/runtime
 ```
 
 ---

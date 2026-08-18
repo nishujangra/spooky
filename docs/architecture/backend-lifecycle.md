@@ -10,7 +10,7 @@ Backend lifecycle state should be understandable as one pipeline:
 2. resolution state is tracked
 3. pool membership exists in upstream pools
 4. health state changes from refresh, checks, and request feedback
-5. canonical snapshots are exposed to control-plane and observability surfaces
+5. canonical snapshots are exposed to the Control API and observability surfaces
 
 The canonical implementation lives under:
 
@@ -27,6 +27,16 @@ The key rule is:
 - `edge::runtime::backend` owns lifecycle state, lifecycle events, and lifecycle snapshots
 
 Listener request paths, health checks, and DNS refresh loops should emit typed lifecycle inputs rather than independently deciding backend state transitions in scattered places.
+
+## How Lifecycle Fits Into Request Flow
+
+Backend lifecycle is adjacent to routing and transport, but it is not the same thing as either one:
+
+- routing decides which backend is eligible for a request
+- transport decides how that backend request runs on the wire
+- backend lifecycle decides how backend state changes over time and how operators see that state
+
+Request execution feeds lifecycle. Lifecycle does not replace request execution.
 
 ## Core Concepts
 
@@ -67,7 +77,7 @@ It can be:
 - `Healthy`
 - `Unhealthy { reason }`
 
-The lifecycle layer uses shared health-failure reason vocabularies so passive failures, active health checks, and control-plane views describe failures consistently.
+The lifecycle layer uses shared health-failure reason vocabularies so passive failures, active health checks, and Control API views describe failures consistently.
 
 ### Membership state
 
@@ -102,7 +112,7 @@ The lifecycle layer exposes snapshots for operator-facing and debugging surfaces
 - `CanonicalBackendLifecycleSnapshot`
 - `BackendLifecycleInventorySnapshot`
 
-These are what control-plane and metrics-oriented surfaces should use instead of rebuilding backend state from several unrelated stores.
+These are what the Control API and metrics-oriented surfaces should use instead of rebuilding backend state from several unrelated stores.
 
 `BackendLifecycleInventorySnapshot` also supports summary views such as total backends and healthy backends.
 
@@ -210,13 +220,23 @@ The inventory view combines:
 - membership state
 - per-upstream placements
 
-That gives control-plane and observability surfaces one place to answer:
+That gives the Control API and observability surfaces one place to answer:
 
 - which backends exist
 - which backends are healthy
 - which upstreams currently place them
 - what addresses they resolve to
 - whether refresh state is current
+
+## Runtime Generation Interaction
+
+Backend lifecycle lives inside the larger runtime-generation model:
+
+- generation-owned state provides the active upstream definitions and placement context
+- shared services such as lifecycle coordination and resolution storage preserve the operator view that request paths consume
+- reloads should publish a coherent next generation instead of partially mutating live backend state in place
+
+This matters because operators need backend state to stay explainable across reload, refresh, failure, and recovery events.
 
 ## What Request Paths Should Do
 
@@ -229,7 +249,7 @@ Forwarding and bootstrap code should:
 They should not:
 
 - invent new backend health mutation logic
-- directly combine resolution store state with pool state for control-plane output
+- directly combine resolution store state with pool state for Control API output
 - treat DNS refresh and health transitions as unrelated subsystems
 
 ## Contributor Rules

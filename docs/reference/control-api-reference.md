@@ -1,26 +1,86 @@
 # Control API Reference
 
-This page documents the current operator-facing control-plane endpoints and their intended use.
+Use this page to look up control-plane endpoints, roles, request fields, and response semantics.
 
-## Scope
+## Open These First
 
-The control API is a privileged admin surface. It should be treated as operator-only infrastructure, not as a public application endpoint.
+Use this table when you need the fastest runtime-introspection path:
 
-Current endpoint family:
+| Need | Endpoint |
+|---|---|
+| current runtime state, backend health, quota backend state, watchdog state, observability package metadata | `GET /admin/runtime` |
+| retained generations, rollback candidates, and recent runtime operations | `GET /admin/runtime/history` |
+| one generation's retained record and related entries | `GET /admin/runtime/history/{generation}` |
+| check whether a candidate config is valid and compatible | `POST /admin/runtime/validate` |
+| dry-run a change and record it in history | `POST /admin/runtime/preview` |
+| commit a compatible runtime-managed change | `POST /admin/runtime/activate` |
 
-- health
-- readiness
-- runtime snapshot
-- staged activation: validate, preview, activate
-- rollback
-- generation history
-- certificate reload
-- full config reload
-- restart request
+## Endpoint Index
+
+| Endpoint | Method | Minimum role | Purpose |
+| --- | --- | --- | --- |
+| `/health` | `GET` | none | liveness |
+| `/ready` | `GET` | none | readiness |
+| `/admin/runtime` | `GET` | `viewer` | current runtime snapshot |
+| `/admin/runtime/history` | `GET` | `viewer` | retained generations and operation history |
+| `/admin/runtime/history/{generation}` | `GET` | `viewer` | one retained generation and related entries |
+| `/admin/runtime/validate` | `POST` | `operator` | validate a candidate without mutating runtime |
+| `/admin/runtime/preview` | `POST` | `operator` | validate and record a preview |
+| `/admin/runtime/activate` | `POST` | `operator` | activate a compatible candidate generation |
+| `/admin/runtime/rollback` | `POST` | `operator` | restore a retained generation |
+| `/admin/runtime/reload` | `POST` | `operator` | legacy full-config reload shortcut |
+| `/admin/runtime/reload-certs` | `POST` | `operator` | reload listener certificate material |
+| `/admin/runtime/restart` | `POST` | `admin` | request controlled restart through the watchdog |
+
+## Common Control API Flows
+
+### Read Current Runtime State
+
+```bash
+curl -k --http1.1 \
+  -H "Authorization: Bearer <token>" \
+  https://127.0.0.1:9902/admin/runtime
+```
+
+### Validate, Preview, and Activate a Candidate
+
+```bash
+curl -k --http1.1 -X POST \
+  -H "Authorization: Bearer <token>" \
+  -H "content-type: application/json" \
+  https://127.0.0.1:9902/admin/runtime/validate \
+  -d '{"config_path":"/etc/spooky/candidate.yaml","requested_by":"ops","reason":"preflight"}'
+
+curl -k --http1.1 -X POST \
+  -H "Authorization: Bearer <token>" \
+  -H "content-type: application/json" \
+  https://127.0.0.1:9902/admin/runtime/preview \
+  -d '{"config_path":"/etc/spooky/candidate.yaml","requested_by":"ops","reason":"preview"}'
+
+curl -k --http1.1 -X POST \
+  -H "Authorization: Bearer <token>" \
+  -H "content-type: application/json" \
+  https://127.0.0.1:9902/admin/runtime/activate \
+  -d '{"config_path":"/etc/spooky/candidate.yaml","expected_generation":12,"requested_by":"ops","reason":"deploy"}'
+```
+
+### Roll Back to a Retained Generation
+
+```bash
+curl -k --http1.1 \
+  -H "Authorization: Bearer <token>" \
+  https://127.0.0.1:9902/admin/runtime/history
+
+curl -k --http1.1 -X POST \
+  -H "Authorization: Bearer <token>" \
+  -H "content-type: application/json" \
+  https://127.0.0.1:9902/admin/runtime/rollback \
+  -d '{"target_generation":11,"expected_active_generation":12,"requested_by":"ops","reason":"rollback"}'
+```
 
 ## Protocol
 
-The control API uses **HTTP/1.1 over TLS**. HTTP/2 is not supported.
+The Control API uses **HTTP/1.1 over TLS**. HTTP/2 is not supported.
 
 When using curl, pass `--http1.1` explicitly — curl negotiates h2 by default when connecting to a TLS endpoint and the server will reject the connection:
 
@@ -30,27 +90,13 @@ curl -k --http1.1 https://<address>:<port>/...
 
 The `-k` flag skips certificate verification for self-signed certs.
 
-## Security Expectations
-
-- bind to loopback or a strongly isolated admin network whenever possible
-- prefer `mTLS required` plus either a bearer token or an mTLS-derived role-bearing identity in production
-- avoid broad public exposure even when authentication is enabled
-- if IP allowlisting is configured, source address policy is enforced before bearer-token validation
-- do not trust `X-Forwarded-For` or similar proxy headers unless a future deployment-specific policy layer explicitly enables that behavior
-
 ## Authentication
 
-The admin plane supports these authentication shapes:
+Supported authentication shapes:
 
 - bearer token only
 - mTLS only
 - mTLS + bearer token
-
-Recommended production posture:
-
-- `mTLS required`
-- bearer token or another role-bearing admin identity
-- isolated admin network exposure
 
 Authentication and authorization are separate concerns:
 
@@ -67,7 +113,6 @@ Compatibility note:
 
 - `observability.control_api.auth_token` remains supported as the legacy single-token admin credential
 - the legacy token is mapped internally to a static admin identity so existing operators keep current restart/reload privileges during migration
-- the legacy token runs in compatibility mode; it preserves behavior, but it is not the recommended production posture
 - new deployments should prefer `observability.control_api.auth.bearer_tokens[]` with explicit roles
 - compatibility boundary: a new Spooky binary accepts legacy `auth_token` configs, but an older binary will reject configs that use the newer nested control-plane fields because `ControlApi` uses strict `deny_unknown_fields`
 
@@ -77,39 +122,20 @@ Role model:
 - `operator`: `viewer` plus validate, preview, activate, rollback, reload, and cert reload
 - `admin`: `operator` plus restart and future destructive admin actions
 
-This role matrix is the intended contract for control-plane implementation.
+## Route Access Rules
 
-## Route Classification And Role Matrix
+Route families:
 
-The admin plane classifies routes in three groups:
-
-- unauthenticated or separately configurable: `/health`, `/ready`
-- read-only privileged: `/admin/runtime`, `/admin/runtime/history`, `/admin/runtime/history/{generation}`
-- mutating privileged: `/admin/runtime/validate`, `/admin/runtime/preview`, `/admin/runtime/activate`, `/admin/runtime/rollback`, `/admin/runtime/reload`, `/admin/runtime/reload-certs`, `/admin/runtime/restart`
-
-Minimum role requirements:
-
-| Route | Method | Classification | Minimum role |
-| --- | --- | --- | --- |
-| `/health` | `GET` | unauthenticated or separately configurable | none |
-| `/ready` | `GET` | unauthenticated or separately configurable | none |
-| `/admin/runtime` | `GET` | read-only privileged | `viewer` |
-| `/admin/runtime/history` | `GET` | read-only privileged | `viewer` |
-| `/admin/runtime/history/{generation}` | `GET` | read-only privileged | `viewer` |
-| `/admin/runtime/validate` | `POST` | mutating privileged | `operator` |
-| `/admin/runtime/preview` | `POST` | mutating privileged | `operator` |
-| `/admin/runtime/activate` | `POST` | mutating privileged | `operator` |
-| `/admin/runtime/rollback` | `POST` | mutating privileged | `operator` |
-| `/admin/runtime/reload` | `POST` | mutating privileged | `operator` |
-| `/admin/runtime/reload-certs` | `POST` | mutating privileged | `operator` |
-| `/admin/runtime/restart` | `POST` | mutating privileged | `admin` |
+- `/health` and `/ready`: unauthenticated or separately protected
+- `/admin/runtime*` reads: `viewer`
+- runtime mutation routes except restart: `operator`
+- `/admin/runtime/restart`: `admin`
 
 Contract rules:
 
 - `viewer` is the minimum privileged read role
 - `operator` is the minimum non-restart mutation role
 - `admin` is required for restart
-- health and readiness may remain unauthenticated, but deployments may choose to protect them separately
 - implementation should distinguish invalid authentication from insufficient role
 
 ## Response Contract
@@ -126,15 +152,13 @@ Representative reasons returned in JSON payloads:
 - `insufficient_role`
 - `source_ip_not_allowed`
 
-When control API mTLS is configured as `required`, missing or invalid client certificates are rejected during the TLS handshake before HTTP routing. That failure does not produce an HTTP `401` or `403` response; the connection is terminated during handshake, and the server emits a control-plane TLS failure log with a stable client-auth reason code.
+When control API mTLS is configured as `required`, missing or invalid client certificates are rejected during the TLS handshake before HTTP routing. That failure does not produce an HTTP `401` or `403` response.
 
 ## Configuration Patterns
 
 ### Bearer-Only Local Dev
 
-Use this for loopback-only development or local automation:
-
-This is compatibility-friendly and intentionally simple, but it is not the recommended long-term production posture.
+Use this for loopback-only development or local automation.
 
 ```yaml
 observability:
@@ -147,9 +171,7 @@ observability:
 
 ### mTLS Optional With Viewer Token
 
-Use this when you want to start accepting client certificates without making them mandatory yet:
-
-This is a transitional posture for gradual hardening. It is safer than legacy single-token mode, but still weaker than required mTLS.
+Use this when you want to accept client certificates without making them mandatory yet.
 
 ```yaml
 observability:
@@ -170,7 +192,7 @@ observability:
 
 ### mTLS Required With Operator/Admin Identities
 
-Recommended production posture:
+Use this for hardened production admin-plane access.
 
 ```yaml
 observability:
@@ -244,12 +266,49 @@ Typical contents include:
 - key counters
 - admission state
 - backend health summary
+- quota backend health summary
+- observability package metadata
+- recent admin actions when available
+- dashboard and documentation references for the shipped operator bundle
 
 Expected use:
 
 - debugging
 - rollout validation
 - incident response
+
+The `observability` block is the packaged runtime-introspection entry point for operators. The high-signal fields are:
+
+- `contract_version`
+- `audit_schema_version`
+- `current_generation`
+- `dashboard_packages`
+- `documentation`
+- `backend_health_summary`
+- `quota_backend_health_summary`
+- `recent_admin_actions`
+
+Example:
+
+```json
+{
+  "generation": 12,
+  "readiness": "ready",
+  "observability": {
+    "contract_version": "v1",
+    "audit_schema_version": "v1",
+    "current_generation": 12,
+    "backend_health_summary": {
+      "healthy": 7,
+      "unhealthy": 1
+    },
+    "quota_backend_health_summary": {
+      "backend_mode": "redis",
+      "availability": "available"
+    }
+  }
+}
+```
 
 ### `POST /admin/runtime/validate`
 
@@ -269,6 +328,15 @@ Expected use:
 Minimum role:
 
 - `operator`
+
+Example:
+
+```bash
+curl -k --http1.1 -X POST https://127.0.0.1:9902/admin/runtime/validate \
+  -H "Authorization: Bearer <token>" \
+  -H "content-type: application/json" \
+  -d '{"config_path":"/etc/spooky/candidate.yaml","requested_by":"ops","reason":"preflight"}'
+```
 
 ### `POST /admin/runtime/preview`
 
@@ -310,6 +378,15 @@ Minimum role:
 
 - `operator`
 
+Example:
+
+```bash
+curl -k --http1.1 -X POST https://127.0.0.1:9902/admin/runtime/activate \
+  -H "Authorization: Bearer <token>" \
+  -H "content-type: application/json" \
+  -d '{"config_path":"/etc/spooky/candidate.yaml","expected_generation":12,"requested_by":"ops","reason":"deploy"}'
+```
+
 ### `POST /admin/runtime/rollback`
 
 Purpose:
@@ -342,7 +419,7 @@ Minimum role:
 Example:
 
 ```bash
-curl -k --http1.1 -X POST https://127.0.0.1:9890/admin/runtime/rollback \
+curl -k --http1.1 -X POST https://127.0.0.1:9902/admin/runtime/rollback \
   -H "Authorization: Bearer <token>" \
   -H "content-type: application/json" \
   -d '{"target_generation": 3}'
@@ -379,10 +456,19 @@ Expected use:
 - choosing a safe rollback target
 - auditing who changed runtime config, when, and from which config source
 - diagnosing why a staged activation never committed
+- correlating runtime operations with audit and observability views
 
 Minimum role:
 
 - `viewer`
+
+Example:
+
+```bash
+curl -k --http1.1 \
+  -H "Authorization: Bearer <token>" \
+  https://127.0.0.1:9902/admin/runtime/history
+```
 
 ### `GET /admin/runtime/history/{generation}`
 
@@ -437,14 +523,14 @@ Optional request body:
 Example:
 
 ```bash
-curl -k --http1.1 -X POST https://127.0.0.1:9890/admin/runtime/reload \
+curl -k --http1.1 -X POST https://127.0.0.1:9902/admin/runtime/reload \
   -H "Authorization: Bearer <token>"
 ```
 
 Activating an alternate config file:
 
 ```bash
-curl -k --http1.1 -X POST https://127.0.0.1:9890/admin/runtime/reload \
+curl -k --http1.1 -X POST https://127.0.0.1:9902/admin/runtime/reload \
   -H "Authorization: Bearer <token>" \
   -H "content-type: application/json" \
   -d '{"config_path": "/etc/spooky/canary.yaml"}'
@@ -485,18 +571,49 @@ Minimum role:
 
 - `admin`
 
-## Operator Notes
+## Audit Configuration And Event Shape
 
-- use cert reload for cert-only changes
-- use `validate` (or `preview`) then `activate` for backend, policy, timeout, or routing changes that don't require rebinding listeners — `activate` reports the diff and classifies failures, unlike the legacy `/reload`
-- pass `expected_generation` on `activate` and `rollback` so a concurrent change fails with `409` instead of silently overwriting
-- check `GET /admin/runtime/history` for a target with `rollback_candidate: true` before calling `rollback`
-- use drain-and-restart when listener addresses or control API/metrics bind must change
-- keep rollback available before using restart-triggering control-plane actions in production
-- all curl invocations must use `--http1.1` — the control API does not support HTTP/2
+The control API audit stream is the operator history surface for admin-plane actions.
+
+Example:
+
+```yaml
+observability:
+  control_api:
+    audit:
+      enabled: true
+      format: json
+      sink: log
+```
+
+Current audit schema version:
+
+- `v1`
+
+The stable top-level event fields are:
+
+- `schema_version`
+- `event_id`
+- `event_type`
+- `time_unix_ms`
+- `request_id`
+- `trace_id`
+- `span_id`
+- `listener`
+- `actor`
+- `action`
+- `target`
+- `generation`
+- `result`
+- `reason`
+- `failure_class`
+- `peer_addr`
+- `authn`
+
+Use audit for actor attribution, authn and authz failure history, and attempt-versus-result correlation for runtime operations.
 
 ## Related Pages
 
 - [Metrics Reference](metrics-reference.md)
-- [Production Readiness](../operations/production-readiness.md)
+- [Control Plane](../operations/control-plane.md)
 - [Operations Runbook](../operations/runbook.md)

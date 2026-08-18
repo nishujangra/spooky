@@ -1,5 +1,14 @@
 # Installation
 
+This page helps you install Spooky on a host and reach the point where you can run it safely.
+
+## Start Here
+
+- Want the fastest local success path: [Quickstart](../tutorials/quickstart.md)
+- Want a container-first path: [Docker](docker.md)
+- Want to install on a Linux host: continue below
+- Want the minimum safe production posture after install: [Minimum Production](minimum-production.md)
+
 ## System Requirements
 
 **Hardware:**
@@ -230,6 +239,21 @@ log:
 ```
 
 See [Configuration Reference](../configuration/reference.md) for all options.
+
+## First Run After Installation
+
+Once the binary, certificates, and config are in place:
+
+1. start Spooky with your config
+2. verify the control API health endpoint
+3. send one proxied request
+4. move to the minimum-production checklist before serving real traffic
+
+Recommended next pages:
+
+- [Quickstart](../tutorials/quickstart.md)
+- [Minimum Production](minimum-production.md)
+- [Production Deployment](../deployment/production.md)
 
 ### Log Rotation
 

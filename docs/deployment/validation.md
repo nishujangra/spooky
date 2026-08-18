@@ -1,6 +1,6 @@
 # Deployment Validation for Spooky
 
-This guide covers how to validate a Spooky configuration change or binary upgrade before it touches production traffic. Target audience: SREs and platform engineers preparing a deployment of Spooky v0.1.1-beta or later.
+This guide covers how to validate a Spooky configuration change or binary upgrade before it touches production traffic. Target audience: SREs and platform engineers preparing a deployment of the current beta release.
 
 The goal is to catch problems at each stage of deployment, not after the restart.
 
@@ -49,7 +49,7 @@ After starting Spooky against the new config (in a staging environment, or as a 
 The `/admin/runtime` endpoint returns the current runtime state of every upstream pool, including per-backend health status. Query it within the first 30 seconds of startup:
 
 ```bash
-curl -sk https://127.0.0.1:9902/admin/runtime | jq .
+curl -sk --http1.1 https://127.0.0.1:9902/admin/runtime | jq .
 ```
 
 A healthy response looks like this:
@@ -317,7 +317,7 @@ A timeout spike after restart is a strong signal that backend addresses changed 
 Poll this endpoint repeatedly in the first few minutes after restart:
 
 ```bash
-watch -n 5 'curl -sk https://127.0.0.1:9902/admin/runtime | jq ".upstreams | to_entries[] | {pool: .key, healthy: .value.healthy_count, total: .value.total_count}"'
+watch -n 5 'curl -sk --http1.1 https://127.0.0.1:9902/admin/runtime | jq ".upstreams | to_entries[] | {pool: .key, healthy: .value.healthy_count, total: .value.total_count}"'
 ```
 
 Any pool where `healthy` is less than `total` after 60 seconds of uptime should be investigated. If a backend was healthy before the restart and is now unhealthy, the new config is likely pointing to a wrong address or using a different TLS mode that the backend does not expect.

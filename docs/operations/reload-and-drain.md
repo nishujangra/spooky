@@ -1,203 +1,174 @@
 # Reload and Drain
 
-This document explains what changes live in Spooky, what requires restart, and what operators should expect during reload and drain workflows.
+This document explains which changes activate live, which changes require a restart, and what operators should expect from reload, rollback, cert reload, and drain workflows.
 
-## Purpose
+## Core Rule
 
-Spooky now has a clearer runtime generation model:
+Spooky does not patch runtime state in place. It prepares a complete next runtime generation and swaps it atomically when the change is compatible.
 
-- startup-owned state
-- generation-owned state
-- long-lived shared services
+That means:
 
-Reload and drain behavior follows that model.
+- readers observe complete generations, not partial mutation
+- in-flight requests continue on the generation they started with
+- rejected activations leave the active generation unchanged
 
-## Runtime Reload Model
+## Preferred Runtime Change Workflow
 
-Runtime reload works by preparing a complete next runtime bundle and atomically swapping it into place.
+For normal runtime-managed changes, use the staged Control API flow:
 
-Important properties:
+1. `POST /admin/runtime/validate`
+   Confirms whether the candidate config can be activated and reports rejected domains.
+2. `POST /admin/runtime/preview`
+   Produces the same planning result, but records the attempt in operator history.
+3. `POST /admin/runtime/activate`
+   Commits the compatible candidate generation.
+4. `GET /admin/runtime/history`
+   Confirms the active generation and retains a rollback target.
 
-- readers observe whole bundles, not partial in-place mutation
-- the previous generation remains valid for in-flight work that still holds it
-- generation-scoped tasks for the previous bundle are retired after replacement
+Use `expected_generation` on activation so concurrent changes fail with `409` instead of silently overwriting each other.
 
-This means reload is a generation swap, not a best-effort patch of live state.
+## What Activates Live
 
-## What Reload Changes Live
+Live activation is the normal path for runtime-managed domains such as:
 
-Runtime reload is intended for changes such as:
+- routes and upstream definitions
+- backend sets and backend weights
+- load-balancing policy
+- admission, overload, retry, hedge, and quota policy
+- runtime timeout and transport policy
+- `log.level`
 
-- routing and upstream policy changes
-- backend set changes
-- load-balancing changes
-- admission and resilience policy changes
-- runtime timeout and transport policy changes that are modeled as reloadable generation state
-- `log.level` changes
-
-When the reload succeeds:
+After a successful activation:
 
 - new requests use the new generation immediately
-- in-flight work on the old generation drains naturally
+- existing requests continue on the previous generation until they complete or are otherwise terminated by normal request-path behavior
 
-## What Does Not Reload Live
+## What Requires Restart
 
-Some changes are restart-required because they belong to startup-owned or separately bound service domains.
+Some changes are restart-required because they affect startup-owned or separately bound service domains.
 
-Examples include:
+Plan a drain-aware restart or node replacement for changes such as:
 
-- non-live logging sink settings such as log file path and log format
-- tracing enablement and related startup-owned tracing settings
-- some bind and service-surface compatibility changes that require new listeners or rebind validation
+- listener removal
+- listener bind-address or port changes
+- control-plane or metrics bind changes
+- logging sink settings such as log format or file output
+- tracing startup configuration
+- control-plane thread-count changes
 
-The system should reject these as incompatible reloads rather than partially applying them.
+These changes should be rejected during activation planning, not partially applied.
 
-## Reload Compatibility Checks
+## Legacy Runtime Reload Shortcut
 
-Reload compatibility is validated centrally before swap.
+`POST /admin/runtime/reload` still exists, but it is a compatibility shortcut.
 
-The control-plane reload flow checks:
+Use it only when:
 
-- listener/runtime compatibility
-- control API compatibility
-- metrics endpoint compatibility
-- startup-owned state compatibility
+- you intentionally want a direct apply path
+- you do not need the fuller staged diff and rejection reporting from `activate`
 
-Operators should expect:
+For production automation, prefer `validate` plus `activate`.
 
-- an explicit rejection when a reload is not safe
-- the currently active generation to remain authoritative when rejection occurs
+## Certificate Reload
 
-## Control API Reload Endpoints
+`POST /admin/runtime/reload-certs` is only for listener TLS material and related trust material used by new downstream handshakes.
 
-Two control-plane actions matter here:
+It does not:
 
-- runtime reload
-- certificate reload
+- rebuild the full runtime generation
+- mutate route or policy state
+- change existing live sessions
 
-### Runtime reload
+Use it for certificate rotation when only the cert or trust material changed.
 
-This rebuilds and validates a new runtime generation and swaps it if allowed.
+## Rollback
 
-### Certificate reload
+Rollback restores a previously retained runtime generation through `POST /admin/runtime/rollback`.
 
-This reloads listener TLS material for new handshakes only. It is not the same as full runtime config reload.
+Operator rules:
 
-## Runtime Generation Visibility
+- choose a target from `GET /admin/runtime/history`
+- confirm `rollback_candidate: true`
+- pass `expected_active_generation`
+- treat rollback as a first-class production workflow, not as a last-minute improvisation
 
-Operators should verify reload outcomes using:
-
-- control API runtime generation id
-- reload response payloads
-- logs around reload rejection or generation swap
-
-Do not assume that file edits on disk imply the active runtime changed. The authoritative signal is the committed active generation.
+Retained generations are bounded. Do not assume very old generations are still available.
 
 ## Drain Semantics
 
-Drain is the controlled path for stopping new useful work while letting existing work finish when possible.
+Drain is the controlled path for stopping admission of new useful work while allowing existing work to finish when possible.
 
-At a high level, drain means:
+At a high level:
 
-- listener enters draining mode
-- existing active streams are allowed to finish if possible
-- if no active streams remain, connections are closed and the listener can stop
-- if the drain timeout expires, remaining connections are closed
+- the listener enters draining mode
+- new connection or request admission is reduced or stopped according to lifecycle behavior
+- in-flight work is given time to finish
+- when the drain timeout is reached, remaining work is force-closed
 
-Drain is part of graceful shutdown and also part of watchdog-driven restart workflows.
+Drain is distinct from activation:
 
-## Watchdog-Driven Restart Flow
+- activation swaps runtime generations
+- drain moves the process toward restart or shutdown
 
-The watchdog can request a restart when runtime progress degrades beyond policy thresholds.
+## Restart Workflow
 
-The expected flow is:
+A restart can be operator-initiated or watchdog-initiated, but operators should expect the same high-level lifecycle:
 
-1. watchdog requests restart and records a reason
-2. listener sees the restart request and enters draining mode
-3. workers eventually report drained state
-4. watchdog completes the restart cycle once the workflow is done
+1. restart is requested
+2. the runtime enters draining mode
+3. workers drain or the configured drain grace elapses
+4. the process or node completes the restart workflow
 
-Operators should expect readiness and runtime snapshot state to reflect this transition rather than needing to infer it from scattered logs.
+Use restart for:
 
-## What Happens to In-Flight Requests
+- binary upgrades
+- restart-required config changes
+- controlled maintenance windows
 
-### On reload
+## What Operators Should Verify
 
-- existing requests continue on the generation they started with
-- new requests use the new generation after the swap
+After activation:
 
-### On drain
+- the active generation changed as expected
+- runtime history recorded the action
+- the diff matches the intended change
+- route, backend, quota, and overload metrics still look healthy
 
-- active requests may complete if they finish before drain timeout and before forced close
-- if graceful completion is not possible, remaining connections are closed
+After cert reload:
 
-This is why generation ownership and drain lifecycle are distinct concerns.
+- new handshakes present the expected certificate
+- certificate-expiry and handshake dashboards stay healthy
 
-## Operator Expectations
+During drain:
 
-Operators should expect reload to answer:
-
-- did compatibility validation pass
-- was a new generation committed
-- what generation is active now
-
-Operators should expect drain to answer:
-
-- is draining active
-- did the watchdog request it
-- how long has restart been pending
-- have workers drained yet
-
-## Recommended Workflow
-
-For routine runtime changes:
-
-1. update config on disk
-2. call runtime reload
-3. verify the active generation changed
-4. verify control API snapshot and metrics align with expected state
-
-For restart-required changes:
-
-1. stage the config change
-2. use maintenance orchestration or restart workflow
-3. treat the restart as a controlled drain event, not as a hot reload
-
-For certificate-only changes:
-
-1. update TLS material
-2. use certificate reload
-3. verify new handshakes use the refreshed material
+- readiness state reflects the transition
+- worker drain progresses
+- drain duration stays within the configured budget
+- remaining traffic is handled by other healthy instances
 
 ## Failure Expectations
 
-If reload fails:
+If activation fails:
 
-- active generation remains unchanged
-- rejection should be explicit
-- operators should not assume partial progress
+- the active generation remains unchanged
+- the rejection should identify the incompatible or invalid domain
+- operators should correct the config or use a restart path if the change is restart-required
+
+If rollback fails:
+
+- inspect retained-generation history first
+- confirm the target still has a retained bundle
+- confirm the active generation did not move unexpectedly
 
 If drain times out:
 
 - remaining connections are closed
-- the process should still complete shutdown/restart progression rather than hanging indefinitely
-
-## Contributor Rules
-
-When adding new reloadable state:
-
-- decide whether it is startup-owned, generation-owned, or process-shared
-- make reload compatibility explicit
-- expose reload result through canonical runtime generation/state surfaces
-
-Do not:
-
-- add silent partial reload behavior
-- let control-plane code invent its own reload compatibility rules outside the canonical path
-- mutate active runtime state in place when the generation model expects replacement
+- the workflow should still complete rather than hanging indefinitely
+- treat repeated drain timeout as a signal to inspect long-lived streams, drain budget, and restart policy
 
 ## Related Pages
 
-- [Runtime Generation Model](../architecture/runtime-generation.md)
-- [Control Plane](control-plane.md)
+- [Production Deployment](../deployment/production.md)
+- [Production Readiness](production-readiness.md)
+- [Runbook](runbook.md)
 - [Control API Reference](../reference/control-api-reference.md)

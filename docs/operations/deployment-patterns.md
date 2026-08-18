@@ -1,37 +1,67 @@
 # Deployment Patterns
 
-This page describes the deployment shapes that fit Spooky best today.
+This page describes the deployment shapes that fit Spooky best today and the rollout patterns that keep operations safe.
 
-## Best-Fit Patterns
+## Best-Fit Product Patterns
 
-### HTTP/3 Edge To HTTP/2 Service Tier
+### HTTP/3 Edge to HTTP/2 or HTTP/1.1 Service Tier
 
 Best current fit.
 
 Use this when:
 
 - clients need HTTP/3 at the edge
-- services can accept HTTP/2 upstream traffic
-- the environment benefits from explicit resource controls and strong teardown behavior
-
-### Controlled Canary Rollout
-
-Recommended current rollout model.
-
-Use this when:
-
-- you need to validate new versions or config changes gradually
-- you can keep a rollback path warm
-- you can bound blast radius during beta operations
+- services speak HTTP/2, HTTP/1.1, or a mix of both
+- you want explicit admission, quota, overload, and backend-health controls
 
 ### Single-Team Edge Tier
 
-Good fit today when one team owns:
+Good fit when one team owns:
 
-- proxy config
-- backend topology
-- TLS and cert rotation
-- runtime tuning
+- route and upstream configuration
+- TLS and certificate rotation
+- host tuning and capacity
+- rollout and incident response
+
+### Finite Multi-Service Platform Edge
+
+Good fit when:
+
+- a platform team owns a bounded set of services
+- config is rendered and activated through controlled automation
+- there is strong observability and clear rollback ownership
+
+## Best-Fit Rollout Patterns
+
+### Canary or Bounded Traffic Slice
+
+Recommended default rollout model.
+
+Use it when:
+
+- you need to validate config or binary changes gradually
+- you can keep a rollback path warm
+- you want to limit blast radius during beta operations
+
+### Active-Active Edge Pool
+
+Recommended for production availability.
+
+Use it when:
+
+- multiple edge nodes can serve the same traffic class
+- your upstream load balancer or traffic manager can remove draining or unhealthy nodes
+- you want binary upgrades and restart-required changes without whole-fleet impact
+
+### Blue-Green or Node-Replacement Rollout
+
+Recommended for:
+
+- binary upgrades
+- restart-required config changes
+- high-assurance operational windows
+
+Use it when replacing nodes is safer than mutating them in place.
 
 ## Weaker-Fit Patterns
 
@@ -39,31 +69,37 @@ Good fit today when one team owns:
 
 Weaker fit today because:
 
-- there is no rich dynamic config control plane
-- there is no plugin system
-- there is no broad policy engine
+- config is file-driven rather than a rich object-level control plane
+- policy depth is still narrower than a broad platform proxy
+- service discovery is DNS-based rather than orchestration-native
 
-### General API Gateway Replacement
-
-Partial fit today. Per-upstream auth is implemented and enforced — API-key, local HS256 JWT with
-scope/role RBAC, and external auth (HTTP subrequest or OIDC) — and scoped rate limiting
-(route/client/tenant/token) ships. It is weaker than a full API gateway because:
-
-- JWT validation covers `HS256`/`RS256`/`ES256` with JWKS-backed rotation, but not `RS384`/`RS512`/`PS*`/`EdDSA` or non-P-256 curves
-- rate limiting is per-instance and scope-based (no distributed/cross-instance rate limiting)
-- rich request/response transformation is missing
-- there is no generic policy engine or auth-provider chaining
-
-### Broad Legacy Upstream Compatibility Proxy
+### Broad Legacy Compatibility Proxy
 
 Weaker fit today because:
 
-- upstream forwarding is centered on HTTP/2
-- protocol breadth is not yet the main strength of the product
+- Spooky is strongest on HTTP/3 edge ingress and H2 or H1 upstream execution
+- very broad legacy protocol breadth is not the main product strength
+
+### Full API Gateway Replacement
+
+Partial fit today because Spooky already ships:
+
+- per-upstream auth
+- scoped rate limiting
+- distributed quota
+- observability and operator-facing control surfaces
+
+It is still weaker than a full gateway platform because:
+
+- request and response transformation depth is limited
+- there is no broad generic policy engine
+- auth-provider chaining and gateway orchestration remain narrower
 
 ## Recommended Rollout Shape
 
-1. Start with one service or bounded traffic class.
-2. Keep previous infrastructure available for rollback.
-3. Use drain-and-restart for non-certificate config changes.
-4. Expand only after stable latency, error rate, and health behavior.
+1. Start with one service, one route family, or one bounded traffic slice.
+2. Keep a known-good config generation and known-good binary ready for rollback.
+3. Use staged activation for runtime-managed config changes.
+4. Use cert reload only for cert-only changes.
+5. Use drain-aware restart or node replacement for restart-required changes.
+6. Expand only after latency, backend health, overload, and quota behavior remain stable.

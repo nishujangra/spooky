@@ -1,6 +1,17 @@
 # Limitations
 
-This page lists the most important current product limits so operators and contributors do not have to infer them from scattered documents.
+Use this page for current hard product limits and non-goals.
+
+## Quick Lookup
+
+| If you need to check | Start here |
+| --- | --- |
+| restart boundaries and runtime history limits | [Configuration And Control Plane Limits](#configuration-and-control-plane-limits) |
+| protocol gaps | [Protocol Limits](#protocol-limits) |
+| traffic-policy gaps | [Traffic-Management Limits](#traffic-management-limits) |
+| auth, RBAC, OIDC, or audit limits | [Security And Policy Limits](#security-and-policy-limits) |
+| platform integration gaps | [Platform And Ecosystem Limits](#platform-and-ecosystem-limits) |
+| current engineering constraints | [Engineering Limits](#engineering-limits) |
 
 ## Architectural Limits
 
@@ -13,7 +24,8 @@ This page lists the most important current product limits so operators and contr
 - Full configuration hot reload exists for runtime-managed settings, but some startup-owned changes still require a restart.
 - Dynamic route updates are not implemented as a first-class runtime feature outside config reload.
 - Dynamic upstream membership changes are limited to DNS refresh rather than a richer control-plane API.
-- There is no transactional apply, generation diff, rollback, or staged config activation model.
+- Runtime activation is generation-based and supports validate, preview, activate, history, and rollback flows, but it is still file-backed rather than a granular per-object mutation API.
+- Retained runtime generations are bounded rather than preserved indefinitely for deep history or fleet-wide change analysis.
 
 ## Protocol Limits
 
@@ -57,23 +69,6 @@ This page lists the most important current product limits so operators and contr
 - The central edge runtime remains concentrated in a very large module.
 - This increases change risk and makes long-term feature growth harder.
 - Some docs and operational guidance still need tighter separation between stable behavior and future intent.
-
-## What These Limits Mean In Practice
-
-Spooky is a strong candidate when:
-
-- HTTP/3 edge performance and correctness are primary goals
-- the upstream environment speaks HTTP/2 (`https://` backends) or HTTP/1.1 (`http://` backends), or a mix of both
-- the deployment can tolerate occasional restarts for startup-owned config changes
-- the deployment does not require rich traffic policy or auth gateway features
-
-Spooky is a poor fit today when:
-
-- every config field must be live-reloadable with no restart boundary
-- upstream protocol breadth is required
-- advanced API gateway behavior is required
-- a rich dynamic control plane is expected
-- a plugin/filter ecosystem is required
 
 ## Related Pages
 

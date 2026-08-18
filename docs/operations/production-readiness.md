@@ -1,97 +1,113 @@
 # Production Readiness
 
-This page is the canonical statement of what the project currently supports in production, what remains partial, and what is still missing.
+This page is the canonical statement of what Spooky supports in production today, what requires extra rollout discipline, and what still remains outside the safe default operating envelope.
 
 ## Current Assessment
 
-Spooky is a **beta HTTP/3 edge reverse proxy** with a strong core data plane, broad correctness and regression coverage, and clear operational ambition. It is suitable for **controlled production rollout** when the operator keeps rollback, monitoring, and staged traffic expansion in place.
+Spooky is a **beta HTTP/3-first edge runtime**. It is suitable for **controlled production rollout** when operators use:
 
-Spooky is **not yet a fully mature general-purpose reverse proxy platform**. The main constraints are:
+- staged activation and explicit rollback
+- protected Control API access
+- observability and alerting before traffic expansion
+- canary or bounded-slice rollout patterns
 
-- config hot reload covers most runtime settings, including live `log.level` changes, but not all: log format/file settings, tracing config, control-plane thread counts, and listener removal/bind-address changes still require a restart
-- upstream forwarding is scheme-driven: HTTP/2 for `https://` backends, HTTP/1.1 for `http://` backends
-- dynamic control-plane capability is file-reload based, not a granular per-object mutation API
-- auth is limited to API key, local JWT (`HS256`/`RS256`/`ES256`, with static keys or JWKS), and per-upstream external auth (HTTP/OIDC); there is no generic policy engine or rate-limiting framework
-- service discovery is limited to DNS refresh rather than a richer orchestration-native model
+Spooky is not yet a general-purpose replacement for every reverse-proxy or API-gateway use case.
 
-## Production-Ready Today
+## Strong Production Areas
 
-The following areas are considered strong enough for controlled production use:
+These areas are strong enough for controlled production use today:
 
 - downstream HTTP/3 ingress over QUIC
-- downstream HTTP/1.1 and HTTP/2 bootstrap ingress
-- upstream HTTP/2 forwarding (`https://` backends) and HTTP/1.1 forwarding (`http://` backends)
-- deterministic host/path/method routing
+- downstream bootstrap HTTP/1.1 and HTTP/2 ingress
+- upstream HTTP/2 forwarding for `https://` backends and HTTP/1.1 forwarding for `http://` backends
+- deterministic host, path, and method routing
 - active and passive backend health handling
 - load balancing with round-robin, random, consistent-hash, least-connections, latency-aware, and sticky-CID behavior
 - downstream TLS termination with SNI certificate selection
-- bootstrap listener client-auth support
 - upstream TLS verification controls and custom trust roots
-- overload handling through inflight limits, queue caps, adaptive admission, and brownout logic
-- graceful drain and bounded shutdown behavior
-- Prometheus metrics and control-plane health/readiness/runtime endpoints
-- per-upstream API key and local JWT authentication (`HS256`/`RS256`/`ES256`, static PEM/JWK keys or background-refreshed JWKS), with scope/role checks
-- per-upstream async external auth (HTTP subrequest or OIDC discovery/introspection), non-blocking against the H3 loop, with configurable fail-open/fail-closed behavior and response-header allowlisting
+- overload handling through inflight limits, queue caps, adaptive admission, brownout, and circuit-open rejection
+- scoped rate limiting plus distributed quota enforcement with burst and sustained contracts
+- Prometheus metrics, structured logs, tracing, and Control API runtime views
+- graceful drain, bounded shutdown, retained runtime generations, and rollback
 
-## Production-Capable With Caveats
+## Production-Capable With Rollout Discipline
 
-The following capabilities exist, but operators should treat them as features that still need careful rollout discipline:
+These capabilities are usable in production, but operators should apply them through staged rollout and explicit validation:
 
-- full configuration hot reload (atomic runtime swap of routes, upstreams, backends, timeouts, limits, and resilience policies), and certificate-only reload for new handshakes — both without a full process restart
-- staged activation — `POST /admin/runtime/validate` and `/preview` plan a config change and return its diff without touching the running runtime, and `/activate` commits it; prefer this over the legacy `POST /admin/runtime/reload` shortcut, which applies the change without surfacing the diff
-- rollback to a retained generation via `POST /admin/runtime/rollback`; use `GET /admin/runtime/history` to pick a target whose `rollback_candidate` is `true`, and note that retained generations are capped at a fixed bound rather than kept indefinitely
-- watchdog-driven recovery hooks
-- DNS-based backend refresh and backend client rotation
-- retry budget, circuit breaker, and hedging controls
-- packet sharding, worker pinning, and other host-tuning features
+- runtime config activation through `POST /admin/runtime/validate`, `/preview`, and `/activate`
+- rollback through retained runtime generations and `POST /admin/runtime/rollback`
+- certificate-only reload for new handshakes through `POST /admin/runtime/reload-certs`
+- DNS refresh and backend client rotation
+- retry, hedge, and circuit-breaker policy
+- watchdog-driven restart workflows
+- packet sharding, worker pinning, and other host-tuning options
 
-These areas are usable, but their surrounding operational model is not yet as mature as top-tier long-established proxies.
+These are production features, but they still need disciplined rollout and observability rather than blind automation.
 
-## Not Yet Production-Complete
+## Restart-Required Areas
 
-The following gaps are the most important reasons Spooky is not yet at general-availability maturity:
+Operators should plan a drain-aware restart or instance replacement workflow for changes in these areas:
 
-- config reload cannot change log format/file settings, tracing config, or control-plane thread counts, and cannot remove/rebind listeners, without a restart (`log.level` reloads live)
-- no transactional config apply, staged activation, or rollback API
+- listener removal or bind-address changes
+- control-plane or metrics bind changes
+- logging sink settings such as log format and file-output shape
+- tracing startup configuration
+- control-plane thread-count changes
+
+`log.level` remains live-reloadable. Do not group it with restart-only logging settings.
+
+## Important Product Boundaries
+
+The main product boundaries today are:
+
 - no upstream HTTP/3 forwarding mode
-- no broad request mirroring, canary traffic splitting, or advanced traffic policy engine
-- no first-class rate limiting framework
-- no interactive OIDC login/session-cookie flows, or generic RBAC/policy engine beyond scope/role checks on JWT claims
-- no broad plugin or extension system
-- no orchestration-native service discovery beyond DNS polling
+- no orchestration-native service discovery beyond DNS refresh
+- no broad request-mirroring or advanced traffic-splitting engine
+- no generic policy engine beyond the current auth, quota, rate-limit, and overload surfaces
+- no interactive OIDC session-login flow or broad gateway-style auth orchestration
 
-## Recommended Operator Stance
+## Good Fit Today
 
-Use Spooky today when all of the following are true:
+Spooky is a good fit when:
 
-- you want an HTTP/3-first edge proxy
-- your backends speak HTTP/2 (`https://`) or HTTP/1.1 (`http://`), or a mix of both
-- you are comfortable with staged rollout and explicit rollback procedures
-- you do not require a large dynamic control plane yet
-- you can keep close operational visibility on the system
+- you want HTTP/3 at the edge
+- your upstreams speak HTTP/2 or HTTP/1.1
+- one team can own routing, TLS, rollout, and incident response
+- you are comfortable using a file-driven config source with staged activation
+- you can keep close observability on latency, overload, quota, and backend health
 
-Do not position Spooky today as:
+## Weaker Fit Today
 
-- a full Envoy-class dynamic proxy platform
-- a drop-in NGINX replacement for every protocol and legacy deployment shape
-- a complete API gateway or auth gateway
-- a broad service-mesh data plane with mesh-native control-plane integration
+Spooky is a weaker fit when you need:
 
-## Readiness Gates Before Broader Adoption
+- a rich dynamic control plane with per-object mutation APIs
+- broad multi-tenant platform policy orchestration
+- very wide upstream protocol compatibility
+- deep service-mesh style discovery and interior control-plane integration
 
-The most important gates before calling the project broadly production-grade are:
+## Minimum Operator Bar
 
-1. Transactional config apply: staged activation, config-diff visibility, and a rollback API on top of the existing reload endpoint (base config hot reload — including live route and upstream updates — already ships).
-2. Live reconfiguration of the remaining restart-only settings (log format/file, tracing config, thread counts, listener removal/bind changes; `log.level` already reloads live).
-3. Refactoring of the oversized edge runtime into smaller subsystems.
-4. Fuzzing and deeper parser/protocol hardening.
-5. First-class rate limiting and a generic policy engine (auth now covers API key, local JWT with JWKS, and external/OIDC checks).
-6. Better operator guidance for rollout, recovery, and ongoing operations.
+Do not expand rollout beyond a controlled slice unless all of the following are true:
+
+- rollback has been tested recently
+- Control API access is protected
+- dashboards and alerts are live and verified
+- backend health and latency behavior have been observed under real traffic
+- the team knows which changes activate live and which require a restart
+
+## Maturity Gates Before Broader Adoption
+
+The main gates before a broader production-grade claim are:
+
+1. Longer-horizon operational validation of activation, rollback, and restart workflows under churn.
+2. Continued parser and protocol hardening, including deeper fuzzing.
+3. Broader maturity of service discovery, policy depth, and control-plane ergonomics.
+4. Further decomposition of concentrated runtime code and more long-horizon fleet history.
 
 ## Related Pages
 
+- [Production Deployment](../deployment/production.md)
+- [Reload and Drain](reload-and-drain.md)
+- [Deployment Patterns](deployment-patterns.md)
 - [Feature Matrix](../reference/feature-matrix.md)
 - [Limitations](../reference/limitations.md)
-- [Security Model](../concepts/security-model.md)
-- [Production Deployment](../deployment/production.md)
-- [Release Maturity](../release-maturity.md)

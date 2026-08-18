@@ -21,6 +21,16 @@ The bootstrap path exists so Spooky can:
 
 Bootstrap is not meant to be a second independent runtime architecture.
 
+## Boundary At a Glance
+
+| Concern | QUIC path | Bootstrap path | Should semantic policy differ? |
+|---|---|---|---|
+| Downstream protocol | HTTP/3 over QUIC | HTTP/1.1 or HTTP/2 | No |
+| Intake mechanics | UDP, QUIC, HTTP/3 streams | HTTP server request intake | No |
+| Upgrade handling | Native stream model | WebSocket and HTTP upgrade handling | Only where protocol requires it |
+| Response writeback | HTTP/3 stream emission | HTTP/1.1 or HTTP/2 response emission | No |
+| Routing, auth, quota, overload, transport, observability | Shared | Shared | No |
+
 ## QUIC Path
 
 The QUIC path is the primary ingress model.
@@ -96,13 +106,14 @@ Some request and response validation is protocol-specific at the edge of the ing
 The following should remain shared and semantically identical:
 
 - auth allow/deny/challenge behavior
-- rate-limit and brownout behavior
+- quota, rate-limit, overload, and brownout behavior
 - route matching and upstream lookup
 - backend selection semantics
 - retry and hedge eligibility
 - backend health feedback
 - outcome reason vocabularies
 - metrics and logging dimensions
+- runtime-generation and Control API views
 
 If bootstrap and QUIC start producing different policy decisions for the same logical request, the shared layer is in the wrong place or one path has leaked local policy logic.
 

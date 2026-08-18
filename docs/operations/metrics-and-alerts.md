@@ -2,6 +2,12 @@
 
 This document explains which Spooky metrics matter most in production and how operators should use them for alerting and dashboards.
 
+## Read This With
+
+- [Metrics Reference](../reference/metrics-reference.md) for exact series names
+- [Observability Operator Bundle](observability-bundle.md) for the packaged dashboards, recording rules, alerts, and SLOs
+- [Control API Reference](../reference/control-api-reference.md) when you need current runtime state rather than trend
+
 ## Purpose
 
 Spooky exposes many counters, gauges, and labeled request families. Operators should focus on the metrics that answer:
@@ -183,6 +189,8 @@ Recommended first dashboards:
 - TLS health dashboard
 - runtime/control-plane health dashboard
 
+The repository now ships these dashboards, so the normal operator path is to use the packaged dashboard set rather than inventing an ad hoc first dashboard stack.
+
 ## First Alerts To Add
 
 ### Request failure alerts
@@ -227,6 +235,7 @@ Alert on:
 - watchdog degraded windows
 - runtime panics
 - unexpected control API limiter drops
+- runtime activation or rollback rejection growth
 
 ## Metric Interpretation Rules
 
@@ -245,6 +254,11 @@ Metrics tell you trend and rate. Control-plane snapshots tell you current runtim
 - metrics to detect an issue
 - control API runtime and backend inventory to inspect current state
 
+For runtime-managed changes and admin-plane incidents, also use:
+
+- `GET /admin/runtime/history`
+- audit records for actor and action attribution
+
 ## Operator Expectations
 
 Metrics should let operators answer:
@@ -257,6 +271,10 @@ Metrics should let operators answer:
 If a dashboard requires reading implementation-specific logs to interpret a core metric, the dashboard likely needs to be redesigned around the canonical labeled families.
 
 ## Related Pages
+
+- [Observability Operator Bundle](observability-bundle.md)
+- [Control Plane](control-plane.md)
+- [Control API Reference](../reference/control-api-reference.md)
 
 - [Metrics Reference](../reference/metrics-reference.md)
 - [Observability Contract](../architecture/observability-contract.md)

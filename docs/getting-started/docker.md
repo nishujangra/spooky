@@ -1,31 +1,46 @@
 # Docker Installation
 
+This page is the fastest way to run Spooky in containers and verify health, metrics, and first proxied traffic.
+
 ## Prerequisites
 
 - [Docker](https://docs.docker.com/get-docker/) 24+ (or Docker Desktop)
 - [Docker Compose](https://docs.docker.com/compose/install/) v2 plugin (bundled with Docker Desktop)
-- TLS certificate and key for the proxy listener (see [TLS Certificates](installation.md#tls-certificates))
+
+## Choose Your Docker Path
+
+- Want the fastest container evaluation path: use the provided Compose stack plus a small demo backend
+- Want to run only the Spooky container: use the single-container commands later in this page
+- Want full host and production guidance: use [Production Deployment](../deployment/production.md)
 
 ## Quick Start with Docker Compose
 
-The fastest way to get Spooky running is with the provided Compose stack.
+The fastest working container path is:
 
-**1. Clone the repository (or copy the packaging files):**
+1. use the provided Compose stack
+2. point the default upstream at a demo backend
+3. verify first traffic, health, and metrics
+
+**1. Clone the repository:**
 
 ```bash
 git clone https://github.com/Supernova-Labs-Org/spooky.git
 cd spooky
 ```
 
-**2. Place your TLS certificates:**
+**2. Use the repo development certificates for local testing.**
+
+The packaged Compose file already mounts `certs/proxy-cert.pem` and `certs/proxy-key-pkcs8.pem` from the repository.
+
+For real deployments, replace them with your own certificate material and follow [TLS Setup](../configuration/tls.md).
+
+**3. Start a small demo backend:**
 
 ```bash
-mkdir -p certs
-cp /path/to/your/proxy-cert.pem     certs/proxy-cert.pem
-cp /path/to/your/proxy-key-pkcs8.pem certs/proxy-key-pkcs8.pem
+docker run -d --name spooky-demo-backend --rm -p 8080:80 nginx:alpine
 ```
 
-**3. Edit the config to point at your backend:**
+**4. Edit the config to point at that backend:**
 
 Open `packaging/docker/config.docker.yaml` and replace the upstream address:
 
@@ -34,8 +49,10 @@ upstream:
   default:
     backends:
       - id: "default-backend"
-        address: "http://your-backend:8080"   # <-- change this
+        address: "http://host.docker.internal:8080"
 ```
+
+If you are on Linux, replace `host.docker.internal` with a reachable host-gateway address or run the backend in the same Compose project and use its service name.
 
 Also replace the control API token:
 
@@ -45,26 +62,30 @@ observability:
     auth_token: "replace-with-strong-token"   # <-- change this
 ```
 
-**4. Start the stack:**
+**5. Start the stack:**
 
 ```bash
 docker compose -f packaging/docker/docker-compose.yml up -d --build
 ```
 
-**5. Verify it is running:**
+**6. Verify health, metrics, and first traffic:**
 
 ```bash
 # Health check
-curl -k https://127.0.0.1:9902/health
+curl -k --http1.1 https://127.0.0.1:9902/health
 
 # Metrics
 curl http://127.0.0.1:9901/metrics
+
+# First proxied request
+curl --http3-only -k https://127.0.0.1:9889/
 ```
 
 **Stop the stack:**
 
 ```bash
 docker compose -f packaging/docker/docker-compose.yml down
+docker rm -f spooky-demo-backend 2>/dev/null || true
 ```
 
 ## Running a Single Container
@@ -109,7 +130,7 @@ docker run -d \
   spooky:latest
 ```
 
-See `packaging/docker/config.docker.yaml` for a fully annotated reference config.
+See `packaging/docker/config.docker.yaml` for the packaged container reference config.
 
 ## Building the Image
 
@@ -169,3 +190,10 @@ docker build -t spooky:latest -f packaging/docker/Dockerfile .
 docker rm -f spooky
 docker run -d ...   # same run command as before
 ```
+
+## What to Read Next
+
+- [Quickstart](../tutorials/quickstart.md) - fastest local non-container first run
+- [Installation](installation.md) - install Spooky directly on a host
+- [Minimum Production](minimum-production.md) - minimum safe production posture
+- [Production Deployment](../deployment/production.md) - full deployment guidance

@@ -1,15 +1,34 @@
 # Overview
 
-Spooky is an HTTP/3 edge proxy and load balancer. It terminates QUIC connections at the edge and forwards requests to HTTP/2 backends, enabling HTTP/3 client support without modifying existing infrastructure.
+This section is the fastest path to understanding Spooky, getting it running, and sending first traffic successfully.
+
+Use this section when you need to answer:
+
+- what Spooky is
+- how to install it
+- how to run it locally or in a container
+- what a minimum safe production posture looks like
+
+## Start Here
+
+- Want the shortest first-run path: [Quickstart](../tutorials/quickstart.md)
+- Need installation and runtime requirements: [Installation](installation.md)
+- Want a container-based setup: [Docker](docker.md)
+- Want the smallest production checklist: [Minimum Production](minimum-production.md)
+- Need exact config keys and defaults: [Configuration Reference](../configuration/reference.md)
+
+## What Spooky Is
+
+Spooky is an HTTP/3 edge runtime and load balancer. It terminates QUIC at the edge, accepts compatibility traffic for HTTP/1.1 and HTTP/2 clients, and forwards requests to existing upstream services through its canonical request, routing, policy, and transport pipeline.
 
 ## What Spooky Does
 
-Spooky bridges the gap between modern HTTP/3 clients and production HTTP/2 backends by:
+Spooky is built to:
 
-- Terminating QUIC connections with TLS 1.3
-- Converting HTTP/3 streams to HTTP/2 requests
-- Distributing load across backend pools with active health checks
-- Routing requests based on path prefix and hostname patterns
+- terminate QUIC connections with TLS 1.3
+- convert HTTP/3 streams into upstream requests
+- distribute load across upstream backends with active health checks
+- route requests based on path prefix and hostname patterns
 
 ## Architecture
 
@@ -30,7 +49,7 @@ HTTP/3 Client → QUIC/TLS → Spooky Edge → HTTP/2 → Backend Servers
 **Protocol Support**
 - HTTP/3 and QUIC (RFC 9114, RFC 9000)
 - TLS 1.3 with certificate chain validation
-- HTTP/2 backend connectivity
+- Scheme-driven upstream connectivity: HTTP/2 for `https://` backends and HTTP/1.1 for `http://` backends
 
 **Load Balancing**
 - Random distribution
@@ -41,7 +60,7 @@ HTTP/3 Client → QUIC/TLS → Spooky Edge → HTTP/2 → Backend Servers
 **Routing**
 - Path prefix matching with longest-match selection
 - Host-based routing
-- Multiple upstream pools with independent configurations
+- Multiple upstreams with independent configurations
 
 **Health Management**
 - Active HTTP health checks with configurable intervals
@@ -141,17 +160,18 @@ curl --http3-only -k \
 Currently working:
 
 - QUIC termination and HTTP/3 support
-- HTTP/2 backend forwarding with connection pooling
+- upstream HTTP/2 forwarding for `https://` backends and HTTP/1.1 forwarding for `http://` backends
 - Multiple load balancing algorithms
 - Active health checking with automatic recovery
-- Path and host-based routing with upstream pools
+- Path, host, and method-aware routing with named upstreams
 
 See [Release Maturity](../release-maturity.md) for beta scope and GA promotion criteria.
 
 ## Next Steps
 
-- [Installation Guide](installation.md) - Complete installation instructions
-- [Configuration Reference](../configuration/reference.md) - Full configuration documentation
-- [TLS Setup](../configuration/tls.md) - Certificate generation and configuration
-- [Load Balancing Guide](../user-guide/load-balancing.md) - Backend selection strategies
-- [Production Deployment](../deployment/production.md) - Production deployment guidelines
+- [Installation Guide](installation.md) - complete installation instructions
+- [Configuration Reference](../configuration/reference.md) - exact configuration schema and defaults
+- [TLS Setup](../configuration/tls.md) - certificate generation and trust configuration
+- [Production Deployment](../deployment/production.md) - deployment and rollout guidance
+- [Operations Overview](../operations/overview.md) - where to go once you are ready to operate Spooky
+- [Troubleshooting](../troubleshooting/common-issues.md) - common failure signatures and checks

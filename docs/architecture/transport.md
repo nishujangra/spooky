@@ -1,10 +1,10 @@
 # Transport Boundary
 
-This document explains what the transport layer owns, what it deliberately hides, and where `edge` should stop reasoning about H1/H2 backend details.
+This document explains what the transport layer owns, what it deliberately hides, and where `edge` should stop reasoning about backend protocol details.
 
 ## Purpose
 
-The transport refactor established one rule:
+The transport boundary is based on one rule:
 
 - `edge` owns request orchestration
 - `transport` owns backend protocol execution
@@ -25,7 +25,7 @@ Its surface is intentionally transport-shaped:
 - rotate a backend client when refresh or lifecycle logic requires it
 - build the runtime transport pool from interpreted runtime config
 
-This is the place where backend protocol choice becomes a resolved runtime concern.
+This is the point where runtime backend transport policy becomes a concrete execution choice.
 
 ## What Transport Owns
 
@@ -38,7 +38,7 @@ Transport decides whether a backend runs over:
 - HTTP/1.1
 - HTTP/2
 
-That mapping is resolved from runtime config and hidden behind the transport façade.
+That mapping is resolved from interpreted runtime config and hidden behind the transport façade. Higher layers should not infer it from raw scheme strings or recreate their own selection logic.
 
 ### Connection reuse
 
@@ -54,7 +54,7 @@ Callers should not know how reuse differs internally between H1 and H2.
 
 Transport owns:
 
-- connect-level timeout behavior
+- connect timeout behavior
 - execution timeout around backend send operations
 - protocol/client-level timeout handling that belongs to transport execution
 
@@ -85,6 +85,16 @@ That includes:
 - outcome recording
 
 Edge should not own how a chosen backend gets executed as H1 or H2.
+
+## What Flows Into Transport
+
+Transport expects higher layers to arrive with:
+
+- a resolved backend identity
+- a canonical upstream request
+- retry and hedge decisions that have already been made for this attempt
+
+Transport is not where route matching, quota, auth, or backend eligibility are decided.
 
 ## Internal Transport Structure
 
@@ -163,7 +173,7 @@ That decision should not require callers to know:
 - how H2 rotates clients
 - whether one protocol exposes generation movement differently
 
-Transport should expose one canonical rotation result so lifecycle code can reason in transport-neutral terms.
+Transport exposes one canonical rotation result so lifecycle code can reason in transport-neutral terms.
 
 ## Error Mapping Boundary
 
@@ -176,6 +186,15 @@ Shared upstream error classification then interprets those errors for:
 - metrics/logging reason mapping
 
 This keeps transport from owning request policy while also keeping edge from digging into protocol implementation details.
+
+## Relationship to Backend Lifecycle
+
+Transport and backend lifecycle are adjacent but distinct:
+
+- transport executes a request or rotates a client
+- backend lifecycle records what that meant for backend health, resolution, and operator views
+
+Transport should not own long-lived health-state transitions. It should surface canonical results that lifecycle code can consume.
 
 ## Contributor Rules
 
