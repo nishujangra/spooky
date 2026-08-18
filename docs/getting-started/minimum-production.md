@@ -2,7 +2,7 @@
 
 This page answers one question: **what is the minimum you must do to run Spooky responsibly in production?**
 
-It is not a full hardening guide — that is [Production Deployment](../deployment/production.md). This page is a focused checklist for operators who have already completed the [quickstart](overview.md) and are preparing to serve real traffic for the first time.
+It is not a full hardening guide — that is [Production Deployment](../deployment/production.md). This page is a focused checklist for operators who have already completed the [quickstart](../tutorials/quickstart.md) or [installation](installation.md) path and are preparing to serve real traffic for the first time.
 
 ---
 
@@ -87,7 +87,7 @@ observability:
   metrics:
     enabled: true
     address: "127.0.0.1"             # Expose to monitoring; restrict to your scrape network
-    port: 9090
+    port: 9901
     path: "/metrics"
 ```
 
@@ -154,8 +154,8 @@ Work through this list top-to-bottom before pointing DNS or a load balancer at t
    _Verify:_ From your Prometheus host (or monitoring agent): `curl -sf http://<spooky-host>:9090/metrics | head -5` — expect Prometheus text format output.
 
 7. **Rollback plan documented: previous binary and config saved, procedure tested.**
-   v0.1.x does not support hot reload — every config change requires a restart. If a bad config or binary is deployed, the service fails to start and traffic stops.
-   _Verify:_ Confirm `/usr/local/bin/spooky.prev` and `/etc/spooky/config.yaml.backup` exist from your last deployment, and that the rollback steps in your runbook have been executed at least once in a non-production environment.
+   Spooky supports generation-based validation, preview, activation, and rollback for runtime-managed changes, but you still need a tested rollback path for binary upgrades and restart-required settings.
+   _Verify:_ Confirm your previous binary and config are retained, and that the rollback steps in your runbook have been executed at least once in a non-production environment.
 
 ---
 
@@ -228,7 +228,20 @@ The control API `/health` endpoint returns HTTP 200 when the process is up. It d
 
 **When to add backends.** CPU saturation is rarely the first bottleneck in a QUIC proxy. Watch `spooky_overload_shed_by_reason_total{reason="backend_inflight"}` in your metrics — sustained shedding on that label means backends are saturated before Spooky is. Add backends to the pool when that counter climbs, not when Spooky's CPU rises.
 
-**How to add a backend in v0.1.x.** Dynamic backend registration is not supported in v0.1.x. To add a backend, update `/etc/spooky/config.yaml` with the new entry and restart the service with `sudo systemctl restart spooky.service`. Prepare for a brief interruption (existing QUIC connections are dropped on restart). Schedule the change during a low-traffic window or behind a second proxy instance if zero-downtime is required. Hot reload is on the roadmap.
+**How to add a backend today.** Dynamic backend registration is not a per-object Control API feature. To add a backend, update `/etc/spooky/config.yaml`, then use the staged runtime flow when the change is runtime-managed:
+
+```bash
+curl -k --http1.1 -X POST https://127.0.0.1:9902/admin/runtime/validate \
+  -H "Authorization: Bearer <token>"
+
+curl -k --http1.1 -X POST https://127.0.0.1:9902/admin/runtime/preview \
+  -H "Authorization: Bearer <token>"
+
+curl -k --http1.1 -X POST https://127.0.0.1:9902/admin/runtime/activate \
+  -H "Authorization: Bearer <token>"
+```
+
+If the change affects restart-required settings such as listener bind/removal or other startup-owned settings, plan a controlled restart instead.
 
 ---
 

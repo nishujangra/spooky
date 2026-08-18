@@ -1,6 +1,6 @@
 # Quickstart
 
-Spooky is an HTTP/3 (QUIC) edge reverse proxy. Clients connect over HTTP/3; Spooky forwards to your existing HTTP/2 backends unchanged. This guide gets a working proxy running locally and confirms the full upgrade path — including the `Alt-Svc` header that tells browsers to switch to HTTP/3.
+This guide gets Spooky from zero to first successful traffic with the fewest moving parts possible.
 
 Total time: about 5 minutes.
 
@@ -12,8 +12,17 @@ Total time: about 5 minutes.
   brew install curl
   # then use $(brew --prefix curl)/bin/curl in the commands below, or put it first on PATH
   ```
-  Alternatively, use Spooky's own `h2_backend` test client (shown in Step 3) to confirm connectivity without curl.
+- **Python 3** for the simplest local backend: `python3 --version`
 - **UDP port 9889 free** — QUIC runs over UDP. Check with `lsof -iUDP:9889`.
+
+## What You Will Run
+
+This quickstart uses:
+
+- a self-signed certificate for local TLS
+- a small local HTTP backend on `127.0.0.1:8080`
+- one catch-all upstream in Spooky
+- one HTTP/3 request to confirm first traffic
 
 ## Step 1: Build
 
@@ -42,12 +51,18 @@ Production: see [TLS Setup](../configuration/tls.md).
 
 ## Step 3: Start a Test Backend
 
-Spooky requires HTTP/2 backends. HTTP/1.1-only upstreams are not supported.
+Spooky supports:
 
-Use the bundled test backend, which speaks HTTP/2 out of the box:
+- HTTP/2 upstream transport for `https://` backends
+- HTTP/1.1 upstream transport for `http://` backends
+
+For the fastest local test, use a simple HTTP/1.1 backend:
 
 ```bash
-cargo run --bin h2_backend -- --port 8080
+mkdir -p /tmp/spooky-demo
+printf 'hello from backend\n' > /tmp/spooky-demo/index.html
+cd /tmp/spooky-demo
+python3 -m http.server 8080
 ```
 
 Leave this running in its own terminal.
@@ -75,7 +90,7 @@ upstream:
       path_prefix: "/"            # match every request path
     backends:
       - id: backend-1             # arbitrary label shown in logs
-        address: "127.0.0.1:8080" # where to forward — must be an HTTP/2 endpoint
+        address: "http://127.0.0.1:8080" # cleartext HTTP/1.1 backend for the local demo
         weight: 100               # relative share of traffic (only meaningful with multiple backends)
 
 log:
@@ -93,7 +108,7 @@ You should see:
 ```
 INFO spooky: loading config path="config.yaml"
 INFO spooky: listening on 0.0.0.0:9889 protocol=http3
-INFO spooky: upstream pool ready pool=default backends=1
+INFO spooky: upstream ready upstream=default backends=1
 ```
 
 ## Step 6: Verify HTTP/3
@@ -106,7 +121,27 @@ curl --http3-only -k https://localhost:9889/
 
 `--http3-only` refuses to fall back to TCP. If this succeeds, QUIC is live.
 
-### 6b. Verify the Alt-Svc upgrade path (mimics browser behavior)
+Expected body:
+
+```text
+hello from backend
+```
+
+### 6b. Check the control API health endpoint
+
+In another terminal:
+
+```bash
+curl -sk https://127.0.0.1:9902/health
+```
+
+Expected response:
+
+```json
+{"status":"ok", ...}
+```
+
+### 6c. Verify the Alt-Svc upgrade path (mimics browser behavior)
 
 Browsers don't start with HTTP/3 — they discover it via the `Alt-Svc` response header on a regular HTTPS request, then switch on the next connection. Test that Spooky sends this header correctly:
 
@@ -128,15 +163,18 @@ If you see this header, Spooky is correctly advertising HTTP/3 to clients that d
 
 **`Error: Address already in use`** — something else is bound to UDP 9889. Find it with `lsof -iUDP:9889` and stop it, or change `port` in `config.yaml`.
 
-**`Failed to connect to backend`** — the h2_backend process isn't running, or is on a different port. Confirm it's up with `curl -k --http2 https://localhost:8080/` (expect a response, not a connection refused).
+**`Failed to connect to backend`** — the local backend is not running, or is on a different port. Confirm it is up with `curl http://127.0.0.1:8080/`.
 
 **`Failed to load TLS certificate`** — the paths in `config.yaml` don't match where you generated the files. Both `certs/cert.pem` and `certs/key.pem` must exist relative to the working directory you launch Spooky from.
 
 **curl falls back to HTTP/2 silently** — you're using the system curl, which lacks HTTP/3 support. Use `brew install curl` and invoke it with the full path, or check `curl --version` for `HTTP/3` in the features list.
 
-## What to Read Next
+## Next Steps
 
-- **[Configuration Reference](../configuration/reference.md)** — every config field, its type, default value, and valid range.
-- **[Load Balancing Guide](../user-guide/load-balancing.md)** — when to use round-robin vs. least-connections vs. random, and how weights interact.
-- **[TLS Setup](../configuration/tls.md)** — production certificates with Let's Encrypt, cert rotation, and mTLS.
-- **[Production Deployment](../deployment/production.md)** — systemd unit file, resource limits, metrics endpoints, and hardening checklist.
+- [Docker](../getting-started/docker.md) — fastest container-based first run
+- [Installation](../getting-started/installation.md) — install Spooky on a host
+- [Configuration Reference](../configuration/reference.md) — exact config keys, defaults, and semantics
+- [Minimum Production](../getting-started/minimum-production.md) — minimum safe production posture
+- [Production Deployment](../deployment/production.md) — full deployment and hardening guide
+- [Load Balancing Guide](../user-guide/load-balancing.md) — strategy selection and routing trade-offs
+- [TLS Setup](../configuration/tls.md) — production certificates, rotation, and mTLS
