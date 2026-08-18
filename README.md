@@ -1,74 +1,120 @@
 # Spooky
 
-Spooky is an HTTP/3 (QUIC) edge proxy and load balancer with native QUIC ingress, a bootstrap HTTP/1.1 and HTTP/2 compatibility path, and scheme-driven HTTP/1.1 or HTTP/2 upstream execution.
+Spooky is a modern edge runtime for high-trust APIs. It sits in front of application traffic, terminates HTTP/3 and QUIC at the edge, routes requests to existing backends, and gives operators explicit control over resilience, policy, and failure handling.
 
-## Overview
+It is designed for teams that need more than basic reverse proxying, especially in environments where latency, availability, traffic contracts, auditability, and clear failure semantics matter.
 
-Modern clients increasingly expect HTTP/3 support, while production platforms still need compatibility with mixed client and backend environments. Spooky bridges that gap by:
+Spooky is not just a proxy binary. It is an operator-facing traffic layer for teams that want one place to understand, control, and protect critical API traffic.
 
-- Terminating QUIC connections with TLS 1.3
-- Running HTTP/3 as the primary data-plane ingress with a bootstrap HTTP/1.1 and HTTP/2 ingress path
-- Converting canonical request flow into scheme-driven upstream HTTP/1.1 or HTTP/2 execution
-- Load balancing across backend pools with health checks
-- Supporting path and host-based routing
-- Enforcing bounded request/response memory with deterministic overload failures
+## Why Spooky
 
+- **Modern edge ingress**: native HTTP/3 over QUIC with a bootstrap HTTP/1.1 and HTTP/2 compatibility path.
+- **Clear traffic control**: routing, load balancing, admission, quota, overload protection, retries, hedging, and circuit breaking are explicit runtime concerns.
+- **Operator visibility**: metrics, logs, traces, control-plane views, audit events, dashboards, alerts, and SLO artifacts ship as one observability package.
+- **Backend compatibility**: adopt modern client ingress without rewriting existing backend services.
+
+## Built For Operators
+
+Spooky is built for the moments when traffic is no longer normal:
+
+- when latency climbs and teams need to know whether the issue is overload, quota, auth, or backend failure
+- when backends are unstable and operators need the edge to absorb pressure instead of amplifying it
+- when policy decisions need to be explicit, observable, and auditable
+- when platform teams want production-grade dashboards, alerts, and runtime visibility without assembling everything from scratch
+
+## How Spooky Works
+
+Spooky gives teams one runtime to receive traffic, make explicit decisions, protect backends, and surface operator-usable outcomes.
+
+![Spooky request lifecycle](assets/image.png)
+
+- accepts modern client traffic at the edge
+- routes requests by host and path
+- evaluates auth, quota, admission, and overload policy separately
+- executes upstream traffic through existing HTTP/1.1 or HTTP/2 backends
+- protects backend pools with health-aware resilience controls
+- exposes clear operational signals across metrics, logs, traces, control API, and audit
+
+## Core Capabilities
+
+### Edge And Routing
+
+- HTTP/3 and QUIC ingress
+- bootstrap HTTP/1.1 and HTTP/2 compatibility ingress
+- path and host-based routing
+- deterministic route resolution
+
+### Load Balancing And Backend Management
+
+- random
+- round-robin
+- consistent-hash
+- least-connections
+- latency-aware
+- sticky-cid
+- active health checks with automatic removal and recovery
+
+### Resilience And Policy
+
+- admission control and overload shedding
+- quota and advanced rate-limit policy pipeline
+- retries and hedging
+- circuit breaking
+- bounded request and response memory behavior
+
+### Observability And Operations
+
+- Prometheus metrics
+- structured logs
+- OTLP tracing
+- control API runtime introspection
+- audit events
+- shipped Grafana dashboards, recording rules, alerts, and SLO definitions
+
+## Where It Fits
+
+Spooky is a strong fit for:
+
+- fintech and payment infrastructure
+- banking and wallet APIs
+- trading and market-data edges
+- B2B API platforms with strict traffic contracts
+- internal platform teams that want modern ingress with stronger operational clarity
 
 ## Quick Start
 
 ```bash
-# Build release binary
 cargo build --release
-
-# Generate self-signed certificates
 make certs-selfsigned
-
-# Run with default configuration
 ./target/release/spooky --config config/config.development.yaml
+```
 
-# Test with HTTP/3 client
+Then test the edge with an HTTP/3 request:
+
+```bash
 curl --http3-only -k \
   --resolve proxy.spooky.local:9889:127.0.0.1 \
   https://proxy.spooky.local:9889/api/health
 ```
 
-## System Requirements
-
-- **Rust**: 1.85 or later (edition 2024)
-- **OS**: Linux
-- **Permissions**: Root is only required for privileged ports (`<1024`); non-privileged ports run unprivileged
-- **Network**: UDP port access for QUIC traffic
-- **Memory**: 256MB minimum, 1GB recommended
-
-### Build Dependencies
-
-```bash
-# Ubuntu/Debian
-sudo apt install cmake build-essential pkg-config
-
-# macOS
-brew install cmake pkg-config
-```
-
 ## Configuration
 
-Spooky uses YAML configuration with validation at startup. See [configuration reference](docs/configuration/reference.md) for complete documentation.
+Spooky uses validated YAML configuration.
 
-Repository config templates:
+Useful starting points:
 
-- `config/config.production.yaml`: secure production baseline (`upstream_tls.verify_certificates=true`)
-- `config/config.development.yaml`: explicit local-development profile (allows insecure upstream TLS)
-- `config/config.sample.yaml`: full reference sample with all major sections
+- `config/config.production.yaml`: production-oriented baseline
+- `config/config.development.yaml`: local development profile
+- `config/config.sample.yaml`: broader reference sample
 
-### Ingress Compatibility Posture
+Recommended docs:
 
-Spooky uses **HTTP/3 over QUIC** as its native ingress data plane and also runs a **TLS bootstrap ingress** for HTTP/1.1 and HTTP/2 clients.
+- [Configuration Reference](docs/configuration/reference.md)
+- [Examples](docs/configuration/examples.md)
+- [TLS Configuration](docs/configuration/tls.md)
+- [Distributed Quota Operations](docs/operations/distributed-quota.md)
 
-- Native path: HTTP/3 over QUIC on UDP.
-- Compatibility path: HTTP/1.1 + HTTP/2 over TLS on TCP for modern browser compatibility and `Alt-Svc` discovery/upgrade to HTTP/3.
-- External frontends (CDN/LB/reverse proxy) are still supported when you want additional edge policy, WAF, or protocol mediation.
-
-### Minimal Example
+Minimal example:
 
 ```yaml
 version: 1
@@ -95,171 +141,89 @@ upstream:
           path: "/health"
           interval: 5000
 
-  default_backend:
-    load_balancing:
-      type: "random"
-    route:
-      path_prefix: "/"
-    backends:
-      - id: "default-1"
-        address: "127.0.0.1:8080"
-        weight: 100
-        health_check:
-          path: "/health"
-          interval: 5000
-
 log:
   level: info
 ```
 
-### Key Configuration Features
-
-**Upstream Pools**: Define multiple named upstream groups. Each pool configures its own routing rules and load balancing strategy independently.
-
-**Routing**: Route requests based on path prefix and hostname. The most specific match (longest prefix) wins.
-
-**Load Balancing**: Per-upstream pool strategies: random, round-robin, consistent-hash, least-connections, latency-aware, and sticky-cid.
-
-**Health Checks**: Automatic backend health monitoring with configurable intervals, timeouts, and thresholds.
-
 ## Architecture
 
-Spooky uses a modular architecture with clear separation of concerns:
+Primary code areas:
 
-```mermaid
-flowchart LR
-    client["HTTP/3<br/>Clients"] -->|UDP/QUIC + TLS| ingress
+- `crates/edge`: ingress, admission, observability, control API
+- `crates/bridge`: protocol conversion
+- `crates/transport`: upstream connection management
+- `crates/lb`: balancing and backend selection
+- `crates/config`: configuration parsing, normalization, and validation
 
-    subgraph edge["Spooky Edge Runtime"]
-        direction TB
-        ingress["Ingress Sockets<br/>SO_REUSEPORT x N"]
+## Production And Operations
 
-        subgraph data_plane["Data Plane"]
-            direction TB
-            workers["Worker Threads<br/>QUIC + HTTP/3 Stream Processing"] --> route["Route Index (Trie)<br/>Deterministic Tie-Breaking"]
-            route --> admission["Admission Control<br/>Global -> Upstream -> Backend"]
-            admission --> bridge["H3 -> H2 Bridge<br/>Copy-Light Header Path"]
-            bridge --> pool["HTTP/2 Pool<br/>Connection Reuse + Bounded Inflight"]
-        end
+Spooky is intended for controlled, production-minded deployment:
 
-        subgraph control_plane["Control Plane"]
-            direction TB
-            health["Active Health Checks"]
-            metrics["Metrics Endpoint<br/>Route SLOs (P50/P95/P99)"]
-        end
-    end
+- Linux runtime
+- UDP access for QUIC ingress
+- TLS certificate management
+- monitoring and alerting in place before rollout
 
-    ingress --> workers
-    pool -->|HTTP/2| backend["Backend Servers"]
-    health -. health state .-> pool
-    workers -. route/outcome metrics .-> metrics
-```
-
-### Components
-
-- **Edge** (`crates/edge`): QUIC termination, HTTP/3 session management
-- **Bridge** (`crates/bridge`): HTTP/3 to HTTP/2 protocol conversion
-- **Transport** (`crates/transport`): HTTP/2 connection pooling
-- **Load Balancer** (`crates/lb`): Backend selection algorithms and health tracking
-- **Config** (`crates/config`): Configuration parsing and validation
-
-## Features
-
-**Core Functionality**
-- HTTP/3 and QUIC (RFC 9114, RFC 9000)
-- TLS 1.3 with certificate chain validation
-- HTTP/2 backend connectivity
-- Streaming request/response handling with bounded queues and body caps
-- Deterministic cap-breach behavior (`413`/`503`) under pressure
-
-**Load Balancing**
-- Random distribution
-- Round-robin rotation
-- Consistent hashing (weighted virtual nodes)
-- Least-connections routing
-- Latency-aware routing (EWMA + in-flight pressure)
-- Sticky sessions via QUIC CID hashing
-- Per-upstream strategy configuration
-
-**Routing**
-- Path prefix matching
-- Host-based routing
-- Longest-match selection for overlapping routes
-
-**Health Management**
-- Active health checks with HTTP probes
-- Configurable failure thresholds and cooldown periods
-- Automatic backend removal and recovery
-
-**Observability**
-- Structured logging with multiple levels (including Spooky-themed aliases)
-- File-based log output via `log.file.enabled` and `log.file.path`
-- Backend latency tracking
-- Health transition logging
-- Optional routing decision transparency logs (`observability.routing`)
-
-## Testing
+Build dependencies:
 
 ```bash
-# Run all tests
-cargo test
+# Ubuntu/Debian
+sudo apt install cmake build-essential pkg-config
 
-# Run specific component tests
-cargo test -p spooky-config
-cargo test -p spooky-lb
-cargo test -p spooky-edge
-
-# Run integration tests
-cargo test -p spooky-edge --test lb_integration
-cargo test -p spooky-edge --test h3_bridge
-
-# Run load scenarios (burst / slow-upstream / quic-loss profile)
-make load-scenarios
+# macOS
+brew install cmake pkg-config
 ```
 
+Start here for deployment and operations:
+
+- [Getting Started](docs/getting-started/overview.md)
+- [Production Deployment](docs/deployment/production.md)
+- [Production Readiness](docs/operations/production-readiness.md)
+- [Metrics And Alerts](docs/operations/metrics-and-alerts.md)
+- [Observability Bundle](docs/operations/observability-bundle.md)
+- [Runbook](docs/operations/runbook.md)
+- [Troubleshooting](docs/troubleshooting/common-issues.md)
 
 ## Project Status
 
-**Beta.** Spooky is feature-complete for core HTTP/3 edge proxying and can be used in controlled production rollouts. It remains pre-GA, so operators should follow the deployment hardening guidance and roll out progressively.
+**Beta.** Spooky is suitable for controlled production rollouts, but it remains pre-GA and should be deployed with staged rollout, monitoring, and rollback readiness.
 
-See [release maturity](docs/release-maturity.md) for scope and GA exit criteria, and [roadmap](docs/roadmap.md) for planned improvements.
+See:
+
+- [Release Maturity](docs/release-maturity.md)
+- [Roadmap](docs/roadmap.md)
+- [Limitations](docs/reference/limitations.md)
 
 ## Documentation
 
-Start with the [docs index](docs/README.md).
+The full documentation index is at [docs/README.md](docs/README.md).
 
-Recommended entrypoints:
+Recommended entry points:
 
 - [Architecture Overview](docs/architecture/overview.md)
-- [Edge Runtime Ownership](docs/architecture/edge-runtime.md)
 - [Request Lifecycle](docs/architecture/request-lifecycle.md)
 - [Transport Boundaries](docs/architecture/transport.md)
+- [Quota Policy Contract](docs/architecture/quota-policy-contract.md)
 - [Observability Contract](docs/architecture/observability-contract.md)
-- [Configuration Reference](docs/configuration/reference.md)
-- [Control Plane](docs/operations/control-plane.md)
-- [Reload and Drain](docs/operations/reload-and-drain.md)
-- [Metrics and Alerts](docs/operations/metrics-and-alerts.md)
-- [Production Deployment](docs/deployment/production.md)
-- [Troubleshooting](docs/troubleshooting/common-issues.md)
+- [Control API Reference](docs/reference/control-api-reference.md)
+- [Feature Matrix](docs/reference/feature-matrix.md)
 
 ## Development
 
-See [contributing guide](CONTRIBUTING.md) for development setup and guidelines.
+Want to help build Spooky? See our [contribution guidelines](CONTRIBUTING.md).
+
+For a minimal development loop:
 
 ```bash
-# Development build
 cargo build
-
-# Run with debug logging
-RUST_LOG=debug cargo run -- --config config/config.development.yaml
-
-# Format code
 cargo fmt
-
-# Lint
-cargo clippy
+cargo clippy --workspace -- -D warnings
+cargo test --workspace
 ```
 
-## License
+For repository structure, testing strategy, and implementation guidance, use:
 
-GNU General Public License v3.0 (GPLv3) - see [LICENSE](LICENSE.md)
+- [Contributing Guide](CONTRIBUTING.md)
+- [Development Overview](docs/development/overview.md)
+- [Codebase Map](docs/development/codebase-map.md)
+- [Testing Strategy](docs/development/testing-strategy.md)
