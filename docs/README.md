@@ -119,66 +119,12 @@ If you are in a hurry:
 - troubleshooting: [troubleshooting/common-issues.md](troubleshooting/common-issues.md)
 - exact support surface: [reference/feature-matrix.md](reference/feature-matrix.md)
 
-### Minimal working config
+For the canonical examples and exact commands:
 
-```yaml
-version: 1
-
-listen:
-  address: "0.0.0.0"
-  port: 9889
-  tls:
-    cert: /etc/spooky/certs/fullchain.pem
-    key: /etc/spooky/certs/privkey.pem
-
-upstream:
-  default:
-    route:
-      path_prefix: "/"
-    backends:
-      - id: backend1
-        address: "127.0.0.1:8080"
-        health_check:
-          path: "/health"
-          interval: 5000
-```
-
-Backends are verified HTTPS by default. To forward to a cleartext HTTP backend, set `upstream_tls.verify_certificates: false` and be aware that a warning is logged at startup. The full schema is in [configuration/reference.md](configuration/reference.md).
-
-### Common commands
-
-**Start the proxy:**
-```bash
-spooky --config /etc/spooky/config.yaml
-```
-
-**Test an HTTP/3 connection** (requires curl built with HTTP/3 support):
-```bash
-curl --http3-only -k \
-  --resolve proxy.example.com:9889:127.0.0.1 \
-  https://proxy.example.com:9889/health
-```
-
-**Check health and readiness** (control API, default port 9902):
-```bash
-curl -k https://127.0.0.1:9902/health
-curl -k https://127.0.0.1:9902/ready
-```
-
-### Log levels
-
-Spooky accepts both its own names and the standard equivalents in `log.level` or `RUST_LOG`.
-
-| Spooky name | Standard equivalent | Verbosity |
-|---|---|---|
-| `whisper` | `trace` | Everything, including internal QUIC events |
-| `haunt` | `debug` | Per-request routing, backend selection, health transitions |
-| `spooky` | `info` | Startup, shutdown, configuration summary (default) |
-| `scream` | `warn` | Recoverable errors, degraded-mode events |
-| `poltergeist` | `error` | Fatal or unrecoverable conditions |
-| `silence` | `off` | No output |
-
-Set per-crate verbosity with `RUST_LOG` (e.g., `RUST_LOG=spooky_edge=haunt,info`). Output format is controlled by `log.format: plain | json`.
+- working config snippets: [configuration/examples.md](configuration/examples.md)
+- full config semantics: [configuration/reference.md](configuration/reference.md)
+- Control API and metrics examples: [api/overview.md](api/overview.md)
+- log levels and logging config: [configuration/reference.md](configuration/reference.md#logging-configuration)
 
 ---
 

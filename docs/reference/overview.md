@@ -2,34 +2,22 @@
 
 This section is the canonical source for exact product behavior, supported surface area, and current limits.
 
-Use this section when you need to answer:
-
-- where strict product reference lives
-- what is implemented, partial, or missing
-- what the current limits are
-- what exact configuration or API behavior means
+Use this section when you need one authoritative source for exact support, limits, configuration semantics, and operator-facing interfaces.
 
 ## Start Here
 
-- [Documentation Audit](documentation-audit.md) maps the current docs tree into the product-reference buckets and highlights legacy sections that should be consolidated.
-- [Feature Matrix](feature-matrix.md) provides the source-backed inventory of implemented, partial, and missing capabilities.
-- [Limitations](limitations.md) lists the current product boundaries directly.
-- [Configuration Reference](../configuration/reference.md) is the authoritative schema and runtime-semantics guide.
-- [TLS Setup](../configuration/tls.md) explains certificate and trust configuration.
-- [API Overview](../api/overview.md) summarizes the current operator-facing Control API and metrics endpoints.
+| Topic | Canonical page | Use when |
+| --- | --- | --- |
+| exact feature support | [Feature Matrix](feature-matrix.md) | you need to know whether a capability is done, partial, or missing |
+| hard product limits | [Limitations](limitations.md) | you need boundaries or non-goals |
+| exact config semantics | [Configuration Reference](../configuration/reference.md) | you need field shape, precedence, and runtime meaning |
+| TLS and trust config | [TLS Setup](../configuration/tls.md) | you need certificate, trust, or mTLS setup details |
+| exact control-plane interface | [Control API Reference](control-api-reference.md) | you need endpoint, role, or response semantics |
+| exact metric and label vocabulary | [Metrics Reference](metrics-reference.md) | you need exported signal names and labels |
+| reader-facing product terms | [Terminology](terminology.md) | you need canonical wording |
 
-## Use This Section For
+## Related Navigation
 
-- exact feature support: [Feature Matrix](feature-matrix.md)
-- current limits: [Limitations](limitations.md)
-- exact config semantics: [Configuration Reference](../configuration/reference.md)
-- exact control-plane interfaces: [Control API Reference](control-api-reference.md)
-- canonical metrics and labels: [Metrics Reference](metrics-reference.md)
-- canonical terminology: [Terminology](terminology.md)
-
-## What This Section Covers
-
-- exact feature support
-- exact current limits
-- exact configuration semantics
-- exact operator-facing interfaces
+- [API Overview](../api/overview.md) is the short entry point for metrics and the Control API.
+- [Operations Overview](../operations/overview.md) is the main deployment, rollout, and recovery entry point.
+- [Troubleshooting](../troubleshooting/common-issues.md) is the symptom-driven diagnosis guide.

@@ -13,27 +13,12 @@ Use the same triage order for most incidents:
 3. inspect `GET /metrics` for trend and rate
 4. inspect runtime logs and control-plane audit events for the request, actor, or generation involved
 
-Useful endpoints:
+Canonical references for the checks above:
 
-- `GET /health`
-- `GET /ready`
-- `GET /metrics`
-- `GET /admin/runtime`
-- `GET /admin/runtime/history`
-- `GET /admin/runtime/history/{generation}`
-- `POST /admin/runtime/validate`
-- `POST /admin/runtime/preview`
-- `POST /admin/runtime/activate`
-- `POST /admin/runtime/rollback`
-
-Useful signal groups:
-
-- request and latency metrics
-- overload and quota metrics
-- backend health, timeout, retry, and hedge metrics
-- TLS handshake and certificate metrics
-- control-plane, runtime generation, and watchdog metrics
-- audit events for admin actions and auth failures
+- exact admin endpoints and curl flows: [Control API Reference](../reference/control-api-reference.md)
+- exact metric names and labels: [Metrics Reference](../reference/metrics-reference.md)
+- dashboard and alert interpretation: [Observability Operator Bundle](../operations/observability-bundle.md)
+- rollout, drain, and rollback workflow: [Runbook](../operations/runbook.md) and [Reload and Drain](../operations/reload-and-drain.md)
 
 ## Symptom Index
 
@@ -475,6 +460,8 @@ Also capture:
 
 ## Related Reference
 
+- [Operations Overview](../operations/overview.md)
+- [Runbook](../operations/runbook.md)
 - [Metrics Reference](../reference/metrics-reference.md)
 - [Control API Reference](../reference/control-api-reference.md)
 - [Control Plane](../operations/control-plane.md)

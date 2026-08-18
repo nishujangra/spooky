@@ -2,13 +2,7 @@
 
 This section is the main entry point for deploying, rolling out, operating, and recovering Spooky in production.
 
-Use it to answer:
-
-- where Spooky fits well today
-- how to prepare hosts and capacity
-- how to roll out config and binary changes safely
-- how reload, drain, rollback, and restart actually work
-- where to look during an incident
+Use it to answer where Spooky fits well today, how to prepare hosts and capacity, how to roll out config and binary changes safely, and where to look during an incident.
 
 ## Start Here
 
@@ -25,6 +19,18 @@ Use it to answer:
 | Interpret visible failures and status codes | [Failure Modes](failure-modes.md) |
 | Operate distributed quota safely | [Distributed Quota](distributed-quota.md) |
 | Use the shipped dashboards, alerts, and SLO views | [Observability Operator Bundle](observability-bundle.md) |
+
+## Canonical Sources By Topic
+
+Use this page for workflow and navigation. Use the pages below for authoritative detail:
+
+| Topic | Canonical page |
+| --- | --- |
+| exact Control API endpoint behavior | [Control API Reference](../reference/control-api-reference.md) |
+| exact metric names and labels | [Metrics Reference](../reference/metrics-reference.md) |
+| exact configuration shape and runtime semantics | [Configuration Reference](../configuration/reference.md) |
+| symptom-driven incident diagnosis | [Troubleshooting](../troubleshooting/common-issues.md) |
+| runtime protection dashboards, alerts, and SLOs | [Observability Operator Bundle](observability-bundle.md) |
 
 ## Core Operating Model
 
@@ -83,3 +89,10 @@ Start with:
 - Pass `expected_generation` on activation and rollback workflows so concurrent changes fail safely.
 - Keep at least one known-good rollback target and one known-good binary available during every rollout.
 - Treat quota denials and overload shedding as separate operational signals.
+
+## Related Pages
+
+- [API Overview](../api/overview.md)
+- [Control API Reference](../reference/control-api-reference.md)
+- [Metrics Reference](../reference/metrics-reference.md)
+- [Troubleshooting](../troubleshooting/common-issues.md)
