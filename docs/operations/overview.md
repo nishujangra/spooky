@@ -1,46 +1,85 @@
 # Operations Overview
 
-This section is the main entry point for deployment, rollout, validation, observability, and day-2 operation of Spooky.
+This section is the main entry point for deploying, rolling out, operating, and recovering Spooky in production.
 
-Use this section when you need to answer:
+Use it to answer:
 
-- where to deploy Spooky
-- how to prepare a host or runtime environment
-- how to validate a rollout
-- how to observe, diagnose, and operate the system
-- where to go during an incident
+- where Spooky fits well today
+- how to prepare hosts and capacity
+- how to roll out config and binary changes safely
+- how reload, drain, rollback, and restart actually work
+- where to look during an incident
 
 ## Start Here
 
-- Ready to deploy: [Production Deployment](../deployment/production.md)
-- [Production Readiness](production-readiness.md) defines what is ready today and what still blocks a broader production claim.
-- [Production Deployment](../deployment/production.md) covers host preparation, service layout, and runtime posture.
-- [Validation](../deployment/validation.md) covers pre-production and post-change validation patterns.
-- [Migration](../deployment/migration.md) covers moving traffic from an existing proxy stack.
-- [Distributed Quota](distributed-quota.md) covers policy examples, Redis backend rollout, degraded-mode behavior, and operator interpretation.
-- [Observability Operator Bundle](observability-bundle.md) covers the shipped dashboards, alerts, SLO package, and cross-surface incident workflow.
-- [Runbook](runbook.md) is the incident and maintenance quick-reference.
-- [Sizing And Capacity](sizing-and-capacity.md) covers the main host and concurrency inputs that shape safe operation.
-- [Host Tuning](host-tuning.md) groups host-level guidance.
-- [Deployment Patterns](deployment-patterns.md) explains where Spooky fits best today.
-- [Failure Modes](failure-modes.md) documents the major operator-visible failure classes.
-- [Troubleshooting](../troubleshooting/common-issues.md) covers common failure signatures and operator checks.
+| Goal | Document |
+|---|---|
+| Decide whether the current release is ready for your environment | [Production Readiness](production-readiness.md) |
+| Prepare a production host and service layout | [Production Deployment](../deployment/production.md) |
+| Understand safe activation, restart-required changes, drain, and rollback | [Reload and Drain](reload-and-drain.md) |
+| Plan host sizing and concurrency limits | [Sizing And Capacity](sizing-and-capacity.md) |
+| Tune the host OS and runtime environment | [Host Tuning](host-tuning.md) |
+| Choose a rollout shape | [Deployment Patterns](deployment-patterns.md) |
+| Validate before and after a change | [Validation](../deployment/validation.md) |
+| Troubleshoot incidents quickly | [Runbook](runbook.md) |
+| Interpret visible failures and status codes | [Failure Modes](failure-modes.md) |
+| Operate distributed quota safely | [Distributed Quota](distributed-quota.md) |
+| Use the shipped dashboards, alerts, and SLO views | [Observability Operator Bundle](observability-bundle.md) |
 
-## Common Paths
+## Core Operating Model
 
-- Deploy a new environment: [Production Deployment](../deployment/production.md)
-- Check if a rollout posture is safe: [Production Readiness](production-readiness.md)
-- Validate before or after a change: [Validation](../deployment/validation.md)
-- Handle incidents and maintenance: [Runbook](runbook.md)
-- Investigate failures: [Failure Modes](failure-modes.md) and [Troubleshooting](../troubleshooting/common-issues.md)
-- Understand dashboards and alerts: [Observability Operator Bundle](observability-bundle.md)
+Spooky has three distinct change paths:
 
-## What This Section Covers
+1. Runtime-managed config changes
+   Use the Control API staged flow: `validate`, `preview`, then `activate`. This is the normal path for routes, upstreams, backends, timeouts, resilience policy, and other live-reloadable runtime state.
+2. Certificate-only changes
+   Use `POST /admin/runtime/reload-certs`. This updates listener TLS material for new handshakes only.
+3. Restart-required changes
+   Use a drain-aware restart or instance replacement workflow when the change affects startup-owned state such as listener bind changes, control-plane bind changes, tracing startup settings, or logging sink configuration.
 
-- rollout posture
-- deployment patterns
-- validation workflow
-- migration planning
-- operational debugging
-- incident response
-- capacity and host planning
+Do not treat all changes as restarts, and do not treat all changes as live-reloadable.
+
+## Common Workflows
+
+### Deploy a new environment
+
+Start with:
+
+- [Production Readiness](production-readiness.md)
+- [Production Deployment](../deployment/production.md)
+- [Host Tuning](host-tuning.md)
+- [Sizing And Capacity](sizing-and-capacity.md)
+
+### Roll out a runtime config change
+
+Start with:
+
+- [Validation](../deployment/validation.md)
+- [Reload and Drain](reload-and-drain.md)
+- [Runbook](runbook.md)
+
+### Roll out a binary upgrade or restart-required config change
+
+Start with:
+
+- [Deployment Patterns](deployment-patterns.md)
+- [Production Deployment](../deployment/production.md)
+- [Reload and Drain](reload-and-drain.md)
+
+### Investigate production failures
+
+Start with:
+
+- [Runbook](runbook.md)
+- [Failure Modes](failure-modes.md)
+- [Observability Operator Bundle](observability-bundle.md)
+- [Troubleshooting](../troubleshooting/common-issues.md)
+
+## Operator Rules
+
+- Keep the Control API on loopback or a strongly isolated admin network.
+- Use `--http1.1` for all `curl` calls to the Control API.
+- Prefer `validate` and `activate` over the legacy `reload` shortcut in production automation.
+- Pass `expected_generation` on activation and rollback workflows so concurrent changes fail safely.
+- Keep at least one known-good rollback target and one known-good binary available during every rollout.
+- Treat quota denials and overload shedding as separate operational signals.
