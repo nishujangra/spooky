@@ -2,13 +2,23 @@
 
 This document explains the operator-facing control-plane services in Spooky and the boundaries each service is allowed to know about runtime state.
 
+## Operator Fast Path
+
+Use the control plane to answer four questions quickly:
+
+1. what runtime generation is active now
+2. what changed recently
+3. what is the current backend, quota, or watchdog state
+4. can an operator action proceed safely
+
 ## Services
 
-The control plane consists of three main service surfaces:
+The control plane consists of four main operator-facing surfaces:
 
 - control API
 - metrics endpoint
 - watchdog service
+- audit stream
 
 These services are not listener sidecars anymore. They are explicit services built from canonical runtime views and shared services.
 
@@ -20,7 +30,8 @@ Its responsibilities are:
 
 - health and readiness checks
 - runtime snapshot rendering
-- runtime reload
+- staged runtime operations such as validate, preview, activate, and rollback
+- legacy runtime reload
 - listener certificate reload
 - controlled restart requests
 
@@ -152,6 +163,26 @@ The control API should read from:
 
 It should not depend on listener-local internals that only exist because a particular ingress path happens to hold them.
 
+### Runtime introspection contract
+
+For operators, the highest-value reads are:
+
+- `GET /admin/runtime`
+- `GET /admin/runtime/history`
+- `GET /admin/runtime/history/{generation}`
+
+Those views should provide:
+
+- active generation
+- runtime history and rollback candidates
+- backend health summary
+- quota backend health summary
+- watchdog state
+- observability contract version
+- audit schema version
+- dashboard and documentation references
+- recent admin actions
+
 ## Metrics Endpoint
 
 The metrics endpoint is the Prometheus scrape surface.
@@ -170,6 +201,11 @@ Its responsibilities are:
 - metrics are rendered from the canonical shared metrics registry
 
 The metrics endpoint is intentionally simpler than the control API. It is a read-only scrape surface, not an administration interface.
+
+Operator rule:
+
+- use metrics for trend, rate, and alerting
+- use the control API for current state and generation-aware introspection
 
 ## Watchdog Service
 
@@ -194,6 +230,19 @@ Operators should expect the watchdog to surface:
 - whether all expected workers have drained
 
 This state is surfaced through control-plane runtime views rather than by reading listener internals directly.
+
+## Audit Stream
+
+The audit stream is the control-plane history surface.
+
+Use it when you need:
+
+- actor attribution
+- authn and authz failure history
+- attempt versus result history for runtime operations
+- reasoned failure records for restart, activate, rollback, reload, or cert reload
+
+The audit stream is low-cardinality and operator-oriented. It is not a request-body or request-header log.
 
 ## Runtime View Contract
 
@@ -224,6 +273,16 @@ The runtime/control-plane views now expose:
 - recent tracked admin/runtime actions when history exists
 - dashboard definition references
 - documentation references
+
+This is what lets operators move from:
+
+- metric
+- to dashboard
+- to runtime snapshot
+- to generation history
+- to audit attribution
+
+without changing vocabulary.
 
 These references are repository asset paths, not UI URLs. Operators and automation should treat
 them as stable package identifiers that can be mapped into Grafana imports, runbooks, or internal
@@ -284,6 +343,8 @@ Operators should expect the control plane to answer questions such as:
 - is the watchdog degraded or requesting restart
 - what do backend health and placement look like
 - can a reload be applied safely
+- what observability package version and audit schema version the node is serving
+- what recent admin actions have been recorded
 
 They should not need to infer those answers indirectly from unrelated logs.
 
@@ -319,6 +380,7 @@ Do not:
 ## Related Pages
 
 - [Observability Contract](../architecture/observability-contract.md)
+- [Observability Operator Bundle](observability-bundle.md)
 - [Reload and Drain](reload-and-drain.md)
 - [Metrics and Alerts](metrics-and-alerts.md)
 - [Control API Reference](../reference/control-api-reference.md)

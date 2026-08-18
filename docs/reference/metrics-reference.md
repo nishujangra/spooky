@@ -1,12 +1,49 @@
 # Metrics Reference
 
-This page documents the major built-in Prometheus metrics families currently exposed by Spooky.
+This page documents the major built-in Prometheus metrics families exposed by Spooky and how operators should use them.
+
+## Use This Page With
+
+- [Observability Operator Bundle](../operations/observability-bundle.md) for the packaged dashboards, alerts, and SLO views
+- [Metrics and Alerts](../operations/metrics-and-alerts.md) for domain-level interpretation
+- [Control API Reference](control-api-reference.md) when you need current runtime state rather than trend
 
 ## Endpoint
 
 - method: `GET`
 - path: configurable by `observability.metrics.path`
 - default path: `/metrics`
+
+## Read Metrics In This Order
+
+When something is wrong, the fastest operator path is usually:
+
+1. request and latency families
+2. overload and quota families
+3. backend health and timeout families
+4. retry and hedge families
+5. TLS and control-plane families
+
+Metrics tell you trend and rate. The Control API tells you current runtime state.
+
+## Canonical Label Rules
+
+The most important low-cardinality labels are:
+
+- `upstream`
+- `backend`
+- `route`
+- `status_class`
+- `outcome`
+- `reason`
+- `decision`
+- `selector_dimensions`
+- `backend_mode`
+
+Operator rule:
+
+- build dashboards and alerts from canonical label values, not from prose parsing
+- keep quota, overload, auth, and generic backend failure separate
 
 ## Core Request Metrics
 
@@ -17,6 +54,11 @@ This page documents the major built-in Prometheus metrics families currently exp
 | `spooky_requests_failure` | counter | Failed requests |
 | `spooky_request_validation_rejects` | counter | Requests rejected by protocol validation |
 | `spooky_policy_denied` | counter | Requests denied by runtime method/path policy |
+| `spooky_external_auth_allowed` | counter | Requests explicitly allowed by external auth |
+| `spooky_external_auth_denied` | counter | Requests denied, challenged, or redirected by external auth |
+| `spooky_external_auth_timeout` | counter | External auth decisions that timed out |
+| `spooky_external_auth_error` | counter | External auth transport or execution failures |
+| `spooky_request_rate_limited` | counter | Requests rejected by scoped request rate limits |
 
 ## Request Breakdown Metrics
 
@@ -37,6 +79,8 @@ Use these for questions like:
 - which upstream is producing 5xx responses?
 - which backend is taking most of the failed traffic?
 - are failures mostly timeouts, backend errors, or overload shedding?
+
+These are the primary traffic families behind the packaged dashboards and recording rules.
 
 ## Latency Metrics
 
@@ -81,6 +125,32 @@ Practical note:
 | `spooky_inflight_wait_admit_total{scope=...}` | counter | Successful admissions after micro-wait |
 | `spooky_brownout_active` | gauge | Brownout mode active state |
 | `spooky_circuit_breaker_rejected_total` | counter | Requests rejected by open circuits |
+
+Interpretation rules:
+
+- `spooky_overload_shed_by_reason_total` is for overload self-protection
+- `spooky_request_rate_limited` is for scoped rate-limit enforcement
+- neither of those is the quota contract signal
+
+## Quota Metrics
+
+| Metric | Type | Meaning |
+| --- | --- | --- |
+| `spooky_quota_policy_outcomes_total{policy,decision,reason,selector_dimensions,backend_mode}` | counter | Quota outcomes grouped by matched policy, decision, canonical reason, selector dimensions, and backend mode |
+| `spooky_quota_backend_health_total{backend_mode,reason}` | counter | Quota backend health and error observations |
+
+Interpretation rules:
+
+- `decision` answers whether quota allowed, denied, failed open, or otherwise changed request handling
+- `reason` answers why the quota result happened
+- `selector_dimensions` tells you which identity dimensions were part of the matched policy
+- `backend_mode` tells you whether the decision came from Redis, local fallback, or another configured enforcement mode
+
+Use these to separate:
+
+- contract exhaustion
+- quota backend degradation
+- fail-open versus fail-closed behavior
 
 ## Connection And Ingress Metrics
 
@@ -175,11 +245,24 @@ last-known-good keys.
 
 | Metric | Type | Meaning |
 | --- | --- | --- |
+| `spooky_runtime_validation_attempts_total` | counter | Staged validation requests accepted by the control plane |
+| `spooky_runtime_preview_attempts_total` | counter | Staged preview requests accepted by the control plane |
+| `spooky_runtime_activation_total{result,reason}` | counter | Runtime activation outcomes grouped by result and canonical reason |
+| `spooky_runtime_rollback_total{result,reason}` | counter | Runtime rollback outcomes grouped by result and canonical reason |
+| `spooky_runtime_rejections_total{reason}` | counter | Runtime activation or rollback rejections grouped by canonical operator reason |
+| `spooky_runtime_active_generation` | gauge | Current active runtime generation identifier |
+| `spooky_runtime_history_depth` | gauge | Number of retained runtime history entries visible to the active generation |
 | `spooky_control_api_connection_limit_drops` | counter | Control API connections dropped by limiter |
 | `spooky_watchdog_restart_requests` | counter | Watchdog restart requests |
 | `spooky_watchdog_restart_hooks` | counter | Restart hooks executed |
 | `spooky_watchdog_degraded_windows` | counter | Degraded watchdog windows |
 | `spooky_runtime_panics` | counter | Observed runtime panics |
+
+Use these when:
+
+- activation, rollback, or restart workflows are misbehaving
+- the active generation may differ across nodes
+- watchdog activity might be driving drain or restart behavior
 
 ## Golden Signals To Watch First
 
@@ -192,6 +275,8 @@ last-known-good keys.
 - active connections
 - request buffered bytes
 - downstream handshake failures
+- quota policy outcomes and quota backend health when 429s or fail-open or fail-closed behavior rises
+- runtime activation, runtime rollback, and runtime rejection families when control-plane workflows are involved
 
 ## First Alerts To Add
 
@@ -204,7 +289,23 @@ last-known-good keys.
 - unexpectedly high `spooky_request_buffered_bytes`
 - any sustained `spooky_runtime_panics`
 
+## Metrics To Control API Workflow
+
+Use this fast path when the metrics tell you the class of problem but not the live state:
+
+| Metric family | Next control-plane read |
+|---|---|
+| `spooky_quota_policy_outcomes_total` | `GET /admin/runtime` |
+| `spooky_quota_backend_health_total` | `GET /admin/runtime` |
+| `spooky_runtime_activation_total` | `GET /admin/runtime/history` |
+| `spooky_runtime_rollback_total` | `GET /admin/runtime/history` |
+| `spooky_runtime_rejections_total` | `GET /admin/runtime/history` |
+| `spooky_watchdog_*` or `spooky_runtime_panics` | `GET /admin/runtime` |
+| `spooky_downstream_tls_*` | `GET /admin/runtime` |
+
 ## Related Pages
 
 - [Control API Reference](control-api-reference.md)
+- [Observability Operator Bundle](../operations/observability-bundle.md)
+- [Metrics and Alerts](../operations/metrics-and-alerts.md)
 - [Operations Runbook](../operations/runbook.md)

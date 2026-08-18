@@ -2,6 +2,19 @@
 
 This page documents the current operator-facing control-plane endpoints and their intended use.
 
+## Open These First
+
+Use this table when you need the fastest runtime-introspection path:
+
+| Need | Endpoint |
+|---|---|
+| current runtime state, backend health, quota backend state, watchdog state, observability package metadata | `GET /admin/runtime` |
+| retained generations, rollback candidates, and recent runtime operations | `GET /admin/runtime/history` |
+| one generation's retained record and related entries | `GET /admin/runtime/history/{generation}` |
+| check whether a candidate config is valid and compatible | `POST /admin/runtime/validate` |
+| dry-run a change and record it in history | `POST /admin/runtime/preview` |
+| commit a compatible runtime-managed change | `POST /admin/runtime/activate` |
+
 ## Scope
 
 The control API is a privileged admin surface. It should be treated as operator-only infrastructure, not as a public application endpoint.
@@ -244,12 +257,27 @@ Typical contents include:
 - key counters
 - admission state
 - backend health summary
+- quota backend health summary
+- observability package metadata
+- recent admin actions when available
+- dashboard and documentation references for the shipped operator bundle
 
 Expected use:
 
 - debugging
 - rollout validation
 - incident response
+
+The `observability` block is the packaged runtime-introspection entry point for operators. The high-signal fields are:
+
+- `contract_version`
+- `audit_schema_version`
+- `current_generation`
+- `dashboard_packages`
+- `documentation`
+- `backend_health_summary`
+- `quota_backend_health_summary`
+- `recent_admin_actions`
 
 ### `POST /admin/runtime/validate`
 
@@ -379,6 +407,7 @@ Expected use:
 - choosing a safe rollback target
 - auditing who changed runtime config, when, and from which config source
 - diagnosing why a staged activation never committed
+- correlating runtime operations with audit and observability views
 
 Minimum role:
 
@@ -485,12 +514,67 @@ Minimum role:
 
 - `admin`
 
+## Audit Configuration And Event Shape
+
+The control API audit stream is the operator history surface for admin-plane actions.
+
+Recommended production posture:
+
+- enable audit
+- keep it separate from request-path logs
+- use JSON output
+- retain it on a protected sink
+
+Example:
+
+```yaml
+observability:
+  control_api:
+    audit:
+      enabled: true
+      format: json
+      sink: log
+```
+
+Current audit schema version:
+
+- `v1`
+
+The stable top-level event fields are:
+
+- `schema_version`
+- `event_id`
+- `event_type`
+- `time_unix_ms`
+- `request_id`
+- `trace_id`
+- `span_id`
+- `listener`
+- `actor`
+- `action`
+- `target`
+- `generation`
+- `result`
+- `reason`
+- `failure_class`
+- `peer_addr`
+- `authn`
+
+Use audit when you need:
+
+- actor attribution
+- authn and authz failure history on the admin plane
+- attempt versus result correlation for validate, preview, activate, rollback, reload, restart, or cert reload
+- a reasoned record of why a control-plane action failed or was denied
+
 ## Operator Notes
 
 - use cert reload for cert-only changes
 - use `validate` (or `preview`) then `activate` for backend, policy, timeout, or routing changes that don't require rebinding listeners — `activate` reports the diff and classifies failures, unlike the legacy `/reload`
 - pass `expected_generation` on `activate` and `rollback` so a concurrent change fails with `409` instead of silently overwriting
 - check `GET /admin/runtime/history` for a target with `rollback_candidate: true` before calling `rollback`
+- use `GET /admin/runtime` when metrics or dashboards show trend but you need the current backend, quota, watchdog, or observability-package state
+- use audit for actor attribution and attempt versus result history
 - use drain-and-restart when listener addresses or control API/metrics bind must change
 - keep rollback available before using restart-triggering control-plane actions in production
 - all curl invocations must use `--http1.1` — the control API does not support HTTP/2

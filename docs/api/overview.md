@@ -23,12 +23,13 @@ Core options:
 Spooky exposes two main operator-facing HTTP surfaces when configured:
 
 - a Prometheus metrics endpoint
-- a control API for liveness, readiness, runtime visibility, full config reload, cert reload, and restart actions
+- a control API for liveness, readiness, runtime visibility, staged activation, rollback, cert reload, and restart actions
 
 Use:
 
 - [Metrics Reference](../reference/metrics-reference.md) for current metric families and first-alert guidance
 - [Control API Reference](../reference/control-api-reference.md) for current endpoint behavior and security posture
+- [Observability Operator Bundle](../operations/observability-bundle.md) for the packaged dashboards, alerts, and control-plane correlation workflow
 
 ## Configuration Surface
 
@@ -57,6 +58,7 @@ The control API applies configuration through a file-reload model, not a granula
 
 - [Metrics Reference](../reference/metrics-reference.md)
 - [Control API Reference](../reference/control-api-reference.md)
+- [Observability Operator Bundle](../operations/observability-bundle.md)
 - [Operations Runbook](../operations/runbook.md)
 
 ## Configuration Validation

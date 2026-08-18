@@ -22,6 +22,19 @@ The canonical observability vocabulary still lives in
 and `crates/edge/src/observability/mod.rs`. This page describes the shipped
 operator experience built on top of that contract.
 
+## Open This First
+
+Use this table when you need a fast starting point during an incident:
+
+| Symptom | First dashboard | First runtime view | Why |
+|---|---|---|---|
+| customer-visible 5xx or latency regression | `edge-traffic.json` | `GET /admin/runtime` | start broad, then localize by upstream or backend |
+| rising 429s or policy denials | `admission-overload.json` | `GET /admin/runtime` | separates quota, overload, auth, and rate-limit outcomes |
+| rising backend timeouts or backend 5xx concentration | `backend-health.json` | `GET /admin/runtime` | ties request failures to backend lifecycle and DNS state |
+| retry or hedge growth | `retries-hedges.json` | `GET /admin/runtime` | shows whether resilience is helping or amplifying failure |
+| handshake or certificate trouble | `tls-certificates.json` | `GET /admin/runtime` | separates downstream TLS, upstream TLS, and cert expiry |
+| activation, rollback, or restart trouble | `control-plane.json` | `GET /admin/runtime/history` | shows runtime generation state and recent control-plane activity |
+
 ## Shipped Package
 
 The current package is made of four layers:
@@ -126,6 +139,7 @@ Operator intent:
 
 - this is the entry dashboard for customer-visible traffic symptoms
 - use it to decide whether the problem is broad, upstream-localized, or backend-localized before opening specialized dashboards
+- from here, the most common next move is either `backend-health.json` for timeout-heavy failures or `admission-overload.json` for 503s that might be self-protection
 
 ### `admission-overload.json`
 
@@ -161,6 +175,7 @@ Operator intent:
 - preserve the runtime boundary between overload control and policy-contract failure
 - do not interpret quota denial as overload
 - do not interpret auth unavailability as quota exhaustion
+- if quota-backend degradation is visible here, confirm runtime state in `GET /admin/runtime` before changing policy
 
 ### `backend-health.json`
 
@@ -195,6 +210,7 @@ Operator intent:
 
 - separate active health probes from passive request-path failures
 - show when DNS churn or stale resolver state is the real cause of backend instability
+- if this dashboard shows churn or degraded health while traffic is failing, the next control-plane read should usually be `GET /admin/runtime`
 
 ### `retries-hedges.json`
 
@@ -227,6 +243,7 @@ Operator intent:
 
 - distinguish resilience behavior that is helping from resilience behavior that is amplifying failure
 - read retry growth and hedge waste together with backend timeout pressure
+- if hedge growth is high but user-visible latency is still rising, treat it as backend stress rather than success
 
 ### `tls-certificates.json`
 
@@ -258,6 +275,7 @@ Operator intent:
 
 - separate downstream handshake problems from upstream TLS request-path failures
 - make certificate expiry and unexpected selection behavior visible before client impact broadens
+- after a certificate change, confirm both the dashboard and the runtime snapshot before expanding rollout
 
 ### `control-plane.json`
 
@@ -290,6 +308,40 @@ Operator intent:
 
 - this is the admin-plane dashboard, not a traffic dashboard
 - use it to correlate runtime operations with emitted audit events and to verify whether the control plane is healthy enough to support incident response
+
+## Runtime Introspection Entry Points
+
+The control plane is part of the observability bundle, not a separate concern.
+
+Use these endpoints as the runtime-introspection entry points:
+
+- `GET /admin/runtime`
+  Use this for current runtime state, observability package metadata, backend health summary, quota backend health summary, watchdog state, and recent admin actions.
+- `GET /admin/runtime/history`
+  Use this for retained generations, activation history, rollback candidates, and generation-scoped operator history.
+- `GET /admin/runtime/history/{generation}`
+  Use this when one generation needs focused review during rollback or activation debugging.
+
+When dashboards show trend but not current state, these are the next calls to make.
+
+## Audit As The Operator History Surface
+
+The audit stream is the control-plane event history for:
+
+- authentication and authorization outcomes
+- validate, preview, activate, rollback, reload, restart, and cert reload attempts
+- attempt versus result correlation
+- actor attribution and peer attribution
+
+The current audit schema version is `v1`, which matches the code-defined `ADMIN_AUDIT_SCHEMA_VERSION`.
+
+Operators should treat audit as:
+
+- the source of truth for who initiated a control-plane action
+- the source of truth for whether the action succeeded, was denied, or failed
+- the place to verify `requested_by`, actor roles, authn mechanisms, generation movement, and canonical reason or failure class
+
+Metrics show rate and trend. Audit shows action sequence and attribution.
 
 ## Alert Severity And Runbook Mapping
 
@@ -449,6 +501,15 @@ Look for:
 The main runtime entry points are documented in
 [Control Plane](control-plane.md).
 
+When the runtime snapshot is open, the high-signal fields to inspect first are:
+
+- `observability.contract_version`
+- `observability.audit_schema_version`
+- `observability.current_generation`
+- `observability.backend_health_summary`
+- `observability.quota_backend_health_summary`
+- `observability.recent_admin_actions`
+
 ### Dashboard to logs and traces
 
 Use logs and traces when the packaged metrics explain the class of failure but
@@ -474,6 +535,21 @@ Use the audit stream when the incident involves:
 Audit is the source of truth for control-plane action history. Metrics and
 dashboards show rate and trend; audit shows who did what, against which target,
 with which generation and result.
+
+### Metrics to audit
+
+Move directly from metrics to audit when:
+
+- control-plane errors or restart requests rise
+- runtime activation or rollback outcomes change unexpectedly
+- auth failures are clearly on the admin plane rather than the request path
+
+Typical sequence:
+
+1. identify the metric family and time window
+2. open `control-plane.json`
+3. read `GET /admin/runtime` or `GET /admin/runtime/history`
+4. use audit events for actor, action, and result attribution
 
 ## Incident Workflows
 
