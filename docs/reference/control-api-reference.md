@@ -32,6 +32,52 @@ Use this table when you need the fastest runtime-introspection path:
 | `/admin/runtime/reload-certs` | `POST` | `operator` | reload listener certificate material |
 | `/admin/runtime/restart` | `POST` | `admin` | request controlled restart through the watchdog |
 
+## Common Control API Flows
+
+### Read Current Runtime State
+
+```bash
+curl -k --http1.1 \
+  -H "Authorization: Bearer <token>" \
+  https://127.0.0.1:9902/admin/runtime
+```
+
+### Validate, Preview, and Activate a Candidate
+
+```bash
+curl -k --http1.1 -X POST \
+  -H "Authorization: Bearer <token>" \
+  -H "content-type: application/json" \
+  https://127.0.0.1:9902/admin/runtime/validate \
+  -d '{"config_path":"/etc/spooky/candidate.yaml","requested_by":"ops","reason":"preflight"}'
+
+curl -k --http1.1 -X POST \
+  -H "Authorization: Bearer <token>" \
+  -H "content-type: application/json" \
+  https://127.0.0.1:9902/admin/runtime/preview \
+  -d '{"config_path":"/etc/spooky/candidate.yaml","requested_by":"ops","reason":"preview"}'
+
+curl -k --http1.1 -X POST \
+  -H "Authorization: Bearer <token>" \
+  -H "content-type: application/json" \
+  https://127.0.0.1:9902/admin/runtime/activate \
+  -d '{"config_path":"/etc/spooky/candidate.yaml","expected_generation":12,"requested_by":"ops","reason":"deploy"}'
+```
+
+### Roll Back to a Retained Generation
+
+```bash
+curl -k --http1.1 \
+  -H "Authorization: Bearer <token>" \
+  https://127.0.0.1:9902/admin/runtime/history
+
+curl -k --http1.1 -X POST \
+  -H "Authorization: Bearer <token>" \
+  -H "content-type: application/json" \
+  https://127.0.0.1:9902/admin/runtime/rollback \
+  -d '{"target_generation":11,"expected_active_generation":12,"requested_by":"ops","reason":"rollback"}'
+```
+
 ## Protocol
 
 The Control API uses **HTTP/1.1 over TLS**. HTTP/2 is not supported.
@@ -242,6 +288,28 @@ The `observability` block is the packaged runtime-introspection entry point for 
 - `quota_backend_health_summary`
 - `recent_admin_actions`
 
+Example:
+
+```json
+{
+  "generation": 12,
+  "readiness": "ready",
+  "observability": {
+    "contract_version": "v1",
+    "audit_schema_version": "v1",
+    "current_generation": 12,
+    "backend_health_summary": {
+      "healthy": 7,
+      "unhealthy": 1
+    },
+    "quota_backend_health_summary": {
+      "backend_mode": "redis",
+      "availability": "available"
+    }
+  }
+}
+```
+
 ### `POST /admin/runtime/validate`
 
 Purpose:
@@ -260,6 +328,15 @@ Expected use:
 Minimum role:
 
 - `operator`
+
+Example:
+
+```bash
+curl -k --http1.1 -X POST https://127.0.0.1:9902/admin/runtime/validate \
+  -H "Authorization: Bearer <token>" \
+  -H "content-type: application/json" \
+  -d '{"config_path":"/etc/spooky/candidate.yaml","requested_by":"ops","reason":"preflight"}'
+```
 
 ### `POST /admin/runtime/preview`
 
@@ -300,6 +377,15 @@ Expected use:
 Minimum role:
 
 - `operator`
+
+Example:
+
+```bash
+curl -k --http1.1 -X POST https://127.0.0.1:9902/admin/runtime/activate \
+  -H "Authorization: Bearer <token>" \
+  -H "content-type: application/json" \
+  -d '{"config_path":"/etc/spooky/candidate.yaml","expected_generation":12,"requested_by":"ops","reason":"deploy"}'
+```
 
 ### `POST /admin/runtime/rollback`
 
@@ -375,6 +461,14 @@ Expected use:
 Minimum role:
 
 - `viewer`
+
+Example:
+
+```bash
+curl -k --http1.1 \
+  -H "Authorization: Bearer <token>" \
+  https://127.0.0.1:9902/admin/runtime/history
+```
 
 ### `GET /admin/runtime/history/{generation}`
 

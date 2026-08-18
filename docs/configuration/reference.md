@@ -156,6 +156,80 @@ log:
 | `observability` | No | Metrics, control API, tracing, and related surfaces |
 | `security` | No | Privilege-drop behavior |
 
+## Common Configuration Patterns
+
+Use these snippets as starting points before moving to the field-by-field sections below.
+
+### Pattern Comparison
+
+| Goal | Recommended shape | Why |
+| --- | --- | --- |
+| one public listener and one simple upstream | top-level `listen` plus one `upstream` | smallest production-capable shape |
+| multiple listener addresses or identities | `listeners[]` | explicit multi-listener runtime model |
+| cleartext backend for local or internal services | `http://host[:port]` backend address | avoids accidentally opting into HTTPS defaults |
+| private upstream trust roots | global `upstream_tls` or per-upstream `tls` override | keeps verification enabled while using private CA material |
+| contract-style request limiting | `resilience.quota` | keeps quota separate from scoped rate limiting and overload |
+
+### Minimal Public Edge
+
+```yaml
+version: 1
+
+listen:
+  address: "0.0.0.0"
+  port: 9889
+  tls:
+    cert: "/etc/spooky/certs/fullchain.pem"
+    key: "/etc/spooky/certs/privkey.pem"
+
+upstream:
+  app:
+    route:
+      path_prefix: "/"
+    backends:
+      - id: "app-1"
+        address: "https://app.internal.example:8443"
+```
+
+### Local Development With Cleartext Backend
+
+```yaml
+version: 1
+
+listen:
+  address: "127.0.0.1"
+  port: 9889
+  tls:
+    cert: "certs/localhost.crt"
+    key: "certs/localhost.key"
+
+upstream:
+  local_app:
+    route:
+      path_prefix: "/"
+    backends:
+      - id: "app-local"
+        address: "http://127.0.0.1:8080"
+```
+
+### Private CA Upstream
+
+```yaml
+upstream_tls:
+  verify_certificates: true
+  strict_sni: true
+  ca_file: "/etc/spooky/pki/internal-ca.pem"
+
+upstream:
+  internal_api:
+    route:
+      host: "api.example.internal"
+      path_prefix: "/"
+    backends:
+      - id: "internal-api-1"
+        address: "https://api.internal.example:9443"
+```
+
 ## Common Top-Level Mistakes
 
 - configuring `listeners[]` and then expecting the top-level `listen` block to stay active at runtime
@@ -567,6 +641,11 @@ Use `listeners` instead of `listen` when you need multiple independent listeners
 
 `listeners` and `listen` share the same per-entry schema. When `listeners` is set, the top-level `listen` block is ignored for runtime listener selection and listener validation.
 
+| Shape | Use when | Runtime effect |
+| --- | --- | --- |
+| `listen` | exactly one listener is needed | one active listener definition |
+| `listeners[]` | more than one listener is needed | `listen` is ignored and the array becomes the active listener set |
+
 ```yaml
 # Single listener — use the top-level listen block (default)
 listen:
@@ -728,6 +807,15 @@ Each backend represents an upstream server that can handle requests.
 | `address` | string | Yes | - | Backend server address. Accepted forms: `host:port`, `host` (defaults to `https://host:443`), `https://host[:port]`, `http://host[:port]` |
 | `weight` | integer | No | `100` | Load balancing weight (higher values receive more traffic) |
 | `health_check` | object | No | - | Health check configuration. Omit to disable active health polling — backend starts and stays healthy. |
+
+#### Backend Address Forms
+
+| Address form | Interpreted as | Typical use |
+| --- | --- | --- |
+| `https://api.internal:8443` | HTTPS upstream over HTTP/2 | standard secure production upstream |
+| `http://127.0.0.1:8080` | cleartext HTTP/1.1 upstream | local development or internal cleartext service |
+| `api.internal:8443` | shorthand for HTTPS on explicit port | secure upstream with short config |
+| `api.internal` | shorthand for `https://api.internal:443` | secure upstream using default port |
 
 **Address format notes:**
 - `host:port` or `host` — shorthand, treated as `https://host:port` (port defaults to `443`)
@@ -908,6 +996,13 @@ Verification semantics:
 - IP-literal backends verify against the configured IP identity.
 - `strict_sni: false` disables only the SNI extension; verification still remains enabled unless `verify_certificates: false`.
 - `verify_certificates: false` disables upstream certificate validation entirely.
+
+#### Global vs Per-Upstream TLS Overrides
+
+| Configuration shape | Best for | Rule |
+| --- | --- | --- |
+| top-level `upstream_tls` | one trust posture for most or all HTTPS backends | applies unless an upstream overrides it |
+| `upstream.<name>.tls` | one upstream needs a different CA or verification mode | wins over `upstream_tls` for that upstream only |
 
 ### Operational Implications
 

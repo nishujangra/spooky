@@ -52,51 +52,60 @@ Clear separation of concerns across crate boundaries:
 
 ### High-Level View
 
+```mermaid
+flowchart TB
+    client_h3["HTTP/3 clients"]
+    client_bootstrap["HTTP/1.1 and HTTP/2 clients"]
+
+    subgraph spooky["Spooky edge runtime"]
+        ingress["Ingress
+        HTTP/3 over QUIC
+        bootstrap HTTP/1.1 and HTTP/2
+        TLS termination"]
+        admission["Shared request policy path
+        admission
+        auth
+        route resolution"]
+        execution["Upstream execution
+        canonical request building
+        backend selection
+        resilience"]
+        transport["Transport boundary
+        runtime-selected HTTP/1.1 or HTTP/2
+        connection reuse
+        response streaming"]
+        observability["Outcome recording
+        metrics
+        logs
+        traces
+        backend feedback"]
+    end
+
+    control["Control plane
+    runtime activation and rollback
+    health checks
+    metrics endpoint
+    Control API
+    watchdog"]
+
+    backends["Upstream backends"]
+
+    client_h3 --> ingress
+    client_bootstrap --> ingress
+    ingress --> admission
+    admission --> execution
+    execution --> transport
+    transport --> backends
+    execution --> observability
+    control -. reads and updates runtime state .-> spooky
 ```
-┌─────────────────┐
-│ HTTP/3 Clients  │
-└────────┬────────┘
-         │ QUIC/UDP
-         │ TLS 1.3
-         ▼
-┌─────────────────────────────────────────┐
-│             Spooky Edge                  │
-│                                          │
-│  ┌────────────────────────────────┐     │
-│  │  Ingress Layer                 │     │
-│  │  - HTTP/3 over QUIC            │     │
-│  │  - bootstrap HTTP/1.1 + HTTP/2 │     │
-│  │  - TLS termination             │     │
-│  └───────────┬────────────────────┘     │
-│              │                           │
-│  ┌───────────▼────────────────────┐     │
-│  │  Request Policy Path           │     │
-│  │  - Intake and admission        │     │
-│  │  - Auth and route resolution   │     │
-│  │  - Outcome classification      │     │
-│  └───────────┬────────────────────┘     │
-│              │                           │
-│  ┌───────────▼────────────────────┐     │
-│  │  Upstream Execution            │     │
-│  │  - Canonical request building  │     │
-│  │  - Backend selection           │     │
-│  │  - Health and resilience       │     │
-│  └───────────┬────────────────────┘     │
-│              │                           │
-│  ┌───────────▼────────────────────┐     │
-│  │  Transport Layer               │     │
-│  │  - Runtime-selected H1 / H2    │     │
-│  │  - Connection reuse            │     │
-│  │  - Streaming response handling │     │
-│  └───────────┬────────────────────┘     │
-└──────────────┼──────────────────────────┘
-               │ HTTP/2 or HTTP/1.1
-               ▼
-       ┌────────────────┐
-       │ Upstream       │
-       │ Backends       │
-       └────────────────┘
-```
+
+### Plane Comparison
+
+| Plane | Primary responsibility | Examples |
+| --- | --- | --- |
+| Data plane | Accept, evaluate, route, and forward requests | QUIC ingress, bootstrap ingress, admission, auth, backend selection, transport execution |
+| Control plane | Inspect, activate, protect, and observe the runtime | Control API, runtime history, metrics endpoint, watchdog, cert reload, health checks |
 
 ### Data Plane and Control Plane
 
@@ -121,6 +130,19 @@ This separation keeps operator tasks out of the hot path and makes runtime state
 ## Request Processing Pipeline
 
 Spooky has two ingress paths, but both are expected to converge on the same internal request flow as early as possible.
+
+### Request Flow At A Glance
+
+```mermaid
+flowchart LR
+    ingress["Ingress"] --> admission["Admission"]
+    admission --> auth["Auth"]
+    auth --> routing["Route and backend selection"]
+    routing --> bridge["Canonical request building"]
+    bridge --> transport["Transport execution"]
+    transport --> response["Response normalization and streaming"]
+    response --> outcome["Outcome recording and backend feedback"]
+```
 
 ### 1. Ingress
 

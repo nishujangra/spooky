@@ -25,6 +25,24 @@ Spooky exposes two main operator-facing HTTP surfaces when configured:
 - a Prometheus metrics endpoint
 - a control API for liveness, readiness, runtime visibility, staged activation, rollback, cert reload, and restart actions
 
+### Surface Comparison
+
+| Surface | Protocol | Main use | Start here |
+| --- | --- | --- | --- |
+| Metrics endpoint | HTTP `GET` | scrape, dashboarding, alerting, trend analysis | `GET /metrics` |
+| Control API | HTTP/1.1 over TLS | runtime state, validate/preview/activate, rollback, cert reload, restart | `GET /health`, `GET /ready`, `GET /admin/runtime` |
+
+### Common Operator Tasks
+
+| Task | Endpoint | Example |
+| --- | --- | --- |
+| check that the process is alive | `GET /health` | `curl -k --http1.1 https://127.0.0.1:9902/health` |
+| check that traffic should be admitted | `GET /ready` | `curl -k --http1.1 https://127.0.0.1:9902/ready` |
+| inspect the active runtime generation and health state | `GET /admin/runtime` | `curl -k --http1.1 -H "Authorization: Bearer <token>" https://127.0.0.1:9902/admin/runtime` |
+| inspect retained generations before rollback | `GET /admin/runtime/history` | `curl -k --http1.1 -H "Authorization: Bearer <token>" https://127.0.0.1:9902/admin/runtime/history` |
+| validate a config before activation | `POST /admin/runtime/validate` | `curl -k --http1.1 -X POST -H "Authorization: Bearer <token>" -H "content-type: application/json" https://127.0.0.1:9902/admin/runtime/validate -d '{"config_path":"/etc/spooky/candidate.yaml"}'` |
+| confirm Prometheus can scrape the process | `GET /metrics` | `curl -s http://127.0.0.1:9901/metrics` |
+
 Use:
 
 - [Metrics Reference](../reference/metrics-reference.md) for current metric families and first-alert guidance
@@ -53,6 +71,31 @@ The control API applies configuration through a file-reload model, not a granula
   counts, and listener bind/removal changes still require a restart
 - reloads default to the currently active runtime config source, which is the startup path until an
   alternate `config_path` is activated; a successful activation makes that file the new active source
+
+### Minimal Control API Flow
+
+```bash
+# 1. validate a candidate
+curl -k --http1.1 -X POST \
+  -H "Authorization: Bearer <token>" \
+  -H "content-type: application/json" \
+  https://127.0.0.1:9902/admin/runtime/validate \
+  -d '{"config_path":"/etc/spooky/candidate.yaml","requested_by":"ops","reason":"preflight"}'
+
+# 2. preview the same candidate and record it in history
+curl -k --http1.1 -X POST \
+  -H "Authorization: Bearer <token>" \
+  -H "content-type: application/json" \
+  https://127.0.0.1:9902/admin/runtime/preview \
+  -d '{"config_path":"/etc/spooky/candidate.yaml","requested_by":"ops","reason":"preview"}'
+
+# 3. activate the candidate
+curl -k --http1.1 -X POST \
+  -H "Authorization: Bearer <token>" \
+  -H "content-type: application/json" \
+  https://127.0.0.1:9902/admin/runtime/activate \
+  -d '{"config_path":"/etc/spooky/candidate.yaml","expected_generation":12,"requested_by":"ops","reason":"deploy"}'
+```
 
 ## Related Pages
 
