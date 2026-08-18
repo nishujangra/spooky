@@ -2,7 +2,19 @@
 
 ## Introduction
 
-Spooky is an HTTP/3 edge runtime and load balancer implemented in Rust. It terminates QUIC at the edge, runs a bootstrap HTTP/1.1 and HTTP/2 compatibility path for downstream clients that are not using native HTTP/3, and forwards upstream traffic through scheme-driven HTTP/2 or HTTP/1.1 transport without requiring backend rewrites.
+Spooky is a Rust edge runtime for API traffic. It accepts HTTP/3 over QUIC as the primary downstream path, exposes a bootstrap HTTP/1.1 and HTTP/2 compatibility path for clients that are not using native HTTP/3, applies shared policy and routing decisions, and forwards requests to upstream backends over runtime-selected HTTP/1.1 or HTTP/2 transport.
+
+## Read This Section
+
+Use this page as the architecture entry point, then go deeper where needed:
+
+| Topic | Document |
+|---|---|
+| Product flow from ingress to response | [Request Lifecycle](request-lifecycle.md) |
+| QUIC path versus bootstrap compatibility path | [Bootstrap vs QUIC](bootstrap-vs-quic.md) |
+| Backend execution and H1/H2 transport boundary | [Transport Boundary](transport.md) |
+| Backend resolution, health, and lifecycle state | [Backend Lifecycle](backend-lifecycle.md) |
+| Runtime reload and generation ownership | [Runtime Generation Model](runtime-generation.md) |
 
 ## Design Principles
 
@@ -66,15 +78,15 @@ Clear separation of concerns across crate boundaries:
 │              │                           │
 │  ┌───────────▼────────────────────┐     │
 │  │  Upstream Execution            │     │
-│  │  - H1 / H2 request building    │     │
+│  │  - Canonical request building  │     │
 │  │  - Backend selection           │     │
 │  │  - Health and resilience       │     │
 │  └───────────┬────────────────────┘     │
 │              │                           │
 │  ┌───────────▼────────────────────┐     │
 │  │  Transport Layer               │     │
-│  │  - HTTP/2 pool for HTTPS       │     │
-│  │  - HTTP/1.1 pool for HTTP      │     │
+│  │  - Runtime-selected H1 / H2    │     │
+│  │  - Connection reuse            │     │
 │  │  - Streaming response handling │     │
 │  └───────────┬────────────────────┘     │
 └──────────────┼──────────────────────────┘
@@ -88,101 +100,111 @@ Clear separation of concerns across crate boundaries:
 
 ### Data Plane and Control Plane
 
-The architecture separates data plane operations (request forwarding) from control plane operations (configuration activation, health checks, runtime views, and metrics):
+The architecture separates data-plane request handling from operator-facing control-plane work such as configuration activation, health checks, runtime views, and metrics exposure.
 
 **Data Plane:**
-- QUIC packet processing
-- HTTP/3 stream handling
-- Protocol conversion
-- Backend request forwarding
-- Response streaming
+- QUIC or bootstrap ingress
+- request admission and auth
+- route resolution and backend selection
+- upstream request execution
+- response normalization and streaming
 
 **Control Plane:**
 - Configuration loading, validation, preview, activation, and rollback
 - Health check execution
 - Backend state and runtime-generation views
-- Metrics, readiness, and control API services
+- Metrics, readiness, and Control API services
 - Watchdog and restart coordination
 
-This separation ensures that control plane operations do not block request processing on the hot path.
+This separation keeps operator tasks out of the hot path and makes runtime state easier to reason about.
 
 ## Request Processing Pipeline
 
-### 1. Connection Establishment
+Spooky has two ingress paths, but both are expected to converge on the same internal request flow as early as possible.
 
-When a client initiates a connection:
-1. UDP packets arrive at the bound socket
-2. QUIC handshake is performed using quiche
-3. TLS 1.3 credentials are validated
-4. HTTP/3 session is established over QUIC
-5. Connection state is tracked in the connections HashMap
+### 1. Ingress
 
-### 2. Request Reception
+The request begins on one of two downstream paths:
 
-For each incoming HTTP/3 stream:
-1. QUIC stream data is received
-2. HTTP/3 headers are decoded via QPACK
-3. Request envelope is created with method, path, authority, headers
-4. Body data is accumulated as stream frames arrive
-5. Stream state is maintained until request is complete
+1. QUIC ingress accepts UDP, performs the QUIC and TLS handshake, and opens HTTP/3 streams.
+2. Bootstrap ingress accepts HTTP/1.1 or HTTP/2 requests on the compatibility path.
+3. In either case, ingress builds a canonical request context containing method, path, authority, headers, and body-stream state.
 
-### 3. Routing and Backend Selection
+### 2. Admission
 
-Once request headers are available:
-1. Router matches request path and host against upstream routes
-2. Longest matching path prefix wins for overlapping routes
-3. Host-based routing is applied if configured
-4. Selected upstream's load-balancing strategy is invoked
-5. Backend index is selected from healthy backends only
-6. Backend address is retrieved from the selected upstream
+Admission is the first shared policy gate. It evaluates whether the request should proceed before upstream work begins.
 
-### 4. Request Building and Protocol Translation
+This stage covers:
 
-Before forwarding to backend:
-1. HTTP/3 pseudo-headers (:method, :path, :authority) are extracted
-2. A canonical upstream request is built with proper URI and method
-3. Regular headers are copied, filtering hop-by-hop headers
-4. Content-Length is set based on body size
-5. Host header is ensured (using authority or backend address)
+- quota and scoped rate-limit decisions
+- overload and brownout shedding
+- inflight and buffer protection
+- admission permit acquisition and route-level caps
 
-### 5. Backend Forwarding
+Quota policy and overload policy are intentionally separate concepts even when both can reject a request.
 
-Request is sent to selected backend:
-1. The runtime selects HTTP/2 transport for `https://` backends and HTTP/1.1 transport for `http://` backends
-2. The appropriate connection pool provides a connection for the backend address
-3. Semaphore-based flow control limits concurrent requests per backend
-4. Request is sent over the selected upstream connection
-5. Timeout is enforced at the transport layer
-6. Backend response is awaited
+### 3. Auth
 
-### 6. Response Handling
+If auth is configured, the request moves through a shared auth decision layer that can:
 
-Backend response is processed:
-1. An upstream HTTP/2 or HTTP/1.1 response is received from the backend
-2. Status code and headers are extracted
-3. Response is written back to HTTP/3 stream
-4. Body is streamed to client per frame via incremental `h3.send_body` calls
-5. Stream is finalized when response is complete
+- allow the request
+- deny the request
+- challenge or redirect where supported
+- fail open or fail closed, depending on policy
 
-### 7. Health Management
+### 4. Routing and Backend Selection
 
-Backend health is tracked continuously:
-1. Successful requests increment success counter
-2. Failed requests increment failure counter
-3. Consecutive failures beyond threshold mark backend unhealthy
-4. Unhealthy backends enter cooldown period
-5. Successful requests during recovery increment recovery counter
-6. Backends return to healthy state after success threshold is met
+After admission and auth succeed:
 
-### 8. Metrics Collection
+1. the routing index matches the request to a route
+2. the route resolves to an upstream
+3. the upstream load-balancing policy selects an eligible backend
+4. backend identity and route identity are attached to the request context for observability and downstream policy
 
-Throughout the pipeline, metrics are recorded:
-- Total requests received
-- Successful responses
-- Failed requests
-- Backend timeouts
-- Backend errors
-- Request latency (start to completion time)
+### 5. Canonical Request Building
+
+Spooky converts ingress-specific request data into a canonical upstream request:
+
+- pseudo-header and regular-header handling
+- host and forwarded-header policy
+- websocket and upgrade shaping where bootstrap compatibility requires it
+- body mode and streaming decisions
+
+This is the `bridge` boundary, not per-ingress custom header logic.
+
+### 6. Backend Transport Execution
+
+The request is handed to the transport layer together with the selected backend identity.
+
+Transport owns:
+
+- runtime-selected HTTP/1.1 or HTTP/2 execution
+- connection reuse
+- connect and execution timeouts
+- backend client rotation
+
+The edge layer still owns retry and hedge orchestration, but it does not own protocol-specific client behavior.
+
+### 7. Response Normalization and Streaming
+
+When the backend responds:
+
+1. the canonical response-normalization layer strips hop-by-hop headers and applies shared bodyless and no-content rules
+2. the ingress path emits the normalized result back to the downstream protocol
+3. guardrails enforce body size and idle or total streaming timeouts while bytes continue to flow
+
+QUIC and bootstrap differ here only in downstream write mechanics.
+
+### 8. Outcome Recording and Backend Feedback
+
+Every terminal request path records a shared outcome vocabulary for:
+
+- route and backend outcome metrics
+- auth, quota, and overload reason mapping
+- retry and hedge results
+- backend request feedback and health observations
+
+This is how Spooky keeps observability and backend lifecycle state aligned across both ingress paths.
 
 ## Concurrency Model
 
@@ -227,8 +249,8 @@ state, and leverages Tokio's async capabilities for backend I/O.
 - Examples: invalid TLS paths, malformed YAML, missing required fields
 
 **Protocol Errors:**
-- QUIC connection failures, stream errors, invalid HTTP/3
-- Isolated to individual connections or streams
+- QUIC connection failures, bootstrap request-parse failures, invalid downstream protocol behavior
+- Usually isolated to individual connections, requests, or streams
 - Do not affect other active connections
 - Logged for debugging
 
@@ -295,10 +317,13 @@ Configuration validation occurs before runtime:
 
 ### Runtime Behavior
 
-Current configuration is immutable at runtime:
-- Loaded once at startup
-- Shared via Arc across components
-- Hot reload implemented with atomic swap
+Runtime configuration is loaded at startup and then exposed through a generation-based runtime bundle:
+
+- startup-owned state stays fixed until restart
+- generation-owned state is replaced on successful reload
+- readers observe complete runtime generations through an atomic bundle swap
+
+See [Runtime Generation Model](runtime-generation.md) for the exact ownership split.
 
 ## Security Considerations
 
@@ -307,13 +332,14 @@ Current configuration is immutable at runtime:
 - TLS 1.3 required for all client connections
 - Certificate chain validation via rustls
 - Private key protection (file permissions)
-- ALPN negotiation ensures HTTP/3
+- ALPN negotiation selects the downstream protocol where TLS listeners require it
 
 ### Backend Communication
 
-- Currently plaintext HTTP/2
-- upstream TLS shipped, verify-on by default (server-side; note true mTLS/client-cert to backends is the actual gap)
-- Connection reuse reduces handshake overhead
+- Upstream execution currently uses HTTP/1.1 or HTTP/2 transport
+- HTTPS backends use upstream TLS with certificate verification enabled by default
+- Backend mTLS client-certificate authentication remains a gap
+- Connection reuse reduces repeated handshake cost
 
 ### Attack Surface
 
@@ -356,21 +382,20 @@ Distributed tracing via OpenTelemetry (shipped).
 ### Latency
 
 - QUIC handshake: 1-RTT with TLS 1.3
-- Proxy overhead: sub-millisecond (header conversion, routing)
-- Backend latency: dependent on backend response time
-- End-to-end: dominated by backend latency
+- Proxy-added latency is primarily routing, request shaping, and transport dispatch overhead
+- Backend latency usually dominates end-to-end request time
+- Streaming responses remain sensitive to downstream and upstream pacing, not only header processing time
 
 ### Throughput
 
-- Concurrent connections: 10,000+ QUIC connections
-- Requests per second: 100,000+ on multi-core hardware
-- Per-connection overhead: 1-2KB memory
-- CPU: primarily driven by QUIC crypto and serialization
+- Throughput depends on worker count, packet sharding, backend behavior, and TLS or QUIC cost
+- CPU pressure is typically driven by QUIC crypto, request volume, and backend protocol execution
+- Capacity planning should be validated with workload-specific benchmarking rather than fixed headline numbers
 
 ### Scalability
 
 - Horizontal: stateless design allows multiple instances
-- Vertical: work-stealing scheduler utilizes all cores
+- Vertical: multi-worker ingress and Tokio-based backend execution scale across cores
 - Backend scaling: dynamic health-based routing
 - Connection scaling: bounded by file descriptors and memory
 

@@ -10,6 +10,8 @@ The runtime generation model exists to answer three questions clearly:
 - what can change on reload
 - what must survive across reloads
 
+That model matters to both operators and contributors because request workers, the Control API, metrics rendering, and background services must all agree on what the active runtime is at any point in time.
+
 The canonical implementation lives under:
 
 - `crates/edge/src/runtime/bundle.rs`
@@ -20,6 +22,12 @@ The canonical implementation lives under:
 ## Ownership Classes
 
 The runtime is intentionally split into three ownership classes.
+
+| Ownership class | What it means | Typical examples |
+|---|---|---|
+| Startup-owned state | Established once and restart-required if changed | config path, fixed process-start assumptions |
+| Generation-owned state | Reloadable active runtime snapshot | routing index, upstream policies, resilience state |
+| Long-lived shared services | Shared services reached through the active generation | metrics, transport shell, lifecycle coordinator, DNS resolver |
 
 ### Startup-owned state
 
@@ -84,6 +92,8 @@ Some of these services are rebuilt from config on reload, while others are delib
 
 This is the boundary between assembly time and live execution time.
 
+Operators can think of `RuntimeBundle` as "the complete version of the runtime the process is currently serving."
+
 ### `SharedRuntimeState`
 
 `SharedRuntimeState` groups:
@@ -130,6 +140,18 @@ The intended read path is:
 Callers should not manually reconstruct active runtime state by following ad hoc chains through listener-local fields.
 
 This keeps control-plane, listener, and metrics code aligned on the same active generation contract.
+
+## Why This Matters For Request Flow
+
+The request path depends on generation views for the pieces that change at runtime:
+
+- listener policy
+- route resolution
+- upstream and backend placement
+- admission and resilience settings
+- shared services needed to execute and observe the request
+
+Because readers consume a coherent generation view, one request does not need to piece together state from multiple partially updated stores.
 
 ## Reload Flow
 
@@ -203,6 +225,16 @@ Reload prepares a complete next generation and swaps the bundle if lifecycle gat
 ### Shutdown and drain path
 
 Drain and shutdown do not mutate the active generation in place to express policy changes. They move lifecycle phase forward and let listener/control-plane services react accordingly.
+
+## Relationship to Backend Lifecycle and Ingress
+
+Runtime generation is the glue between architecture layers:
+
+- ingress workers read the active generation to know which listeners, routes, and policies are live
+- backend lifecycle coordination uses runtime context without requiring request paths to own durable backend state
+- Control API and observability surfaces read the same active generation that request workers use
+
+That shared read model is what keeps reload, traffic handling, and operator views consistent.
 
 ## Contributor Rules
 

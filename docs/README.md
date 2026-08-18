@@ -38,7 +38,12 @@ Spooky is a modern edge runtime for high-trust APIs. This documentation set is o
 
 | Document | What you'll find |
 |---|---|
-| [Architecture Overview](architecture/overview.md) | Design principles, data-plane topology, sharded ingress model |
+| [Architecture Overview](architecture/overview.md) | Architecture entry point, shared product flow, ingress model, and runtime boundaries |
+| [Request Lifecycle](architecture/request-lifecycle.md) | Canonical flow from intake through admission, routing, transport, and outcome recording |
+| [Bootstrap vs QUIC](architecture/bootstrap-vs-quic.md) | Exact boundary between the native HTTP/3 path and the compatibility ingress path |
+| [Transport Boundary](architecture/transport.md) | What transport owns, what edge owns, and how H1/H2 execution stays hidden behind one facade |
+| [Backend Lifecycle](architecture/backend-lifecycle.md) | Backend identity, resolution, health, membership, and operator-visible lifecycle state |
+| [Runtime Generation Model](architecture/runtime-generation.md) | How runtime reload, active generations, and shared services work |
 | [Component Breakdown](architecture/components.md) | Per-crate responsibilities, inter-crate boundaries, key types |
 | [Distributed Quota Contract](architecture/quota-policy-contract.md) | Semantic contract for quota semantics, selector composition, and distributed counter behavior |
 | [Codebase Map](development/codebase-map.md) | Current crate/module map and where major logic lives |

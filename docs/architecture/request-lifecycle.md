@@ -1,6 +1,6 @@
 # Request Lifecycle
 
-This document describes the canonical request path through Spooky after the refactor work that split admission, auth, resolution, transport, normalization, streaming, and outcome recording into shared layers.
+This document describes the canonical request path through Spooky. It explains the product flow that both ingress paths should follow after intake: shared admission, auth, routing, transport execution, response normalization, streaming guardrails, and outcome recording.
 
 ## Purpose
 
@@ -9,11 +9,13 @@ The request path should be understandable as one ordered flow:
 1. intake
 2. admission
 3. auth
-4. route resolution
-5. backend dispatch
-6. response normalization
-7. body streaming and guardrails
-8. outcome recording
+4. route resolution and backend selection
+5. canonical request building
+6. backend dispatch
+7. response normalization
+8. body streaming and guardrails
+9. retry and hedge evaluation when needed
+10. outcome recording
 
 That flow should be shared conceptually across:
 
@@ -21,6 +23,16 @@ That flow should be shared conceptually across:
 - bootstrap compatibility ingress
 
 The two paths differ in ingress and egress mechanics, not in core policy meaning.
+
+## One Request, Two Ingress Paths
+
+The product-level rule is simple:
+
+- QUIC and bootstrap may parse requests differently
+- they should reach the same internal policy decisions for the same logical request
+- they should emit the same canonical observability reasons for the same outcome
+
+If those paths disagree semantically, the shared boundary is in the wrong place.
 
 ## Main Ownership Boundaries
 
@@ -104,15 +116,22 @@ Admission is the first shared policy gate.
 
 Admission covers:
 
-- local auth prerequisites where applicable
+- quota and scoped rate-limit decisions
+- overload and brownout shedding
 - route-level policy rejection
-- scoped rate-limit decisions
-- brownout and overload shedding
+- local auth prerequisites where applicable
 - permit acquisition and admission execution checks
 
 Admission should produce typed policy results, not direct response I/O decisions scattered across intake code.
 
 Both QUIC forwarding and bootstrap compatibility code should route these checks through the same admission layer.
+
+Quota and overload are intentionally separate:
+
+- quota describes contract or entitlement enforcement
+- overload describes runtime self-protection
+
+They may both reject a request, but they should not collapse into one policy meaning.
 
 ## Step 3: Auth Decisions
 
@@ -135,7 +154,8 @@ After admission and auth, the request enters the shared resolution pipeline.
 
 Resolution covers:
 
-- route matching
+- listener-aware route matching
+- host and path-based route matching
 - upstream lookup
 - load-balancing strategy selection
 - canonical load-balancing key extraction
@@ -144,7 +164,7 @@ Resolution covers:
 
 The result of this phase should be a typed resolved target, not a mix of route, upstream, and backend values reconstructed later by dispatch code.
 
-## Step 5: Request Building
+## Step 5: Canonical Request Building
 
 Once a backend is selected, ingress code shapes the request into the canonical bridge input.
 
@@ -173,7 +193,7 @@ But edge should not re-decide protocol execution details. At this point it shoul
 
 - send this canonical request to this backend
 
-Transport decides how that backend is executed.
+Transport decides how that backend is executed according to the runtime-selected backend transport kind.
 
 ## Step 7: Response Normalization
 
@@ -257,6 +277,16 @@ They intentionally differ only in:
 - QUIC-specific stream progression details
 
 If a new policy exists only in one path, it usually belongs in a shared layer instead.
+
+## Routing, Transport, and Lifecycle Relationship
+
+The request path depends on three adjacent subsystems:
+
+- routing decides which upstream and backend should receive the request
+- transport decides how that backend request is executed on the wire
+- backend lifecycle decides how request feedback changes backend health and operator-visible state
+
+Those concerns are related, but they should not collapse into one module.
 
 ## Contributor Rules
 
