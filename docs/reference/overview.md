@@ -4,6 +4,7 @@ This section is the canonical source for exact behavior and supported surface ar
 
 ## Start Here
 
+- [Documentation Audit](documentation-audit.md) maps the current docs tree into the product-reference buckets and highlights legacy sections that should be consolidated.
 - [Feature Matrix](feature-matrix.md) provides the source-backed inventory of implemented, partial, and missing capabilities.
 - [Limitations](limitations.md) lists the current product boundaries directly.
 - [Configuration Reference](../configuration/reference.md) is the authoritative schema and runtime-semantics guide.
