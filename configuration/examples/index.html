@@ -1457,6 +1457,56 @@
     <p>This page collects complete deployment-oriented examples. Use it together with the <a href="../reference/">Configuration Reference</a>, which remains the canonical schema and semantics document.</p>
 <p>For distributed quota examples and migration guidance, see
 <a href="../../operations/distributed-quota/">Distributed Quota</a>.</p>
+<h2 id="how-to-use-these-examples">How To Use These Examples</h2>
+<p>Use these examples as starting points, not as copy-paste truth for every environment.</p>
+<ul>
+<li>start with the smallest example that matches your deployment shape</li>
+<li>change addresses, certificates, and admin credentials first</li>
+<li>validate operational implications before promoting a local example into production</li>
+</ul>
+<h2 id="example-selection-guide">Example Selection Guide</h2>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>If you need...</th>
+<th>Start with...</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>a local first run</td>
+<td>Example 1</td>
+</tr>
+<tr>
+<td>one upstream in production</td>
+<td>Example 2</td>
+</tr>
+<tr>
+<td>multiple upstreams with different routing</td>
+<td>Example 3</td>
+</tr>
+<tr>
+<td>multiple listeners with different bind identities</td>
+<td>Example 4</td>
+</tr>
+<tr>
+<td>downstream client certificate auth</td>
+<td>Example 5</td>
+</tr>
+<tr>
+<td>a private CA for upstream trust</td>
+<td>Example 6</td>
+</tr>
+<tr>
+<td>static asymmetric JWT verification</td>
+<td>Example 7</td>
+</tr>
+<tr>
+<td>remote JWKS validation</td>
+<td>Example 8</td>
+</tr>
+</tbody>
+</table></div>
 <h2 id="example-1-minimal-local-development">Example 1: Minimal Local Development</h2>
 <pre><code class="language-yaml">version: 1
 
@@ -1480,6 +1530,10 @@ upstream_tls:
   strict_sni: false
 </code></pre>
 <p>Use this shape for local iteration only. It opts into cleartext upstream traffic explicitly with <code>http://</code>.</p>
+<p>Common mistake:</p>
+<ul>
+<li>copying this example into production without restoring upstream TLS verification and stronger admin-surface protection</li>
+</ul>
 <h2 id="example-2-single-upstream-production">Example 2: Single-Upstream Production</h2>
 <pre><code class="language-yaml">version: 1
 
@@ -1531,6 +1585,11 @@ observability:
     port: 9902
     auth_token: &quot;replace-with-strong-token&quot;
 </code></pre>
+<p>Use this when:</p>
+<ul>
+<li>one upstream handles most traffic</li>
+<li>you want the simplest host deployment that is still production-oriented</li>
+</ul>
 <h2 id="example-3-multi-upstream-production">Example 3: Multi-Upstream Production</h2>
 <pre><code class="language-yaml">version: 1
 
@@ -1579,6 +1638,11 @@ upstream:
 load_balancing:
   type: round-robin
 </code></pre>
+<p>Use this when:</p>
+<ul>
+<li>different hosts or paths must route to different upstreams</li>
+<li>the application needs different load-balancing strategies per upstream</li>
+</ul>
 <h2 id="example-4-multi-listener-deployment">Example 4: Multi-Listener Deployment</h2>
 <pre><code class="language-yaml">version: 1
 
@@ -1613,6 +1677,10 @@ upstream:
         address: &quot;backend.internal.example:8443&quot;
 </code></pre>
 <p>The top-level <code>listen</code> field is always required by the schema. When <code>listeners[]</code> is non-empty, runtime normalization uses <code>listeners[]</code> and the top-level <code>listen</code> block is superseded.</p>
+<p>Common mistake:</p>
+<ul>
+<li>expecting the top-level <code>listen</code> block to stay active alongside <code>listeners[]</code></li>
+</ul>
 <h2 id="example-5-bootstrap-listener-client-auth">Example 5: Bootstrap Listener Client Auth</h2>
 <pre><code class="language-yaml">version: 1
 
@@ -1661,6 +1729,11 @@ upstream:
       - id: &quot;backend1&quot;
         address: &quot;backend.private.example:8443&quot;
 </code></pre>
+<p>Use this when:</p>
+<ul>
+<li>the upstream certificate chain is not rooted in the public Web PKI</li>
+<li>one deployment needs stricter trust control than public default CA bundles</li>
+</ul>
 <h2 id="example-7-static-rs256-and-es256-jwt-keys">Example 7: Static RS256 And ES256 JWT Keys</h2>
 <p>Pin verification to public keys you manage yourself. <code>secret</code> stays empty because
 <code>HS256</code> is not in the allowlist — configuring both is rejected at startup.</p>
@@ -1774,16 +1847,16 @@ token signed by a trusted key is accepted, so set them in production.</p>
 </table></div>
 <p>Both reject tokens while keys are missing; they differ only in whether the process
 starts at all.</p>
-<h2 id="example-9-current-reload-stance">Example 9: Current Reload Stance</h2>
-<p>Spooky supports <strong>full configuration hot reload</strong> via <code>POST /admin/runtime/reload</code>, alongside
-certificate-only reload for new handshakes. When planning operations:</p>
+<h2 id="example-9-runtime-activation-and-reload-posture">Example 9: Runtime Activation And Reload Posture</h2>
+<p>Spooky supports generation-based validation, preview, activation, rollback, and certificate-only reload. When planning operations:</p>
 <ul>
-<li>use full config reload (<code>/admin/runtime/reload</code>) for route, upstream, backend, timeout, limit,
-  resilience-policy, and <code>log.level</code> changes — these apply live via an atomic runtime swap, no restart</li>
-<li>use cert reload (<code>/admin/runtime/reload-certs</code>) for listener certificate replacement</li>
-<li>plan a drain-and-restart workflow only for log format/file settings, tracing config, control-plane
-  thread counts, and listener removal or bind-address changes, which the reload endpoint rejects</li>
-<li>keep rollback and staged rollout procedures ready</li>
+<li>use <code>POST /admin/runtime/validate</code> to check a candidate configuration</li>
+<li>use <code>POST /admin/runtime/preview</code> to see the staged diff without touching the running runtime</li>
+<li>use <code>POST /admin/runtime/activate</code> to commit a runtime-managed config change</li>
+<li>use <code>POST /admin/runtime/rollback</code> to return to a retained runtime generation</li>
+<li>use <code>POST /admin/runtime/reload-certs</code> for listener certificate replacement on new handshakes</li>
+<li>use the legacy <code>POST /admin/runtime/reload</code> shortcut only when you intentionally want the older direct-apply behavior without preview</li>
+<li>plan a drain-and-restart workflow only for log format/file settings, tracing config, control-plane thread counts, and listener removal or bind-address changes</li>
 </ul>
 <h2 id="related-pages">Related Pages</h2>
 <ul>
@@ -2247,6 +2320,22 @@ certificate-only reload for new handshakes. When planning operations:</p>
         
         
         
+        <a href="#how-to-use-these-examples"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#how-to-use-these-examples');">
+            How To Use These Examples
+        </a>
+        
+
+        
+        <a href="#example-selection-guide"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#example-selection-guide');">
+            Example Selection Guide
+        </a>
+        
+
+        
         <a href="#example-1-minimal-local-development"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#example-1-minimal-local-development');">
@@ -2319,10 +2408,10 @@ certificate-only reload for new handshakes. When planning operations:</p>
         
 
         
-        <a href="#example-9-current-reload-stance"
+        <a href="#example-9-runtime-activation-and-reload-posture"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#example-9-current-reload-stance');">
-            Example 9: Current Reload Stance
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#example-9-runtime-activation-and-reload-posture');">
+            Example 9: Runtime Activation And Reload Posture
         </a>
         
 

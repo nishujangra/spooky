@@ -1454,92 +1454,104 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>This page is the canonical statement of what the project currently supports in production, what remains partial, and what is still missing.</p>
+    <p>This page is the canonical statement of what Spooky supports in production today, what requires extra rollout discipline, and what still remains outside the safe default operating envelope.</p>
 <h2 id="current-assessment">Current Assessment</h2>
-<p>Spooky is a <strong>beta HTTP/3 edge reverse proxy</strong> with a strong core data plane, broad correctness and regression coverage, and clear operational ambition. It is suitable for <strong>controlled production rollout</strong> when the operator keeps rollback, monitoring, and staged traffic expansion in place.</p>
-<p>Spooky is <strong>not yet a fully mature general-purpose reverse proxy platform</strong>. The main constraints are:</p>
+<p>Spooky is a <strong>beta HTTP/3-first edge runtime</strong>. It is suitable for <strong>controlled production rollout</strong> when operators use:</p>
 <ul>
-<li>config hot reload covers most runtime settings, including live <code>log.level</code> changes, but not all: log format/file settings, tracing config, control-plane thread counts, and listener removal/bind-address changes still require a restart</li>
-<li>upstream forwarding is scheme-driven: HTTP/2 for <code>https://</code> backends, HTTP/1.1 for <code>http://</code> backends</li>
-<li>dynamic control-plane capability is file-reload based, not a granular per-object mutation API</li>
-<li>auth is limited to API key, local JWT (<code>HS256</code>/<code>RS256</code>/<code>ES256</code>, with static keys or JWKS), and per-upstream external auth (HTTP/OIDC); there is no generic policy engine or rate-limiting framework</li>
-<li>service discovery is limited to DNS refresh rather than a richer orchestration-native model</li>
+<li>staged activation and explicit rollback</li>
+<li>protected Control API access</li>
+<li>observability and alerting before traffic expansion</li>
+<li>canary or bounded-slice rollout patterns</li>
 </ul>
-<h2 id="production-ready-today">Production-Ready Today</h2>
-<p>The following areas are considered strong enough for controlled production use:</p>
+<p>Spooky is not yet a general-purpose replacement for every reverse-proxy or API-gateway use case.</p>
+<h2 id="strong-production-areas">Strong Production Areas</h2>
+<p>These areas are strong enough for controlled production use today:</p>
 <ul>
 <li>downstream HTTP/3 ingress over QUIC</li>
-<li>downstream HTTP/1.1 and HTTP/2 bootstrap ingress</li>
-<li>upstream HTTP/2 forwarding (<code>https://</code> backends) and HTTP/1.1 forwarding (<code>http://</code> backends)</li>
-<li>deterministic host/path/method routing</li>
+<li>downstream bootstrap HTTP/1.1 and HTTP/2 ingress</li>
+<li>upstream HTTP/2 forwarding for <code>https://</code> backends and HTTP/1.1 forwarding for <code>http://</code> backends</li>
+<li>deterministic host, path, and method routing</li>
 <li>active and passive backend health handling</li>
 <li>load balancing with round-robin, random, consistent-hash, least-connections, latency-aware, and sticky-CID behavior</li>
 <li>downstream TLS termination with SNI certificate selection</li>
-<li>bootstrap listener client-auth support</li>
 <li>upstream TLS verification controls and custom trust roots</li>
-<li>overload handling through inflight limits, queue caps, adaptive admission, and brownout logic</li>
-<li>graceful drain and bounded shutdown behavior</li>
-<li>Prometheus metrics and control-plane health/readiness/runtime endpoints</li>
-<li>per-upstream API key and local JWT authentication (<code>HS256</code>/<code>RS256</code>/<code>ES256</code>, static PEM/JWK keys or background-refreshed JWKS), with scope/role checks</li>
-<li>per-upstream async external auth (HTTP subrequest or OIDC discovery/introspection), non-blocking against the H3 loop, with configurable fail-open/fail-closed behavior and response-header allowlisting</li>
+<li>overload handling through inflight limits, queue caps, adaptive admission, brownout, and circuit-open rejection</li>
+<li>scoped rate limiting plus distributed quota enforcement with burst and sustained contracts</li>
+<li>Prometheus metrics, structured logs, tracing, and Control API runtime views</li>
+<li>graceful drain, bounded shutdown, retained runtime generations, and rollback</li>
 </ul>
-<h2 id="production-capable-with-caveats">Production-Capable With Caveats</h2>
-<p>The following capabilities exist, but operators should treat them as features that still need careful rollout discipline:</p>
+<h2 id="production-capable-with-rollout-discipline">Production-Capable With Rollout Discipline</h2>
+<p>These capabilities are usable in production, but operators should apply them through staged rollout and explicit validation:</p>
 <ul>
-<li>full configuration hot reload (atomic runtime swap of routes, upstreams, backends, timeouts, limits, and resilience policies), and certificate-only reload for new handshakes — both without a full process restart</li>
-<li>staged activation — <code>POST /admin/runtime/validate</code> and <code>/preview</code> plan a config change and return its diff without touching the running runtime, and <code>/activate</code> commits it; prefer this over the legacy <code>POST /admin/runtime/reload</code> shortcut, which applies the change without surfacing the diff</li>
-<li>rollback to a retained generation via <code>POST /admin/runtime/rollback</code>; use <code>GET /admin/runtime/history</code> to pick a target whose <code>rollback_candidate</code> is <code>true</code>, and note that retained generations are capped at a fixed bound rather than kept indefinitely</li>
-<li>watchdog-driven recovery hooks</li>
-<li>DNS-based backend refresh and backend client rotation</li>
-<li>retry budget, circuit breaker, and hedging controls</li>
-<li>packet sharding, worker pinning, and other host-tuning features</li>
+<li>runtime config activation through <code>POST /admin/runtime/validate</code>, <code>/preview</code>, and <code>/activate</code></li>
+<li>rollback through retained runtime generations and <code>POST /admin/runtime/rollback</code></li>
+<li>certificate-only reload for new handshakes through <code>POST /admin/runtime/reload-certs</code></li>
+<li>DNS refresh and backend client rotation</li>
+<li>retry, hedge, and circuit-breaker policy</li>
+<li>watchdog-driven restart workflows</li>
+<li>packet sharding, worker pinning, and other host-tuning options</li>
 </ul>
-<p>These areas are usable, but their surrounding operational model is not yet as mature as top-tier long-established proxies.</p>
-<h2 id="not-yet-production-complete">Not Yet Production-Complete</h2>
-<p>The following gaps are the most important reasons Spooky is not yet at general-availability maturity:</p>
+<p>These are production features, but they still need disciplined rollout and observability rather than blind automation.</p>
+<h2 id="restart-required-areas">Restart-Required Areas</h2>
+<p>Operators should plan a drain-aware restart or instance replacement workflow for changes in these areas:</p>
 <ul>
-<li>config reload cannot change log format/file settings, tracing config, or control-plane thread counts, and cannot remove/rebind listeners, without a restart (<code>log.level</code> reloads live)</li>
-<li>no transactional config apply, staged activation, or rollback API</li>
+<li>listener removal or bind-address changes</li>
+<li>control-plane or metrics bind changes</li>
+<li>logging sink settings such as log format and file-output shape</li>
+<li>tracing startup configuration</li>
+<li>control-plane thread-count changes</li>
+</ul>
+<p><code>log.level</code> remains live-reloadable. Do not group it with restart-only logging settings.</p>
+<h2 id="important-product-boundaries">Important Product Boundaries</h2>
+<p>The main product boundaries today are:</p>
+<ul>
 <li>no upstream HTTP/3 forwarding mode</li>
-<li>no broad request mirroring, canary traffic splitting, or advanced traffic policy engine</li>
-<li>no first-class rate limiting framework</li>
-<li>no interactive OIDC login/session-cookie flows, or generic RBAC/policy engine beyond scope/role checks on JWT claims</li>
-<li>no broad plugin or extension system</li>
-<li>no orchestration-native service discovery beyond DNS polling</li>
+<li>no orchestration-native service discovery beyond DNS refresh</li>
+<li>no broad request-mirroring or advanced traffic-splitting engine</li>
+<li>no generic policy engine beyond the current auth, quota, rate-limit, and overload surfaces</li>
+<li>no interactive OIDC session-login flow or broad gateway-style auth orchestration</li>
 </ul>
-<h2 id="recommended-operator-stance">Recommended Operator Stance</h2>
-<p>Use Spooky today when all of the following are true:</p>
+<h2 id="good-fit-today">Good Fit Today</h2>
+<p>Spooky is a good fit when:</p>
 <ul>
-<li>you want an HTTP/3-first edge proxy</li>
-<li>your backends speak HTTP/2 (<code>https://</code>) or HTTP/1.1 (<code>http://</code>), or a mix of both</li>
-<li>you are comfortable with staged rollout and explicit rollback procedures</li>
-<li>you do not require a large dynamic control plane yet</li>
-<li>you can keep close operational visibility on the system</li>
+<li>you want HTTP/3 at the edge</li>
+<li>your upstreams speak HTTP/2 or HTTP/1.1</li>
+<li>one team can own routing, TLS, rollout, and incident response</li>
+<li>you are comfortable using a file-driven config source with staged activation</li>
+<li>you can keep close observability on latency, overload, quota, and backend health</li>
 </ul>
-<p>Do not position Spooky today as:</p>
+<h2 id="weaker-fit-today">Weaker Fit Today</h2>
+<p>Spooky is a weaker fit when you need:</p>
 <ul>
-<li>a full Envoy-class dynamic proxy platform</li>
-<li>a drop-in NGINX replacement for every protocol and legacy deployment shape</li>
-<li>a complete API gateway or auth gateway</li>
-<li>a broad service-mesh data plane with mesh-native control-plane integration</li>
+<li>a rich dynamic control plane with per-object mutation APIs</li>
+<li>broad multi-tenant platform policy orchestration</li>
+<li>very wide upstream protocol compatibility</li>
+<li>deep service-mesh style discovery and interior control-plane integration</li>
 </ul>
-<h2 id="readiness-gates-before-broader-adoption">Readiness Gates Before Broader Adoption</h2>
-<p>The most important gates before calling the project broadly production-grade are:</p>
+<h2 id="minimum-operator-bar">Minimum Operator Bar</h2>
+<p>Do not expand rollout beyond a controlled slice unless all of the following are true:</p>
+<ul>
+<li>rollback has been tested recently</li>
+<li>Control API access is protected</li>
+<li>dashboards and alerts are live and verified</li>
+<li>backend health and latency behavior have been observed under real traffic</li>
+<li>the team knows which changes activate live and which require a restart</li>
+</ul>
+<h2 id="maturity-gates-before-broader-adoption">Maturity Gates Before Broader Adoption</h2>
+<p>The main gates before a broader production-grade claim are:</p>
 <ol>
-<li>Transactional config apply: staged activation, config-diff visibility, and a rollback API on top of the existing reload endpoint (base config hot reload — including live route and upstream updates — already ships).</li>
-<li>Live reconfiguration of the remaining restart-only settings (log format/file, tracing config, thread counts, listener removal/bind changes; <code>log.level</code> already reloads live).</li>
-<li>Refactoring of the oversized edge runtime into smaller subsystems.</li>
-<li>Fuzzing and deeper parser/protocol hardening.</li>
-<li>First-class rate limiting and a generic policy engine (auth now covers API key, local JWT with JWKS, and external/OIDC checks).</li>
-<li>Better operator guidance for rollout, recovery, and ongoing operations.</li>
+<li>Longer-horizon operational validation of activation, rollback, and restart workflows under churn.</li>
+<li>Continued parser and protocol hardening, including deeper fuzzing.</li>
+<li>Broader maturity of service discovery, policy depth, and control-plane ergonomics.</li>
+<li>Further decomposition of concentrated runtime code and more long-horizon fleet history.</li>
 </ol>
 <h2 id="related-pages">Related Pages</h2>
 <ul>
+<li><a href="../../deployment/production/">Production Deployment</a></li>
+<li><a href="../reload-and-drain/">Reload and Drain</a></li>
+<li><a href="../deployment-patterns/">Deployment Patterns</a></li>
 <li><a href="../../reference/feature-matrix/">Feature Matrix</a></li>
 <li><a href="../../reference/limitations/">Limitations</a></li>
-<li><a href="../../concepts/security-model/">Security Model</a></li>
-<li><a href="../../deployment/production/">Production Deployment</a></li>
-<li><a href="../../release-maturity/">Release Maturity</a></li>
 </ul>
   </div>
   
@@ -2005,42 +2017,66 @@
         
 
         
-        <a href="#production-ready-today"
+        <a href="#strong-production-areas"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#production-ready-today');">
-            Production-Ready Today
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#strong-production-areas');">
+            Strong Production Areas
         </a>
         
 
         
-        <a href="#production-capable-with-caveats"
+        <a href="#production-capable-with-rollout-discipline"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#production-capable-with-caveats');">
-            Production-Capable With Caveats
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#production-capable-with-rollout-discipline');">
+            Production-Capable With Rollout Discipline
         </a>
         
 
         
-        <a href="#not-yet-production-complete"
+        <a href="#restart-required-areas"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#not-yet-production-complete');">
-            Not Yet Production-Complete
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#restart-required-areas');">
+            Restart-Required Areas
         </a>
         
 
         
-        <a href="#recommended-operator-stance"
+        <a href="#important-product-boundaries"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#recommended-operator-stance');">
-            Recommended Operator Stance
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#important-product-boundaries');">
+            Important Product Boundaries
         </a>
         
 
         
-        <a href="#readiness-gates-before-broader-adoption"
+        <a href="#good-fit-today"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#readiness-gates-before-broader-adoption');">
-            Readiness Gates Before Broader Adoption
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#good-fit-today');">
+            Good Fit Today
+        </a>
+        
+
+        
+        <a href="#weaker-fit-today"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#weaker-fit-today');">
+            Weaker Fit Today
+        </a>
+        
+
+        
+        <a href="#minimum-operator-bar"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#minimum-operator-bar');">
+            Minimum Operator Bar
+        </a>
+        
+
+        
+        <a href="#maturity-gates-before-broader-adoption"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#maturity-gates-before-broader-adoption');">
+            Maturity Gates Before Broader Adoption
         </a>
         
 

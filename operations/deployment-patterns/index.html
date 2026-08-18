@@ -1454,62 +1454,92 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>This page describes the deployment shapes that fit Spooky best today.</p>
-<h2 id="best-fit-patterns">Best-Fit Patterns</h2>
-<h3 id="http3-edge-to-http2-service-tier">HTTP/3 Edge To HTTP/2 Service Tier</h3>
+    <p>This page describes the deployment shapes that fit Spooky best today and the rollout patterns that keep operations safe.</p>
+<h2 id="best-fit-product-patterns">Best-Fit Product Patterns</h2>
+<h3 id="http3-edge-to-http2-or-http11-service-tier">HTTP/3 Edge to HTTP/2 or HTTP/1.1 Service Tier</h3>
 <p>Best current fit.</p>
 <p>Use this when:</p>
 <ul>
 <li>clients need HTTP/3 at the edge</li>
-<li>services can accept HTTP/2 upstream traffic</li>
-<li>the environment benefits from explicit resource controls and strong teardown behavior</li>
-</ul>
-<h3 id="controlled-canary-rollout">Controlled Canary Rollout</h3>
-<p>Recommended current rollout model.</p>
-<p>Use this when:</p>
-<ul>
-<li>you need to validate new versions or config changes gradually</li>
-<li>you can keep a rollback path warm</li>
-<li>you can bound blast radius during beta operations</li>
+<li>services speak HTTP/2, HTTP/1.1, or a mix of both</li>
+<li>you want explicit admission, quota, overload, and backend-health controls</li>
 </ul>
 <h3 id="single-team-edge-tier">Single-Team Edge Tier</h3>
-<p>Good fit today when one team owns:</p>
+<p>Good fit when one team owns:</p>
 <ul>
-<li>proxy config</li>
-<li>backend topology</li>
-<li>TLS and cert rotation</li>
-<li>runtime tuning</li>
+<li>route and upstream configuration</li>
+<li>TLS and certificate rotation</li>
+<li>host tuning and capacity</li>
+<li>rollout and incident response</li>
 </ul>
+<h3 id="finite-multi-service-platform-edge">Finite Multi-Service Platform Edge</h3>
+<p>Good fit when:</p>
+<ul>
+<li>a platform team owns a bounded set of services</li>
+<li>config is rendered and activated through controlled automation</li>
+<li>there is strong observability and clear rollback ownership</li>
+</ul>
+<h2 id="best-fit-rollout-patterns">Best-Fit Rollout Patterns</h2>
+<h3 id="canary-or-bounded-traffic-slice">Canary or Bounded Traffic Slice</h3>
+<p>Recommended default rollout model.</p>
+<p>Use it when:</p>
+<ul>
+<li>you need to validate config or binary changes gradually</li>
+<li>you can keep a rollback path warm</li>
+<li>you want to limit blast radius during beta operations</li>
+</ul>
+<h3 id="active-active-edge-pool">Active-Active Edge Pool</h3>
+<p>Recommended for production availability.</p>
+<p>Use it when:</p>
+<ul>
+<li>multiple edge nodes can serve the same traffic class</li>
+<li>your upstream load balancer or traffic manager can remove draining or unhealthy nodes</li>
+<li>you want binary upgrades and restart-required changes without whole-fleet impact</li>
+</ul>
+<h3 id="blue-green-or-node-replacement-rollout">Blue-Green or Node-Replacement Rollout</h3>
+<p>Recommended for:</p>
+<ul>
+<li>binary upgrades</li>
+<li>restart-required config changes</li>
+<li>high-assurance operational windows</li>
+</ul>
+<p>Use it when replacing nodes is safer than mutating them in place.</p>
 <h2 id="weaker-fit-patterns">Weaker-Fit Patterns</h2>
 <h3 id="dynamic-fleet-managed-multi-tenant-platform">Dynamic Fleet-Managed Multi-Tenant Platform</h3>
 <p>Weaker fit today because:</p>
 <ul>
-<li>there is no rich dynamic config control plane</li>
-<li>there is no plugin system</li>
-<li>there is no broad policy engine</li>
+<li>config is file-driven rather than a rich object-level control plane</li>
+<li>policy depth is still narrower than a broad platform proxy</li>
+<li>service discovery is DNS-based rather than orchestration-native</li>
 </ul>
-<h3 id="general-api-gateway-replacement">General API Gateway Replacement</h3>
-<p>Partial fit today. Per-upstream auth is implemented and enforced — API-key, local HS256 JWT with
-scope/role RBAC, and external auth (HTTP subrequest or OIDC) — and scoped rate limiting
-(route/client/tenant/token) ships. It is weaker than a full API gateway because:</p>
-<ul>
-<li>JWT validation covers <code>HS256</code>/<code>RS256</code>/<code>ES256</code> with JWKS-backed rotation, but not <code>RS384</code>/<code>RS512</code>/<code>PS*</code>/<code>EdDSA</code> or non-P-256 curves</li>
-<li>rate limiting is per-instance and scope-based (no distributed/cross-instance rate limiting)</li>
-<li>rich request/response transformation is missing</li>
-<li>there is no generic policy engine or auth-provider chaining</li>
-</ul>
-<h3 id="broad-legacy-upstream-compatibility-proxy">Broad Legacy Upstream Compatibility Proxy</h3>
+<h3 id="broad-legacy-compatibility-proxy">Broad Legacy Compatibility Proxy</h3>
 <p>Weaker fit today because:</p>
 <ul>
-<li>upstream forwarding is centered on HTTP/2</li>
-<li>protocol breadth is not yet the main strength of the product</li>
+<li>Spooky is strongest on HTTP/3 edge ingress and H2 or H1 upstream execution</li>
+<li>very broad legacy protocol breadth is not the main product strength</li>
+</ul>
+<h3 id="full-api-gateway-replacement">Full API Gateway Replacement</h3>
+<p>Partial fit today because Spooky already ships:</p>
+<ul>
+<li>per-upstream auth</li>
+<li>scoped rate limiting</li>
+<li>distributed quota</li>
+<li>observability and operator-facing control surfaces</li>
+</ul>
+<p>It is still weaker than a full gateway platform because:</p>
+<ul>
+<li>request and response transformation depth is limited</li>
+<li>there is no broad generic policy engine</li>
+<li>auth-provider chaining and gateway orchestration remain narrower</li>
 </ul>
 <h2 id="recommended-rollout-shape">Recommended Rollout Shape</h2>
 <ol>
-<li>Start with one service or bounded traffic class.</li>
-<li>Keep previous infrastructure available for rollback.</li>
-<li>Use drain-and-restart for non-certificate config changes.</li>
-<li>Expand only after stable latency, error rate, and health behavior.</li>
+<li>Start with one service, one route family, or one bounded traffic slice.</li>
+<li>Keep a known-good config generation and known-good binary ready for rollback.</li>
+<li>Use staged activation for runtime-managed config changes.</li>
+<li>Use cert reload only for cert-only changes.</li>
+<li>Use drain-aware restart or node replacement for restart-required changes.</li>
+<li>Expand only after latency, backend health, overload, and quota behavior remain stable.</li>
 </ol>
   </div>
   
@@ -1967,29 +1997,57 @@ scope/role RBAC, and external auth (HTTP subrequest or OIDC) — and scoped rate
         
         
         
-        <a href="#best-fit-patterns"
+        <a href="#best-fit-product-patterns"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#best-fit-patterns');">
-            Best-Fit Patterns
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#best-fit-product-patterns');">
+            Best-Fit Product Patterns
         </a>
         
         
-        <a href="#http3-edge-to-http2-service-tier"
+        <a href="#http3-edge-to-http2-or-http11-service-tier"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#http3-edge-to-http2-service-tier');">
-            HTTP/3 Edge To HTTP/2 Service Tier
-        </a>
-        
-        <a href="#controlled-canary-rollout"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#controlled-canary-rollout');">
-            Controlled Canary Rollout
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#http3-edge-to-http2-or-http11-service-tier');">
+            HTTP/3 Edge to HTTP/2 or HTTP/1.1 Service Tier
         </a>
         
         <a href="#single-team-edge-tier"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#single-team-edge-tier');">
             Single-Team Edge Tier
+        </a>
+        
+        <a href="#finite-multi-service-platform-edge"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#finite-multi-service-platform-edge');">
+            Finite Multi-Service Platform Edge
+        </a>
+        
+        
+
+        
+        <a href="#best-fit-rollout-patterns"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#best-fit-rollout-patterns');">
+            Best-Fit Rollout Patterns
+        </a>
+        
+        
+        <a href="#canary-or-bounded-traffic-slice"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#canary-or-bounded-traffic-slice');">
+            Canary or Bounded Traffic Slice
+        </a>
+        
+        <a href="#active-active-edge-pool"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#active-active-edge-pool');">
+            Active-Active Edge Pool
+        </a>
+        
+        <a href="#blue-green-or-node-replacement-rollout"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#blue-green-or-node-replacement-rollout');">
+            Blue-Green or Node-Replacement Rollout
         </a>
         
         
@@ -2008,16 +2066,16 @@ scope/role RBAC, and external auth (HTTP subrequest or OIDC) — and scoped rate
             Dynamic Fleet-Managed Multi-Tenant Platform
         </a>
         
-        <a href="#general-api-gateway-replacement"
+        <a href="#broad-legacy-compatibility-proxy"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#general-api-gateway-replacement');">
-            General API Gateway Replacement
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#broad-legacy-compatibility-proxy');">
+            Broad Legacy Compatibility Proxy
         </a>
         
-        <a href="#broad-legacy-upstream-compatibility-proxy"
+        <a href="#full-api-gateway-replacement"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#broad-legacy-upstream-compatibility-proxy');">
-            Broad Legacy Upstream Compatibility Proxy
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#full-api-gateway-replacement');">
+            Full API Gateway Replacement
         </a>
         
         

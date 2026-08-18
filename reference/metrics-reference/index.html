@@ -1454,12 +1454,69 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>This page documents the major built-in Prometheus metrics families currently exposed by Spooky.</p>
+    <p>Use this page to look up exported metric families, labels, and meanings.</p>
+<h2 id="quick-lookup">Quick Lookup</h2>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>If you need to check</th>
+<th>Start here</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>request volume, outcomes, and status classes</td>
+<td><a href="#core-request-metrics">Core Request Metrics</a> and <a href="#request-breakdown-metrics">Request Breakdown Metrics</a></td>
+</tr>
+<tr>
+<td>latency families</td>
+<td><a href="#latency-metrics">Latency Metrics</a></td>
+</tr>
+<tr>
+<td>overload, brownout, and circuit protection</td>
+<td><a href="#overload-and-admission-metrics">Overload And Admission Metrics</a></td>
+</tr>
+<tr>
+<td>quota decisions and backend health</td>
+<td><a href="#quota-metrics">Quota Metrics</a></td>
+</tr>
+<tr>
+<td>retries and hedges</td>
+<td><a href="#retry-and-hedging-metrics">Retry And Hedging Metrics</a></td>
+</tr>
+<tr>
+<td>downstream or upstream TLS</td>
+<td><a href="#tls-metrics">TLS Metrics</a></td>
+</tr>
+<tr>
+<td>control-plane or runtime generation signals</td>
+<td><a href="#control-plane-and-runtime-metrics">Control Plane And Runtime Metrics</a></td>
+</tr>
+</tbody>
+</table></div>
 <h2 id="endpoint">Endpoint</h2>
 <ul>
 <li>method: <code>GET</code></li>
 <li>path: configurable by <code>observability.metrics.path</code></li>
 <li>default path: <code>/metrics</code></li>
+</ul>
+<h2 id="canonical-label-rules">Canonical Label Rules</h2>
+<p>The most important low-cardinality labels are:</p>
+<ul>
+<li><code>upstream</code></li>
+<li><code>backend</code></li>
+<li><code>route</code></li>
+<li><code>status_class</code></li>
+<li><code>outcome</code></li>
+<li><code>reason</code></li>
+<li><code>decision</code></li>
+<li><code>selector_dimensions</code></li>
+<li><code>backend_mode</code></li>
+</ul>
+<p>Operator rule:</p>
+<ul>
+<li>build dashboards and alerts from canonical label values, not from prose parsing</li>
+<li>keep quota, overload, auth, and generic backend failure separate</li>
 </ul>
 <h2 id="core-request-metrics">Core Request Metrics</h2>
 <div class="table-wrapper"><table>
@@ -1495,6 +1552,31 @@
 <td><code>spooky_policy_denied</code></td>
 <td>counter</td>
 <td>Requests denied by runtime method/path policy</td>
+</tr>
+<tr>
+<td><code>spooky_external_auth_allowed</code></td>
+<td>counter</td>
+<td>Requests explicitly allowed by external auth</td>
+</tr>
+<tr>
+<td><code>spooky_external_auth_denied</code></td>
+<td>counter</td>
+<td>Requests denied, challenged, or redirected by external auth</td>
+</tr>
+<tr>
+<td><code>spooky_external_auth_timeout</code></td>
+<td>counter</td>
+<td>External auth decisions that timed out</td>
+</tr>
+<tr>
+<td><code>spooky_external_auth_error</code></td>
+<td>counter</td>
+<td>External auth transport or execution failures</td>
+</tr>
+<tr>
+<td><code>spooky_request_rate_limited</code></td>
+<td>counter</td>
+<td>Requests rejected by scoped request rate limits</td>
 </tr>
 </tbody>
 </table></div>
@@ -1532,6 +1614,7 @@
 <li>which backend is taking most of the failed traffic?</li>
 <li>are failures mostly timeouts, backend errors, or overload shedding?</li>
 </ul>
+<p>These are the primary traffic families behind the packaged dashboards and recording rules.</p>
 <h2 id="latency-metrics">Latency Metrics</h2>
 <div class="table-wrapper"><table>
 <thead>
@@ -1680,6 +1763,47 @@
 </tr>
 </tbody>
 </table></div>
+<p>Interpretation rules:</p>
+<ul>
+<li><code>spooky_overload_shed_by_reason_total</code> is for overload self-protection</li>
+<li><code>spooky_request_rate_limited</code> is for scoped rate-limit enforcement</li>
+<li>neither of those is the quota contract signal</li>
+</ul>
+<h2 id="quota-metrics">Quota Metrics</h2>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Type</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>spooky_quota_policy_outcomes_total{policy,decision,reason,selector_dimensions,backend_mode}</code></td>
+<td>counter</td>
+<td>Quota outcomes grouped by matched policy, decision, canonical reason, selector dimensions, and backend mode</td>
+</tr>
+<tr>
+<td><code>spooky_quota_backend_health_total{backend_mode,reason}</code></td>
+<td>counter</td>
+<td>Quota backend health and error observations</td>
+</tr>
+</tbody>
+</table></div>
+<p>Interpretation rules:</p>
+<ul>
+<li><code>decision</code> answers whether quota allowed, denied, failed open, or otherwise changed request handling</li>
+<li><code>reason</code> answers why the quota result happened</li>
+<li><code>selector_dimensions</code> tells you which identity dimensions were part of the matched policy</li>
+<li><code>backend_mode</code> tells you whether the decision came from Redis, local fallback, or another configured enforcement mode</li>
+</ul>
+<p>Use these to separate:</p>
+<ul>
+<li>contract exhaustion</li>
+<li>quota backend degradation</li>
+<li>fail-open versus fail-closed behavior</li>
+</ul>
 <h2 id="connection-and-ingress-metrics">Connection And Ingress Metrics</h2>
 <div class="table-wrapper"><table>
 <thead>
@@ -2012,6 +2136,41 @@ last-known-good keys.</p>
 </thead>
 <tbody>
 <tr>
+<td><code>spooky_runtime_validation_attempts_total</code></td>
+<td>counter</td>
+<td>Staged validation requests accepted by the control plane</td>
+</tr>
+<tr>
+<td><code>spooky_runtime_preview_attempts_total</code></td>
+<td>counter</td>
+<td>Staged preview requests accepted by the control plane</td>
+</tr>
+<tr>
+<td><code>spooky_runtime_activation_total{result,reason}</code></td>
+<td>counter</td>
+<td>Runtime activation outcomes grouped by result and canonical reason</td>
+</tr>
+<tr>
+<td><code>spooky_runtime_rollback_total{result,reason}</code></td>
+<td>counter</td>
+<td>Runtime rollback outcomes grouped by result and canonical reason</td>
+</tr>
+<tr>
+<td><code>spooky_runtime_rejections_total{reason}</code></td>
+<td>counter</td>
+<td>Runtime activation or rollback rejections grouped by canonical operator reason</td>
+</tr>
+<tr>
+<td><code>spooky_runtime_active_generation</code></td>
+<td>gauge</td>
+<td>Current active runtime generation identifier</td>
+</tr>
+<tr>
+<td><code>spooky_runtime_history_depth</code></td>
+<td>gauge</td>
+<td>Number of retained runtime history entries visible to the active generation</td>
+</tr>
+<tr>
 <td><code>spooky_control_api_connection_limit_drops</code></td>
 <td>counter</td>
 <td>Control API connections dropped by limiter</td>
@@ -2038,31 +2197,56 @@ last-known-good keys.</p>
 </tr>
 </tbody>
 </table></div>
-<h2 id="golden-signals-to-watch-first">Golden Signals To Watch First</h2>
+<p>Use these when:</p>
 <ul>
-<li>request success/failure counters</li>
-<li>request totals by upstream and backend outcome</li>
-<li>upstream request latency histogram percentiles from PromQL</li>
-<li>route latency percentiles</li>
-<li>overload shed counts by reason</li>
-<li>backend timeout and backend error counters</li>
-<li>active connections</li>
-<li>request buffered bytes</li>
-<li>downstream handshake failures</li>
+<li>activation, rollback, or restart workflows are misbehaving</li>
+<li>the active generation may differ across nodes</li>
+<li>watchdog activity might be driving drain or restart behavior</li>
 </ul>
-<h2 id="first-alerts-to-add">First Alerts To Add</h2>
-<ul>
-<li><code>sum by (upstream) (rate(spooky_upstream_requests_total{status_class="5xx"}[5m]))</code></li>
-<li><code>sum by (backend) (rate(spooky_backend_requests_total{outcome="backend_error"}[5m]))</code></li>
-<li><code>histogram_quantile(0.95, sum by (le, upstream) (rate(spooky_upstream_request_latency_ms_bucket[5m])))</code></li>
-<li>sustained growth in <code>spooky_overload_shed_by_reason_total</code></li>
-<li>rising <code>spooky_backend_timeouts</code></li>
-<li>rising <code>spooky_downstream_tls_handshake_failure_total</code></li>
-<li>unexpectedly high <code>spooky_request_buffered_bytes</code></li>
-<li>any sustained <code>spooky_runtime_panics</code></li>
-</ul>
+<h2 id="metrics-to-control-api-workflow">Metrics To Control API Workflow</h2>
+<p>Use this fast path when the metrics tell you the class of problem but not the live state:</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Metric family</th>
+<th>Next control-plane read</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>spooky_quota_policy_outcomes_total</code></td>
+<td><code>GET /admin/runtime</code></td>
+</tr>
+<tr>
+<td><code>spooky_quota_backend_health_total</code></td>
+<td><code>GET /admin/runtime</code></td>
+</tr>
+<tr>
+<td><code>spooky_runtime_activation_total</code></td>
+<td><code>GET /admin/runtime/history</code></td>
+</tr>
+<tr>
+<td><code>spooky_runtime_rollback_total</code></td>
+<td><code>GET /admin/runtime/history</code></td>
+</tr>
+<tr>
+<td><code>spooky_runtime_rejections_total</code></td>
+<td><code>GET /admin/runtime/history</code></td>
+</tr>
+<tr>
+<td><code>spooky_watchdog_*</code> or <code>spooky_runtime_panics</code></td>
+<td><code>GET /admin/runtime</code></td>
+</tr>
+<tr>
+<td><code>spooky_downstream_tls_*</code></td>
+<td><code>GET /admin/runtime</code></td>
+</tr>
+</tbody>
+</table></div>
 <h2 id="related-pages">Related Pages</h2>
 <ul>
+<li><a href="../../operations/observability-bundle/">Observability Operator Bundle</a></li>
+<li><a href="../../operations/metrics-and-alerts/">Metrics and Alerts</a></li>
 <li><a href="../control-api-reference/">Control API Reference</a></li>
 <li><a href="../../operations/runbook/">Operations Runbook</a></li>
 </ul>
@@ -2522,10 +2706,26 @@ last-known-good keys.</p>
         
         
         
+        <a href="#quick-lookup"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#quick-lookup');">
+            Quick Lookup
+        </a>
+        
+
+        
         <a href="#endpoint"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#endpoint');">
             Endpoint
+        </a>
+        
+
+        
+        <a href="#canonical-label-rules"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#canonical-label-rules');">
+            Canonical Label Rules
         </a>
         
 
@@ -2574,6 +2774,14 @@ last-known-good keys.</p>
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#overload-and-admission-metrics');">
             Overload And Admission Metrics
+        </a>
+        
+
+        
+        <a href="#quota-metrics"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#quota-metrics');">
+            Quota Metrics
         </a>
         
 
@@ -2634,18 +2842,10 @@ last-known-good keys.</p>
         
 
         
-        <a href="#golden-signals-to-watch-first"
+        <a href="#metrics-to-control-api-workflow"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#golden-signals-to-watch-first');">
-            Golden Signals To Watch First
-        </a>
-        
-
-        
-        <a href="#first-alerts-to-add"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#first-alerts-to-add');">
-            First Alerts To Add
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#metrics-to-control-api-workflow');">
+            Metrics To Control API Workflow
         </a>
         
 

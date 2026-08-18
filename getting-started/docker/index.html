@@ -1454,48 +1454,65 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <h2 id="prerequisites">Prerequisites</h2>
+    <p>This page is the fastest way to run Spooky in containers and verify health, metrics, and first proxied traffic.</p>
+<h2 id="prerequisites">Prerequisites</h2>
 <ul>
 <li><a href="https://docs.docker.com/get-docker/">Docker</a> 24+ (or Docker Desktop)</li>
 <li><a href="https://docs.docker.com/compose/install/">Docker Compose</a> v2 plugin (bundled with Docker Desktop)</li>
-<li>TLS certificate and key for the proxy listener (see <a href="../installation/#tls-certificates">TLS Certificates</a>)</li>
+</ul>
+<h2 id="choose-your-docker-path">Choose Your Docker Path</h2>
+<ul>
+<li>Want the fastest container evaluation path: use the provided Compose stack plus a small demo backend</li>
+<li>Want to run only the Spooky container: use the single-container commands later in this page</li>
+<li>Want full host and production guidance: use <a href="../../deployment/production/">Production Deployment</a></li>
 </ul>
 <h2 id="quick-start-with-docker-compose">Quick Start with Docker Compose</h2>
-<p>The fastest way to get Spooky running is with the provided Compose stack.</p>
-<p><strong>1. Clone the repository (or copy the packaging files):</strong></p>
+<p>The fastest working container path is:</p>
+<ol>
+<li>use the provided Compose stack</li>
+<li>point the default upstream at a demo backend</li>
+<li>verify first traffic, health, and metrics</li>
+</ol>
+<p><strong>1. Clone the repository:</strong></p>
 <pre><code class="language-bash">git clone https://github.com/Supernova-Labs-Org/spooky.git
 cd spooky
 </code></pre>
-<p><strong>2. Place your TLS certificates:</strong></p>
-<pre><code class="language-bash">mkdir -p certs
-cp /path/to/your/proxy-cert.pem     certs/proxy-cert.pem
-cp /path/to/your/proxy-key-pkcs8.pem certs/proxy-key-pkcs8.pem
+<p><strong>2. Use the repo development certificates for local testing.</strong></p>
+<p>The packaged Compose file already mounts <code>certs/proxy-cert.pem</code> and <code>certs/proxy-key-pkcs8.pem</code> from the repository.</p>
+<p>For real deployments, replace them with your own certificate material and follow <a href="../../configuration/tls/">TLS Setup</a>.</p>
+<p><strong>3. Start a small demo backend:</strong></p>
+<pre><code class="language-bash">docker run -d --name spooky-demo-backend --rm -p 8080:80 nginx:alpine
 </code></pre>
-<p><strong>3. Edit the config to point at your backend:</strong></p>
+<p><strong>4. Edit the config to point at that backend:</strong></p>
 <p>Open <code>packaging/docker/config.docker.yaml</code> and replace the upstream address:</p>
 <pre><code class="language-yaml">upstream:
   default:
     backends:
       - id: &quot;default-backend&quot;
-        address: &quot;http://your-backend:8080&quot;   # &lt;-- change this
+        address: &quot;http://host.docker.internal:8080&quot;
 </code></pre>
+<p>If you are on Linux, replace <code>host.docker.internal</code> with a reachable host-gateway address or run the backend in the same Compose project and use its service name.</p>
 <p>Also replace the control API token:</p>
 <pre><code class="language-yaml">observability:
   control_api:
     auth_token: &quot;replace-with-strong-token&quot;   # &lt;-- change this
 </code></pre>
-<p><strong>4. Start the stack:</strong></p>
+<p><strong>5. Start the stack:</strong></p>
 <pre><code class="language-bash">docker compose -f packaging/docker/docker-compose.yml up -d --build
 </code></pre>
-<p><strong>5. Verify it is running:</strong></p>
+<p><strong>6. Verify health, metrics, and first traffic:</strong></p>
 <pre><code class="language-bash"># Health check
-curl -k https://127.0.0.1:9902/health
+curl -k --http1.1 https://127.0.0.1:9902/health
 
 # Metrics
 curl http://127.0.0.1:9901/metrics
+
+# First proxied request
+curl --http3-only -k https://127.0.0.1:9889/
 </code></pre>
 <p><strong>Stop the stack:</strong></p>
 <pre><code class="language-bash">docker compose -f packaging/docker/docker-compose.yml down
+docker rm -f spooky-demo-backend 2&gt;/dev/null || true
 </code></pre>
 <h2 id="running-a-single-container">Running a Single Container</h2>
 <p>If you prefer to manage the container directly:</p>
@@ -1550,7 +1567,7 @@ docker run -d \
   --restart unless-stopped \
   spooky:latest
 </code></pre>
-<p>See <code>packaging/docker/config.docker.yaml</code> for a fully annotated reference config.</p>
+<p>See <code>packaging/docker/config.docker.yaml</code> for the packaged container reference config.</p>
 <h2 id="building-the-image">Building the Image</h2>
 <p>A helper script is provided to build and tag the image:</p>
 <pre><code class="language-bash"># Default tag: spooky:packaging
@@ -1591,6 +1608,13 @@ docker build -t spooky:latest -f packaging/docker/Dockerfile .
 docker rm -f spooky
 docker run -d ...   # same run command as before
 </code></pre>
+<h2 id="what-to-read-next">What to Read Next</h2>
+<ul>
+<li><a href="../../tutorials/quickstart/">Quickstart</a> - fastest local non-container first run</li>
+<li><a href="../installation/">Installation</a> - install Spooky directly on a host</li>
+<li><a href="../minimum-production/">Minimum Production</a> - minimum safe production posture</li>
+<li><a href="../../deployment/production/">Production Deployment</a> - full deployment guidance</li>
+</ul>
   </div>
   
   <script>
@@ -2055,6 +2079,14 @@ docker run -d ...   # same run command as before
         
 
         
+        <a href="#choose-your-docker-path"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#choose-your-docker-path');">
+            Choose Your Docker Path
+        </a>
+        
+
+        
         <a href="#quick-start-with-docker-compose"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#quick-start-with-docker-compose');">
@@ -2115,6 +2147,14 @@ docker run -d ...   # same run command as before
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#upgrading');">
             Upgrading
+        </a>
+        
+
+        
+        <a href="#what-to-read-next"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#what-to-read-next');">
+            What to Read Next
         </a>
         
 

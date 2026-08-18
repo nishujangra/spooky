@@ -1429,6 +1429,12 @@
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <p>This document explains which Spooky metrics matter most in production and how operators should use them for alerting and dashboards.</p>
+<h2 id="read-this-with">Read This With</h2>
+<ul>
+<li><a href="../../reference/metrics-reference/">Metrics Reference</a> for exact series names</li>
+<li><a href="../observability-bundle/">Observability Operator Bundle</a> for the packaged dashboards, recording rules, alerts, and SLOs</li>
+<li><a href="../../reference/control-api-reference/">Control API Reference</a> when you need current runtime state rather than trend</li>
+</ul>
 <h2 id="purpose">Purpose</h2>
 <p>Spooky exposes many counters, gauges, and labeled request families. Operators should focus on the metrics that answer:</p>
 <ul>
@@ -1577,6 +1583,7 @@ distinguish quota exhaustion, quota backend degradation, and overload shedding.<
 <li>TLS health dashboard</li>
 <li>runtime/control-plane health dashboard</li>
 </ul>
+<p>The repository now ships these dashboards, so the normal operator path is to use the packaged dashboard set rather than inventing an ad hoc first dashboard stack.</p>
 <h2 id="first-alerts-to-add">First Alerts To Add</h2>
 <h3 id="request-failure-alerts">Request failure alerts</h3>
 <p>Alert on sustained increases in:</p>
@@ -1615,6 +1622,7 @@ distinguish quota exhaustion, quota backend degradation, and overload shedding.<
 <li>watchdog degraded windows</li>
 <li>runtime panics</li>
 <li>unexpected control API limiter drops</li>
+<li>runtime activation or rollback rejection growth</li>
 </ul>
 <h2 id="metric-interpretation-rules">Metric Interpretation Rules</h2>
 <h3 id="use-labeled-families-first">Use labeled families first</h3>
@@ -1627,6 +1635,11 @@ distinguish quota exhaustion, quota backend degradation, and overload shedding.<
 <li>metrics to detect an issue</li>
 <li>control API runtime and backend inventory to inspect current state</li>
 </ul>
+<p>For runtime-managed changes and admin-plane incidents, also use:</p>
+<ul>
+<li><code>GET /admin/runtime/history</code></li>
+<li>audit records for actor and action attribution</li>
+</ul>
 <h2 id="operator-expectations">Operator Expectations</h2>
 <p>Metrics should let operators answer:</p>
 <ul>
@@ -1638,7 +1651,14 @@ distinguish quota exhaustion, quota backend degradation, and overload shedding.<
 <p>If a dashboard requires reading implementation-specific logs to interpret a core metric, the dashboard likely needs to be redesigned around the canonical labeled families.</p>
 <h2 id="related-pages">Related Pages</h2>
 <ul>
-<li><a href="../../reference/metrics-reference/">Metrics Reference</a></li>
+<li><a href="../observability-bundle/">Observability Operator Bundle</a></li>
+<li><a href="../control-plane/">Control Plane</a></li>
+<li>
+<p><a href="../../reference/control-api-reference/">Control API Reference</a></p>
+</li>
+<li>
+<p><a href="../../reference/metrics-reference/">Metrics Reference</a></p>
+</li>
 <li><a href="../../architecture/observability-contract/">Observability Contract</a></li>
 <li><a href="../control-plane/">Control Plane</a></li>
 <li><a href="../reload-and-drain/">Reload and Drain</a></li>
@@ -2072,6 +2092,14 @@ distinguish quota exhaustion, quota backend degradation, and overload shedding.<
         
         
         
+        
+        <a href="#read-this-with"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#read-this-with');">
+            Read This With
+        </a>
+        
+
         
         <a href="#purpose"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"

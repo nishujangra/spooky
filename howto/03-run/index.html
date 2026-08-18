@@ -1455,6 +1455,7 @@
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <p>This guide covers running Spooky directly, as a systemd service, and in Docker — including startup validation, graceful shutdown, and health checking.</p>
+<p>For the fastest first successful request, use <a href="../../tutorials/quickstart/">Quickstart</a> or <a href="../../getting-started/docker/">Docker Installation</a> first. This page is the broader run-mode reference once you already have a working config.</p>
 <hr />
 <h2 id="prerequisites">Prerequisites</h2>
 <p>Before starting Spooky you need:</p>
@@ -1482,10 +1483,13 @@ cargo build --release
 <h3 id="basic-start">Basic start</h3>
 <pre><code class="language-bash">spooky --config /etc/spooky/config.yaml
 </code></pre>
-<h3 id="validate-config-without-starting-current-version-of-spooky-does-not-support-validate-flag-planned-feature">Validate config without starting (Current version of spooky does not support validate flag) (planned feature)</h3>
-<pre><code class="language-bash">spooky --config /etc/spooky/config.yaml --validate
-</code></pre>
-<p>Spooky exits 0 on success, 1 on validation failure, with a descriptive error message.</p>
+<h3 id="validate-by-startup-on-a-safe-host-or-staging-instance">Validate by startup on a safe host or staging instance</h3>
+<p>Spooky validates its config during startup. There is no standalone <code>--validate</code> flag.</p>
+<p>Use one of these approaches:</p>
+<ul>
+<li>start Spooky against the candidate config on a non-production host and stop it after successful startup</li>
+<li>use the Control API staged flow: <code>POST /admin/runtime/validate</code>, <code>/preview</code>, then <code>/activate</code></li>
+</ul>
 <h3 id="foreground-with-debug-logging-development">Foreground with debug logging (development)</h3>
 <p>Override the log level at runtime by setting the level in your config or using a dev config:</p>
 <pre><code class="language-yaml">log:
@@ -1521,7 +1525,7 @@ sudo chmod 755 /usr/bin/spooky
 sudo setcap cap_net_bind_service=+ep /usr/bin/spooky
 </code></pre>
 <h3 id="copy-your-config-and-certificates">Copy your config and certificates</h3>
-<pre><code class="language-bash">sudo cp config/config.reverse.yaml /etc/spooky/config.yaml
+<pre><code class="language-bash">sudo cp /path/to/your/config.yaml /etc/spooky/config.yaml
 sudo cp certs/fullchain.pem /etc/spooky/certs/fullchain.pem
 sudo cp certs/privkey.pem   /etc/spooky/certs/privkey.pem
 sudo chown spooky:spooky /etc/spooky/certs/*
@@ -1574,10 +1578,8 @@ sudo systemctl status spooky
 sudo journalctl -u spooky -f
 </code></pre>
 <h3 id="graceful-reload-after-cert-renewal">Graceful reload (after cert renewal)</h3>
-<pre><code class="language-bash"># Signal spooky to reload (currently triggers restart)
-sudo systemctl reload spooky
-
-# Or full restart
+<pre><code class="language-bash"># Prefer the staged Control API flow for runtime-managed config changes.
+# Use a full restart only when the change touches restart-required settings.
 sudo systemctl restart spooky
 </code></pre>
 <hr />
@@ -1638,13 +1640,13 @@ docker compose logs -f spooky
 <h2 id="health-and-readiness-checks">Health and Readiness Checks</h2>
 <p>If <code>observability.control_api.enabled=true</code>:</p>
 <pre><code class="language-bash"># Liveness — is the process alive?
-curl -k https://127.0.0.1:9902/health
+curl -k --http1.1 https://127.0.0.1:9902/health
 
 # Readiness — is Spooky ready to serve traffic?
-curl -k https://127.0.0.1:9902/ready
+curl -k --http1.1 https://127.0.0.1:9902/ready
 
 # Runtime info (requires auth token)
-curl -k -H &quot;Authorization: Bearer &lt;token&gt;&quot; https://127.0.0.1:9902/admin/runtime
+curl -k --http1.1 -H &quot;Authorization: Bearer &lt;token&gt;&quot; https://127.0.0.1:9902/admin/runtime
 </code></pre>
 <hr />
 <h2 id="graceful-shutdown">Graceful Shutdown</h2>
@@ -2210,10 +2212,10 @@ curl --http3-only -k https://api.example.com/health
             Basic start
         </a>
         
-        <a href="#validate-config-without-starting-current-version-of-spooky-does-not-support-validate-flag-planned-feature"
+        <a href="#validate-by-startup-on-a-safe-host-or-staging-instance"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#validate-config-without-starting-current-version-of-spooky-does-not-support-validate-flag-planned-feature');">
-            Validate config without starting (Current version of spooky does not support validate flag) (planned feature)
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#validate-by-startup-on-a-safe-host-or-staging-instance');">
+            Validate by startup on a safe host or staging instance
         </a>
         
         <a href="#foreground-with-debug-logging-development"

@@ -1454,38 +1454,68 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>This page groups host-level tuning guidance relevant to production Spooky deployments.</p>
-<h2 id="host-priorities">Host Priorities</h2>
+    <p>This page groups host-level tuning guidance for production Spooky deployments. Use it together with <a href="../../deployment/production/">Production Deployment</a> and <a href="../sizing-and-capacity/">Sizing And Capacity</a>.</p>
+<h2 id="primary-goals">Primary Goals</h2>
+<p>Tune the host so the edge runtime gets:</p>
 <ul>
-<li>sufficient UDP buffer sizing</li>
-<li>sufficient file descriptor limits</li>
-<li>stable CPU scheduling under multi-worker load</li>
-<li>predictable network path MTU</li>
-<li>minimal interference from unrelated noisy workloads</li>
+<li>enough UDP and TCP buffer headroom</li>
+<li>enough file descriptors and process limits</li>
+<li>predictable CPU scheduling</li>
+<li>stable network behavior under packet bursts</li>
+<li>minimal interference from unrelated co-located workloads</li>
 </ul>
-<h2 id="linux-tuning-areas">Linux Tuning Areas</h2>
-<p>Important areas to validate:</p>
+<h2 id="baseline-tuning-areas">Baseline Tuning Areas</h2>
+<p>Validate these areas first:</p>
 <ul>
-<li>receive and send socket buffer sizes</li>
-<li>device backlog and packet budget</li>
+<li>socket receive and send buffer ceilings</li>
+<li>device backlog and packet-processing budget</li>
 <li>file descriptor ceilings</li>
-<li>capability model for privileged ports</li>
-<li>conntrack impact, if present in the environment</li>
+<li>privileged-port bind strategy</li>
+<li>conntrack impact, if your environment inserts it in the path</li>
+<li>CPU pinning or IRQ placement only after measurement</li>
 </ul>
-<h2 id="built-in-project-guidance">Built-In Project Guidance</h2>
-<p>The repository already includes:</p>
+<h2 id="recommended-starting-posture">Recommended Starting Posture</h2>
 <ul>
-<li>production guidance in <a href="../../deployment/production/">Production Deployment</a></li>
-<li>a Linux sysctl helper in <code>scripts/sysctl-linux-network-tuning.sh</code></li>
+<li>start from the Linux baseline in <a href="../../deployment/production/">Production Deployment</a></li>
+<li>use <code>scripts/sysctl-linux-network-tuning.sh</code> only as a baseline helper, not as a final answer</li>
+<li>keep the metrics and Control API surfaces reachable from operations tooling but isolated from public traffic</li>
+<li>isolate Spooky from unrelated batch or noisy-neighbor workloads where possible</li>
 </ul>
-<p>Use those as a baseline, then tune with real traffic and host telemetry.</p>
-<h2 id="practical-advice">Practical Advice</h2>
+<h2 id="host-validation-checklist">Host Validation Checklist</h2>
+<p>Before rollout, confirm:</p>
+<ol>
+<li>UDP and TCP buffer values are high enough for your expected traffic shape.</li>
+<li><code>nofile</code> and related service limits exceed expected connection and socket usage.</li>
+<li>The host can bind the required ports using either capability-based bind or privileged start plus drop.</li>
+<li>MTU and network path behavior are stable between clients, the edge, and upstream networks.</li>
+<li>Scraping, log shipping, and control-plane access do not contend heavily with the data plane.</li>
+</ol>
+<h2 id="cpu-guidance">CPU Guidance</h2>
 <ul>
-<li>do not treat aggressive sysctl values as universally correct</li>
-<li>validate tuning with the same traffic pattern you expect in production</li>
-<li>keep cert, config, and log path permissions minimal</li>
-<li>isolate the process from unrelated noisy co-located workloads where possible</li>
-<li>verify privileged-port bind strategy before rollout</li>
+<li>Start with one worker per core as a baseline.</li>
+<li>Add packet sharding only if packet-rate pressure or worker imbalance justifies it.</li>
+<li>Add worker pinning only after measuring improvement on the target host.</li>
+<li>Avoid sharing the same cores with aggressive background jobs, log processors, or unrelated proxies.</li>
+</ul>
+<h2 id="network-guidance">Network Guidance</h2>
+<ul>
+<li>Validate QUIC traffic on the real ingress path, not only from local loopback tests.</li>
+<li>Measure packet drops, backlog pressure, and receive errors under burst traffic.</li>
+<li>If conntrack is present, confirm it is not becoming a hidden bottleneck for UDP traffic.</li>
+<li>Treat MTU changes carefully. Validate with the same client and network shapes you expect in production.</li>
+</ul>
+<h2 id="security-and-permissions">Security And Permissions</h2>
+<ul>
+<li>Keep config and certificate paths readable only to the minimum required service identities.</li>
+<li>Keep the Control API on loopback or an isolated admin network.</li>
+<li>Prefer explicit service-account ownership and minimal writable paths.</li>
+</ul>
+<h2 id="tuning-rules">Tuning Rules</h2>
+<ul>
+<li>Do not copy aggressive sysctl values between environments blindly.</li>
+<li>Change one tuning area at a time and record the latency, drop-rate, and memory effect.</li>
+<li>Re-test after binary upgrades, kernel upgrades, or major traffic-shape changes.</li>
+<li>If a host change improves benchmark results but makes drain, rollout, or observability behavior worse, treat it as incomplete.</li>
 </ul>
   </div>
   
@@ -1943,34 +1973,66 @@
         
         
         
-        <a href="#host-priorities"
+        <a href="#primary-goals"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#host-priorities');">
-            Host Priorities
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#primary-goals');">
+            Primary Goals
         </a>
         
 
         
-        <a href="#linux-tuning-areas"
+        <a href="#baseline-tuning-areas"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#linux-tuning-areas');">
-            Linux Tuning Areas
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#baseline-tuning-areas');">
+            Baseline Tuning Areas
         </a>
         
 
         
-        <a href="#built-in-project-guidance"
+        <a href="#recommended-starting-posture"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#built-in-project-guidance');">
-            Built-In Project Guidance
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#recommended-starting-posture');">
+            Recommended Starting Posture
         </a>
         
 
         
-        <a href="#practical-advice"
+        <a href="#host-validation-checklist"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#practical-advice');">
-            Practical Advice
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#host-validation-checklist');">
+            Host Validation Checklist
+        </a>
+        
+
+        
+        <a href="#cpu-guidance"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#cpu-guidance');">
+            CPU Guidance
+        </a>
+        
+
+        
+        <a href="#network-guidance"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#network-guidance');">
+            Network Guidance
+        </a>
+        
+
+        
+        <a href="#security-and-permissions"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#security-and-permissions');">
+            Security And Permissions
+        </a>
+        
+
+        
+        <a href="#tuning-rules"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#tuning-rules');">
+            Tuning Rules
         </a>
         
 

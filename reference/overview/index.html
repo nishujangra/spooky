@@ -1454,21 +1454,60 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>This section is the canonical source for exact behavior and supported surface area.</p>
+    <p>This section is the canonical source for exact product behavior, supported surface area, and current limits.</p>
+<p>Use this section when you need one authoritative source for exact support, limits, configuration semantics, and operator-facing interfaces.</p>
 <h2 id="start-here">Start Here</h2>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Topic</th>
+<th>Canonical page</th>
+<th>Use when</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>exact feature support</td>
+<td><a href="../feature-matrix/">Feature Matrix</a></td>
+<td>you need to know whether a capability is done, partial, or missing</td>
+</tr>
+<tr>
+<td>hard product limits</td>
+<td><a href="../limitations/">Limitations</a></td>
+<td>you need boundaries or non-goals</td>
+</tr>
+<tr>
+<td>exact config semantics</td>
+<td><a href="../../configuration/reference/">Configuration Reference</a></td>
+<td>you need field shape, precedence, and runtime meaning</td>
+</tr>
+<tr>
+<td>TLS and trust config</td>
+<td><a href="../../configuration/tls/">TLS Setup</a></td>
+<td>you need certificate, trust, or mTLS setup details</td>
+</tr>
+<tr>
+<td>exact control-plane interface</td>
+<td><a href="../control-api-reference/">Control API Reference</a></td>
+<td>you need endpoint, role, or response semantics</td>
+</tr>
+<tr>
+<td>exact metric and label vocabulary</td>
+<td><a href="../metrics-reference/">Metrics Reference</a></td>
+<td>you need exported signal names and labels</td>
+</tr>
+<tr>
+<td>reader-facing product terms</td>
+<td><a href="../terminology/">Terminology</a></td>
+<td>you need canonical wording</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="related-navigation">Related Navigation</h2>
 <ul>
-<li><a href="../feature-matrix/">Feature Matrix</a> provides the source-backed inventory of implemented, partial, and missing capabilities.</li>
-<li><a href="../limitations/">Limitations</a> lists the current product boundaries directly.</li>
-<li><a href="../../configuration/reference/">Configuration Reference</a> is the authoritative schema and runtime-semantics guide.</li>
-<li><a href="../../configuration/tls/">TLS Setup</a> explains certificate and trust configuration.</li>
-<li><a href="../../api/overview/">API Overview</a> summarizes the current operator-facing control and metrics endpoints.</li>
-</ul>
-<h2 id="what-this-section-covers">What This Section Covers</h2>
-<ul>
-<li>exact feature support</li>
-<li>exact current limits</li>
-<li>exact configuration semantics</li>
-<li>exact operator-facing interfaces</li>
+<li><a href="../../api/overview/">API Overview</a> is the short entry point for metrics and the Control API.</li>
+<li><a href="../../operations/overview/">Operations Overview</a> is the main deployment, rollout, and recovery entry point.</li>
+<li><a href="../../troubleshooting/common-issues/">Troubleshooting</a> is the symptom-driven diagnosis guide.</li>
 </ul>
   </div>
   
@@ -1934,10 +1973,10 @@
         
 
         
-        <a href="#what-this-section-covers"
+        <a href="#related-navigation"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#what-this-section-covers');">
-            What This Section Covers
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#related-navigation');">
+            Related Navigation
         </a>
         
 

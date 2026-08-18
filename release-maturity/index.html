@@ -1478,7 +1478,7 @@
 <ul>
 <li>every interface is frozen</li>
 <li>every deployment shape has been equally hardened</li>
-<li>a fully restart-free config workflow exists — most config applies live via <code>POST /admin/runtime/reload</code> (including <code>log.level</code>), but log format/file settings, tracing config, control-plane thread counts, and listener removal/bind-address changes still require a restart</li>
+<li>a fully restart-free config workflow exists — most runtime-managed config applies live through the staged <code>validate</code>, <code>preview</code>, and <code>activate</code> flow, but log format/file settings, tracing config, control-plane thread counts, and listener removal/bind-address changes still require a restart</li>
 </ul>
 <h2 id="current-strong-areas">Current Strong Areas</h2>
 <ul>
@@ -1513,10 +1513,11 @@
 <ul>
 <li>use canaries or bounded traffic first</li>
 <li>keep rollback warm and tested</li>
-<li>apply most config changes live via <code>POST /admin/runtime/reload</code> (routes, upstreams, backends,
-  timeouts, limits, resilience policies, and <code>log.level</code>); drain-and-restart only for log
-  format/file settings, tracing config, control-plane thread counts, and listener removal /
-  bind-address changes</li>
+<li>apply most runtime-managed config changes live through <code>POST /admin/runtime/validate</code>,
+  <code>POST /admin/runtime/preview</code>, and <code>POST /admin/runtime/activate</code>; use the legacy
+  <code>POST /admin/runtime/reload</code> shortcut only when you intentionally want the older direct-apply path</li>
+<li>drain-and-restart for log format/file settings, tracing config, control-plane thread counts,
+  and listener removal or bind-address changes</li>
 <li>read release notes before upgrade</li>
 <li>pin to tagged versions, not moving branches</li>
 </ul>

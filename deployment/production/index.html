@@ -1455,286 +1455,133 @@
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <blockquote>
-<p><strong>Warning:</strong> Spooky is beta software. It can be deployed to production only with controlled rollout, strict monitoring, and rollback readiness. Review current limitations and GA exit criteria before broad adoption (see <a href="../../release-maturity/">Release Maturity</a> and <a href="../../roadmap/">Roadmap</a>).</p>
+<p>Spooky is beta software. Deploy it to production only with staged rollout, rollback readiness, and verified observability. Read <a href="../../operations/production-readiness/">Production Readiness</a> first.</p>
 </blockquote>
-<p>This guide covers deployment procedures, system configuration, and operational considerations for Spooky HTTP/3 load balancer deployments.</p>
-<h2 id="pre-deployment-checklist">Pre-Deployment Checklist</h2>
-<h3 id="infrastructure-requirements">Infrastructure Requirements</h3>
-<p><strong>Compute Resources</strong>
-- CPU: 4 cores minimum (8+ for high-throughput deployments)
-- Memory: 4GB minimum (8GB+ recommended, ~1-2KB per concurrent connection)
-- Disk: 10GB minimum (configuration, logs, and binary storage)
-- OS: Linux kernel 5.0+ (Ubuntu 20.04 LTS, RHEL 8+, or equivalent)</p>
-<p><strong>Network Requirements</strong>
-- UDP ingress on designated QUIC port (typically 443)
-- HTTP/2 egress to backend pool networks
-- Low-latency connectivity between proxy tier and backends (&lt;5ms RTT preferred)
-- MTU considerations: 1500 byte minimum, jumbo frames (9000 bytes) beneficial for high-throughput scenarios</p>
-<p><strong>Certificate Infrastructure</strong>
-- Valid TLS certificates with full chain
-- Automated renewal mechanism (Let's Encrypt, internal PKI, or certificate management platform)
-- Certificate rotation procedures documented and tested</p>
-<h3 id="pre-deployment-validation">Pre-Deployment Validation</h3>
-<p>Before deploying to production, verify the following:</p>
+<p>This guide covers the recommended production host layout, service model, security posture, rollout sequence, and change-management workflow for Spooky.</p>
+<h2 id="recommended-deployment-shape">Recommended Deployment Shape</h2>
+<p>Use Spooky as:</p>
+<ul>
+<li>an active-active edge pool</li>
+<li>behind a UDP-capable load balancer or traffic manager</li>
+<li>with one protected Control API surface per node</li>
+<li>with Prometheus scraping and centralized log collection in place before broad rollout</li>
+</ul>
+<p>Recommended rollout shape:</p>
 <ol>
-<li>Configuration validated with <code>spooky --config &lt;path&gt;</code> (startup validation happens before serving)</li>
-<li>Backend health check endpoints operational and returning expected responses</li>
-<li>TLS certificates valid with appropriate SANs and expiration dates</li>
-<li>Firewall rules permit required traffic flows</li>
-<li>Service account and filesystem permissions configured</li>
-<li>Monitoring and alerting infrastructure ready to receive metrics</li>
-<li>Runbooks prepared for common failure scenarios</li>
+<li>one canary node or one bounded traffic slice</li>
+<li>staged activation for runtime-managed config changes</li>
+<li>cert reload for cert-only changes</li>
+<li>drain-aware restart or node replacement for restart-required changes</li>
 </ol>
-<h2 id="system-configuration">System Configuration</h2>
-<h3 id="binary-installation">Binary Installation</h3>
-<p>Production deployments should use compiled release binaries:</p>
-<pre><code class="language-bash"># Download release binary
-VERSION=&quot;0.1.0&quot;
-ARCH=&quot;x86_64&quot;
-wget &quot;https://github.com/Supernova-Labs-Org/spooky/releases/download/v${VERSION}/spooky-linux-${ARCH}.tar.gz&quot;
-tar xzf &quot;spooky-linux-${ARCH}.tar.gz&quot;
-
-# Verify checksum
-sha256sum -c &quot;spooky-linux-${ARCH}.tar.gz.sha256&quot;
-
-# Install to system path
-sudo install -m 755 -o root -g root spooky /usr/local/bin/spooky
-
-# Create dedicated service account
-sudo useradd --system --shell /usr/sbin/nologin \
+<h2 id="minimum-host-baseline">Minimum Host Baseline</h2>
+<p>Start with:</p>
+<ul>
+<li>Linux kernel 5.x or later</li>
+<li>4 to 8 cores for a serious production node baseline</li>
+<li>4 GB minimum memory, more for heavy concurrency or large-body workloads</li>
+<li>enough file descriptors and socket buffer headroom for expected traffic</li>
+</ul>
+<p>Validate with your real traffic shape before treating these as final numbers.</p>
+<h2 id="directory-and-account-layout">Directory And Account Layout</h2>
+<p>Recommended baseline:</p>
+<pre><code class="language-bash">sudo useradd --system --shell /usr/sbin/nologin \
   --home-dir /var/lib/spooky --create-home spooky
 
-# Initialize directory structure
-sudo mkdir -p /etc/spooky/certs /var/log/spooky
-sudo chown -R root:spooky /etc/spooky
-sudo chmod 750 /etc/spooky
-sudo chown spooky:spooky /var/log/spooky
-sudo chmod 750 /var/log/spooky
+sudo mkdir -p /etc/spooky/certs /var/lib/spooky /var/log/spooky
 
-# Note: Spooky logs to stdout/stderr by default (collected by journald).
-# The /var/log/spooky directory is for optional file-based logging.
+sudo chown root:spooky /etc/spooky
+sudo chmod 750 /etc/spooky
+
+sudo chown root:spooky /etc/spooky/certs
+sudo chmod 750 /etc/spooky/certs
+
+sudo chown spooky:spooky /var/lib/spooky /var/log/spooky
+sudo chmod 750 /var/lib/spooky /var/log/spooky
 </code></pre>
-<h3 id="kernel-parameter-tuning">Kernel Parameter Tuning</h3>
-<p>UDP and QUIC workloads benefit from increased buffer sizes and connection tracking limits:</p>
+<p>Recommended permissions:</p>
+<ul>
+<li>config files: readable by <code>root</code> and the <code>spooky</code> group</li>
+<li>private keys: readable only by the minimum required service identities</li>
+<li>writable paths: limited to runtime state and optional local logs</li>
+</ul>
+<h2 id="binary-installation">Binary Installation</h2>
+<p>Install a release binary or a verified internal build into a stable path such as:</p>
+<pre><code class="language-bash">sudo install -m 755 -o root -g root spooky /usr/local/bin/spooky
+</code></pre>
+<p>Keep:</p>
+<ul>
+<li>the current production binary</li>
+<li>the previous known-good binary</li>
+<li>checksums or provenance metadata for the binary you deployed</li>
+</ul>
+<h2 id="host-tuning-baseline">Host Tuning Baseline</h2>
+<p>Before rollout, set and verify:</p>
+<ul>
+<li>UDP and TCP buffer ceilings</li>
+<li>device backlog and packet budget</li>
+<li>file descriptor ceilings</li>
+<li>privileged-port bind strategy</li>
+<li>conntrack behavior, if present</li>
+</ul>
+<p>Use <a href="../../operations/host-tuning/">Host Tuning</a> for the tuning model and <code>scripts/sysctl-linux-network-tuning.sh</code> only as a starting helper.</p>
+<p>Example <code>sysctl</code> baseline:</p>
 <pre><code class="language-bash"># /etc/sysctl.d/99-spooky.conf
-# UDP receive/send buffer tuning
 net.core.rmem_max = 67108864
 net.core.wmem_max = 67108864
 net.core.rmem_default = 16777216
 net.core.wmem_default = 16777216
-
-# Network device backlog
 net.core.netdev_max_backlog = 65536
-net.core.netdev_budget = 50000
-net.core.netdev_budget_usecs = 5000
-
-# Connection tracking (if using conntrack)
-net.netfilter.nf_conntrack_max = 2097152
-net.netfilter.nf_conntrack_tcp_timeout_established = 7200
-net.netfilter.nf_conntrack_udp_timeout = 60
-net.netfilter.nf_conntrack_udp_timeout_stream = 120
-
-# TCP tuning for HTTP/2 backend connections
-net.ipv4.tcp_rmem = 8192 262144 33554432
-net.ipv4.tcp_wmem = 8192 262144 33554432
-net.ipv4.tcp_max_syn_backlog = 8192
-net.ipv4.tcp_slow_start_after_idle = 0
-net.ipv4.tcp_mtu_probing = 1
-
-# File descriptor limits
 fs.file-max = 2097152
-
-# Apply configuration
-sudo sysctl -p /etc/sysctl.d/99-spooky.conf
 </code></pre>
-<h3 id="resource-limits">Resource Limits</h3>
-<p>Configure ulimits for the spooky service account:</p>
+<p>Apply and verify:</p>
+<pre><code class="language-bash">sudo sysctl --system
+sysctl net.core.rmem_max
+sysctl fs.file-max
+</code></pre>
+<h2 id="resource-limits">Resource Limits</h2>
+<p>Recommended service-account limits:</p>
 <pre><code class="language-bash"># /etc/security/limits.d/spooky.conf
 spooky soft nofile 1048576
 spooky hard nofile 1048576
 spooky soft nproc 16384
 spooky hard nproc 16384
-spooky soft memlock unlimited
-spooky hard memlock unlimited
 </code></pre>
-<h3 id="production-configuration">Production Configuration</h3>
-<pre><code class="language-yaml"># /etc/spooky/config.yaml
-version: 1
-
-listen:
-  protocol: http3
-  address: &quot;0.0.0.0&quot;
-  port: 443
-  tls:
-    cert: &quot;/etc/spooky/certs/fullchain.pem&quot;
-    key: &quot;/etc/spooky/certs/privkey.pem&quot;
-
-# Define upstream pools with health checking
-upstream:
-  # API backend pool with consistent hashing for session affinity
-  api_pool:
-    load_balancing:
-      type: &quot;consistent-hash&quot;
-    route:
-      path_prefix: &quot;/api&quot;
-    backends:
-      - id: &quot;api-01&quot;
-        address: &quot;10.0.10.10:8080&quot;
-        weight: 100
-        health_check:
-          path: &quot;/health&quot;
-          interval: 5000
-          timeout_ms: 2000
-          failure_threshold: 3
-          success_threshold: 2
-
-      - id: &quot;api-02&quot;
-        address: &quot;10.0.10.11:8080&quot;
-        weight: 100
-        health_check:
-          path: &quot;/health&quot;
-          interval: 5000
-          timeout_ms: 2000
-          failure_threshold: 3
-          success_threshold: 2
-
-  # Static content pool with round-robin
-  static_pool:
-    load_balancing:
-      type: &quot;round-robin&quot;
-    route:
-      path_prefix: &quot;/static&quot;
-    backends:
-      - id: &quot;static-01&quot;
-        address: &quot;10.0.20.10:8080&quot;
-        weight: 100
-        health_check:
-          path: &quot;/&quot;
-          interval: 10000
-
-      - id: &quot;static-02&quot;
-        address: &quot;10.0.20.11:8080&quot;
-        weight: 100
-        health_check:
-          path: &quot;/&quot;
-          interval: 10000
-
-  # Default backend pool
-  default_pool:
-    load_balancing:
-      type: &quot;random&quot;
-    route:
-      path_prefix: &quot;/&quot;
-    backends:
-      - id: &quot;web-01&quot;
-        address: &quot;10.0.30.10:8080&quot;
-        weight: 100
-        health_check:
-          path: &quot;/health&quot;
-          interval: 5000
-
-# Logging configuration
-log:
-  level: info  # Use 'warn' for production to reduce I/O
-
-security:
-  privileges:
-    enabled: true
-    user: &quot;spooky&quot;
-    group: &quot;spooky&quot;
-
-observability:
-  control_api:
-    enabled: true
-    address: &quot;127.0.0.1&quot;
-    port: 9902
-    auth_token: &quot;replace-with-strong-token&quot;
-    max_connections: 256
-    connection_timeout_ms: 30000
-
-# Connection tuning (if supported by configuration schema)
-# Adjust based on backend capacity and expected load
-# max_concurrent_connections: 10000
-# backend_connection_pool_size: 100
-</code></pre>
-<p><strong>Configuration Notes:</strong>
-- Route matching uses longest-prefix: more specific paths take precedence
-- Health check intervals balance detection speed vs. backend load
-- Adjust <code>failure_threshold</code> and <code>success_threshold</code> based on backend stability
-- Weight distribution should reflect backend capacity
-- Consistent hashing is appropriate for stateful backends requiring session affinity
-- For privileged ports (for example <code>443</code>), bind as root/capability and drop privileges immediately with <code>security.privileges</code>
-- Keep control API on loopback unless protected by strong network ACLs and authentication</p>
-<h2 id="tls-certificate-management">TLS Certificate Management</h2>
-<h3 id="certificate-acquisition">Certificate Acquisition</h3>
-<h4 id="lets-encrypt-acme">Let's Encrypt (ACME)</h4>
-<pre><code class="language-bash"># Install certbot
-sudo apt-get install -y certbot
-
-# Obtain certificate (HTTP-01 challenge, requires port 80)
-sudo certbot certonly --standalone \
-  --preferred-challenges http \
-  --email ops@example.com \
-  --agree-tos \
-  --non-interactive \
-  -d proxy.example.com
-
-# Copy to spooky directory
-sudo cp /etc/letsencrypt/live/proxy.example.com/fullchain.pem /etc/spooky/certs/
-sudo cp /etc/letsencrypt/live/proxy.example.com/privkey.pem /etc/spooky/certs/
-sudo chown root:spooky /etc/spooky/certs/*.pem
-sudo chmod 640 /etc/spooky/certs/privkey.pem
-sudo chmod 644 /etc/spooky/certs/fullchain.pem
-</code></pre>
-<h4 id="automated-renewal">Automated Renewal</h4>
-<pre><code class="language-bash"># Create renewal hook
-sudo tee /etc/letsencrypt/renewal-hooks/deploy/spooky-reload.sh &lt;&lt; 'EOF'
-#!/bin/bash
-set -e
-
-CERT_DOMAIN=&quot;proxy.example.com&quot;
-SPOOKY_CERT_DIR=&quot;/etc/spooky/certs&quot;
-
-# Copy renewed certificates
-cp &quot;/etc/letsencrypt/live/${CERT_DOMAIN}/fullchain.pem&quot; &quot;${SPOOKY_CERT_DIR}/&quot;
-cp &quot;/etc/letsencrypt/live/${CERT_DOMAIN}/privkey.pem&quot; &quot;${SPOOKY_CERT_DIR}/&quot;
-
-# Set permissions
-chown root:spooky &quot;${SPOOKY_CERT_DIR}&quot;/*.pem
-chmod 640 &quot;${SPOOKY_CERT_DIR}/privkey.pem&quot;
-chmod 644 &quot;${SPOOKY_CERT_DIR}/fullchain.pem&quot;
-
-# Reload spooky (graceful reload if supported, otherwise restart)
-systemctl reload-or-restart spooky
-
-logger -t spooky-cert-renewal &quot;TLS certificates renewed and spooky reloaded&quot;
-EOF
-
-sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/spooky-reload.sh
-
-# Test renewal process
-sudo certbot renew --dry-run
-</code></pre>
-<h3 id="certificate-validation">Certificate Validation</h3>
-<p>Before deploying new certificates:</p>
-<pre><code class="language-bash"># Verify certificate and key match
-openssl x509 -noout -modulus -in /etc/spooky/certs/fullchain.pem | openssl md5
-openssl rsa -noout -modulus -in /etc/spooky/certs/privkey.pem | openssl md5
-
-# Verify certificate chain
-openssl verify -CAfile /etc/spooky/certs/fullchain.pem /etc/spooky/certs/fullchain.pem
-
-# Check expiration
-openssl x509 -noout -dates -in /etc/spooky/certs/fullchain.pem
-
-# Verify SAN entries
+<p>Also reflect the same intent in your <code>systemd</code> unit.</p>
+<h2 id="control-api-posture">Control API Posture</h2>
+<p>Treat the Control API as operator-only infrastructure.</p>
+<p>Recommended posture:</p>
+<ul>
+<li>bind to loopback or an isolated admin network</li>
+<li>require TLS</li>
+<li>require explicit auth</li>
+<li>grant <code>viewer</code>, <code>operator</code>, and <code>admin</code> roles deliberately</li>
+<li>use <code>--http1.1</code> for all <code>curl</code> interactions</li>
+</ul>
+<p>Do not expose the Control API broadly on the same network surface as public traffic.</p>
+<h2 id="certificate-management">Certificate Management</h2>
+<p>Use a documented certificate lifecycle with:</p>
+<ul>
+<li>predictable source of truth</li>
+<li>verified SAN coverage</li>
+<li>expiry monitoring</li>
+<li>tested cert reload workflow</li>
+</ul>
+<p>Before replacing a certificate, verify:</p>
+<pre><code class="language-bash">openssl x509 -noout -dates -in /etc/spooky/certs/fullchain.pem
 openssl x509 -noout -text -in /etc/spooky/certs/fullchain.pem | grep -A1 &quot;Subject Alternative Name&quot;
+openssl rsa -noout -modulus -in /etc/spooky/certs/privkey.pem | openssl md5
+openssl x509 -noout -modulus -in /etc/spooky/certs/fullchain.pem | openssl md5
 </code></pre>
-<h2 id="systemd-service-configuration">Systemd Service Configuration</h2>
-<h3 id="service-unit">Service Unit</h3>
-<pre><code class="language-ini"># /etc/systemd/system/spooky.service
-[Unit]
-Description=Spooky HTTP/3 to HTTP/2 Proxy
+<p>For cert-only updates, prefer:</p>
+<pre><code class="language-bash">curl -k --http1.1 -X POST \
+  -H &quot;Authorization: Bearer &lt;operator-token&gt;&quot; \
+  https://127.0.0.1:9902/admin/runtime/reload-certs
+</code></pre>
+<p>Use a full restart only when the change is not cert-only.</p>
+<h2 id="example-service-unit">Example Service Unit</h2>
+<p>Use <code>systemd</code> as a supervised service layer and keep change management in your rollout automation rather than depending on ad hoc shell access.</p>
+<pre><code class="language-ini">[Unit]
+Description=Spooky edge runtime
 Documentation=https://github.com/Supernova-Labs-Org/spooky
 After=network-online.target
 Wants=network-online.target
@@ -1743,48 +1590,22 @@ Wants=network-online.target
 Type=simple
 User=spooky
 Group=spooky
-
-# Binary and configuration
 ExecStart=/usr/local/bin/spooky --config /etc/spooky/config.yaml
-# Hot reload: config is reloaded via the control API, not a signal.
-# `systemctl reload spooky` POSTs to the reload endpoint (control API is HTTPS + bearer-auth).
-# Applies routes/upstreams/backends/limits/policies and log.level live; log format/file settings,
-# tracing config, thread counts, and listener bind/removal changes still require a full restart.
-ExecReload=/usr/bin/curl -sf -k -X POST -H &quot;Authorization: Bearer ${SPOOKY_ADMIN_TOKEN}&quot; https://127.0.0.1:9902/admin/runtime/reload
-
-# Restart policy
 Restart=always
 RestartSec=5s
-StartLimitBurst=3
-StartLimitIntervalSec=60s
-
-# Resource limits
 LimitNOFILE=1048576
 LimitNPROC=16384
 TasksMax=16384
-
-# Security hardening
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/log/spooky
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectKernelLogs=true
-ProtectControlGroups=true
-ProtectProc=invisible
-ProcSubset=pid
+ReadWritePaths=/var/lib/spooky /var/log/spooky
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=true
 RestrictRealtime=true
 RestrictSUIDSGID=true
 LockPersonality=true
-SystemCallArchitectures=native
-SystemCallFilter=@system-service
-SystemCallFilter=~@privileged @resources
-
-# Logging
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=spooky
@@ -1792,688 +1613,135 @@ SyslogIdentifier=spooky
 [Install]
 WantedBy=multi-user.target
 </code></pre>
-<h3 id="service-management">Service Management</h3>
-<pre><code class="language-bash"># Install and enable service
-sudo systemctl daemon-reload
-sudo systemctl enable spooky.service
-
-# Start service
-sudo systemctl start spooky.service
-
-# Verify status
-sudo systemctl status spooky.service
-
-# View logs
-sudo journalctl -u spooky.service -f
-
-# Restart for configuration changes
-sudo systemctl restart spooky.service
-
-# Full restart
-sudo systemctl restart spooky.service
-</code></pre>
-<h2 id="security-hardening">Security Hardening</h2>
-<h3 id="network-security">Network Security</h3>
-<p><strong>Firewall Configuration (nftables)</strong></p>
-<pre><code class="language-bash"># /etc/nftables.conf (example rules)
-table inet filter {
-    chain input {
-        type filter hook input priority filter; policy drop;
-
-        # Allow established/related connections
-        ct state established,related accept
-        ct state invalid drop
-
-        # Allow loopback
-        iif lo accept
-
-        # Allow SSH (restrict to management network)
-        ip saddr 10.0.0.0/24 tcp dport 22 ct state new accept
-
-        # Allow QUIC/HTTP3
-        udp dport 443 accept
-
-        # Allow health checks from monitoring (optional)
-        ip saddr 10.0.0.0/24 tcp dport 8080 ct state new accept
-
-        # Rate limiting for new connections
-        ct state new limit rate over 1000/second burst 2000 packets drop
-    }
-
-    chain forward {
-        type filter hook forward priority filter; policy drop;
-    }
-
-    chain output {
-        type filter hook output priority filter; policy accept;
-    }
-}
-</code></pre>
-<h3 id="application-security">Application Security</h3>
-<p><strong>Filesystem Permissions</strong></p>
-<pre><code class="language-bash"># Configuration immutable after validation
-sudo chown root:spooky /etc/spooky/config.yaml
-sudo chmod 640 /etc/spooky/config.yaml
-sudo chattr +i /etc/spooky/config.yaml  # Immutable (remove with -i for updates)
-
-# Certificate protection
-sudo chmod 640 /etc/spooky/certs/privkey.pem
-sudo chmod 644 /etc/spooky/certs/fullchain.pem
-</code></pre>
-<p><strong>TLS Configuration</strong></p>
-<p>Ensure TLS 1.3 is enforced with strong cipher suites. Note: cipher suite configuration may be limited by the underlying QUIC library (quiche). Verify supported options in the Spooky documentation.</p>
-<h3 id="selinux-apparmor">SELinux / AppArmor</h3>
-<p>For environments requiring mandatory access control, create appropriate policies. Example AppArmor profile skeleton:</p>
-<pre><code class="language-bash"># /etc/apparmor.d/usr.local.bin.spooky
-#include &lt;tunables/global&gt;
-
-/usr/local/bin/spooky {
-  #include &lt;abstractions/base&gt;
-  #include &lt;abstractions/nameservice&gt;
-
-  capability net_bind_service,
-  capability setuid,
-  capability setgid,
-
-  /usr/local/bin/spooky mr,
-  /etc/spooky/** r,
-  /var/log/spooky/** rw,
-
-  network inet dgram,
-  network inet6 dgram,
-  network inet stream,
-  network inet6 stream,
-}
-</code></pre>
-<h2 id="monitoring-and-observability">Monitoring and Observability</h2>
-<h3 id="metrics-exposition">Metrics Exposition</h3>
-<p>Spooky exposes a Prometheus-compatible metrics endpoint. Configure it in <code>config.yaml</code>:</p>
-<pre><code class="language-yaml">observability:
-  metrics:
-    enabled: true
-    address: &quot;127.0.0.1&quot;
-    port: 9901
-    path: &quot;/metrics&quot;
-</code></pre>
-<p>Scrape it with Prometheus:</p>
-<pre><code class="language-yaml"># prometheus.yml
-scrape_configs:
-  - job_name: 'spooky'
-    scrape_interval: 15s
-    scrape_timeout: 10s
-    metrics_path: '/metrics'
-    static_configs:
-      - targets: ['spooky-01.internal:9901', 'spooky-02.internal:9901']
-        labels:
-          environment: 'production'
-          service: 'proxy'
-</code></pre>
-<h3 id="key-metrics-to-monitor">Key Metrics to Monitor</h3>
-<p><strong>Throughput Metrics</strong>
-- <code>spooky_requests_total</code> — total requests processed
-- <code>spooky_route_requests_total{route="..."}</code> — per-route request count
-- <code>spooky_worker_ingress_packets_total{worker="..."}</code> — UDP packets received per worker</p>
-<p><strong>Latency Metrics</strong>
-- <code>spooky_route_latency_ms_p50/p95/p99{route="..."}</code> — per-route latency percentiles</p>
-<p><strong>Connection and Queue Gauges</strong>
-- <code>spooky_active_connections</code> — current live QUIC connections
-- <code>spooky_ingress_queue_bytes</code> — bytes currently buffered in ingress shard queues</p>
-<p><strong>Drop and Error Counters</strong>
-- <code>spooky_ingress_queue_drops</code> — packets dropped due to full shard queues
-- <code>spooky_ingress_queue_drop_bytes</code> — bytes dropped due to full shard queues
-- <code>spooky_ingress_bad_header_total</code> — packets with unparseable QUIC headers
-- <code>spooky_ingress_rate_limited_total</code> — Initial packets dropped by the connection rate limiter
-- <code>spooky_ingress_unroutable_total</code> — non-Initial packets for unknown connections
-- <code>spooky_ingress_draining_drops_total</code> — packets dropped during graceful shutdown
-- <code>spooky_ingress_connection_create_failed_total</code> — packets dropped due to QUIC accept failure
-- <code>spooky_connection_cap_rejects</code> — packets dropped because the connection cap was reached</p>
-<p><strong>Overload Shed Counters</strong>
-- <code>spooky_overload_shed_by_reason_total{reason="..."}</code> — requests shed by the overload system, broken down by reason (<code>brownout</code>, <code>adaptive_admission</code>, <code>route_cap</code>, <code>route_global_cap</code>, <code>global_inflight</code>, <code>upstream_inflight</code>, <code>backend_inflight</code>, <code>request_buffer_cap</code>, <code>response_prebuffer_cap</code>, <code>connection_cap</code>)
-- <code>spooky_route_overload_shed_total{route="..."}</code> — overload shed per route</p>
-<p><strong>Resilience Metrics</strong>
-- <code>spooky_retries_total</code> — total retry attempts fired across all routes
-- <code>spooky_retry_attempts_total{reason="timeout|transport|pool"}</code> — retries broken down by the error that triggered them
-- <code>spooky_retry_denied_total{reason="budget|no_bodyless|no_alternate"}</code> — retry denials broken down by reason: <code>budget</code> (retry budget exhausted), <code>no_bodyless</code> (request has a body so retry is unsafe), <code>no_alternate</code> (no alternate backend available)
-- <code>spooky_hedge_triggered_total</code> — hedge requests launched
-- <code>spooky_hedge_won_total</code> — times the hedge response was used (primary was slower)
-- <code>spooky_hedge_wasted_total</code> — times the hedge response arrived after the primary (wasted work)
-- <code>spooky_hedge_primary_won_after_trigger_total</code> — times the primary response arrived after the hedge launched but before it responded
-- <code>spooky_hedge_primary_late_ms_total</code> / <code>spooky_hedge_primary_late_samples_total</code> — aggregate and sample count for primary latency past the hedge trigger point
-- <code>spooky_circuit_breaker_rejected_total</code> — requests rejected because a backend circuit breaker was open
-- <code>spooky_brownout_active</code> — gauge; <code>1</code> while brownout mode is active (non-core routes are being shed), <code>0</code> otherwise</p>
-<p><strong>Backend Health Metrics</strong>
-- <code>spooky_health_checks_total</code> / <code>spooky_health_checks_success</code> / <code>spooky_health_checks_failure</code>
-- <code>spooky_backend_timeouts</code> / <code>spooky_backend_errors</code>
-- <code>spooky_health_failures_total{reason="..."}</code> — health failures by reason (<code>5xx</code>, <code>timeout</code>, <code>transport</code>, <code>tls</code>)</p>
-<p><strong>Resource Metrics</strong>
-- <code>spooky_request_buffered_bytes</code> — bytes currently buffered in request backpressure queues
-- <code>spooky_request_buffered_high_watermark_bytes</code> — peak request buffer usage since start
-- CPU utilization, memory (RSS), file descriptors — use node_exporter alongside Spooky</p>
-<h3 id="alerting-rules">Alerting Rules</h3>
-<pre><code class="language-yaml"># prometheus-alerts.yml
-groups:
-  - name: spooky-availability
-    rules:
-      - alert: SpookyInstanceDown
-        expr: up{job=&quot;spooky&quot;} == 0
-        for: 1m
-        labels:
-          severity: critical
-        annotations:
-          summary: &quot;Spooky instance {{ $labels.instance }} is down&quot;
-          description: &quot;Instance has been unreachable for 1 minute&quot;
-
-      - alert: SpookyHighErrorRate
-        expr: |
-          (
-            sum(rate(http_requests_total{job=&quot;spooky&quot;,status=~&quot;5..&quot;}[5m]))
-            /
-            sum(rate(http_requests_total{job=&quot;spooky&quot;}[5m]))
-          ) &gt; 0.05
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: &quot;High 5xx error rate on Spooky&quot;
-          description: &quot;Error rate is {{ $value | humanizePercentage }}&quot;
-
-      - alert: SpookyBackendAllDown
-        expr: |
-          sum by (upstream_pool) (backend_healthy{job=&quot;spooky&quot;}) == 0
-        for: 2m
-        labels:
-          severity: critical
-        annotations:
-          summary: &quot;All backends down for pool {{ $labels.upstream_pool }}&quot;
-
-      - alert: SpookyLatencyHigh
-        expr: |
-          histogram_quantile(0.95,
-            sum(rate(http_request_duration_seconds_bucket{job=&quot;spooky&quot;}[5m])) by (le)
-          ) &gt; 1.0
-        for: 10m
-        labels:
-          severity: warning
-        annotations:
-          summary: &quot;High request latency (p95 &gt; 1s)&quot;
-
-      - alert: SpookyFileDescriptorExhaustion
-        expr: process_open_fds{job=&quot;spooky&quot;} / process_max_fds{job=&quot;spooky&quot;} &gt; 0.8
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: &quot;File descriptor usage high on {{ $labels.instance }}&quot;
-
-  - name: spooky-capacity
-    rules:
-      - alert: SpookyCPUSaturation
-        expr: rate(process_cpu_seconds_total{job=&quot;spooky&quot;}[5m]) &gt; 0.8
-        for: 15m
-        labels:
-          severity: warning
-        annotations:
-          summary: &quot;CPU saturation on {{ $labels.instance }}&quot;
-
-      - alert: SpookyMemoryPressure
-        expr: |
-          process_resident_memory_bytes{job=&quot;spooky&quot;} / node_memory_MemTotal_bytes &gt; 0.8
-        for: 10m
-        labels:
-          severity: warning
-        annotations:
-          summary: &quot;Memory pressure on {{ $labels.instance }}&quot;
-</code></pre>
-<h3 id="log-management">Log Management</h3>
-<p><strong>Structured Logging</strong></p>
-<p>Configure JSON output for log aggregation:</p>
-<pre><code class="language-yaml">log:
-  level: info
-  format: json  # If supported
-</code></pre>
-<p><strong>Log Aggregation</strong></p>
-<p>Ship logs to centralized logging (ELK, Loki, Splunk):</p>
-<pre><code class="language-bash"># Example: journald to Loki via Promtail
-# /etc/promtail/config.yml
-server:
-  http_listen_port: 9080
-
-positions:
-  filename: /var/lib/promtail/positions.yaml
-
-clients:
-  - url: http://loki.internal:3100/loki/api/v1/push
-
-scrape_configs:
-  - job_name: systemd-journal
-    journal:
-      max_age: 12h
-      labels:
-        job: systemd-journal
-    relabel_configs:
-      - source_labels: ['__journal__systemd_unit']
-        target_label: 'unit'
-      - source_labels: ['__journal_syslog_identifier']
-        target_label: 'syslog_identifier'
-    pipeline_stages:
-      - match:
-          selector: '{syslog_identifier=&quot;spooky&quot;}'
-          stages:
-            - json:
-                expressions:
-                  level: level
-                  path: path
-                  backend: backend
-                  duration: duration
-            - labels:
-                level:
-                path:
-                backend:
-</code></pre>
-<p><strong>Log Rotation</strong></p>
-<p>Configure log rotation for file-based logging (when stdout/stderr is redirected to files):</p>
-<pre><code class="language-bash"># /etc/logrotate.d/spooky
-/var/log/spooky/*.log {
-    daily
-    rotate 14
-    compress
-    delaycompress
-    missingok
-    notifempty
-    create 0640 spooky spooky
-    sharedscripts
-    postrotate
-        /bin/systemctl restart spooky.service &gt; /dev/null 2&gt;&amp;1 || true
-    endscript
-}
-</code></pre>
-<h2 id="high-availability-architecture">High Availability Architecture</h2>
-<h3 id="active-active-configuration">Active-Active Configuration</h3>
-<p>Deploy multiple Spooky instances behind a UDP-capable load balancer:</p>
-<pre><code>                    ┌─────────────┐
-                    │   DNS/GLB   │
-                    └──────┬──────┘
-                           │
-              ┌────────────┴────────────┐
-              │                         │
-         ┌────▼────┐              ┌────▼────┐
-         │ L4 LB 1 │              │ L4 LB 2 │
-         └────┬────┘              └────┬────┘
-              │                         │
-       ┌──────┴──────┬──────────────────┴──────┐
-       │             │                          │
-  ┌────▼───┐   ┌────▼───┐                ┌────▼───┐
-  │Spooky 1│   │Spooky 2│      ...       │Spooky N│
-  └────┬───┘   └────┬───┘                └────┬───┘
-       │             │                          │
-       └──────┬──────┴──────────────────────────┘
-              │
-      ┌───────▼────────┐
-      │ Backend Pool   │
-      └────────────────┘
-</code></pre>
-<p><strong>Layer 4 Load Balancer Options:</strong>
-- ECMP routing with consistent hashing
-- Anycast with BGP
-- Cloud provider UDP load balancers (AWS NLB, GCP Network Load Balancer)</p>
-<h3 id="configuration-synchronization">Configuration Synchronization</h3>
-<p>Maintain consistent configuration across instances:</p>
-<pre><code class="language-bash"># Use configuration management (Ansible example)
-# playbooks/deploy-spooky.yml
-- hosts: proxy_tier
-  become: yes
-  tasks:
-    - name: Deploy Spooky configuration
-      template:
-        src: templates/spooky-config.yaml.j2
-        dest: /etc/spooky/config.yaml
-        owner: root
-        group: spooky
-        mode: '0640'
-        # Note: Configuration validation happens during startup
-      notify: restart spooky
-
-    - name: Deploy TLS certificates
-      copy:
-        src: &quot;{{ item.src }}&quot;
-        dest: &quot;{{ item.dest }}&quot;
-        owner: root
-        group: spooky
-        mode: &quot;{{ item.mode }}&quot;
-      with_items:
-        - { src: 'certs/fullchain.pem', dest: '/etc/spooky/certs/fullchain.pem', mode: '0644' }
-        - { src: 'certs/privkey.pem', dest: '/etc/spooky/certs/privkey.pem', mode: '0640' }
-      notify: restart spooky
-
-  handlers:
-    - name: restart spooky
-      systemd:
-        name: spooky
-        state: restarted
-</code></pre>
-<h3 id="health-checking">Health Checking</h3>
-<p>Implement external health checks for load balancer integration:</p>
-<pre><code class="language-bash"># Health check script for L4 LB integration
-# /usr/local/bin/spooky-healthcheck.sh
-#!/bin/bash
-set -euo pipefail
-
-# Check if process is running
-if ! pgrep -x spooky &gt; /dev/null; then
-    exit 1
-fi
-
-# Check if listening on QUIC port (example: port 443)
-if ! ss -ulpn | grep -q &quot;:443 &quot;; then
-    exit 1
-fi
-
-# Optional: Check internal health endpoint if available
-# curl -sf http://localhost:8080/health || exit 1
-
-exit 0
-</code></pre>
-<h2 id="performance-optimization">Performance Optimization</h2>
-<h3 id="connection-pooling">Connection Pooling</h3>
-<p>Optimize HTTP/2 backend connection pool based on backend capacity:</p>
+<p>Notes:</p>
 <ul>
-<li>Typical ratio: 1 backend connection per 50-100 concurrent QUIC connections</li>
-<li>Monitor backend connection state and adjust pool size accordingly</li>
-<li>Consider backend connection limits and TCP socket exhaustion</li>
+<li>Do not assume <code>systemctl reload</code> is your primary production change path.</li>
+<li>Prefer explicit Control API activation automation for runtime-managed changes.</li>
+<li>Use <code>systemctl restart</code> only for restart-required changes or binary replacement workflows.</li>
 </ul>
-<h3 id="quic-tuning">QUIC Tuning</h3>
-<p>QUIC performance depends on UDP buffer sizes and packet processing:</p>
-<pre><code class="language-bash"># Increase UDP receive buffer for high packet rates
-# Already covered in kernel tuning section, but worth emphasizing:
-# net.core.rmem_max = 67108864
-# net.core.rmem_default = 16777216
-
-# Verify current settings
-sysctl net.core.rmem_max
-sysctl net.core.rmem_default
-
-# Monitor UDP receive buffer overflows
-netstat -su | grep &quot;receive errors&quot;
-</code></pre>
-<h3 id="cpu-affinity">CPU Affinity</h3>
-<p>For multi-instance deployments on large systems, consider CPU pinning:</p>
-<pre><code class="language-ini"># /etc/systemd/system/spooky@.service (template unit for multiple instances)
-[Service]
-# Pin instance 0 to CPUs 0-3, instance 1 to CPUs 4-7, etc.
-CPUAffinity=%i-$(((%i+1)*4-1))
-</code></pre>
-<h3 id="memory-management">Memory Management</h3>
-<p>Monitor heap usage and consider tuning allocator behavior:</p>
-<pre><code class="language-bash"># If using jemalloc (check with ldd /usr/local/bin/spooky)
-# Set environment variables for memory profiling
-# Environment=/usr/bin/env MALLOC_CONF=prof:true,prof_prefix:/var/log/spooky/jeprof
-</code></pre>
-<h2 id="operational-procedures">Operational Procedures</h2>
-<h3 id="deployment-process">Deployment Process</h3>
+<h2 id="change-management-model">Change Management Model</h2>
+<h3 id="runtime-managed-config-changes">Runtime-managed config changes</h3>
+<p>Use:</p>
 <ol>
-<li><strong>Configuration Validation</strong>: Validate new configuration in staging environment</li>
-<li><strong>Gradual Rollout</strong>: Deploy to canary instance first, monitor error rates and latency</li>
-<li><strong>Progressive Deployment</strong>: Roll out to remaining instances with staggered timing</li>
-<li><strong>Rollback Plan</strong>: Keep previous binary version and configuration for rapid rollback</li>
+<li>config render or distribution</li>
+<li><code>POST /admin/runtime/validate</code></li>
+<li><code>POST /admin/runtime/preview</code></li>
+<li><code>POST /admin/runtime/activate</code></li>
+<li>runtime-history and metrics verification</li>
 </ol>
-<pre><code class="language-bash"># Deployment script example
-#!/bin/bash
-set -euo pipefail
-
-NEW_VERSION=&quot;$1&quot;
-INSTANCES=(&quot;spooky-01&quot; &quot;spooky-02&quot; &quot;spooky-03&quot;)
-
-# Deploy to canary
-echo &quot;Deploying to canary: ${INSTANCES[0]}&quot;
-ssh &quot;${INSTANCES[0]}&quot; &quot;sudo systemctl stop spooky &amp;&amp; \
-  sudo cp /usr/local/bin/spooky /usr/local/bin/spooky.prev &amp;&amp; \
-  sudo wget -O /usr/local/bin/spooky https://releases.example.com/spooky-${NEW_VERSION} &amp;&amp; \
-  sudo systemctl start spooky&quot;
-
-echo &quot;Canary deployed. Monitor metrics for 5 minutes...&quot;
-sleep 300
-
-# Check canary health
-if ! curl -sf &quot;http://${INSTANCES[0]}:8080/health&quot;; then
-    echo &quot;Canary health check failed. Rolling back.&quot;
-    ssh &quot;${INSTANCES[0]}&quot; &quot;sudo systemctl stop spooky &amp;&amp; \
-      sudo mv /usr/local/bin/spooky.prev /usr/local/bin/spooky &amp;&amp; \
-      sudo systemctl start spooky&quot;
-    exit 1
-fi
-
-# Deploy to remaining instances
-for instance in &quot;${INSTANCES[@]:1}&quot;; do
-    echo &quot;Deploying to ${instance}&quot;
-    ssh &quot;${instance}&quot; &quot;sudo systemctl stop spooky &amp;&amp; \
-      sudo cp /usr/local/bin/spooky /usr/local/bin/spooky.prev &amp;&amp; \
-      sudo wget -O /usr/local/bin/spooky https://releases.example.com/spooky-${NEW_VERSION} &amp;&amp; \
-      sudo systemctl start spooky&quot;
-    sleep 30
-done
-
-echo &quot;Deployment complete.&quot;
-</code></pre>
-<h3 id="configuration-changes">Configuration Changes</h3>
-<pre><code class="language-bash"># Test configuration before applying (startup validation will happen)
-sudo -u spooky spooky --config /etc/spooky/config.yaml.new
-
-# Atomic configuration update
-sudo mv /etc/spooky/config.yaml /etc/spooky/config.yaml.backup
-sudo mv /etc/spooky/config.yaml.new /etc/spooky/config.yaml
-
-# Restart service after non-certificate config changes
-sudo systemctl restart spooky.service
-
-# Verify reload success
-sudo systemctl status spooky.service
-sudo journalctl -u spooky.service -n 50 --no-pager
-</code></pre>
-<h3 id="incident-response">Incident Response</h3>
-<p><strong>High Error Rate</strong></p>
+<h3 id="certificate-only-changes">Certificate-only changes</h3>
+<p>Use:</p>
 <ol>
-<li>Check backend health: <code>sudo journalctl -u spooky.service | grep "health check"</code></li>
-<li>Verify backend connectivity: <code>curl -v http://&lt;backend-ip&gt;:&lt;port&gt;/health</code></li>
-<li>Review recent configuration changes</li>
-<li>Check for backend capacity issues (CPU, memory, connection limits)</li>
-<li>If necessary, remove unhealthy backends from pool or rollback configuration</li>
+<li>write new cert material</li>
+<li>verify permissions and expiry</li>
+<li><code>POST /admin/runtime/reload-certs</code></li>
+<li>verify new handshakes</li>
 </ol>
-<p><strong>Connection Exhaustion</strong></p>
+<h3 id="restart-required-changes">Restart-required changes</h3>
+<p>Use:</p>
 <ol>
-<li>Check file descriptor usage: <code>ls /proc/$(pgrep spooky)/fd | wc -l</code></li>
-<li>Review ulimits: <code>cat /proc/$(pgrep spooky)/limits</code></li>
-<li>Identify connection leaks: <code>ss -anp | grep spooky | wc -l</code></li>
-<li>Restart service if connection leak suspected: <code>sudo systemctl restart spooky.service</code></li>
+<li>canary node or bounded slice</li>
+<li>drain-aware restart or node replacement</li>
+<li>post-restart verification</li>
+<li>expand only after stable health and latency</li>
 </ol>
-<p><strong>Memory Leak</strong></p>
-<ol>
-<li>Monitor RSS over time: <code>ps aux | grep spooky</code></li>
-<li>Capture heap profile if using jemalloc</li>
-<li>Review recent traffic patterns for anomalies</li>
-<li>Restart service to recover capacity, engage upstream support</li>
-</ol>
-<h3 id="capacity-planning">Capacity Planning</h3>
-<p>Monitor these indicators for scaling decisions:</p>
-<p><strong>Scale Horizontally (Add Instances) When:</strong>
-- CPU utilization sustained &gt;70% across all instances
-- Network bandwidth saturation
-- Request queueing observed (increasing latency at constant RPS)</p>
-<p><strong>Scale Vertically (Increase Resources) When:</strong>
-- Memory usage approaching limits
-- Context switching rate high with available CPU
-- Single-instance throughput below theoretical maximum</p>
-<p><strong>Scaling Methodology:</strong>
-1. Baseline current performance metrics
-2. Load test with synthetic traffic at 2x current peak
-3. Identify bottleneck (CPU, memory, network, backend capacity)
-4. Size new deployment for 3x current peak with headroom
-5. Implement autoscaling based on CPU/RPS metrics if using cloud infrastructure</p>
-<h2 id="troubleshooting">Troubleshooting</h2>
-<h3 id="diagnostic-commands">Diagnostic Commands</h3>
-<pre><code class="language-bash"># Process information
-ps aux | grep spooky
-pstree -p $(pgrep spooky)
+<h2 id="activation-workflow-example">Activation Workflow Example</h2>
+<pre><code class="language-bash">curl -k --http1.1 -X POST \
+  -H &quot;Authorization: Bearer &lt;operator-token&gt;&quot; \
+  -H &quot;content-type: application/json&quot; \
+  -d '{&quot;config_path&quot;:&quot;/etc/spooky/config.yaml&quot;,&quot;requested_by&quot;:&quot;ops&quot;,&quot;reason&quot;:&quot;route change&quot;}' \
+  https://127.0.0.1:9902/admin/runtime/validate
 
-# Open file descriptors
-ls -l /proc/$(pgrep spooky)/fd | wc -l
-lsof -p $(pgrep spooky) | head -20
+curl -k --http1.1 -X POST \
+  -H &quot;Authorization: Bearer &lt;operator-token&gt;&quot; \
+  -H &quot;content-type: application/json&quot; \
+  -d '{&quot;config_path&quot;:&quot;/etc/spooky/config.yaml&quot;,&quot;requested_by&quot;:&quot;ops&quot;,&quot;reason&quot;:&quot;route change&quot;}' \
+  https://127.0.0.1:9902/admin/runtime/preview
 
-# Network connections
-ss -anp | grep spooky | grep ESTABLISHED | wc -l
-ss -anp | grep spooky | grep TIME-WAIT | wc -l
-ss -su  # UDP socket statistics
-
-# System calls and performance
-strace -c -p $(pgrep spooky) -e trace=network  # 10 second sample
-perf top -p $(pgrep spooky)
-
-# Memory analysis
-cat /proc/$(pgrep spooky)/status | grep -E &quot;Vm|Rss&quot;
-pmap -x $(pgrep spooky)
-
-# Configuration verification
-sudo -u spooky spooky --config /etc/spooky/config.yaml
+curl -k --http1.1 -X POST \
+  -H &quot;Authorization: Bearer &lt;operator-token&gt;&quot; \
+  -H &quot;content-type: application/json&quot; \
+  -d '{&quot;config_path&quot;:&quot;/etc/spooky/config.yaml&quot;,&quot;expected_generation&quot;:12,&quot;requested_by&quot;:&quot;ops&quot;,&quot;reason&quot;:&quot;route change&quot;}' \
+  https://127.0.0.1:9902/admin/runtime/activate
 </code></pre>
-<h3 id="common-issues">Common Issues</h3>
-<p><strong>Service Fails to Start</strong></p>
-<p>Symptoms: systemd reports failure, process exits immediately</p>
-<p>Diagnosis:</p>
-<pre><code class="language-bash"># Check systemd logs
-sudo journalctl -u spooky.service -n 100 --no-pager
-
-# Test configuration manually
-sudo -u spooky /usr/local/bin/spooky --config /etc/spooky/config.yaml
-
-# Check certificate validity
-openssl x509 -noout -dates -in /etc/spooky/certs/fullchain.pem
-
-# Verify file permissions
-ls -la /etc/spooky/certs/
+<h2 id="rollback-workflow-example">Rollback Workflow Example</h2>
+<p>Choose a retained generation first:</p>
+<pre><code class="language-bash">curl -k --http1.1 \
+  -H &quot;Authorization: Bearer &lt;viewer-or-operator-token&gt;&quot; \
+  https://127.0.0.1:9902/admin/runtime/history
 </code></pre>
-<p>Resolution: Address configuration errors, certificate issues, or permission problems identified above.</p>
-<p><strong>High Latency</strong></p>
-<p>Symptoms: Increased p95/p99 request duration</p>
-<p>Diagnosis:</p>
-<pre><code class="language-bash"># Check backend latency
-curl -w &quot;@curl-format.txt&quot; -o /dev/null -s http://&lt;backend&gt;/&lt;path&gt;
-
-# Network path latency
-mtr &lt;backend-ip&gt;
-
-# System resource contention
-top -p $(pgrep spooky)
-iostat -x 1 10
-
-# Connection state distribution
-ss -anp | grep spooky | awk '{print $2}' | sort | uniq -c
+<p>Then roll back:</p>
+<pre><code class="language-bash">curl -k --http1.1 -X POST \
+  -H &quot;Authorization: Bearer &lt;operator-token&gt;&quot; \
+  -H &quot;content-type: application/json&quot; \
+  -d '{&quot;target_generation&quot;:11,&quot;expected_active_generation&quot;:12,&quot;requested_by&quot;:&quot;ops&quot;,&quot;reason&quot;:&quot;rollback&quot;}' \
+  https://127.0.0.1:9902/admin/runtime/rollback
 </code></pre>
-<p>Resolution: Investigate backend performance, network conditions, or system resource exhaustion.</p>
-<p><strong>Backend Connection Failures</strong></p>
-<p>Symptoms: 502/503 errors, "connection refused" in logs</p>
-<p>Diagnosis:</p>
-<pre><code class="language-bash"># Verify backend reachability
-nc -zv &lt;backend-ip&gt; &lt;backend-port&gt;
-
-# Check backend process state
-ssh &lt;backend&gt; &quot;systemctl status &lt;backend-service&gt;&quot;
-
-# Firewall/security group verification
-sudo iptables -L -n -v | grep &lt;backend-ip&gt;
-
-# Review health check logs
-sudo journalctl -u spooky.service | grep &quot;health check&quot;
-</code></pre>
-<p>Resolution: Restore backend service, fix network connectivity, or adjust health check parameters.</p>
-<h2 id="backup-and-disaster-recovery">Backup and Disaster Recovery</h2>
-<h3 id="configuration-backup">Configuration Backup</h3>
-<pre><code class="language-bash"># /usr/local/bin/backup-spooky-config.sh
-#!/bin/bash
-set -euo pipefail
-
-BACKUP_ROOT=&quot;/var/backups/spooky&quot;
-TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-BACKUP_DIR=&quot;${BACKUP_ROOT}/${TIMESTAMP}&quot;
-
-mkdir -p &quot;${BACKUP_DIR}&quot;
-
-# Backup configuration
-cp -a /etc/spooky/config.yaml &quot;${BACKUP_DIR}/&quot;
-
-# Backup certificates (excluding private keys for security)
-cp /etc/spooky/certs/fullchain.pem &quot;${BACKUP_DIR}/&quot;
-
-# Store metadata
-cat &gt; &quot;${BACKUP_DIR}/metadata.txt&quot; &lt;&lt; EOF
-Backup Date: $(date -Is)
-Hostname: $(hostname -f)
-Spooky Version: $(spooky --version 2&gt;&amp;1 || echo &quot;unknown&quot;)
-EOF
-
-# Compress backup
-tar czf &quot;${BACKUP_ROOT}/spooky-config-${TIMESTAMP}.tar.gz&quot; -C &quot;${BACKUP_ROOT}&quot; &quot;${TIMESTAMP}&quot;
-rm -rf &quot;${BACKUP_DIR}&quot;
-
-# Rotate old backups (keep 30 days)
-find &quot;${BACKUP_ROOT}&quot; -name &quot;spooky-config-*.tar.gz&quot; -mtime +30 -delete
-
-echo &quot;Backup completed: ${BACKUP_ROOT}/spooky-config-${TIMESTAMP}.tar.gz&quot;
-</code></pre>
-<p>Schedule via cron:</p>
-<pre><code class="language-bash"># Run daily at 2 AM
-0 2 * * * /usr/local/bin/backup-spooky-config.sh &gt;&gt; /var/log/spooky/backup.log 2&gt;&amp;1
-</code></pre>
-<h3 id="recovery-procedures">Recovery Procedures</h3>
-<p><strong>Configuration Restoration</strong></p>
-<pre><code class="language-bash"># Extract backup
-tar xzf /var/backups/spooky/spooky-config-YYYYMMDD-HHMMSS.tar.gz -C /tmp
-
-# Restore configuration
-sudo cp /tmp/YYYYMMDD-HHMMSS/config.yaml /etc/spooky/config.yaml
-sudo chown root:spooky /etc/spooky/config.yaml
-sudo chmod 640 /etc/spooky/config.yaml
-
-# Restart service after non-certificate config changes
-sudo systemctl restart spooky.service
-</code></pre>
-<p><strong>Complete System Rebuild</strong>
-1. Provision new host with OS installation
-2. Apply system configuration (kernel tuning, resource limits)
-3. Install Spooky binary
-4. Restore configuration from backup
-5. Install TLS certificates
-6. Start service and verify health
-7. Update load balancer to include new instance</p>
-<p>Recovery Time Objective (RTO): Target &lt;15 minutes with automation
-Recovery Point Objective (RPO): Configuration changes backed up daily</p>
-<h2 id="maintenance-windows">Maintenance Windows</h2>
-<h3 id="planned-maintenance-checklist">Planned Maintenance Checklist</h3>
-<p><strong>Pre-Maintenance</strong>
-- [ ] Notify stakeholders of maintenance window
-- [ ] Verify backup procedures completed successfully
-- [ ] Review rollback procedures
-- [ ] Prepare configuration changes or binary updates
-- [ ] Verify staging environment changes successful</p>
-<p><strong>During Maintenance</strong>
-- [ ] Remove instance from load balancer (if applicable)
-- [ ] Drain existing connections (if graceful shutdown supported)
-- [ ] Apply updates (configuration, binary, certificates)
-- [ ] Restart service
-- [ ] Verify service health and connectivity
-- [ ] Monitor error rates and latency for 5 minutes
-- [ ] Return instance to load balancer</p>
-<p><strong>Post-Maintenance</strong>
-- [ ] Confirm all instances operational
-- [ ] Review metrics for anomalies
-- [ ] Update change log
-- [ ] Close maintenance notification</p>
-<h2 id="additional-resources">Additional Resources</h2>
+<h2 id="observability-before-traffic-expansion">Observability Before Traffic Expansion</h2>
+<p>Before broad rollout, verify:</p>
 <ul>
-<li>Spooky Configuration Reference: <code>/docs/configuration/reference.md</code></li>
-<li>Load Balancing Strategies: <code>/docs/user-guide/load-balancing.md</code></li>
-<li>Troubleshooting Guide: <code>/docs/troubleshooting/common-issues.md</code></li>
-<li>Architecture Overview: <code>/docs/architecture/overview.md</code></li>
+<li>metrics endpoint is scraped successfully</li>
+<li>logs are shipping</li>
+<li>Control API health and readiness are reachable from the admin path</li>
+<li>dashboards for latency, overload, quota, backend health, and TLS are populated</li>
 </ul>
-<p>For issues not covered in this guide, consult the project repository issue tracker or engage with the development team.</p>
+<p>Use the shipped observability package rather than inventing an unverified local query set.</p>
+<p>See:</p>
+<ul>
+<li><a href="../../operations/observability-bundle/">Observability Operator Bundle</a></li>
+<li><a href="../../reference/metrics-reference/">Metrics Reference</a></li>
+</ul>
+<h2 id="rollout-procedure">Rollout Procedure</h2>
+<h3 id="new-config-on-an-existing-binary">New config on an existing binary</h3>
+<ol>
+<li>Render the candidate config to disk.</li>
+<li>Validate it before touching traffic.</li>
+<li>Activate on one canary node or one bounded slice.</li>
+<li>Watch latency, overload, backend health, quota outcomes, and auth outcomes.</li>
+<li>Expand gradually.</li>
+</ol>
+<h3 id="new-binary">New binary</h3>
+<ol>
+<li>Keep the previous binary available.</li>
+<li>Deploy to one canary node first.</li>
+<li>Let the node rejoin only after health, readiness, and key dashboards stay stable.</li>
+<li>Roll out node by node or slice by slice.</li>
+</ol>
+<h3 id="restart-required-config-change">Restart-required config change</h3>
+<ol>
+<li>Prepare the config and verify it is intentionally restart-required.</li>
+<li>Use a drain-aware restart or node replacement workflow.</li>
+<li>Keep rollback ready at the binary and config level.</li>
+</ol>
+<h2 id="security-checklist">Security Checklist</h2>
+<p>Before production, confirm:</p>
+<ol>
+<li>private keys are minimally readable</li>
+<li>Control API is not broadly exposed</li>
+<li>service account permissions are minimal</li>
+<li>public ingress and admin-plane firewall rules are distinct</li>
+<li>logs do not expose secrets or unnecessary request material</li>
+</ol>
+<h2 id="final-pre-go-live-checklist">Final Pre-Go-Live Checklist</h2>
+<p>Confirm all of the following:</p>
+<ul>
+<li>host tuning baseline applied and verified</li>
+<li>metrics and logs visible</li>
+<li>Control API auth tested</li>
+<li>cert reload tested</li>
+<li>runtime activation and rollback tested</li>
+<li>restart-required workflow tested</li>
+<li>canary rollout procedure documented</li>
+<li>incident owner and rollback owner clear</li>
+</ul>
+<h2 id="related-pages">Related Pages</h2>
+<ul>
+<li><a href="../../operations/production-readiness/">Production Readiness</a></li>
+<li><a href="../../operations/reload-and-drain/">Reload and Drain</a></li>
+<li><a href="../validation/">Validation</a></li>
+<li><a href="../../operations/deployment-patterns/">Deployment Patterns</a></li>
+<li><a href="../../operations/runbook/">Runbook</a></li>
+</ul>
   </div>
   
   <script>
@@ -2930,328 +2198,178 @@ Recovery Point Objective (RPO): Configuration changes backed up daily</p>
         
         
         
-        <a href="#pre-deployment-checklist"
+        <a href="#recommended-deployment-shape"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#pre-deployment-checklist');">
-            Pre-Deployment Checklist
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#recommended-deployment-shape');">
+            Recommended Deployment Shape
         </a>
-        
-        
-        <a href="#infrastructure-requirements"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#infrastructure-requirements');">
-            Infrastructure Requirements
-        </a>
-        
-        <a href="#pre-deployment-validation"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#pre-deployment-validation');">
-            Pre-Deployment Validation
-        </a>
-        
         
 
         
-        <a href="#system-configuration"
+        <a href="#minimum-host-baseline"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#system-configuration');">
-            System Configuration
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#minimum-host-baseline');">
+            Minimum Host Baseline
         </a>
         
+
+        
+        <a href="#directory-and-account-layout"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#directory-and-account-layout');">
+            Directory And Account Layout
+        </a>
+        
+
         
         <a href="#binary-installation"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#binary-installation');">
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#binary-installation');">
             Binary Installation
         </a>
         
-        <a href="#kernel-parameter-tuning"
+
+        
+        <a href="#host-tuning-baseline"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#kernel-parameter-tuning');">
-            Kernel Parameter Tuning
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#host-tuning-baseline');">
+            Host Tuning Baseline
         </a>
+        
+
         
         <a href="#resource-limits"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#resource-limits');">
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#resource-limits');">
             Resource Limits
         </a>
         
-        <a href="#production-configuration"
+
+        
+        <a href="#control-api-posture"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#production-configuration');">
-            Production Configuration
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#control-api-posture');">
+            Control API Posture
+        </a>
+        
+
+        
+        <a href="#certificate-management"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#certificate-management');">
+            Certificate Management
+        </a>
+        
+
+        
+        <a href="#example-service-unit"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#example-service-unit');">
+            Example Service Unit
+        </a>
+        
+
+        
+        <a href="#change-management-model"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#change-management-model');">
+            Change Management Model
+        </a>
+        
+        
+        <a href="#runtime-managed-config-changes"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#runtime-managed-config-changes');">
+            Runtime-managed config changes
+        </a>
+        
+        <a href="#certificate-only-changes"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#certificate-only-changes');">
+            Certificate-only changes
+        </a>
+        
+        <a href="#restart-required-changes"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#restart-required-changes');">
+            Restart-required changes
         </a>
         
         
 
         
-        <a href="#tls-certificate-management"
+        <a href="#activation-workflow-example"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#tls-certificate-management');">
-            TLS Certificate Management
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#activation-workflow-example');">
+            Activation Workflow Example
+        </a>
+        
+
+        
+        <a href="#rollback-workflow-example"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#rollback-workflow-example');">
+            Rollback Workflow Example
+        </a>
+        
+
+        
+        <a href="#observability-before-traffic-expansion"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#observability-before-traffic-expansion');">
+            Observability Before Traffic Expansion
+        </a>
+        
+
+        
+        <a href="#rollout-procedure"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#rollout-procedure');">
+            Rollout Procedure
         </a>
         
         
-        <a href="#certificate-acquisition"
+        <a href="#new-config-on-an-existing-binary"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#certificate-acquisition');">
-            Certificate Acquisition
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#new-config-on-an-existing-binary');">
+            New config on an existing binary
         </a>
         
-        <a href="#certificate-validation"
+        <a href="#new-binary"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#certificate-validation');">
-            Certificate Validation
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#new-binary');">
+            New binary
+        </a>
+        
+        <a href="#restart-required-config-change"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#restart-required-config-change');">
+            Restart-required config change
         </a>
         
         
 
         
-        <a href="#systemd-service-configuration"
+        <a href="#security-checklist"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#systemd-service-configuration');">
-            Systemd Service Configuration
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#security-checklist');">
+            Security Checklist
         </a>
-        
-        
-        <a href="#service-unit"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#service-unit');">
-            Service Unit
-        </a>
-        
-        <a href="#service-management"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#service-management');">
-            Service Management
-        </a>
-        
         
 
         
-        <a href="#security-hardening"
+        <a href="#final-pre-go-live-checklist"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#security-hardening');">
-            Security Hardening
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#final-pre-go-live-checklist');">
+            Final Pre-Go-Live Checklist
         </a>
-        
-        
-        <a href="#network-security"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#network-security');">
-            Network Security
-        </a>
-        
-        <a href="#application-security"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#application-security');">
-            Application Security
-        </a>
-        
-        <a href="#selinux-apparmor"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#selinux-apparmor');">
-            SELinux / AppArmor
-        </a>
-        
         
 
         
-        <a href="#monitoring-and-observability"
+        <a href="#related-pages"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#monitoring-and-observability');">
-            Monitoring and Observability
-        </a>
-        
-        
-        <a href="#metrics-exposition"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#metrics-exposition');">
-            Metrics Exposition
-        </a>
-        
-        <a href="#key-metrics-to-monitor"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#key-metrics-to-monitor');">
-            Key Metrics to Monitor
-        </a>
-        
-        <a href="#alerting-rules"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#alerting-rules');">
-            Alerting Rules
-        </a>
-        
-        <a href="#log-management"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#log-management');">
-            Log Management
-        </a>
-        
-        
-
-        
-        <a href="#high-availability-architecture"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#high-availability-architecture');">
-            High Availability Architecture
-        </a>
-        
-        
-        <a href="#active-active-configuration"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#active-active-configuration');">
-            Active-Active Configuration
-        </a>
-        
-        <a href="#configuration-synchronization"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#configuration-synchronization');">
-            Configuration Synchronization
-        </a>
-        
-        <a href="#health-checking"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#health-checking');">
-            Health Checking
-        </a>
-        
-        
-
-        
-        <a href="#performance-optimization"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#performance-optimization');">
-            Performance Optimization
-        </a>
-        
-        
-        <a href="#connection-pooling"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#connection-pooling');">
-            Connection Pooling
-        </a>
-        
-        <a href="#quic-tuning"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#quic-tuning');">
-            QUIC Tuning
-        </a>
-        
-        <a href="#cpu-affinity"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#cpu-affinity');">
-            CPU Affinity
-        </a>
-        
-        <a href="#memory-management"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#memory-management');">
-            Memory Management
-        </a>
-        
-        
-
-        
-        <a href="#operational-procedures"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#operational-procedures');">
-            Operational Procedures
-        </a>
-        
-        
-        <a href="#deployment-process"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#deployment-process');">
-            Deployment Process
-        </a>
-        
-        <a href="#configuration-changes"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#configuration-changes');">
-            Configuration Changes
-        </a>
-        
-        <a href="#incident-response"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#incident-response');">
-            Incident Response
-        </a>
-        
-        <a href="#capacity-planning"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#capacity-planning');">
-            Capacity Planning
-        </a>
-        
-        
-
-        
-        <a href="#troubleshooting"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#troubleshooting');">
-            Troubleshooting
-        </a>
-        
-        
-        <a href="#diagnostic-commands"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#diagnostic-commands');">
-            Diagnostic Commands
-        </a>
-        
-        <a href="#common-issues"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#common-issues');">
-            Common Issues
-        </a>
-        
-        
-
-        
-        <a href="#backup-and-disaster-recovery"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#backup-and-disaster-recovery');">
-            Backup and Disaster Recovery
-        </a>
-        
-        
-        <a href="#configuration-backup"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#configuration-backup');">
-            Configuration Backup
-        </a>
-        
-        <a href="#recovery-procedures"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#recovery-procedures');">
-            Recovery Procedures
-        </a>
-        
-        
-
-        
-        <a href="#maintenance-windows"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#maintenance-windows');">
-            Maintenance Windows
-        </a>
-        
-        
-        <a href="#planned-maintenance-checklist"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#planned-maintenance-checklist');">
-            Planned Maintenance Checklist
-        </a>
-        
-        
-
-        
-        <a href="#additional-resources"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#additional-resources');">
-            Additional Resources
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#related-pages');">
+            Related Pages
         </a>
         
 

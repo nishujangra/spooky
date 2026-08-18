@@ -1436,6 +1436,7 @@
 <li>what can change on reload</li>
 <li>what must survive across reloads</li>
 </ul>
+<p>That model matters to both operators and contributors because request workers, the Control API, metrics rendering, and background services must all agree on what the active runtime is at any point in time.</p>
 <p>The canonical implementation lives under:</p>
 <ul>
 <li><code>crates/edge/src/runtime/bundle.rs</code></li>
@@ -1445,6 +1446,32 @@
 </ul>
 <h2 id="ownership-classes">Ownership Classes</h2>
 <p>The runtime is intentionally split into three ownership classes.</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Ownership class</th>
+<th>What it means</th>
+<th>Typical examples</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Startup-owned state</td>
+<td>Established once and restart-required if changed</td>
+<td>config path, fixed process-start assumptions</td>
+</tr>
+<tr>
+<td>Generation-owned state</td>
+<td>Reloadable active runtime snapshot</td>
+<td>routing index, upstream policies, resilience state</td>
+</tr>
+<tr>
+<td>Long-lived shared services</td>
+<td>Shared services reached through the active generation</td>
+<td>metrics, transport shell, lifecycle coordinator, DNS resolver</td>
+</tr>
+</tbody>
+</table></div>
 <h3 id="startup-owned-state">Startup-owned state</h3>
 <p>Startup-owned state is established once for the process and must not change while the process keeps running.</p>
 <p>Examples:</p>
@@ -1493,6 +1520,7 @@
 <li>shared runtime state</li>
 </ul>
 <p>This is the boundary between assembly time and live execution time.</p>
+<p>Operators can think of <code>RuntimeBundle</code> as "the complete version of the runtime the process is currently serving."</p>
 <h3 id="sharedruntimestate"><code>SharedRuntimeState</code></h3>
 <p><code>SharedRuntimeState</code> groups:</p>
 <ul>
@@ -1530,6 +1558,16 @@
 </ol>
 <p>Callers should not manually reconstruct active runtime state by following ad hoc chains through listener-local fields.</p>
 <p>This keeps control-plane, listener, and metrics code aligned on the same active generation contract.</p>
+<h2 id="why-this-matters-for-request-flow">Why This Matters For Request Flow</h2>
+<p>The request path depends on generation views for the pieces that change at runtime:</p>
+<ul>
+<li>listener policy</li>
+<li>route resolution</li>
+<li>upstream and backend placement</li>
+<li>admission and resilience settings</li>
+<li>shared services needed to execute and observe the request</li>
+</ul>
+<p>Because readers consume a coherent generation view, one request does not need to piece together state from multiple partially updated stores.</p>
 <h2 id="reload-flow">Reload Flow</h2>
 <p>At a high level, reload follows this sequence:</p>
 <ol>
@@ -1586,6 +1624,14 @@
 <p>Reload prepares a complete next generation and swaps the bundle if lifecycle gating and validation allow it.</p>
 <h3 id="shutdown-and-drain-path">Shutdown and drain path</h3>
 <p>Drain and shutdown do not mutate the active generation in place to express policy changes. They move lifecycle phase forward and let listener/control-plane services react accordingly.</p>
+<h2 id="relationship-to-backend-lifecycle-and-ingress">Relationship to Backend Lifecycle and Ingress</h2>
+<p>Runtime generation is the glue between architecture layers:</p>
+<ul>
+<li>ingress workers read the active generation to know which listeners, routes, and policies are live</li>
+<li>backend lifecycle coordination uses runtime context without requiring request paths to own durable backend state</li>
+<li>Control API and observability surfaces read the same active generation that request workers use</li>
+</ul>
+<p>That shared read model is what keeps reload, traffic handling, and operator views consistent.</p>
 <h2 id="contributor-rules">Contributor Rules</h2>
 <p>When adding code:</p>
 <ul>
@@ -2119,6 +2165,14 @@
         
 
         
+        <a href="#why-this-matters-for-request-flow"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#why-this-matters-for-request-flow');">
+            Why This Matters For Request Flow
+        </a>
+        
+
+        
         <a href="#reload-flow"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#reload-flow');">
@@ -2196,6 +2250,14 @@
             Shutdown and drain path
         </a>
         
+        
+
+        
+        <a href="#relationship-to-backend-lifecycle-and-ingress"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#relationship-to-backend-lifecycle-and-ingress');">
+            Relationship to Backend Lifecycle and Ingress
+        </a>
         
 
         

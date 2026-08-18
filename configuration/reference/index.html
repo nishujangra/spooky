@@ -1454,12 +1454,14 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>This is the canonical configuration document for Spooky. It should answer four questions for every setting:</p>
+    <p>This is the canonical configuration document for Spooky. It should answer these questions for every major configuration area:</p>
 <ul>
-<li>what field exists</li>
-<li>what values it accepts</li>
-<li>what its default is</li>
-<li>what runtime behavior it changes</li>
+<li>what the section is for</li>
+<li>what fields exist</li>
+<li>what values are allowed</li>
+<li>what the defaults are</li>
+<li>what runtime behavior the settings change</li>
+<li>what operators should be careful about</li>
 </ul>
 <p>Use <a href="../defaults/">Configuration Defaults</a> for the exhaustive default inventory and <a href="../examples/">Configuration Examples</a> for complete deployment patterns. Use this page when you need exact schema and semantics.</p>
 <p>For distributed quota policy examples, Redis backend posture, migration from
@@ -1477,11 +1479,13 @@ legacy scoped rate limiting, and operator interpretation, see
 <p>Default coverage now lives on <a href="../defaults/">Configuration Defaults</a> so the full inventory can stay centralized and easier to audit against the code.</p>
 <p>This page does not change the current product behavior:</p>
 <ul>
-<li>configuration hot reload is supported via <code>POST /admin/runtime/reload</code>: the full config is
-  re-read, validated, and applied through an atomic runtime swap (routes, upstreams, backends,
-  timeouts, limits, resilience policies, and <code>log.level</code>). Only log format/file settings, tracing
-  config, control-plane thread counts, and listener removal / bind-address changes still require a
-  restart.</li>
+<li>configuration hot reload is supported through the staged <code>POST /admin/runtime/validate</code>,
+  <code>POST /admin/runtime/preview</code>, and <code>POST /admin/runtime/activate</code> flow. The legacy
+  <code>POST /admin/runtime/reload</code> shortcut still exists, but it bypasses preview. Runtime-managed
+  changes are re-read, validated, and applied through an atomic runtime swap (routes, upstreams,
+  backends, timeouts, limits, resilience policies, and <code>log.level</code>). Only log format/file
+  settings, tracing config, control-plane thread counts, and listener removal / bind-address
+  changes still require a restart.</li>
 <li>certificate reload (<code>POST /admin/runtime/reload-certs</code>) covers new handshakes only</li>
 <li>backend transport is scheme-driven: <code>https://</code> backends use HTTP/2, <code>http://</code> backends use HTTP/1.1</li>
 </ul>
@@ -1528,6 +1532,38 @@ legacy scoped rate limiting, and operator interpretation, see
 <li>Read <a href="../tls/">TLS Setup</a> before configuring production certificates or private trust roots.</li>
 <li>Read <a href="../../operations/production-readiness/">Production Readiness</a> if you are deciding whether the current operational model fits your rollout requirements.</li>
 </ul>
+<h2 id="configuration-reading-map">Configuration Reading Map</h2>
+<p>Use this quick map before diving into field tables:</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Goal</th>
+<th>Page</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Copy a working template</td>
+<td><a href="../examples/">Configuration Examples</a></td>
+</tr>
+<tr>
+<td>Check what happens when a field is omitted</td>
+<td><a href="../defaults/">Configuration Defaults</a></td>
+</tr>
+<tr>
+<td>Understand exact field semantics</td>
+<td>this page</td>
+</tr>
+<tr>
+<td>Configure certificates and trust</td>
+<td><a href="../tls/">TLS Setup</a></td>
+</tr>
+<tr>
+<td>Understand rollout and restart implications</td>
+<td><a href="../../deployment/production/">Production Deployment</a> and <a href="../../operations/production-readiness/">Production Readiness</a></td>
+</tr>
+</tbody>
+</table></div>
 <h2 id="configuration-file-format">Configuration File Format</h2>
 <p>Spooky uses YAML configuration loaded with:</p>
 <pre><code class="language-bash">spooky --config /path/to/config.yaml
@@ -1628,6 +1664,104 @@ log:
 </tr>
 </tbody>
 </table></div>
+<h2 id="common-configuration-patterns">Common Configuration Patterns</h2>
+<p>Use these snippets as starting points before moving to the field-by-field sections below.</p>
+<h3 id="pattern-comparison">Pattern Comparison</h3>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Goal</th>
+<th>Recommended shape</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>one public listener and one simple upstream</td>
+<td>top-level <code>listen</code> plus one <code>upstream</code></td>
+<td>smallest production-capable shape</td>
+</tr>
+<tr>
+<td>multiple listener addresses or identities</td>
+<td><code>listeners[]</code></td>
+<td>explicit multi-listener runtime model</td>
+</tr>
+<tr>
+<td>cleartext backend for local or internal services</td>
+<td><code>http://host[:port]</code> backend address</td>
+<td>avoids accidentally opting into HTTPS defaults</td>
+</tr>
+<tr>
+<td>private upstream trust roots</td>
+<td>global <code>upstream_tls</code> or per-upstream <code>tls</code> override</td>
+<td>keeps verification enabled while using private CA material</td>
+</tr>
+<tr>
+<td>contract-style request limiting</td>
+<td><code>resilience.quota</code></td>
+<td>keeps quota separate from scoped rate limiting and overload</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="minimal-public-edge">Minimal Public Edge</h3>
+<pre><code class="language-yaml">version: 1
+
+listen:
+  address: &quot;0.0.0.0&quot;
+  port: 9889
+  tls:
+    cert: &quot;/etc/spooky/certs/fullchain.pem&quot;
+    key: &quot;/etc/spooky/certs/privkey.pem&quot;
+
+upstream:
+  app:
+    route:
+      path_prefix: &quot;/&quot;
+    backends:
+      - id: &quot;app-1&quot;
+        address: &quot;https://app.internal.example:8443&quot;
+</code></pre>
+<h3 id="local-development-with-cleartext-backend">Local Development With Cleartext Backend</h3>
+<pre><code class="language-yaml">version: 1
+
+listen:
+  address: &quot;127.0.0.1&quot;
+  port: 9889
+  tls:
+    cert: &quot;certs/localhost.crt&quot;
+    key: &quot;certs/localhost.key&quot;
+
+upstream:
+  local_app:
+    route:
+      path_prefix: &quot;/&quot;
+    backends:
+      - id: &quot;app-local&quot;
+        address: &quot;http://127.0.0.1:8080&quot;
+</code></pre>
+<h3 id="private-ca-upstream">Private CA Upstream</h3>
+<pre><code class="language-yaml">upstream_tls:
+  verify_certificates: true
+  strict_sni: true
+  ca_file: &quot;/etc/spooky/pki/internal-ca.pem&quot;
+
+upstream:
+  internal_api:
+    route:
+      host: &quot;api.example.internal&quot;
+      path_prefix: &quot;/&quot;
+    backends:
+      - id: &quot;internal-api-1&quot;
+        address: &quot;https://api.internal.example:9443&quot;
+</code></pre>
+<h2 id="common-top-level-mistakes">Common Top-Level Mistakes</h2>
+<ul>
+<li>configuring <code>listeners[]</code> and then expecting the top-level <code>listen</code> block to stay active at runtime</li>
+<li>using backend shorthand when cleartext <code>http://</code> was intended</li>
+<li>exposing the Control API on a non-loopback address without strong access controls</li>
+<li>turning off upstream certificate verification without treating it as an explicit break-glass choice</li>
+<li>increasing inflight, body, or queue limits without validating backend and host capacity</li>
+</ul>
 <h2 id="runtime-normalization-and-precedence">Runtime Normalization And Precedence</h2>
 <p>Spooky normalizes configuration into a single runtime model before it serves traffic.</p>
 <p>Precedence and interpretation rules:</p>
@@ -1906,6 +2040,12 @@ log:
 </ul>
 <h2 id="listen-configuration">Listen Configuration</h2>
 <p>Configures the listening interface for incoming client connections. HTTP/3 requires TLS configuration.</p>
+<p>Use this section when you need to decide:</p>
+<ul>
+<li>where Spooky binds</li>
+<li>which TLS identity it serves</li>
+<li>whether one listener or multiple listeners are needed</li>
+</ul>
 <h3 id="properties">Properties</h3>
 <div class="table-wrapper"><table>
 <thead>
@@ -2066,6 +2206,27 @@ listen:
 <h3 id="multi-listener-configuration">Multi-Listener Configuration</h3>
 <p>Use <code>listeners</code> instead of <code>listen</code> when you need multiple independent listeners — for example, a public-facing port and a private/internal port with different TLS identities.</p>
 <p><code>listeners</code> and <code>listen</code> share the same per-entry schema. When <code>listeners</code> is set, the top-level <code>listen</code> block is ignored for runtime listener selection and listener validation.</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Shape</th>
+<th>Use when</th>
+<th>Runtime effect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>listen</code></td>
+<td>exactly one listener is needed</td>
+<td>one active listener definition</td>
+</tr>
+<tr>
+<td><code>listeners[]</code></td>
+<td>more than one listener is needed</td>
+<td><code>listen</code> is ignored and the array becomes the active listener set</td>
+</tr>
+</tbody>
+</table></div>
 <pre><code class="language-yaml"># Single listener — use the top-level listen block (default)
 listen:
   protocol: http3
@@ -2091,8 +2252,22 @@ listeners:
       key: &quot;/etc/spooky/certs/internal-privkey.pem&quot;
 </code></pre>
 <p>Each listener entry shares the same upstream routing table — route matching, load balancing, and health checks are global across all listeners.</p>
+<h3 id="common-mistakes">Common Mistakes</h3>
+<ul>
+<li>assuming <code>listeners[]</code> adds to the top-level <code>listen</code> block instead of replacing it at runtime</li>
+<li>providing only <code>cert</code> or only <code>key</code> in the legacy pair</li>
+<li>expecting certificate reload to change active connections rather than only future handshakes</li>
+<li>forgetting that listener changes can still cross restart boundaries depending on bind topology</li>
+</ul>
 <h2 id="upstream-configuration">Upstream Configuration</h2>
-<p>Upstream pools define groups of backend servers with routing rules and load balancing strategies. Each upstream pool is identified by a unique name and contains routing criteria, load balancing configuration, and backend definitions.</p>
+<p>Upstreams define groups of backends with routing rules and load-balancing strategies. Each upstream is identified by a unique name and contains route criteria, load-balancing configuration, and backend definitions.</p>
+<p>Use this section when you need to decide:</p>
+<ul>
+<li>how requests match a route</li>
+<li>which upstream handles which traffic</li>
+<li>how backend addresses and health checks are defined</li>
+<li>how host and forwarded-header policy are applied</li>
+</ul>
 <h3 id="structure">Structure</h3>
 <pre><code class="language-yaml">upstream:
   pool_name:
@@ -2157,7 +2332,7 @@ listeners:
 </tbody>
 </table></div>
 <h3 id="route-matching">Route Matching</h3>
-<p>Route matching determines which upstream pool handles a request. Routes are evaluated by longest-prefix matching across all configured upstreams, selecting the route with the most specific (longest) path prefix.</p>
+<p>Route matching determines which upstream handles a request. Routes are evaluated by longest-prefix matching across all configured upstreams, selecting the route with the most specific (longest) path prefix.</p>
 <h4 id="routematch-properties">RouteMatch Properties</h4>
 <div class="table-wrapper"><table>
 <thead>
@@ -2304,10 +2479,42 @@ upstream:
 </tr>
 </tbody>
 </table></div>
+<h4 id="backend-address-forms">Backend Address Forms</h4>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Address form</th>
+<th>Interpreted as</th>
+<th>Typical use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>https://api.internal:8443</code></td>
+<td>HTTPS upstream over HTTP/2</td>
+<td>standard secure production upstream</td>
+</tr>
+<tr>
+<td><code>http://127.0.0.1:8080</code></td>
+<td>cleartext HTTP/1.1 upstream</td>
+<td>local development or internal cleartext service</td>
+</tr>
+<tr>
+<td><code>api.internal:8443</code></td>
+<td>shorthand for HTTPS on explicit port</td>
+<td>secure upstream with short config</td>
+</tr>
+<tr>
+<td><code>api.internal</code></td>
+<td>shorthand for <code>https://api.internal:443</code></td>
+<td>secure upstream using default port</td>
+</tr>
+</tbody>
+</table></div>
 <p><strong>Address format notes:</strong>
 - <code>host:port</code> or <code>host</code> — shorthand, treated as <code>https://host:port</code> (port defaults to <code>443</code>)
 - <code>https://host[:port]</code> — TLS upstream; port defaults to <code>443</code> if omitted
-- <code>http://host[:port]</code> — cleartext HTTP/1.1 upstream; port defaults to <code>80</code> if omitted. Mixed <code>http://</code> and <code>https://</code> backends are supported within the same upstream pool.</p>
+- <code>http://host[:port]</code> — cleartext HTTP/1.1 upstream; port defaults to <code>80</code> if omitted. Mixed <code>http://</code> and <code>https://</code> backends are supported within the same upstream.</p>
 <h4 id="health-check-configuration">Health Check Configuration</h4>
 <p>Health checks monitor backend availability and automatically remove unhealthy backends from the pool.</p>
 <div class="table-wrapper"><table>
@@ -2612,6 +2819,42 @@ backends:
 <li><code>strict_sni: false</code> disables only the SNI extension; verification still remains enabled unless <code>verify_certificates: false</code>.</li>
 <li><code>verify_certificates: false</code> disables upstream certificate validation entirely.</li>
 </ul>
+<h4 id="global-vs-per-upstream-tls-overrides">Global vs Per-Upstream TLS Overrides</h4>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Configuration shape</th>
+<th>Best for</th>
+<th>Rule</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>top-level <code>upstream_tls</code></td>
+<td>one trust posture for most or all HTTPS backends</td>
+<td>applies unless an upstream overrides it</td>
+</tr>
+<tr>
+<td><code>upstream.&lt;name&gt;.tls</code></td>
+<td>one upstream needs a different CA or verification mode</td>
+<td>wins over <code>upstream_tls</code> for that upstream only</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="operational-implications">Operational Implications</h3>
+<ul>
+<li>Route specificity matters more than declaration order. The longest matching path prefix wins.</li>
+<li>Backend address scheme changes runtime transport behavior. <code>https://</code> selects HTTP/2 transport; <code>http://</code> selects HTTP/1.1 transport.</li>
+<li>Health checks are optional. If you omit them, a backend stays eligible unless passive health signals or other runtime behavior remove it.</li>
+<li><code>host_policy</code> and <code>forwarded_headers</code> directly affect what upstream applications see.</li>
+</ul>
+<h3 id="common-mistakes_1">Common Mistakes</h3>
+<ul>
+<li>forgetting the <code>http://</code> prefix for local or cleartext backends and accidentally opting into HTTPS defaults</li>
+<li>creating overlapping routes without understanding the longest-prefix and tie-break rules</li>
+<li>treating backend <code>id</code> as cosmetic only even though it appears in logs, metrics, and runtime views</li>
+<li>using <code>forwarded_headers.preserve</code> on untrusted edge traffic</li>
+</ul>
 <h4 id="examples_3">Examples</h4>
 <pre><code class="language-yaml">upstream_tls:
   verify_certificates: true   # global default
@@ -2644,7 +2887,7 @@ upstream:
     backends: [...]
 </code></pre>
 <h2 id="load-balancing-configuration">Load Balancing Configuration</h2>
-<p>Load balancing determines how requests are distributed across healthy backends within an upstream pool. Each pool configures its own strategy independently.</p>
+<p>Load balancing determines how requests are distributed across healthy backends within an upstream. Each upstream configures its own strategy independently.</p>
 <h3 id="properties_2">Properties</h3>
 <div class="table-wrapper"><table>
 <thead>
@@ -2725,6 +2968,18 @@ upstream:
 <li>Use <code>least-connections</code> when backend load varies significantly across requests</li>
 <li>Use <code>latency-aware</code> when you want faster backends to absorb more traffic</li>
 <li>Use <code>sticky-cid</code> for QUIC-connection affinity without application-level stickiness keys</li>
+</ul>
+<h3 id="operational-implications_1">Operational Implications</h3>
+<ul>
+<li><code>round-robin</code> and <code>random</code> are the easiest to reason about for initial rollouts.</li>
+<li><code>consistent-hash</code> and <code>sticky-cid</code> improve affinity but make membership changes more visible to clients.</li>
+<li><code>least-connections</code> and <code>latency-aware</code> depend more heavily on live runtime signals and should be paired with good observability.</li>
+</ul>
+<h3 id="common-mistakes_2">Common Mistakes</h3>
+<ul>
+<li>picking <code>consistent-hash</code> without a stable key that matches application behavior</li>
+<li>expecting backend <code>weight</code> to influence algorithms that currently ignore weights</li>
+<li>using <code>sticky-cid</code> to solve application-layer affinity problems that should use explicit request keys</li>
 </ul>
 <h3 id="examples_4">Examples</h3>
 <pre><code class="language-yaml">upstream:
@@ -2837,6 +3092,18 @@ log:
     enabled: true
     path: /tmp/spooky-trace.log
 </code></pre>
+<h3 id="operational-implications_2">Operational Implications</h3>
+<ul>
+<li><code>log.level</code> reloads live, but log sink shape such as file output and format remains startup-owned.</li>
+<li><code>json</code> is the safer default for production log pipelines.</li>
+<li>file logging adds local disk-management responsibility; stderr or journald avoids that at the cost of external collection requirements.</li>
+</ul>
+<h3 id="common-mistakes_3">Common Mistakes</h3>
+<ul>
+<li>enabling file logging without rotation</li>
+<li>using trace-level logging for sustained production traffic</li>
+<li>assuming format changes apply through live runtime activation</li>
+</ul>
 <h2 id="performance-configuration">Performance Configuration</h2>
 <p>Controls resource limits, tuning knobs, and connection-flood protection. All fields are optional and fall back to sane defaults.</p>
 <h3 id="properties_4">Properties</h3>
@@ -3133,8 +3400,26 @@ performance:
   new_connections_per_sec: 10000
   new_connections_burst: 2000
 </code></pre>
+<h3 id="operational-implications_3">Operational Implications</h3>
+<ul>
+<li><code>worker_threads</code>, <code>reuseport</code>, and shard settings shape how ingress work spreads across cores.</li>
+<li>inflight limits, timeouts, and body caps define overload behavior as much as raw performance.</li>
+<li>DNS refresh and connection-pool settings affect how quickly backend changes are observed.</li>
+</ul>
+<h3 id="common-mistakes_4">Common Mistakes</h3>
+<ul>
+<li>raising inflight limits without validating backend capacity and timeout posture</li>
+<li>setting very high body caps without thinking about memory pressure</li>
+<li>enabling aggressive multi-worker tuning before baseline observability is in place</li>
+</ul>
 <h2 id="resilience-configuration">Resilience Configuration</h2>
 <p>Controls retry budgets, circuit breaking, hedging, adaptive admission, brownout shedding, route queuing, protocol policy, and the worker watchdog. All fields are optional and fall back to production-tuned defaults.</p>
+<p>Use this section when you need to decide:</p>
+<ul>
+<li>how Spooky protects itself and its backends under pressure</li>
+<li>which retry and hedge behaviors are allowed</li>
+<li>what request-shape rules are enforced before backend execution</li>
+</ul>
 <h3 id="adaptive_admission">adaptive_admission</h3>
 <p>Dynamically adjusts the global in-flight request limit based on observed backend latency.</p>
 <div class="table-wrapper"><table>
@@ -3688,8 +3973,27 @@ performance:
       - &quot;auth_pool&quot;
       - &quot;payments_pool&quot;
 </code></pre>
+<h3 id="operational-implications_4">Operational Implications</h3>
+<ul>
+<li><code>adaptive_admission</code>, <code>brownout</code>, <code>route_queue</code>, and inflight caps interact as one overload-control surface.</li>
+<li>retry, hedging, and circuit breaking can protect latency or amplify backend pressure depending on how they are tuned.</li>
+<li>quota and scoped rate limiting are policy-contract features; they should not be interpreted as overload behavior.</li>
+</ul>
+<h3 id="common-mistakes_5">Common Mistakes</h3>
+<ul>
+<li>leaving <code>brownout.core_routes</code> empty and unintentionally shedding all routes during brownout</li>
+<li>enabling hedging without understanding replay safety and backend amplification</li>
+<li>treating retry budgets as a substitute for backend reliability work</li>
+<li>mixing quota expectations with overload tuning</li>
+</ul>
 <h2 id="observability-endpoint-hardening">Observability Endpoint Hardening</h2>
 <p>When enabling <code>observability.metrics</code> or <code>observability.control_api</code>, keep endpoints on loopback unless you intentionally expose them behind network controls.</p>
+<p>Use this section when you need to decide:</p>
+<ul>
+<li>where metrics and the Control API should bind</li>
+<li>how much runtime control to expose</li>
+<li>how strongly the admin surface must be protected</li>
+</ul>
 <h3 id="metrics-endpoint">Metrics Endpoint</h3>
 <p>Key fields:</p>
 <ul>
@@ -3755,6 +4059,12 @@ performance:
 <li><code>resilience.watchdog.restart_command</code>: array, where index <code>0</code> is executable and remaining entries are arguments.</li>
 </ul>
 <p>Legacy <code>resilience.watchdog.restart_hook</code> is deprecated and rejected by validation.</p>
+<h3 id="common-mistakes_6">Common Mistakes</h3>
+<ul>
+<li>exposing the Control API on <code>0.0.0.0</code> for convenience</li>
+<li>assuming health and readiness endpoints are enough protection for admin-plane exposure</li>
+<li>using the legacy reload shortcut when staged validate/preview/activate flows are the safer operational path</li>
+</ul>
 <h2 id="configuration-validation">Configuration Validation</h2>
 <p>Spooky validates configuration at startup and reports errors before attempting to start the server.</p>
 <h3 id="common-validation-errors">Common Validation Errors</h3>
@@ -4345,6 +4655,14 @@ log:
         
 
         
+        <a href="#configuration-reading-map"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#configuration-reading-map');">
+            Configuration Reading Map
+        </a>
+        
+
+        
         <a href="#configuration-file-format"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#configuration-file-format');">
@@ -4365,6 +4683,48 @@ log:
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#top-level-keys-at-a-glance');">
             Top-Level Keys At A Glance
+        </a>
+        
+
+        
+        <a href="#common-configuration-patterns"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#common-configuration-patterns');">
+            Common Configuration Patterns
+        </a>
+        
+        
+        <a href="#pattern-comparison"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#pattern-comparison');">
+            Pattern Comparison
+        </a>
+        
+        <a href="#minimal-public-edge"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#minimal-public-edge');">
+            Minimal Public Edge
+        </a>
+        
+        <a href="#local-development-with-cleartext-backend"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#local-development-with-cleartext-backend');">
+            Local Development With Cleartext Backend
+        </a>
+        
+        <a href="#private-ca-upstream"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#private-ca-upstream');">
+            Private CA Upstream
+        </a>
+        
+        
+
+        
+        <a href="#common-top-level-mistakes"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#common-top-level-mistakes');">
+            Common Top-Level Mistakes
         </a>
         
 
@@ -4564,6 +4924,12 @@ log:
             Multi-Listener Configuration
         </a>
         
+        <a href="#common-mistakes"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#common-mistakes');">
+            Common Mistakes
+        </a>
+        
         
 
         
@@ -4616,6 +4982,18 @@ log:
             Per-Upstream TLS Policy
         </a>
         
+        <a href="#operational-implications"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#operational-implications');">
+            Operational Implications
+        </a>
+        
+        <a href="#common-mistakes_1"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#common-mistakes_1');">
+            Common Mistakes
+        </a>
+        
         
 
         
@@ -4642,6 +5020,18 @@ log:
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#algorithm-selection');">
             Algorithm Selection
+        </a>
+        
+        <a href="#operational-implications_1"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#operational-implications_1');">
+            Operational Implications
+        </a>
+        
+        <a href="#common-mistakes_2"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#common-mistakes_2');">
+            Common Mistakes
         </a>
         
         <a href="#examples_4"
@@ -4678,6 +5068,18 @@ log:
             Examples
         </a>
         
+        <a href="#operational-implications_2"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#operational-implications_2');">
+            Operational Implications
+        </a>
+        
+        <a href="#common-mistakes_3"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#common-mistakes_3');">
+            Common Mistakes
+        </a>
+        
         
 
         
@@ -4704,6 +5106,18 @@ log:
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#examples_6');">
             Examples
+        </a>
+        
+        <a href="#operational-implications_3"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#operational-implications_3');">
+            Operational Implications
+        </a>
+        
+        <a href="#common-mistakes_4"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#common-mistakes_4');">
+            Common Mistakes
         </a>
         
         
@@ -4776,6 +5190,18 @@ log:
             Example
         </a>
         
+        <a href="#operational-implications_4"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#operational-implications_4');">
+            Operational Implications
+        </a>
+        
+        <a href="#common-mistakes_5"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#common-mistakes_5');">
+            Common Mistakes
+        </a>
+        
         
 
         
@@ -4808,6 +5234,12 @@ log:
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#watchdog-restart-hook');">
             Watchdog Restart Hook
+        </a>
+        
+        <a href="#common-mistakes_6"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#common-mistakes_6');">
+            Common Mistakes
         </a>
         
         

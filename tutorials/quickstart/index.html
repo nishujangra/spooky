@@ -1454,7 +1454,7 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Spooky is an HTTP/3 (QUIC) edge reverse proxy. Clients connect over HTTP/3; Spooky forwards to your existing HTTP/2 backends unchanged. This guide gets a working proxy running locally and confirms the full upgrade path — including the <code>Alt-Svc</code> header that tells browsers to switch to HTTP/3.</p>
+    <p>This guide gets Spooky from zero to first successful traffic with the fewest moving parts possible.</p>
 <p>Total time: about 5 minutes.</p>
 <h2 id="prerequisites">Prerequisites</h2>
 <ul>
@@ -1462,9 +1462,17 @@
 <li><strong>curl with HTTP/3 support</strong> — the curl that ships with macOS does not include HTTP/3. Install one that does:
   <code>bash
   brew install curl
-  # then use $(brew --prefix curl)/bin/curl in the commands below, or put it first on PATH</code>
-  Alternatively, use Spooky's own <code>h2_backend</code> test client (shown in Step 3) to confirm connectivity without curl.</li>
+  # then use $(brew --prefix curl)/bin/curl in the commands below, or put it first on PATH</code></li>
+<li><strong>Python 3</strong> for the simplest local backend: <code>python3 --version</code></li>
 <li><strong>UDP port 9889 free</strong> — QUIC runs over UDP. Check with <code>lsof -iUDP:9889</code>.</li>
+</ul>
+<h2 id="what-you-will-run">What You Will Run</h2>
+<p>This quickstart uses:</p>
+<ul>
+<li>a self-signed certificate for local TLS</li>
+<li>a small local HTTP backend on <code>127.0.0.1:8080</code></li>
+<li>one catch-all upstream in Spooky</li>
+<li>one HTTP/3 request to confirm first traffic</li>
 </ul>
 <h2 id="step-1-build">Step 1: Build</h2>
 <pre><code class="language-bash">git clone https://github.com/Supernova-Labs-Org/spooky.git
@@ -1483,9 +1491,16 @@ openssl req -x509 -newkey rsa:4096 -nodes \
 </code></pre>
 <p>Production: see <a href="../../configuration/tls/">TLS Setup</a>.</p>
 <h2 id="step-3-start-a-test-backend">Step 3: Start a Test Backend</h2>
-<p>Spooky requires HTTP/2 backends. HTTP/1.1-only upstreams are not supported.</p>
-<p>Use the bundled test backend, which speaks HTTP/2 out of the box:</p>
-<pre><code class="language-bash">cargo run --bin h2_backend -- --port 8080
+<p>Spooky supports:</p>
+<ul>
+<li>HTTP/2 upstream transport for <code>https://</code> backends</li>
+<li>HTTP/1.1 upstream transport for <code>http://</code> backends</li>
+</ul>
+<p>For the fastest local test, use a simple HTTP/1.1 backend:</p>
+<pre><code class="language-bash">mkdir -p /tmp/spooky-demo
+printf 'hello from backend\n' &gt; /tmp/spooky-demo/index.html
+cd /tmp/spooky-demo
+python3 -m http.server 8080
 </code></pre>
 <p>Leave this running in its own terminal.</p>
 <h2 id="step-4-write-the-config">Step 4: Write the Config</h2>
@@ -1508,7 +1523,7 @@ upstream:
       path_prefix: &quot;/&quot;            # match every request path
     backends:
       - id: backend-1             # arbitrary label shown in logs
-        address: &quot;127.0.0.1:8080&quot; # where to forward — must be an HTTP/2 endpoint
+        address: &quot;http://127.0.0.1:8080&quot; # cleartext HTTP/1.1 backend for the local demo
         weight: 100               # relative share of traffic (only meaningful with multiple backends)
 
 log:
@@ -1520,14 +1535,24 @@ log:
 <p>You should see:</p>
 <pre><code>INFO spooky: loading config path=&quot;config.yaml&quot;
 INFO spooky: listening on 0.0.0.0:9889 protocol=http3
-INFO spooky: upstream pool ready pool=default backends=1
+INFO spooky: upstream ready upstream=default backends=1
 </code></pre>
 <h2 id="step-6-verify-http3">Step 6: Verify HTTP/3</h2>
 <h3 id="6a-force-http3-confirms-quic-is-working">6a. Force HTTP/3 (confirms QUIC is working)</h3>
 <pre><code class="language-bash">curl --http3-only -k https://localhost:9889/
 </code></pre>
 <p><code>--http3-only</code> refuses to fall back to TCP. If this succeeds, QUIC is live.</p>
-<h3 id="6b-verify-the-alt-svc-upgrade-path-mimics-browser-behavior">6b. Verify the Alt-Svc upgrade path (mimics browser behavior)</h3>
+<p>Expected body:</p>
+<pre><code class="language-text">hello from backend
+</code></pre>
+<h3 id="6b-check-the-control-api-health-endpoint">6b. Check the control API health endpoint</h3>
+<p>In another terminal:</p>
+<pre><code class="language-bash">curl -sk --http1.1 https://127.0.0.1:9902/health
+</code></pre>
+<p>Expected response:</p>
+<pre><code class="language-json">{&quot;status&quot;:&quot;ok&quot;, ...}
+</code></pre>
+<h3 id="6c-verify-the-alt-svc-upgrade-path-mimics-browser-behavior">6c. Verify the Alt-Svc upgrade path (mimics browser behavior)</h3>
 <p>Browsers don't start with HTTP/3 — they discover it via the <code>Alt-Svc</code> response header on a regular HTTPS request, then switch on the next connection. Test that Spooky sends this header correctly:</p>
 <pre><code class="language-bash">curl -k -I https://localhost:9889/
 </code></pre>
@@ -1538,15 +1563,18 @@ INFO spooky: upstream pool ready pool=default backends=1
 <p>If you see this header, Spooky is correctly advertising HTTP/3 to clients that don't yet support it or haven't upgraded yet.</p>
 <h2 id="common-issues">Common Issues</h2>
 <p><strong><code>Error: Address already in use</code></strong> — something else is bound to UDP 9889. Find it with <code>lsof -iUDP:9889</code> and stop it, or change <code>port</code> in <code>config.yaml</code>.</p>
-<p><strong><code>Failed to connect to backend</code></strong> — the h2_backend process isn't running, or is on a different port. Confirm it's up with <code>curl -k --http2 https://localhost:8080/</code> (expect a response, not a connection refused).</p>
+<p><strong><code>Failed to connect to backend</code></strong> — the local backend is not running, or is on a different port. Confirm it is up with <code>curl http://127.0.0.1:8080/</code>.</p>
 <p><strong><code>Failed to load TLS certificate</code></strong> — the paths in <code>config.yaml</code> don't match where you generated the files. Both <code>certs/cert.pem</code> and <code>certs/key.pem</code> must exist relative to the working directory you launch Spooky from.</p>
 <p><strong>curl falls back to HTTP/2 silently</strong> — you're using the system curl, which lacks HTTP/3 support. Use <code>brew install curl</code> and invoke it with the full path, or check <code>curl --version</code> for <code>HTTP/3</code> in the features list.</p>
-<h2 id="what-to-read-next">What to Read Next</h2>
+<h2 id="next-steps">Next Steps</h2>
 <ul>
-<li><strong><a href="../../configuration/reference/">Configuration Reference</a></strong> — every config field, its type, default value, and valid range.</li>
-<li><strong><a href="../../user-guide/load-balancing/">Load Balancing Guide</a></strong> — when to use round-robin vs. least-connections vs. random, and how weights interact.</li>
-<li><strong><a href="../../configuration/tls/">TLS Setup</a></strong> — production certificates with Let's Encrypt, cert rotation, and mTLS.</li>
-<li><strong><a href="../../deployment/production/">Production Deployment</a></strong> — systemd unit file, resource limits, metrics endpoints, and hardening checklist.</li>
+<li><a href="../../getting-started/docker/">Docker</a> — fastest container-based first run</li>
+<li><a href="../../getting-started/installation/">Installation</a> — install Spooky on a host</li>
+<li><a href="../../configuration/reference/">Configuration Reference</a> — exact config keys, defaults, and semantics</li>
+<li><a href="../../getting-started/minimum-production/">Minimum Production</a> — minimum safe production posture</li>
+<li><a href="../../deployment/production/">Production Deployment</a> — full deployment and hardening guide</li>
+<li><a href="../../user-guide/load-balancing/">Load Balancing Guide</a> — strategy selection and routing trade-offs</li>
+<li><a href="../../configuration/tls/">TLS Setup</a> — production certificates, rotation, and mTLS</li>
 </ul>
   </div>
   
@@ -2012,6 +2040,14 @@ INFO spooky: upstream pool ready pool=default backends=1
         
 
         
+        <a href="#what-you-will-run"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#what-you-will-run');">
+            What You Will Run
+        </a>
+        
+
+        
         <a href="#step-1-build"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#step-1-build');">
@@ -2065,10 +2101,16 @@ INFO spooky: upstream pool ready pool=default backends=1
             6a. Force HTTP/3 (confirms QUIC is working)
         </a>
         
-        <a href="#6b-verify-the-alt-svc-upgrade-path-mimics-browser-behavior"
+        <a href="#6b-check-the-control-api-health-endpoint"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#6b-verify-the-alt-svc-upgrade-path-mimics-browser-behavior');">
-            6b. Verify the Alt-Svc upgrade path (mimics browser behavior)
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#6b-check-the-control-api-health-endpoint');">
+            6b. Check the control API health endpoint
+        </a>
+        
+        <a href="#6c-verify-the-alt-svc-upgrade-path-mimics-browser-behavior"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#6c-verify-the-alt-svc-upgrade-path-mimics-browser-behavior');">
+            6c. Verify the Alt-Svc upgrade path (mimics browser behavior)
         </a>
         
         
@@ -2082,10 +2124,10 @@ INFO spooky: upstream pool ready pool=default backends=1
         
 
         
-        <a href="#what-to-read-next"
+        <a href="#next-steps"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#what-to-read-next');">
-            What to Read Next
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#next-steps');">
+            Next Steps
         </a>
         
 

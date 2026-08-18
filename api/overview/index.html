@@ -1454,7 +1454,8 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>This page summarizes the operator-facing programmatic surfaces. Use the linked reference pages for the canonical details.</p>
+    <p>This page is the short map for Spooky's operator-facing programmatic surfaces.</p>
+<p>Use the linked reference pages for canonical endpoint behavior, status codes, metrics, and configuration semantics.</p>
 <h2 id="cli-surface">CLI Surface</h2>
 <p>Basic usage:</p>
 <pre><code class="language-bash">spooky --config /etc/spooky/config.yaml
@@ -1482,161 +1483,95 @@
 </tr>
 </tbody>
 </table></div>
-<h2 id="control-and-metrics-surfaces">Control And Metrics Surfaces</h2>
-<p>Spooky exposes two main operator-facing HTTP surfaces when configured:</p>
-<ul>
-<li>a Prometheus metrics endpoint</li>
-<li>a control API for liveness, readiness, runtime visibility, full config reload, cert reload, and restart actions</li>
-</ul>
-<p>Use:</p>
-<ul>
-<li><a href="../../reference/metrics-reference/">Metrics Reference</a> for current metric families and first-alert guidance</li>
-<li><a href="../../reference/control-api-reference/">Control API Reference</a> for current endpoint behavior and security posture</li>
-</ul>
-<h2 id="configuration-surface">Configuration Surface</h2>
-<p>The canonical configuration docs live in:</p>
-<ul>
-<li><a href="../../configuration/reference/">Configuration Reference</a></li>
-<li><a href="../../configuration/examples/">Configuration Examples</a></li>
-<li><a href="../../configuration/tls/">TLS Setup</a></li>
-</ul>
-<h2 id="important-scope-note">Important Scope Note</h2>
-<p>The control API applies configuration through a file-reload model, not a granular per-object API.</p>
-<ul>
-<li>it provides health, readiness, runtime inspection, restart actions, certificate reload, staged
-  activation (<code>POST /admin/runtime/validate</code>, <code>/preview</code>, <code>/activate</code>), rollback
-  (<code>POST /admin/runtime/rollback</code>), generation history (<code>GET /admin/runtime/history</code>), and the
-  legacy full config reload shortcut (<code>POST /admin/runtime/reload</code>)</li>
-<li>config reload re-reads the config file and applies it live via an atomic runtime swap, including
-  route, upstream, and backend changes — it is not a per-object mutation API (you edit the file and
-  reload). <code>log.level</code> applies live; log format/file settings, tracing config, control-plane thread
-  counts, and listener bind/removal changes still require a restart</li>
-<li>reloads default to the currently active runtime config source, which is the startup path until an
-  alternate <code>config_path</code> is activated; a successful activation makes that file the new active source</li>
-</ul>
-<h2 id="related-pages">Related Pages</h2>
-<ul>
-<li><a href="../../reference/metrics-reference/">Metrics Reference</a></li>
-<li><a href="../../reference/control-api-reference/">Control API Reference</a></li>
-<li><a href="../../operations/runbook/">Operations Runbook</a></li>
-</ul>
-<h2 id="configuration-validation">Configuration Validation</h2>
-<h3 id="startup-validation">Startup Validation</h3>
-<p>Configuration validation is performed automatically at startup before the QUIC listener is initialized. The validation process verifies:</p>
-<ul>
-<li>Configuration file format and syntax</li>
-<li>Required field presence</li>
-<li>Value type correctness</li>
-<li>File path existence (certificates, keys)</li>
-<li>Network address format validity</li>
-</ul>
-<h3 id="exit-codes">Exit Codes</h3>
-<ul>
-<li><code>0</code>: Configuration validated successfully, normal operation</li>
-<li><code>1</code>: Configuration validation failed or runtime error occurred</li>
-</ul>
-<h3 id="validation-output">Validation Output</h3>
-<p><strong>Valid Configuration</strong>:</p>
-<pre><code>Configuration validation successful
-Spooky startup phase=begin
-Spooky listener topology listeners=1 packet_shards_per_worker=1 reuseport=true pin_workers=false
-Listener 0 binds udp=0.0.0.0:9889 tcp_bootstrap=0.0.0.0:9889
-</code></pre>
-<p><strong>Invalid Configuration</strong>:</p>
-<pre><code>Error loading config: &lt;error details&gt;
-</code></pre>
-<p>or</p>
-<pre><code>Configuration validation failed. Exiting...
-</code></pre>
-<h2 id="error-codes">Error Codes</h2>
-<h3 id="http-status-codes">HTTP Status Codes</h3>
-<p>Spooky may return the following HTTP status codes to clients:</p>
-<ul>
-<li><code>200 OK</code>: Request successful (forwarded from backend)</li>
-<li><code>400 Bad Request</code>: Malformed or invalid request</li>
-<li><code>500 Internal Server Error</code>: Internal proxy error (e.g., TLS configuration issues)</li>
-<li><code>502 Bad Gateway</code>: Backend server error</li>
-<li><code>503 Service Unavailable</code>: Backend timeout, no healthy backends available, or upstream response body exceeds <code>max_response_body_bytes</code></li>
-</ul>
-<h2 id="logging">Logging</h2>
-<h3 id="log-format">Log Format</h3>
-<p>Spooky uses the <code>env_logger</code> logging implementation with timestamped output. All log messages are written to standard output (stdout) with the following format:</p>
-<pre><code>[YYYY-MM-DD HH:MM:SS] [LEVEL] [module::path] message
-</code></pre>
-<h3 id="log-output-examples">Log Output Examples</h3>
-<pre><code>[2026-02-18 14:23:45] [INFO] [spooky::listener_group] Spooky startup phase=begin
-[2026-02-18 14:23:45] [INFO] [spooky::listener_group] Spooky listener topology listeners=1 packet_shards_per_worker=1 reuseport=true pin_workers=false
-[2026-02-18 14:23:45] [INFO] [spooky::listener_group] Listener 0 binds udp=0.0.0.0:9889 tcp_bootstrap=0.0.0.0:9889
-[2026-02-18 14:23:45] [INFO] [spooky_edge::quic_listener] Runtime performance concurrency worker_threads=1 control_plane_threads=2 packet_shards_per_worker=1 reuseport=true pin_workers=false
-[2026-02-18 14:23:45] [DEBUG] [spooky_edge::quic_listener] Certificate loaded successfully
-[2026-02-18 14:23:50] [INFO] [spooky_edge::quic_listener] Length of data received: 1200
-[2026-02-18 14:23:50] [DEBUG] [spooky_edge::quic_listener] Packet DCID (len=8): [00 01 02 03 04 05 06 07], type: Initial, active connections: 1
-[2026-02-18 14:25:30] [INFO] [spooky_edge::quic_listener] Draining connections
-[2026-02-18 14:25:35] [INFO] [spooky] Spooky shutdown complete
-</code></pre>
-<h3 id="log-levels">Log Levels</h3>
-<p>Log verbosity is configured via the <code>log.level</code> configuration parameter. The following levels are available (ordered from most to least verbose):</p>
+<h2 id="surface-map">Surface Map</h2>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
-<th>Level</th>
-<th>Standard Equivalent</th>
-<th>Use Case</th>
+<th>Surface</th>
+<th>Protocol</th>
+<th>Main use</th>
+<th>Canonical page</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>whisper</code></td>
-<td>trace</td>
-<td>Extremely detailed diagnostic information including packet hex dumps</td>
+<td>metrics endpoint</td>
+<td>HTTP <code>GET</code></td>
+<td>scrape, dashboarding, alerting, trend analysis</td>
+<td><a href="../../reference/metrics-reference/">Metrics Reference</a></td>
 </tr>
 <tr>
-<td><code>haunt</code></td>
-<td>debug</td>
-<td>Detailed diagnostic information for troubleshooting</td>
+<td>Control API</td>
+<td>HTTP/1.1 over TLS</td>
+<td>runtime state, staged activation, rollback, cert reload, restart</td>
+<td><a href="../../reference/control-api-reference/">Control API Reference</a></td>
 </tr>
 <tr>
-<td><code>spooky</code></td>
-<td>info</td>
-<td>General informational messages about normal operation</td>
-</tr>
-<tr>
-<td><code>scream</code></td>
-<td>warn</td>
-<td>Warning messages for potentially problematic situations</td>
-</tr>
-<tr>
-<td><code>poltergeist</code></td>
-<td>error</td>
-<td>Error messages for failures and exceptions</td>
-</tr>
-<tr>
-<td><code>silence</code></td>
-<td>off</td>
-<td>Disable all logging output</td>
+<td>config file</td>
+<td>YAML</td>
+<td>runtime configuration input</td>
+<td><a href="../../configuration/reference/">Configuration Reference</a></td>
 </tr>
 </tbody>
 </table></div>
-<p>Standard log level names (<code>trace</code>, <code>debug</code>, <code>info</code>, <code>warn</code>, <code>error</code>, <code>off</code>) are also supported for compatibility.</p>
-<h3 id="log-configuration">Log Configuration</h3>
-<p>Configure logging in the configuration file:</p>
-<pre><code class="language-yaml">log:
-  level: &quot;spooky&quot;  # or &quot;haunt&quot;, &quot;whisper&quot;, etc.
-</code></pre>
-<h3 id="environment-variable-control">Environment Variable Control</h3>
-<p>The <code>env_logger</code> implementation respects the <code>RUST_LOG</code> environment variable, which can be used to override configuration file settings or enable module-specific logging:</p>
-<pre><code class="language-bash"># Override global log level
-RUST_LOG=debug spooky --config config.yaml
-
-# Enable debug logging for specific modules
-RUST_LOG=spooky_edge=debug,spooky_transport=info spooky --config config.yaml
-
-# Trace all modules
-RUST_LOG=trace spooky --config config.yaml
-</code></pre>
-<h2 id="environment-variables">Environment Variables</h2>
-<p><strong>Note</strong>: Environment variable interpolation in configuration files is not currently supported. Configuration values must be provided literally in the YAML file.</p>
-<p>For dynamic configuration, consider using external configuration management tools or templating the configuration file before loading.</p>
+<h2 id="common-entry-points">Common Entry Points</h2>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Task</th>
+<th>Start here</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>check process liveness and readiness</td>
+<td><code>GET /health</code> and <code>GET /ready</code> in <a href="../../reference/control-api-reference/">Control API Reference</a></td>
+</tr>
+<tr>
+<td>inspect active runtime state</td>
+<td><code>GET /admin/runtime</code> in <a href="../../reference/control-api-reference/">Control API Reference</a></td>
+</tr>
+<tr>
+<td>validate, preview, activate, or roll back runtime config</td>
+<td><a href="../../reference/control-api-reference/">Control API Reference</a></td>
+</tr>
+<tr>
+<td>understand metric names and labels</td>
+<td><a href="../../reference/metrics-reference/">Metrics Reference</a></td>
+</tr>
+<tr>
+<td>use dashboards, alerts, and SLO views</td>
+<td><a href="../../operations/observability-bundle/">Observability Operator Bundle</a></td>
+</tr>
+<tr>
+<td>understand reload, drain, and restart boundaries</td>
+<td><a href="../../operations/reload-and-drain/">Reload and Drain</a></td>
+</tr>
+<tr>
+<td>understand exact config shape and examples</td>
+<td><a href="../../configuration/reference/">Configuration Reference</a> and <a href="../../configuration/examples/">Configuration Examples</a></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="scope-note">Scope Note</h2>
+<p>The Control API is a file-reload control surface, not a granular per-object mutation API.</p>
+<p>For the canonical behavior of:</p>
+<ul>
+<li><code>validate</code>, <code>preview</code>, <code>activate</code>, <code>rollback</code>, <code>reload</code>, <code>reload-certs</code>, and <code>restart</code></li>
+<li>generation history and rollback eligibility</li>
+<li>authn, authz, and mTLS behavior</li>
+<li>response status and failure semantics</li>
+</ul>
+<p>use <a href="../../reference/control-api-reference/">Control API Reference</a>.</p>
+<p>For runtime-managed versus restart-required configuration boundaries, use <a href="../../operations/reload-and-drain/">Reload and Drain</a>.</p>
+<h2 id="related-pages">Related Pages</h2>
+<ul>
+<li><a href="../../reference/control-api-reference/">Control API Reference</a></li>
+<li><a href="../../reference/metrics-reference/">Metrics Reference</a></li>
+<li><a href="../../configuration/reference/">Configuration Reference</a></li>
+<li><a href="../../operations/observability-bundle/">Observability Operator Bundle</a></li>
+<li><a href="../../operations/runbook/">Operations Runbook</a></li>
+</ul>
   </div>
   
   <script>
@@ -2101,26 +2036,26 @@ RUST_LOG=trace spooky --config config.yaml
         
 
         
-        <a href="#control-and-metrics-surfaces"
+        <a href="#surface-map"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#control-and-metrics-surfaces');">
-            Control And Metrics Surfaces
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#surface-map');">
+            Surface Map
         </a>
         
 
         
-        <a href="#configuration-surface"
+        <a href="#common-entry-points"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#configuration-surface');">
-            Configuration Surface
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#common-entry-points');">
+            Common Entry Points
         </a>
         
 
         
-        <a href="#important-scope-note"
+        <a href="#scope-note"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#important-scope-note');">
-            Important Scope Note
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#scope-note');">
+            Scope Note
         </a>
         
 
@@ -2129,98 +2064,6 @@ RUST_LOG=trace spooky --config config.yaml
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#related-pages');">
             Related Pages
-        </a>
-        
-
-        
-        <a href="#configuration-validation"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#configuration-validation');">
-            Configuration Validation
-        </a>
-        
-        
-        <a href="#startup-validation"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#startup-validation');">
-            Startup Validation
-        </a>
-        
-        <a href="#exit-codes"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#exit-codes');">
-            Exit Codes
-        </a>
-        
-        <a href="#validation-output"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#validation-output');">
-            Validation Output
-        </a>
-        
-        
-
-        
-        <a href="#error-codes"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#error-codes');">
-            Error Codes
-        </a>
-        
-        
-        <a href="#http-status-codes"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#http-status-codes');">
-            HTTP Status Codes
-        </a>
-        
-        
-
-        
-        <a href="#logging"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#logging');">
-            Logging
-        </a>
-        
-        
-        <a href="#log-format"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#log-format');">
-            Log Format
-        </a>
-        
-        <a href="#log-output-examples"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#log-output-examples');">
-            Log Output Examples
-        </a>
-        
-        <a href="#log-levels"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#log-levels');">
-            Log Levels
-        </a>
-        
-        <a href="#log-configuration"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#log-configuration');">
-            Log Configuration
-        </a>
-        
-        <a href="#environment-variable-control"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#environment-variable-control');">
-            Environment Variable Control
-        </a>
-        
-        
-
-        
-        <a href="#environment-variables"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#environment-variables');">
-            Environment Variables
         </a>
         
 

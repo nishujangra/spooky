@@ -1781,11 +1781,12 @@ forwarded_headers:
     reload_certs_path: &quot;/admin/runtime/reload-certs&quot;
 </code></pre>
 <p>Check readiness:</p>
-<pre><code class="language-bash">curl -k https://127.0.0.1:9902/ready
-curl -k https://127.0.0.1:9902/health
+<pre><code class="language-bash">curl -k --http1.1 https://127.0.0.1:9902/ready
+curl -k --http1.1 https://127.0.0.1:9902/health
 </code></pre>
 <p>Reload listener certificates without restarting the process:</p>
 <pre><code class="language-bash">curl -X POST \
+  --http1.1 \
   -H 'Authorization: Bearer replace-with-strong-token' \
   https://127.0.0.1:9902/admin/runtime/reload-certs
 </code></pre>
@@ -1804,8 +1805,9 @@ sudo chown -R spooky:spooky /etc/spooky /var/log/spooky
 </code></pre>
 <hr />
 <h2 id="validating-your-config">Validating Your Config</h2>
-<p>Spooky runs full validation on startup and exits with a clear error message. To validate without starting:</p>
-<pre><code class="language-bash">spooky --config /etc/spooky/config.yaml --validate
+<p>Spooky runs full validation on startup and exits with a clear error message. There is no standalone <code>--validate</code> flag.</p>
+<p>To validate a config safely, start Spooky with the candidate file in a controlled environment and confirm it reaches the listening state without exiting. Stop it after you confirm startup succeeded:</p>
+<pre><code class="language-bash">spooky --config /etc/spooky/config.yaml
 </code></pre>
 <p>Common validation errors and fixes:</p>
 <div class="table-wrapper"><table>

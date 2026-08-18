@@ -1454,47 +1454,176 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>This page documents the current operator-facing control-plane endpoints and their intended use.</p>
-<h2 id="scope">Scope</h2>
-<p>The control API is a privileged admin surface. It should be treated as operator-only infrastructure, not as a public application endpoint.</p>
-<p>Current endpoint family:</p>
-<ul>
-<li>health</li>
-<li>readiness</li>
-<li>runtime snapshot</li>
-<li>staged activation: validate, preview, activate</li>
-<li>rollback</li>
-<li>generation history</li>
-<li>certificate reload</li>
-<li>full config reload</li>
-<li>restart request</li>
-</ul>
+    <p>Use this page to look up control-plane endpoints, roles, request fields, and response semantics.</p>
+<h2 id="open-these-first">Open These First</h2>
+<p>Use this table when you need the fastest runtime-introspection path:</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Need</th>
+<th>Endpoint</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>current runtime state, backend health, quota backend state, watchdog state, observability package metadata</td>
+<td><code>GET /admin/runtime</code></td>
+</tr>
+<tr>
+<td>retained generations, rollback candidates, and recent runtime operations</td>
+<td><code>GET /admin/runtime/history</code></td>
+</tr>
+<tr>
+<td>one generation's retained record and related entries</td>
+<td><code>GET /admin/runtime/history/{generation}</code></td>
+</tr>
+<tr>
+<td>check whether a candidate config is valid and compatible</td>
+<td><code>POST /admin/runtime/validate</code></td>
+</tr>
+<tr>
+<td>dry-run a change and record it in history</td>
+<td><code>POST /admin/runtime/preview</code></td>
+</tr>
+<tr>
+<td>commit a compatible runtime-managed change</td>
+<td><code>POST /admin/runtime/activate</code></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="endpoint-index">Endpoint Index</h2>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Endpoint</th>
+<th>Method</th>
+<th>Minimum role</th>
+<th>Purpose</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>/health</code></td>
+<td><code>GET</code></td>
+<td>none</td>
+<td>liveness</td>
+</tr>
+<tr>
+<td><code>/ready</code></td>
+<td><code>GET</code></td>
+<td>none</td>
+<td>readiness</td>
+</tr>
+<tr>
+<td><code>/admin/runtime</code></td>
+<td><code>GET</code></td>
+<td><code>viewer</code></td>
+<td>current runtime snapshot</td>
+</tr>
+<tr>
+<td><code>/admin/runtime/history</code></td>
+<td><code>GET</code></td>
+<td><code>viewer</code></td>
+<td>retained generations and operation history</td>
+</tr>
+<tr>
+<td><code>/admin/runtime/history/{generation}</code></td>
+<td><code>GET</code></td>
+<td><code>viewer</code></td>
+<td>one retained generation and related entries</td>
+</tr>
+<tr>
+<td><code>/admin/runtime/validate</code></td>
+<td><code>POST</code></td>
+<td><code>operator</code></td>
+<td>validate a candidate without mutating runtime</td>
+</tr>
+<tr>
+<td><code>/admin/runtime/preview</code></td>
+<td><code>POST</code></td>
+<td><code>operator</code></td>
+<td>validate and record a preview</td>
+</tr>
+<tr>
+<td><code>/admin/runtime/activate</code></td>
+<td><code>POST</code></td>
+<td><code>operator</code></td>
+<td>activate a compatible candidate generation</td>
+</tr>
+<tr>
+<td><code>/admin/runtime/rollback</code></td>
+<td><code>POST</code></td>
+<td><code>operator</code></td>
+<td>restore a retained generation</td>
+</tr>
+<tr>
+<td><code>/admin/runtime/reload</code></td>
+<td><code>POST</code></td>
+<td><code>operator</code></td>
+<td>legacy full-config reload shortcut</td>
+</tr>
+<tr>
+<td><code>/admin/runtime/reload-certs</code></td>
+<td><code>POST</code></td>
+<td><code>operator</code></td>
+<td>reload listener certificate material</td>
+</tr>
+<tr>
+<td><code>/admin/runtime/restart</code></td>
+<td><code>POST</code></td>
+<td><code>admin</code></td>
+<td>request controlled restart through the watchdog</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="common-control-api-flows">Common Control API Flows</h2>
+<h3 id="read-current-runtime-state">Read Current Runtime State</h3>
+<pre><code class="language-bash">curl -k --http1.1 \
+  -H &quot;Authorization: Bearer &lt;token&gt;&quot; \
+  https://127.0.0.1:9902/admin/runtime
+</code></pre>
+<h3 id="validate-preview-and-activate-a-candidate">Validate, Preview, and Activate a Candidate</h3>
+<pre><code class="language-bash">curl -k --http1.1 -X POST \
+  -H &quot;Authorization: Bearer &lt;token&gt;&quot; \
+  -H &quot;content-type: application/json&quot; \
+  https://127.0.0.1:9902/admin/runtime/validate \
+  -d '{&quot;config_path&quot;:&quot;/etc/spooky/candidate.yaml&quot;,&quot;requested_by&quot;:&quot;ops&quot;,&quot;reason&quot;:&quot;preflight&quot;}'
+
+curl -k --http1.1 -X POST \
+  -H &quot;Authorization: Bearer &lt;token&gt;&quot; \
+  -H &quot;content-type: application/json&quot; \
+  https://127.0.0.1:9902/admin/runtime/preview \
+  -d '{&quot;config_path&quot;:&quot;/etc/spooky/candidate.yaml&quot;,&quot;requested_by&quot;:&quot;ops&quot;,&quot;reason&quot;:&quot;preview&quot;}'
+
+curl -k --http1.1 -X POST \
+  -H &quot;Authorization: Bearer &lt;token&gt;&quot; \
+  -H &quot;content-type: application/json&quot; \
+  https://127.0.0.1:9902/admin/runtime/activate \
+  -d '{&quot;config_path&quot;:&quot;/etc/spooky/candidate.yaml&quot;,&quot;expected_generation&quot;:12,&quot;requested_by&quot;:&quot;ops&quot;,&quot;reason&quot;:&quot;deploy&quot;}'
+</code></pre>
+<h3 id="roll-back-to-a-retained-generation">Roll Back to a Retained Generation</h3>
+<pre><code class="language-bash">curl -k --http1.1 \
+  -H &quot;Authorization: Bearer &lt;token&gt;&quot; \
+  https://127.0.0.1:9902/admin/runtime/history
+
+curl -k --http1.1 -X POST \
+  -H &quot;Authorization: Bearer &lt;token&gt;&quot; \
+  -H &quot;content-type: application/json&quot; \
+  https://127.0.0.1:9902/admin/runtime/rollback \
+  -d '{&quot;target_generation&quot;:11,&quot;expected_active_generation&quot;:12,&quot;requested_by&quot;:&quot;ops&quot;,&quot;reason&quot;:&quot;rollback&quot;}'
+</code></pre>
 <h2 id="protocol">Protocol</h2>
-<p>The control API uses <strong>HTTP/1.1 over TLS</strong>. HTTP/2 is not supported.</p>
+<p>The Control API uses <strong>HTTP/1.1 over TLS</strong>. HTTP/2 is not supported.</p>
 <p>When using curl, pass <code>--http1.1</code> explicitly — curl negotiates h2 by default when connecting to a TLS endpoint and the server will reject the connection:</p>
 <pre><code class="language-bash">curl -k --http1.1 https://&lt;address&gt;:&lt;port&gt;/...
 </code></pre>
 <p>The <code>-k</code> flag skips certificate verification for self-signed certs.</p>
-<h2 id="security-expectations">Security Expectations</h2>
-<ul>
-<li>bind to loopback or a strongly isolated admin network whenever possible</li>
-<li>prefer <code>mTLS required</code> plus either a bearer token or an mTLS-derived role-bearing identity in production</li>
-<li>avoid broad public exposure even when authentication is enabled</li>
-<li>if IP allowlisting is configured, source address policy is enforced before bearer-token validation</li>
-<li>do not trust <code>X-Forwarded-For</code> or similar proxy headers unless a future deployment-specific policy layer explicitly enables that behavior</li>
-</ul>
 <h2 id="authentication">Authentication</h2>
-<p>The admin plane supports these authentication shapes:</p>
+<p>Supported authentication shapes:</p>
 <ul>
 <li>bearer token only</li>
 <li>mTLS only</li>
 <li>mTLS + bearer token</li>
-</ul>
-<p>Recommended production posture:</p>
-<ul>
-<li><code>mTLS required</code></li>
-<li>bearer token or another role-bearing admin identity</li>
-<li>isolated admin network exposure</li>
 </ul>
 <p>Authentication and authorization are separate concerns:</p>
 <ul>
@@ -1508,7 +1637,6 @@
 <ul>
 <li><code>observability.control_api.auth_token</code> remains supported as the legacy single-token admin credential</li>
 <li>the legacy token is mapped internally to a static admin identity so existing operators keep current restart/reload privileges during migration</li>
-<li>the legacy token runs in compatibility mode; it preserves behavior, but it is not the recommended production posture</li>
 <li>new deployments should prefer <code>observability.control_api.auth.bearer_tokens[]</code> with explicit roles</li>
 <li>compatibility boundary: a new Spooky binary accepts legacy <code>auth_token</code> configs, but an older binary will reject configs that use the newer nested control-plane fields because <code>ControlApi</code> uses strict <code>deny_unknown_fields</code></li>
 </ul>
@@ -1518,105 +1646,19 @@
 <li><code>operator</code>: <code>viewer</code> plus validate, preview, activate, rollback, reload, and cert reload</li>
 <li><code>admin</code>: <code>operator</code> plus restart and future destructive admin actions</li>
 </ul>
-<p>This role matrix is the intended contract for control-plane implementation.</p>
-<h2 id="route-classification-and-role-matrix">Route Classification And Role Matrix</h2>
-<p>The admin plane classifies routes in three groups:</p>
+<h2 id="route-access-rules">Route Access Rules</h2>
+<p>Route families:</p>
 <ul>
-<li>unauthenticated or separately configurable: <code>/health</code>, <code>/ready</code></li>
-<li>read-only privileged: <code>/admin/runtime</code>, <code>/admin/runtime/history</code>, <code>/admin/runtime/history/{generation}</code></li>
-<li>mutating privileged: <code>/admin/runtime/validate</code>, <code>/admin/runtime/preview</code>, <code>/admin/runtime/activate</code>, <code>/admin/runtime/rollback</code>, <code>/admin/runtime/reload</code>, <code>/admin/runtime/reload-certs</code>, <code>/admin/runtime/restart</code></li>
+<li><code>/health</code> and <code>/ready</code>: unauthenticated or separately protected</li>
+<li><code>/admin/runtime*</code> reads: <code>viewer</code></li>
+<li>runtime mutation routes except restart: <code>operator</code></li>
+<li><code>/admin/runtime/restart</code>: <code>admin</code></li>
 </ul>
-<p>Minimum role requirements:</p>
-<div class="table-wrapper"><table>
-<thead>
-<tr>
-<th>Route</th>
-<th>Method</th>
-<th>Classification</th>
-<th>Minimum role</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>/health</code></td>
-<td><code>GET</code></td>
-<td>unauthenticated or separately configurable</td>
-<td>none</td>
-</tr>
-<tr>
-<td><code>/ready</code></td>
-<td><code>GET</code></td>
-<td>unauthenticated or separately configurable</td>
-<td>none</td>
-</tr>
-<tr>
-<td><code>/admin/runtime</code></td>
-<td><code>GET</code></td>
-<td>read-only privileged</td>
-<td><code>viewer</code></td>
-</tr>
-<tr>
-<td><code>/admin/runtime/history</code></td>
-<td><code>GET</code></td>
-<td>read-only privileged</td>
-<td><code>viewer</code></td>
-</tr>
-<tr>
-<td><code>/admin/runtime/history/{generation}</code></td>
-<td><code>GET</code></td>
-<td>read-only privileged</td>
-<td><code>viewer</code></td>
-</tr>
-<tr>
-<td><code>/admin/runtime/validate</code></td>
-<td><code>POST</code></td>
-<td>mutating privileged</td>
-<td><code>operator</code></td>
-</tr>
-<tr>
-<td><code>/admin/runtime/preview</code></td>
-<td><code>POST</code></td>
-<td>mutating privileged</td>
-<td><code>operator</code></td>
-</tr>
-<tr>
-<td><code>/admin/runtime/activate</code></td>
-<td><code>POST</code></td>
-<td>mutating privileged</td>
-<td><code>operator</code></td>
-</tr>
-<tr>
-<td><code>/admin/runtime/rollback</code></td>
-<td><code>POST</code></td>
-<td>mutating privileged</td>
-<td><code>operator</code></td>
-</tr>
-<tr>
-<td><code>/admin/runtime/reload</code></td>
-<td><code>POST</code></td>
-<td>mutating privileged</td>
-<td><code>operator</code></td>
-</tr>
-<tr>
-<td><code>/admin/runtime/reload-certs</code></td>
-<td><code>POST</code></td>
-<td>mutating privileged</td>
-<td><code>operator</code></td>
-</tr>
-<tr>
-<td><code>/admin/runtime/restart</code></td>
-<td><code>POST</code></td>
-<td>mutating privileged</td>
-<td><code>admin</code></td>
-</tr>
-</tbody>
-</table></div>
 <p>Contract rules:</p>
 <ul>
 <li><code>viewer</code> is the minimum privileged read role</li>
 <li><code>operator</code> is the minimum non-restart mutation role</li>
 <li><code>admin</code> is required for restart</li>
-<li>health and readiness may remain unauthenticated, but deployments may choose to protect them separately</li>
 <li>implementation should distinguish invalid authentication from insufficient role</li>
 </ul>
 <h2 id="response-contract">Response Contract</h2>
@@ -1632,11 +1674,10 @@
 <li><code>insufficient_role</code></li>
 <li><code>source_ip_not_allowed</code></li>
 </ul>
-<p>When control API mTLS is configured as <code>required</code>, missing or invalid client certificates are rejected during the TLS handshake before HTTP routing. That failure does not produce an HTTP <code>401</code> or <code>403</code> response; the connection is terminated during handshake, and the server emits a control-plane TLS failure log with a stable client-auth reason code.</p>
+<p>When control API mTLS is configured as <code>required</code>, missing or invalid client certificates are rejected during the TLS handshake before HTTP routing. That failure does not produce an HTTP <code>401</code> or <code>403</code> response.</p>
 <h2 id="configuration-patterns">Configuration Patterns</h2>
 <h3 id="bearer-only-local-dev">Bearer-Only Local Dev</h3>
-<p>Use this for loopback-only development or local automation:</p>
-<p>This is compatibility-friendly and intentionally simple, but it is not the recommended long-term production posture.</p>
+<p>Use this for loopback-only development or local automation.</p>
 <pre><code class="language-yaml">observability:
   control_api:
     enabled: true
@@ -1645,8 +1686,7 @@
     auth_token: &quot;change-me-local-dev&quot;
 </code></pre>
 <h3 id="mtls-optional-with-viewer-token">mTLS Optional With Viewer Token</h3>
-<p>Use this when you want to start accepting client certificates without making them mandatory yet:</p>
-<p>This is a transitional posture for gradual hardening. It is safer than legacy single-token mode, but still weaker than required mTLS.</p>
+<p>Use this when you want to accept client certificates without making them mandatory yet.</p>
 <pre><code class="language-yaml">observability:
   control_api:
     enabled: true
@@ -1663,7 +1703,7 @@
           actor_id: &quot;ops-readonly&quot;
 </code></pre>
 <h3 id="mtls-required-with-operatoradmin-identities">mTLS Required With Operator/Admin Identities</h3>
-<p>Recommended production posture:</p>
+<p>Use this for hardened production admin-plane access.</p>
 <pre><code class="language-yaml">observability:
   control_api:
     enabled: true
@@ -1730,6 +1770,10 @@
 <li>key counters</li>
 <li>admission state</li>
 <li>backend health summary</li>
+<li>quota backend health summary</li>
+<li>observability package metadata</li>
+<li>recent admin actions when available</li>
+<li>dashboard and documentation references for the shipped operator bundle</li>
 </ul>
 <p>Expected use:</p>
 <ul>
@@ -1737,6 +1781,36 @@
 <li>rollout validation</li>
 <li>incident response</li>
 </ul>
+<p>The <code>observability</code> block is the packaged runtime-introspection entry point for operators. The high-signal fields are:</p>
+<ul>
+<li><code>contract_version</code></li>
+<li><code>audit_schema_version</code></li>
+<li><code>current_generation</code></li>
+<li><code>dashboard_packages</code></li>
+<li><code>documentation</code></li>
+<li><code>backend_health_summary</code></li>
+<li><code>quota_backend_health_summary</code></li>
+<li><code>recent_admin_actions</code></li>
+</ul>
+<p>Example:</p>
+<pre><code class="language-json">{
+  &quot;generation&quot;: 12,
+  &quot;readiness&quot;: &quot;ready&quot;,
+  &quot;observability&quot;: {
+    &quot;contract_version&quot;: &quot;v1&quot;,
+    &quot;audit_schema_version&quot;: &quot;v1&quot;,
+    &quot;current_generation&quot;: 12,
+    &quot;backend_health_summary&quot;: {
+      &quot;healthy&quot;: 7,
+      &quot;unhealthy&quot;: 1
+    },
+    &quot;quota_backend_health_summary&quot;: {
+      &quot;backend_mode&quot;: &quot;redis&quot;,
+      &quot;availability&quot;: &quot;available&quot;
+    }
+  }
+}
+</code></pre>
 <h3 id="post-adminruntimevalidate"><code>POST /admin/runtime/validate</code></h3>
 <p>Purpose:</p>
 <ul>
@@ -1753,6 +1827,12 @@
 <ul>
 <li><code>operator</code></li>
 </ul>
+<p>Example:</p>
+<pre><code class="language-bash">curl -k --http1.1 -X POST https://127.0.0.1:9902/admin/runtime/validate \
+  -H &quot;Authorization: Bearer &lt;token&gt;&quot; \
+  -H &quot;content-type: application/json&quot; \
+  -d '{&quot;config_path&quot;:&quot;/etc/spooky/candidate.yaml&quot;,&quot;requested_by&quot;:&quot;ops&quot;,&quot;reason&quot;:&quot;preflight&quot;}'
+</code></pre>
 <h3 id="post-adminruntimepreview"><code>POST /admin/runtime/preview</code></h3>
 <p>Purpose:</p>
 <ul>
@@ -1804,6 +1884,12 @@
 <ul>
 <li><code>operator</code></li>
 </ul>
+<p>Example:</p>
+<pre><code class="language-bash">curl -k --http1.1 -X POST https://127.0.0.1:9902/admin/runtime/activate \
+  -H &quot;Authorization: Bearer &lt;token&gt;&quot; \
+  -H &quot;content-type: application/json&quot; \
+  -d '{&quot;config_path&quot;:&quot;/etc/spooky/candidate.yaml&quot;,&quot;expected_generation&quot;:12,&quot;requested_by&quot;:&quot;ops&quot;,&quot;reason&quot;:&quot;deploy&quot;}'
+</code></pre>
 <h3 id="post-adminruntimerollback"><code>POST /admin/runtime/rollback</code></h3>
 <p>Purpose:</p>
 <ul>
@@ -1870,7 +1956,7 @@
 <li><code>operator</code></li>
 </ul>
 <p>Example:</p>
-<pre><code class="language-bash">curl -k --http1.1 -X POST https://127.0.0.1:9890/admin/runtime/rollback \
+<pre><code class="language-bash">curl -k --http1.1 -X POST https://127.0.0.1:9902/admin/runtime/rollback \
   -H &quot;Authorization: Bearer &lt;token&gt;&quot; \
   -H &quot;content-type: application/json&quot; \
   -d '{&quot;target_generation&quot;: 3}'
@@ -1950,11 +2036,17 @@
 <li>choosing a safe rollback target</li>
 <li>auditing who changed runtime config, when, and from which config source</li>
 <li>diagnosing why a staged activation never committed</li>
+<li>correlating runtime operations with audit and observability views</li>
 </ul>
 <p>Minimum role:</p>
 <ul>
 <li><code>viewer</code></li>
 </ul>
+<p>Example:</p>
+<pre><code class="language-bash">curl -k --http1.1 \
+  -H &quot;Authorization: Bearer &lt;token&gt;&quot; \
+  https://127.0.0.1:9902/admin/runtime/history
+</code></pre>
 <h3 id="get-adminruntimehistorygeneration"><code>GET /admin/runtime/history/{generation}</code></h3>
 <p>Purpose:</p>
 <ul>
@@ -2025,11 +2117,11 @@
 </tbody>
 </table></div>
 <p>Example:</p>
-<pre><code class="language-bash">curl -k --http1.1 -X POST https://127.0.0.1:9890/admin/runtime/reload \
+<pre><code class="language-bash">curl -k --http1.1 -X POST https://127.0.0.1:9902/admin/runtime/reload \
   -H &quot;Authorization: Bearer &lt;token&gt;&quot;
 </code></pre>
 <p>Activating an alternate config file:</p>
-<pre><code class="language-bash">curl -k --http1.1 -X POST https://127.0.0.1:9890/admin/runtime/reload \
+<pre><code class="language-bash">curl -k --http1.1 -X POST https://127.0.0.1:9902/admin/runtime/reload \
   -H &quot;Authorization: Bearer &lt;token&gt;&quot; \
   -H &quot;content-type: application/json&quot; \
   -d '{&quot;config_path&quot;: &quot;/etc/spooky/canary.yaml&quot;}'
@@ -2067,20 +2159,45 @@
 <ul>
 <li><code>admin</code></li>
 </ul>
-<h2 id="operator-notes">Operator Notes</h2>
+<h2 id="audit-configuration-and-event-shape">Audit Configuration And Event Shape</h2>
+<p>The control API audit stream is the operator history surface for admin-plane actions.</p>
+<p>Example:</p>
+<pre><code class="language-yaml">observability:
+  control_api:
+    audit:
+      enabled: true
+      format: json
+      sink: log
+</code></pre>
+<p>Current audit schema version:</p>
 <ul>
-<li>use cert reload for cert-only changes</li>
-<li>use <code>validate</code> (or <code>preview</code>) then <code>activate</code> for backend, policy, timeout, or routing changes that don't require rebinding listeners — <code>activate</code> reports the diff and classifies failures, unlike the legacy <code>/reload</code></li>
-<li>pass <code>expected_generation</code> on <code>activate</code> and <code>rollback</code> so a concurrent change fails with <code>409</code> instead of silently overwriting</li>
-<li>check <code>GET /admin/runtime/history</code> for a target with <code>rollback_candidate: true</code> before calling <code>rollback</code></li>
-<li>use drain-and-restart when listener addresses or control API/metrics bind must change</li>
-<li>keep rollback available before using restart-triggering control-plane actions in production</li>
-<li>all curl invocations must use <code>--http1.1</code> — the control API does not support HTTP/2</li>
+<li><code>v1</code></li>
 </ul>
+<p>The stable top-level event fields are:</p>
+<ul>
+<li><code>schema_version</code></li>
+<li><code>event_id</code></li>
+<li><code>event_type</code></li>
+<li><code>time_unix_ms</code></li>
+<li><code>request_id</code></li>
+<li><code>trace_id</code></li>
+<li><code>span_id</code></li>
+<li><code>listener</code></li>
+<li><code>actor</code></li>
+<li><code>action</code></li>
+<li><code>target</code></li>
+<li><code>generation</code></li>
+<li><code>result</code></li>
+<li><code>reason</code></li>
+<li><code>failure_class</code></li>
+<li><code>peer_addr</code></li>
+<li><code>authn</code></li>
+</ul>
+<p>Use audit for actor attribution, authn and authz failure history, and attempt-versus-result correlation for runtime operations.</p>
 <h2 id="related-pages">Related Pages</h2>
 <ul>
 <li><a href="../metrics-reference/">Metrics Reference</a></li>
-<li><a href="../../operations/production-readiness/">Production Readiness</a></li>
+<li><a href="../../operations/control-plane/">Control Plane</a></li>
 <li><a href="../../operations/runbook/">Operations Runbook</a></li>
 </ul>
   </div>
@@ -2539,11 +2656,47 @@
         
         
         
-        <a href="#scope"
+        <a href="#open-these-first"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#scope');">
-            Scope
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#open-these-first');">
+            Open These First
         </a>
+        
+
+        
+        <a href="#endpoint-index"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#endpoint-index');">
+            Endpoint Index
+        </a>
+        
+
+        
+        <a href="#common-control-api-flows"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#common-control-api-flows');">
+            Common Control API Flows
+        </a>
+        
+        
+        <a href="#read-current-runtime-state"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#read-current-runtime-state');">
+            Read Current Runtime State
+        </a>
+        
+        <a href="#validate-preview-and-activate-a-candidate"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#validate-preview-and-activate-a-candidate');">
+            Validate, Preview, and Activate a Candidate
+        </a>
+        
+        <a href="#roll-back-to-a-retained-generation"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#roll-back-to-a-retained-generation');">
+            Roll Back to a Retained Generation
+        </a>
+        
         
 
         
@@ -2551,14 +2704,6 @@
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#protocol');">
             Protocol
-        </a>
-        
-
-        
-        <a href="#security-expectations"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#security-expectations');">
-            Security Expectations
         </a>
         
 
@@ -2571,10 +2716,10 @@
         
 
         
-        <a href="#route-classification-and-role-matrix"
+        <a href="#route-access-rules"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#route-classification-and-role-matrix');">
-            Route Classification And Role Matrix
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#route-access-rules');">
+            Route Access Rules
         </a>
         
 
@@ -2697,10 +2842,10 @@
         
 
         
-        <a href="#operator-notes"
+        <a href="#audit-configuration-and-event-shape"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#operator-notes');">
-            Operator Notes
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#audit-configuration-and-event-shape');">
+            Audit Configuration And Event Shape
         </a>
         
 

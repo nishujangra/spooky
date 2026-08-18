@@ -1454,74 +1454,70 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>This page documents the major operator-visible failure classes and how they typically surface.</p>
-<h2 id="400">400</h2>
-<p>Typical reason:</p>
-<ul>
-<li>malformed or unsupported request semantics</li>
-</ul>
-<p>Examples:</p>
-<ul>
-<li>upgrade-style request semantics on paths that do not support them</li>
-<li>invalid request shape after validation</li>
-</ul>
-<h2 id="403">403</h2>
-<p>Typical reason:</p>
-<ul>
-<li>policy denied the request path</li>
-</ul>
-<p>Quota note:</p>
-<ul>
-<li>this is not the normal distributed quota exhaustion status</li>
-<li>treat 403 as route or request policy denial, not as quota contract enforcement</li>
-</ul>
-<h2 id="405">405</h2>
-<p>Typical reason:</p>
-<ul>
-<li>method policy blocked the request</li>
-</ul>
-<h2 id="408">408</h2>
-<p>Typical reason:</p>
-<ul>
-<li>client request body stalled beyond the configured idle timeout</li>
-</ul>
-<h2 id="413">413</h2>
-<p>Typical reason:</p>
-<ul>
-<li>request body exceeded configured request-body limits</li>
-</ul>
-<h2 id="500-class-upstream-responses">500-Class Upstream Responses</h2>
-<p>Typical reason:</p>
-<ul>
-<li>upstream returned a genuine 5xx response</li>
-</ul>
-<p>Interpretation:</p>
-<ul>
-<li>this is usually a backend behavior signal, not necessarily a proxy-generated fault</li>
-</ul>
-<h2 id="502">502</h2>
-<p>Typical reason:</p>
-<ul>
-<li>upstream transport or bridge-level failure before a valid backend response could be served</li>
-</ul>
-<h2 id="503">503</h2>
-<p>Typical reasons:</p>
-<ul>
-<li>overload shedding</li>
-<li>queue-cap overflow</li>
-<li>upstream timeout</li>
-<li>response-body cap breach</li>
-<li>temporary backend unavailability</li>
-<li>distributed quota backend failure under <code>fail_closed</code></li>
-</ul>
-<p>Interpretation:</p>
-<ul>
-<li>503 in Spooky can mean either self-protection or upstream failure insulation</li>
-<li>distributed quota <code>fail_closed</code> also uses 503, but with quota-specific body
-  text and runtime-state evidence</li>
-<li>always inspect the body text, logs, and overload metrics before assuming one cause</li>
-</ul>
-<h2 id="429">429</h2>
+    <p>This page documents the main operator-visible failure classes and how to interpret them.</p>
+<h2 id="read-failures-in-the-right-order">Read Failures in the Right Order</h2>
+<p>When a request fails, decide in this order:</p>
+<ol>
+<li>Was it a request-shape or policy rejection?</li>
+<li>Was it quota enforcement?</li>
+<li>Was it overload self-protection?</li>
+<li>Was it upstream transport failure or timeout?</li>
+<li>Was it a genuine upstream application response?</li>
+</ol>
+<p>Do not collapse these classes into one generic "proxy error."</p>
+<h2 id="common-status-codes">Common Status Codes</h2>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Typical meaning</th>
+<th>Operator interpretation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>400</code></td>
+<td>malformed or unsupported request shape</td>
+<td>client or ingress semantics problem</td>
+</tr>
+<tr>
+<td><code>403</code></td>
+<td>route or request policy denial</td>
+<td>not normal quota exhaustion</td>
+</tr>
+<tr>
+<td><code>405</code></td>
+<td>method policy denial</td>
+<td>route policy mismatch</td>
+</tr>
+<tr>
+<td><code>408</code></td>
+<td>request body stalled past idle timeout</td>
+<td>slow or broken client body upload</td>
+</tr>
+<tr>
+<td><code>413</code></td>
+<td>request body exceeded configured cap</td>
+<td>policy or client size issue</td>
+</tr>
+<tr>
+<td><code>429</code></td>
+<td>quota contract exhausted</td>
+<td>contract enforcement, not overload</td>
+</tr>
+<tr>
+<td><code>502</code></td>
+<td>upstream transport or bridge failure before a valid backend response</td>
+<td>backend connectivity, TLS, or protocol execution issue</td>
+</tr>
+<tr>
+<td><code>503</code></td>
+<td>overload shed, timeout insulation, temporary backend unavailability, or fail-closed quota backend failure</td>
+<td>inspect reason and metrics before acting</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="429-quota-contract-failure">429: Quota Contract Failure</h2>
 <p>Typical reasons:</p>
 <ul>
 <li><code>burst_quota_exhausted</code></li>
@@ -1530,25 +1526,50 @@
 </ul>
 <p>Interpretation:</p>
 <ul>
-<li>429 is the normal distributed quota contract status</li>
-<li>treat it as contract enforcement, not overload</li>
-<li>use quota metrics and runtime snapshot fields before changing overload knobs</li>
+<li>this is the normal distributed quota contract response</li>
+<li>treat it as quota enforcement, not overload</li>
+<li>inspect quota policy outcomes and quota backend health before tuning inflight limits</li>
 </ul>
-<h2 id="silent-drop-behaviors">Silent Drop Behaviors</h2>
-<p>Some invalid or non-actionable traffic is dropped rather than converted into a rich HTTP response.</p>
+<h2 id="503-do-not-assume-one-cause">503: Do Not Assume One Cause</h2>
+<p>In Spooky, <code>503</code> can mean:</p>
+<ul>
+<li>overload shedding</li>
+<li>queue-cap or buffer-cap protection</li>
+<li>upstream timeout insulation</li>
+<li>temporary backend unavailability</li>
+<li>fail-closed quota backend failure</li>
+</ul>
+<p>Operator rule:</p>
+<ul>
+<li>inspect the body text, logs, and metrics first</li>
+<li>check overload metrics and quota-backend health separately</li>
+<li>do not widen limits until you know whether the system is protecting itself correctly</li>
+</ul>
+<h2 id="genuine-upstream-5xx-responses">Genuine Upstream 5xx Responses</h2>
+<p>If the upstream returned a real 5xx response, that is usually a backend signal rather than a proxy-generated failure.</p>
+<p>Check:</p>
+<ul>
+<li>backend error distribution</li>
+<li>per-upstream latency</li>
+<li>backend health transitions</li>
+<li>recent backend deploys or dependency failures</li>
+</ul>
+<h2 id="silent-drop-cases">Silent Drop Cases</h2>
+<p>Some traffic is dropped rather than turned into a rich HTTP response.</p>
 <p>Examples include:</p>
 <ul>
-<li>malformed packet cases before a request lifecycle exists</li>
-<li>new connection attempts during draining</li>
+<li>malformed packets before a request lifecycle exists</li>
+<li>new connection attempts during drain</li>
 <li>packets for unknown connections in certain QUIC states</li>
 </ul>
-<h2 id="stream-reset-versus-http-error-response">Stream Reset Versus HTTP Error Response</h2>
+<p>These are visible through observability and lifecycle signals rather than always through an HTTP status code.</p>
+<h2 id="stream-reset-versus-http-error">Stream Reset Versus HTTP Error</h2>
 <p>Spooky deliberately distinguishes between:</p>
 <ul>
-<li>returning a terminal HTTP response such as 408, 413, or 503</li>
-<li>resetting a stream when transport semantics or teardown behavior require it</li>
+<li>returning an HTTP response such as <code>408</code>, <code>413</code>, <code>429</code>, or <code>503</code></li>
+<li>resetting or terminating a stream when protocol or teardown semantics require it</li>
 </ul>
-<p>This distinction matters for clients and should be considered during incident analysis.</p>
+<p>This matters during client debugging and incident analysis. A missing HTTP status does not automatically mean the failure was invisible; it may have happened before a stable request-response boundary existed.</p>
   </div>
   
   <script>
@@ -2005,90 +2026,58 @@
         
         
         
-        <a href="#400"
+        <a href="#read-failures-in-the-right-order"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#400');">
-            400
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#read-failures-in-the-right-order');">
+            Read Failures in the Right Order
         </a>
         
 
         
-        <a href="#403"
+        <a href="#common-status-codes"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#403');">
-            403
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#common-status-codes');">
+            Common Status Codes
         </a>
         
 
         
-        <a href="#405"
+        <a href="#429-quota-contract-failure"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#405');">
-            405
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#429-quota-contract-failure');">
+            429: Quota Contract Failure
         </a>
         
 
         
-        <a href="#408"
+        <a href="#503-do-not-assume-one-cause"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#408');">
-            408
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#503-do-not-assume-one-cause');">
+            503: Do Not Assume One Cause
         </a>
         
 
         
-        <a href="#413"
+        <a href="#genuine-upstream-5xx-responses"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#413');">
-            413
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#genuine-upstream-5xx-responses');">
+            Genuine Upstream 5xx Responses
         </a>
         
 
         
-        <a href="#500-class-upstream-responses"
+        <a href="#silent-drop-cases"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#500-class-upstream-responses');">
-            500-Class Upstream Responses
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#silent-drop-cases');">
+            Silent Drop Cases
         </a>
         
 
         
-        <a href="#502"
+        <a href="#stream-reset-versus-http-error"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#502');">
-            502
-        </a>
-        
-
-        
-        <a href="#503"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#503');">
-            503
-        </a>
-        
-
-        
-        <a href="#429"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#429');">
-            429
-        </a>
-        
-
-        
-        <a href="#silent-drop-behaviors"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#silent-drop-behaviors');">
-            Silent Drop Behaviors
-        </a>
-        
-
-        
-        <a href="#stream-reset-versus-http-error-response"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#stream-reset-versus-http-error-response');">
-            Stream Reset Versus HTTP Error Response
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#stream-reset-versus-http-error');">
+            Stream Reset Versus HTTP Error
         </a>
         
 

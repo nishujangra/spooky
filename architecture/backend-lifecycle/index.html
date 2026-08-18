@@ -1436,7 +1436,7 @@
 <li>resolution state is tracked</li>
 <li>pool membership exists in upstream pools</li>
 <li>health state changes from refresh, checks, and request feedback</li>
-<li>canonical snapshots are exposed to control-plane and observability surfaces</li>
+<li>canonical snapshots are exposed to the Control API and observability surfaces</li>
 </ol>
 <p>The canonical implementation lives under:</p>
 <ul>
@@ -1452,6 +1452,14 @@
 <li><code>edge::runtime::backend</code> owns lifecycle state, lifecycle events, and lifecycle snapshots</li>
 </ul>
 <p>Listener request paths, health checks, and DNS refresh loops should emit typed lifecycle inputs rather than independently deciding backend state transitions in scattered places.</p>
+<h2 id="how-lifecycle-fits-into-request-flow">How Lifecycle Fits Into Request Flow</h2>
+<p>Backend lifecycle is adjacent to routing and transport, but it is not the same thing as either one:</p>
+<ul>
+<li>routing decides which backend is eligible for a request</li>
+<li>transport decides how that backend request runs on the wire</li>
+<li>backend lifecycle decides how backend state changes over time and how operators see that state</li>
+</ul>
+<p>Request execution feeds lifecycle. Lifecycle does not replace request execution.</p>
 <h2 id="core-concepts">Core Concepts</h2>
 <h3 id="backend-identity">Backend identity</h3>
 <p>Backend identity is the stable key for lifecycle state.</p>
@@ -1482,7 +1490,7 @@
 <li><code>Healthy</code></li>
 <li><code>Unhealthy { reason }</code></li>
 </ul>
-<p>The lifecycle layer uses shared health-failure reason vocabularies so passive failures, active health checks, and control-plane views describe failures consistently.</p>
+<p>The lifecycle layer uses shared health-failure reason vocabularies so passive failures, active health checks, and Control API views describe failures consistently.</p>
 <h3 id="membership-state">Membership state</h3>
 <p>Membership state is modeled by <code>BackendMembershipState</code>.</p>
 <p>It describes whether the backend is:</p>
@@ -1509,7 +1517,7 @@
 <li><code>CanonicalBackendLifecycleSnapshot</code></li>
 <li><code>BackendLifecycleInventorySnapshot</code></li>
 </ul>
-<p>These are what control-plane and metrics-oriented surfaces should use instead of rebuilding backend state from several unrelated stores.</p>
+<p>These are what the Control API and metrics-oriented surfaces should use instead of rebuilding backend state from several unrelated stores.</p>
 <p><code>BackendLifecycleInventorySnapshot</code> also supports summary views such as total backends and healthy backends.</p>
 <h2 id="backend-lifecycle-coordinator">Backend Lifecycle Coordinator</h2>
 <p><code>BackendLifecycleCoordinator</code> is the unification point.</p>
@@ -1597,7 +1605,7 @@
 <li>membership state</li>
 <li>per-upstream placements</li>
 </ul>
-<p>That gives control-plane and observability surfaces one place to answer:</p>
+<p>That gives the Control API and observability surfaces one place to answer:</p>
 <ul>
 <li>which backends exist</li>
 <li>which backends are healthy</li>
@@ -1605,6 +1613,14 @@
 <li>what addresses they resolve to</li>
 <li>whether refresh state is current</li>
 </ul>
+<h2 id="runtime-generation-interaction">Runtime Generation Interaction</h2>
+<p>Backend lifecycle lives inside the larger runtime-generation model:</p>
+<ul>
+<li>generation-owned state provides the active upstream definitions and placement context</li>
+<li>shared services such as lifecycle coordination and resolution storage preserve the operator view that request paths consume</li>
+<li>reloads should publish a coherent next generation instead of partially mutating live backend state in place</li>
+</ul>
+<p>This matters because operators need backend state to stay explainable across reload, refresh, failure, and recovery events.</p>
 <h2 id="what-request-paths-should-do">What Request Paths Should Do</h2>
 <p>Forwarding and bootstrap code should:</p>
 <ul>
@@ -1615,7 +1631,7 @@
 <p>They should not:</p>
 <ul>
 <li>invent new backend health mutation logic</li>
-<li>directly combine resolution store state with pool state for control-plane output</li>
+<li>directly combine resolution store state with pool state for Control API output</li>
 <li>treat DNS refresh and health transitions as unrelated subsystems</li>
 </ul>
 <h2 id="contributor-rules">Contributor Rules</h2>
@@ -2083,6 +2099,14 @@
         
 
         
+        <a href="#how-lifecycle-fits-into-request-flow"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#how-lifecycle-fits-into-request-flow');">
+            How Lifecycle Fits Into Request Flow
+        </a>
+        
+
+        
         <a href="#core-concepts"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#core-concepts');">
@@ -2183,6 +2207,14 @@
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#canonical-inventory-view');">
             Canonical Inventory View
+        </a>
+        
+
+        
+        <a href="#runtime-generation-interaction"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#runtime-generation-interaction');">
+            Runtime Generation Interaction
         </a>
         
 

@@ -1454,58 +1454,107 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>This page is the operator quick-reference for common high-signal failure modes and maintenance actions.</p>
+    <p>This page is the operator quick-reference for common production changes and high-signal failure scenarios.</p>
 <h2 id="before-you-touch-production">Before You Touch Production</h2>
+<p>Confirm all of the following:</p>
 <ul>
-<li>keep a tested rollback path</li>
-<li>know whether the change requires cert reload or drain-and-restart</li>
-<li>know where metrics, logs, and control API endpoints are exposed</li>
-<li>keep a traffic-reduction plan ready before making invasive changes</li>
+<li>rollback target is known</li>
+<li>binary rollback path is known</li>
+<li>you know whether the change is runtime-managed, cert-only, or restart-required</li>
+<li>Control API, metrics, and logs are reachable from the operator path</li>
+<li>a traffic-reduction or instance-removal plan is ready</li>
 </ul>
+<h2 id="standard-change-workflows">Standard Change Workflows</h2>
+<h3 id="runtime-managed-config-change">Runtime-managed config change</h3>
+<p>Use this for routes, upstreams, backends, timeouts, resilience, quota, and similar live-reloadable runtime domains.</p>
+<ol>
+<li>Render the candidate config.</li>
+<li><code>POST /admin/runtime/validate</code></li>
+<li><code>POST /admin/runtime/preview</code></li>
+<li><code>POST /admin/runtime/activate</code></li>
+<li>Verify the active generation and runtime history.</li>
+<li>Watch latency, backend health, overload, quota, and auth outcomes before expanding rollout.</li>
+</ol>
+<h3 id="certificate-only-change">Certificate-only change</h3>
+<ol>
+<li>Write new cert material with correct permissions.</li>
+<li>Verify expiry and SAN coverage.</li>
+<li><code>POST /admin/runtime/reload-certs</code></li>
+<li>Confirm new handshakes present the new certificate.</li>
+<li>Keep the previous cert material until verification is complete.</li>
+</ol>
+<h3 id="restart-required-change-or-binary-upgrade">Restart-required change or binary upgrade</h3>
+<ol>
+<li>Remove or drain one node from traffic.</li>
+<li>Apply the change or replace the binary.</li>
+<li>Restart the node.</li>
+<li>Verify health, readiness, metrics, and key dashboards.</li>
+<li>Reintroduce the node only after it is stable.</li>
+<li>Repeat node by node or slice by slice.</li>
+</ol>
 <h2 id="scenario-rising-503-rate">Scenario: Rising 503 Rate</h2>
 <p>Check:</p>
 <ul>
 <li><code>spooky_overload_shed_by_reason_total</code></li>
-<li>route latency metrics</li>
+<li>quota backend health and quota outcome series</li>
+<li>route latency and backend timeout signals</li>
 <li>active connections and inflight pressure</li>
-<li>backend health state</li>
-<li>recent config or backend changes</li>
+<li>recent config, backend, or deploy changes</li>
 </ul>
 <p>Likely causes:</p>
 <ul>
-<li>global or scoped inflight limits reached</li>
-<li>route queue cap exceeded</li>
-<li>upstream or backend overload</li>
+<li>overload self-protection</li>
 <li>backend timeout surge</li>
+<li>temporary backend unavailability</li>
+<li>fail-closed quota backend failure</li>
 </ul>
 <p>Immediate actions:</p>
 <ol>
-<li>Determine whether the 503s are overload-generated or upstream-generated.</li>
-<li>Reduce traffic or shed non-critical traffic first.</li>
+<li>Decide whether the 503s are overload, quota-backend, or upstream-failure related.</li>
+<li>Reduce demand or remove non-critical traffic first.</li>
 <li>Verify backend health and recent latency changes.</li>
-<li>Roll back the most recent risky config change if the spike correlates with change timing.</li>
+<li>Roll back the most recent risky change if the spike correlates strongly with it.</li>
+</ol>
+<h2 id="scenario-rising-429-rate">Scenario: Rising 429 Rate</h2>
+<p>Check:</p>
+<ul>
+<li>quota policy outcome metrics</li>
+<li>matched policy identifiers</li>
+<li>quota backend health</li>
+<li>recent traffic-shape changes by tenant, token, client, or route</li>
+</ul>
+<p>Interpretation:</p>
+<ul>
+<li>this is contract enforcement, not overload</li>
+<li>do not widen inflight or brownout settings to fix a quota-contract problem</li>
+</ul>
+<p>Immediate actions:</p>
+<ol>
+<li>Confirm the affected selector dimensions.</li>
+<li>Confirm whether burst or sustained windows are being exhausted.</li>
+<li>Verify whether the rise is expected traffic growth, abuse, or mis-sized quota policy.</li>
 </ol>
 <h2 id="scenario-handshake-failures-or-client-connection-failures">Scenario: Handshake Failures Or Client Connection Failures</h2>
 <p>Check:</p>
 <ul>
-<li>downstream TLS metrics</li>
-<li>ALPN selection metrics</li>
-<li>certificate expiry/selection metrics</li>
-<li>listener cert/key presence and permissions</li>
+<li>downstream TLS and handshake metrics</li>
+<li>certificate-expiry and certificate-selection signals</li>
+<li>ALPN-related behavior</li>
+<li>listener certificate paths and permissions</li>
 </ul>
 <p>Likely causes:</p>
 <ul>
-<li>invalid or expired certificate material</li>
-<li>wrong SNI mapping</li>
-<li>missing client certificate in required-client-cert mode</li>
-<li>client-side protocol mismatch</li>
+<li>expired or wrong certificate material</li>
+<li>wrong hostname coverage</li>
+<li>missing client certificate where required</li>
+<li>client protocol mismatch</li>
 </ul>
 <p>Immediate actions:</p>
 <ol>
-<li>Verify the listener is presenting the expected certificate.</li>
-<li>Verify whether failures are concentrated on one hostname or all hostnames.</li>
-<li>If only certificate material changed, use the certificate reload path when appropriate.</li>
-<li>If listener routing or policy changed, prefer drain-and-restart with rollback readiness.</li>
+<li>Verify the listener presents the expected certificate.</li>
+<li>Determine whether the failures are isolated to one listener or hostname.</li>
+<li>If only cert material changed, use cert reload.</li>
+<li>If the issue involves listener bind or startup-owned changes, use the restart path.</li>
 </ol>
 <h2 id="scenario-backend-timeout-surge">Scenario: Backend Timeout Surge</h2>
 <p>Check:</p>
@@ -1518,159 +1567,114 @@
 <p>Likely causes:</p>
 <ul>
 <li>unhealthy backend pool</li>
-<li>sudden backend latency regression</li>
-<li>connection establishment failures</li>
-<li>under-sized backend fleet</li>
+<li>backend latency regression</li>
+<li>network or TLS establishment issues</li>
+<li>too much concurrency against a weak backend tier</li>
 </ul>
 <p>Immediate actions:</p>
 <ol>
-<li>Confirm whether the issue is localized to one upstream or all traffic.</li>
-<li>Remove or isolate failing backends if health signals are clear.</li>
+<li>Confirm whether the issue is local to one upstream or broad.</li>
+<li>Remove or isolate obviously failing backends if health signals are clear.</li>
 <li>Reduce concurrency pressure if the proxy is amplifying backend collapse.</li>
-<li>Roll back recent backend or network changes first, not just proxy config.</li>
+<li>Roll back recent backend or network changes before widening limits.</li>
 </ol>
 <h2 id="scenario-control-api-or-metrics-endpoint-unavailable">Scenario: Control API Or Metrics Endpoint Unavailable</h2>
 <p>Check:</p>
 <ul>
-<li>bind address and port config</li>
+<li>bind address and port settings</li>
 <li>local firewall rules</li>
-<li>listener startup logs</li>
-<li>whether endpoints are configured as required or optional</li>
+<li>startup logs</li>
+<li>whether the endpoints are required in the config</li>
 </ul>
 <p>Immediate actions:</p>
 <ol>
-<li>Confirm whether the process is healthy but only the admin plane is down.</li>
-<li>If admin endpoints are <code>required: true</code>, treat startup failure as intentional protection.</li>
-<li>If admin endpoints are <code>required: false</code>, decide whether to fail closed operationally and restart into a safer config.</li>
-</ol>
-<h2 id="scenario-cert-rotation">Scenario: Cert Rotation</h2>
-<p>Safe approach:</p>
-<ol>
-<li>Place new cert and key material with correct permissions.</li>
-<li>Validate hostname coverage and expiry before activation.</li>
-<li>Use certificate reload for listener cert replacement.</li>
-<li>Verify new handshakes present the new certificate.</li>
-<li>Keep previous material until verification is complete.</li>
-</ol>
-<h2 id="scenario-route-or-upstream-change">Scenario: Route Or Upstream Change</h2>
-<p>Current operational model:</p>
-<ul>
-<li>certificate-only changes can use cert reload</li>
-<li>route, upstream, timeout, and policy changes should be treated as drain-and-restart changes</li>
-</ul>
-<p>Recommended sequence:</p>
-<ol>
-<li>Validate config offline.</li>
-<li>Stage on a canary node or bounded traffic slice.</li>
-<li>Drain and restart one instance at a time.</li>
-<li>Watch error rate, route latency, health transitions, and shed counters.</li>
-<li>Expand only after the canary stays stable.</li>
+<li>Determine whether the data plane is healthy but the admin plane is down.</li>
+<li>If the admin surface is required and failed to bind, treat that as intentional startup protection.</li>
+<li>If the admin surface is optional and unavailable, decide whether to restart into a safer posture.</li>
 </ol>
 <h2 id="scenario-jwt-rejections-or-stale-jwks-state">Scenario: JWT Rejections Or Stale JWKS State</h2>
-<p>First, find out whether the problem is the tokens or the keys:</p>
+<p>Find out whether the problem is the tokens or the key source:</p>
 <ol>
-<li>Check <code>GET /admin/runtime</code> and read <code>jwks.sources[]</code> and <code>auth.providers[]</code>.</li>
-<li>Read <code>cache_state</code>. <code>fresh</code> or <code>stale</code> means keys are loading; <code>empty_unusable</code>
-   means no usable keys and every JWT request is being rejected.</li>
-<li>Compare <code>last_refresh_attempt_unix_seconds</code> with <code>last_refresh_success_unix_seconds</code>.
-   A recent attempt with an old success means refreshes are failing — read
-   <code>last_failure_reason</code>.</li>
-<li>Read <code>auth.jwt_validation_failures[]</code> for the dominant rejection reason.</li>
+<li>Read <code>GET /admin/runtime</code> and inspect the JWT and JWKS state.</li>
+<li>Check cache freshness and refresh timestamps.</li>
+<li>Read the dominant JWT validation failure reasons.</li>
+<li>Confirm whether the issue is a rotated <code>kid</code>, stale JWKS state, issuer mismatch, or token expiry.</li>
 </ol>
-<p>What the common reasons mean:</p>
+<p>What common reasons usually mean:</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
 <th>Reason</th>
-<th>Cause</th>
+<th>Meaning</th>
 </tr>
 </thead>
 <tbody>
 <tr>
 <td><code>key_source_unavailable</code></td>
-<td>JWKS never loaded or aged past the staleness window</td>
+<td>no usable verification key source</td>
 </tr>
 <tr>
 <td><code>missing_verification_key</code></td>
-<td>Token's <code>kid</code> is not in the cached set; check whether the issuer rotated early</td>
+<td>token <code>kid</code> not present in the cached key set</td>
 </tr>
 <tr>
 <td><code>algorithm_not_allowed</code></td>
-<td>Token <code>alg</code> is outside <code>allowed_algorithms</code></td>
+<td>token algorithm not allowed by config</td>
 </tr>
 <tr>
-<td><code>issuer_mismatch</code> / <code>audience_mismatch</code></td>
-<td>Token is valid but issued for a different issuer or audience</td>
+<td><code>issuer_mismatch</code> or <code>audience_mismatch</code></td>
+<td>token valid for some other audience or issuer</td>
 </tr>
 <tr>
 <td><code>token_expired</code></td>
-<td>Ordinary client-side expiry, not a server problem</td>
-</tr>
-<tr>
-<td><code>ambiguous_verification_key</code></td>
-<td>Two configured keys resolve to the same <code>kid</code></td>
+<td>normal token expiry</td>
 </tr>
 </tbody>
 </table></div>
 <p>Recovery:</p>
 <ul>
-<li>if the issuer rotated early, an unknown <code>kid</code> already triggers a rate-limited
-  background refresh — wait one refresh interval before intervening</li>
-<li>if refreshes are failing, verify the endpoint is reachable over HTTPS from the
-  proxy host; keys keep validating until <code>jwks_stale_if_error_secs</code> elapses</li>
-<li>if state is <code>empty_unusable</code>, treat it as an auth outage for that upstream</li>
-<li>avoid restarting a node with <code>require_ready</code> while the issuer is down: it will
-  fail to boot rather than start degraded</li>
-</ul>
-<h3 id="rotation-cadence-and-refresh-intervals">Rotation Cadence And Refresh Intervals</h3>
-<ul>
-<li>keep <code>jwks_refresh_interval_secs</code> (default <code>300</code>) well below the issuer's rotation
-  interval so new keys are cached before tokens signed with them arrive</li>
-<li>keep <code>jwks_cache_ttl_secs</code> (default <code>900</code>) at roughly three refresh intervals so a
-  single failed refresh does not immediately mark the set stale</li>
-<li><code>jwks_stale_if_error_secs</code> (default <code>3600</code>) is the outage budget: how long
-  last-known-good keys keep working while refreshes fail. It also sets the overlap
-  window during which a key dropped from the JWKS stays valid</li>
-<li>overlap old and new keys in the published JWKS for at least one full
-  <code>jwks_cache_ttl_secs</code> when rotating</li>
-</ul>
-<h3 id="alerts-worth-adding">Alerts Worth Adding</h3>
-<ul>
-<li><code>spooky_jwks_state{state="empty_unusable"} == 1</code> — auth outage for that upstream, page</li>
-<li><code>spooky_jwks_age_seconds</code> above <code>jwks_cache_ttl_secs</code> — refreshes are not landing</li>
-<li><code>rate(spooky_jwks_refresh_failure_total[15m]) &gt; 0</code> sustained — issuer or network problem</li>
-<li><code>rate(spooky_jwks_unknown_kid_total[5m])</code> rising — likely an unannounced rotation</li>
-<li><code>rate(spooky_jwt_validation_failures_total{reason="key_source_unavailable"}[5m]) &gt; 0</code> —
-  requests are being rejected for key-availability reasons rather than bad tokens</li>
+<li>wait one refresh interval if an issuer rotated early</li>
+<li>verify HTTPS reachability to the JWKS endpoint from the proxy host</li>
+<li>treat <code>empty_unusable</code> as an auth outage for that upstream</li>
+<li>avoid relying on restart as the primary fix for an upstream issuer outage</li>
 </ul>
 <h2 id="scenario-brownout-or-overload-triggering">Scenario: Brownout Or Overload Triggering</h2>
 <p>Check:</p>
 <ul>
 <li>overload shed counters by reason</li>
-<li>brownout state transitions</li>
+<li>brownout activation state</li>
 <li>active connections</li>
-<li>inflight metrics versus configured caps</li>
+<li>inflight pressure versus configured caps</li>
 </ul>
 <p>Actions:</p>
 <ol>
-<li>Confirm whether the system is protecting itself correctly rather than failing unexpectedly.</li>
+<li>Confirm whether self-protection is behaving correctly.</li>
 <li>Preserve core traffic first.</li>
-<li>Reduce demand or increase backend capacity before simply widening limits.</li>
-<li>Avoid increasing caps blindly without memory and latency validation.</li>
+<li>Reduce demand or add backend capacity before simply widening limits.</li>
+<li>Avoid increasing caps blindly without memory and tail-latency validation.</li>
 </ol>
-<h2 id="scenario-draining-for-deploy-or-maintenance">Scenario: Draining For Deploy Or Maintenance</h2>
+<h2 id="scenario-drain-for-deploy-or-maintenance">Scenario: Drain For Deploy Or Maintenance</h2>
 <ol>
-<li>Stop sending new traffic to the instance.</li>
-<li>Trigger drain-aware restart workflow.</li>
-<li>Watch for completion before hard termination whenever possible.</li>
-<li>Use the configured forced-drain timeout only as a safety boundary, not as the primary shutdown path.</li>
+<li>Stop routing new traffic to the node if your traffic manager supports it.</li>
+<li>Use the drain-aware restart workflow.</li>
+<li>Watch drain progress and readiness.</li>
+<li>Use the configured forced-drain timeout only as a safety boundary.</li>
 </ol>
-<h2 id="after-any-incident">After Any Incident</h2>
+<p>If drain repeatedly times out:</p>
 <ul>
-<li>record what metric or symptom first signaled the issue</li>
-<li>record whether the proxy was the root cause or the reflector of backend failure</li>
-<li>record what config or dependency changed</li>
-<li>add or tighten alerts and runbook steps for the same class of issue</li>
+<li>inspect long-lived streams</li>
+<li>inspect shutdown drain timeout</li>
+<li>inspect watchdog drain-grace configuration</li>
+<li>inspect whether traffic removal from the upstream load balancer is happening soon enough</li>
+</ul>
+<h2 id="after-any-incident">After Any Incident</h2>
+<p>Record:</p>
+<ul>
+<li>the first signal that surfaced the issue</li>
+<li>whether the proxy was the root cause or a reflector of backend failure</li>
+<li>what changed immediately beforehand</li>
+<li>whether the failure was quota, overload, auth, transport, or upstream application behavior</li>
+<li>what alert, dashboard, or runbook step should be tightened before the next occurrence</li>
 </ul>
   </div>
   
@@ -2136,10 +2140,46 @@
         
 
         
+        <a href="#standard-change-workflows"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#standard-change-workflows');">
+            Standard Change Workflows
+        </a>
+        
+        
+        <a href="#runtime-managed-config-change"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#runtime-managed-config-change');">
+            Runtime-managed config change
+        </a>
+        
+        <a href="#certificate-only-change"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#certificate-only-change');">
+            Certificate-only change
+        </a>
+        
+        <a href="#restart-required-change-or-binary-upgrade"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#restart-required-change-or-binary-upgrade');">
+            Restart-required change or binary upgrade
+        </a>
+        
+        
+
+        
         <a href="#scenario-rising-503-rate"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#scenario-rising-503-rate');">
             Scenario: Rising 503 Rate
+        </a>
+        
+
+        
+        <a href="#scenario-rising-429-rate"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#scenario-rising-429-rate');">
+            Scenario: Rising 429 Rate
         </a>
         
 
@@ -2168,41 +2208,11 @@
         
 
         
-        <a href="#scenario-cert-rotation"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#scenario-cert-rotation');">
-            Scenario: Cert Rotation
-        </a>
-        
-
-        
-        <a href="#scenario-route-or-upstream-change"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#scenario-route-or-upstream-change');">
-            Scenario: Route Or Upstream Change
-        </a>
-        
-
-        
         <a href="#scenario-jwt-rejections-or-stale-jwks-state"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#scenario-jwt-rejections-or-stale-jwks-state');">
             Scenario: JWT Rejections Or Stale JWKS State
         </a>
-        
-        
-        <a href="#rotation-cadence-and-refresh-intervals"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#rotation-cadence-and-refresh-intervals');">
-            Rotation Cadence And Refresh Intervals
-        </a>
-        
-        <a href="#alerts-worth-adding"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#alerts-worth-adding');">
-            Alerts Worth Adding
-        </a>
-        
         
 
         
@@ -2214,10 +2224,10 @@
         
 
         
-        <a href="#scenario-draining-for-deploy-or-maintenance"
+        <a href="#scenario-drain-for-deploy-or-maintenance"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#scenario-draining-for-deploy-or-maintenance');">
-            Scenario: Draining For Deploy Or Maintenance
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#scenario-drain-for-deploy-or-maintenance');">
+            Scenario: Drain For Deploy Or Maintenance
         </a>
         
 

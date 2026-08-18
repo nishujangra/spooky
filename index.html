@@ -1441,9 +1441,47 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Spooky is an open-source HTTP/3 (QUIC) edge reverse proxy written in Rust that terminates QUIC connections and forwards traffic to HTTP/2 backends.</p>
+    <p>Spooky is a modern edge runtime for high-trust APIs. This documentation set is organized so readers can quickly answer five questions:</p>
+<ul>
+<li>what Spooky is</li>
+<li>where to start</li>
+<li>where to deploy and operate it</li>
+<li>where to troubleshoot issues</li>
+<li>where exact product reference lives</li>
+</ul>
 <hr />
-<h2 id="where-to-start">Where to start</h2>
+<h2 id="start-here">Start Here</h2>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Goal</th>
+<th>Go to</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Understand the product</td>
+<td><a href="../README.md">README</a> and <a href="getting-started/overview/">Getting Started Overview</a></td>
+</tr>
+<tr>
+<td>Install and run Spooky</td>
+<td><a href="getting-started/overview/">Getting Started</a></td>
+</tr>
+<tr>
+<td>Prepare for deployment</td>
+<td><a href="operations/overview/">Operations Overview</a> and <a href="deployment/production/">Production Deployment</a></td>
+</tr>
+<tr>
+<td>Troubleshoot issues</td>
+<td><a href="troubleshooting/common-issues/">Common Issues</a> and <a href="operations/runbook/">Runbook</a></td>
+</tr>
+<tr>
+<td>Find exact supported behavior</td>
+<td><a href="reference/overview/">Reference Overview</a></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="documentation-paths">Documentation Paths</h2>
 <h3 id="operator-install-configure-run-in-production">Operator — install, configure, run in production</h3>
 <div class="table-wrapper"><table>
 <thead>
@@ -1478,6 +1516,14 @@
 <td>Canonical statement of what is production-ready today and what still blocks GA</td>
 </tr>
 <tr>
+<td><a href="operations/overview/">Operations Overview</a></td>
+<td>Main entry point for deployment, rollout, observability, and failure handling</td>
+</tr>
+<tr>
+<td><a href="troubleshooting/common-issues/">Troubleshooting</a></td>
+<td>Symptom-driven diagnostics and operator checks</td>
+</tr>
+<tr>
 <td><a href="reference/limitations/">Limitations</a></td>
 <td>The current hard product limits, without marketing language</td>
 </tr>
@@ -1494,7 +1540,27 @@
 <tbody>
 <tr>
 <td><a href="architecture/overview/">Architecture Overview</a></td>
-<td>Design principles, data-plane topology, sharded ingress model</td>
+<td>Architecture entry point, shared product flow, ingress model, and runtime boundaries</td>
+</tr>
+<tr>
+<td><a href="architecture/request-lifecycle/">Request Lifecycle</a></td>
+<td>Canonical flow from intake through admission, routing, transport, and outcome recording</td>
+</tr>
+<tr>
+<td><a href="architecture/bootstrap-vs-quic/">Bootstrap vs QUIC</a></td>
+<td>Exact boundary between the native HTTP/3 path and the compatibility ingress path</td>
+</tr>
+<tr>
+<td><a href="architecture/transport/">Transport Boundary</a></td>
+<td>What transport owns, what edge owns, and how H1/H2 execution stays hidden behind one facade</td>
+</tr>
+<tr>
+<td><a href="architecture/backend-lifecycle/">Backend Lifecycle</a></td>
+<td>Backend identity, resolution, health, membership, and operator-visible lifecycle state</td>
+</tr>
+<tr>
+<td><a href="architecture/runtime-generation/">Runtime Generation Model</a></td>
+<td>How runtime reload, active generations, and shared services work</td>
 </tr>
 <tr>
 <td><a href="architecture/components/">Component Breakdown</a></td>
@@ -1518,7 +1584,7 @@
 </tr>
 </tbody>
 </table></div>
-<h3 id="control-plane-and-operations-runtime-control-observability-and-failure-handling">Control Plane and Operations — runtime control, observability, and failure handling</h3>
+<h3 id="control-api-and-operations-runtime-control-observability-and-failure-handling">Control API and Operations — runtime control, observability, and failure handling</h3>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1529,7 +1595,7 @@
 <tbody>
 <tr>
 <td><a href="api/overview/">API Overview</a></td>
-<td>Metrics endpoint and control-plane HTTP surfaces at a high level</td>
+<td>Metrics endpoint and Control API surfaces at a high level</td>
 </tr>
 <tr>
 <td><a href="reference/control-api-reference/">Control API Reference</a></td>
@@ -1633,16 +1699,16 @@
 </thead>
 <tbody>
 <tr>
+<td><a href="reference/overview/">Reference Overview</a></td>
+<td>Main entry point for exact behavior, product limits, and authoritative reference pages</td>
+</tr>
+<tr>
 <td><a href="configuration/reference/">Configuration Reference</a></td>
 <td>Authoritative schema reference for every configuration block</td>
 </tr>
 <tr>
 <td><a href="reference/feature-matrix/">Feature Matrix</a></td>
 <td>Strict feature-by-feature inventory of what is done, partial, and missing</td>
-</tr>
-<tr>
-<td><a href="reference/overview/">Reference Overview</a></td>
-<td>Index of the strict reference material and product limits</td>
 </tr>
 <tr>
 <td><a href="roadmap/">Roadmap</a></td>
@@ -1682,85 +1748,21 @@
 <p>Controlled production rollout is supported. See <a href="release-maturity/">release-maturity.md</a> for operator expectations, environment guidance, and GA exit criteria.</p>
 <hr />
 <h2 id="quick-reference">Quick reference</h2>
-<h3 id="minimal-working-config">Minimal working config</h3>
-<pre><code class="language-yaml">version: 1
-
-listen:
-  address: &quot;0.0.0.0&quot;
-  port: 9889
-  tls:
-    cert: /etc/spooky/certs/fullchain.pem
-    key: /etc/spooky/certs/privkey.pem
-
-upstream:
-  default:
-    route:
-      path_prefix: &quot;/&quot;
-    backends:
-      - id: backend1
-        address: &quot;127.0.0.1:8080&quot;
-        health_check:
-          path: &quot;/health&quot;
-          interval: 5000
-</code></pre>
-<p>Backends are verified HTTPS by default. To forward to a cleartext HTTP backend, set <code>upstream_tls.verify_certificates: false</code> and be aware that a warning is logged at startup. The full schema is in <a href="configuration/reference/">configuration/reference.md</a>.</p>
-<h3 id="common-commands">Common commands</h3>
-<p><strong>Start the proxy:</strong></p>
-<pre><code class="language-bash">spooky --config /etc/spooky/config.yaml
-</code></pre>
-<p><strong>Test an HTTP/3 connection</strong> (requires curl built with HTTP/3 support):</p>
-<pre><code class="language-bash">curl --http3-only -k \
-  --resolve proxy.example.com:9889:127.0.0.1 \
-  https://proxy.example.com:9889/health
-</code></pre>
-<p><strong>Check health and readiness</strong> (control API, default port 9902):</p>
-<pre><code class="language-bash">curl -k https://127.0.0.1:9902/health
-curl -k https://127.0.0.1:9902/ready
-</code></pre>
-<h3 id="log-levels">Log levels</h3>
-<p>Spooky accepts both its own names and the standard equivalents in <code>log.level</code> or <code>RUST_LOG</code>.</p>
-<div class="table-wrapper"><table>
-<thead>
-<tr>
-<th>Spooky name</th>
-<th>Standard equivalent</th>
-<th>Verbosity</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>whisper</code></td>
-<td><code>trace</code></td>
-<td>Everything, including internal QUIC events</td>
-</tr>
-<tr>
-<td><code>haunt</code></td>
-<td><code>debug</code></td>
-<td>Per-request routing, backend selection, health transitions</td>
-</tr>
-<tr>
-<td><code>spooky</code></td>
-<td><code>info</code></td>
-<td>Startup, shutdown, configuration summary (default)</td>
-</tr>
-<tr>
-<td><code>scream</code></td>
-<td><code>warn</code></td>
-<td>Recoverable errors, degraded-mode events</td>
-</tr>
-<tr>
-<td><code>poltergeist</code></td>
-<td><code>error</code></td>
-<td>Fatal or unrecoverable conditions</td>
-</tr>
-<tr>
-<td><code>silence</code></td>
-<td><code>off</code></td>
-<td>No output</td>
-</tr>
-</tbody>
-</table></div>
-<p>Set per-crate verbosity with <code>RUST_LOG</code> (e.g., <code>RUST_LOG=spooky_edge=haunt,info</code>). Output format is controlled by <code>log.format: plain | json</code>.</p>
+<p>If you are in a hurry:</p>
+<ul>
+<li>first run: <a href="getting-started/overview/">getting-started/overview.md</a></li>
+<li>production deployment: <a href="deployment/production/">deployment/production.md</a></li>
+<li>incident response: <a href="operations/runbook/">operations/runbook.md</a></li>
+<li>troubleshooting: <a href="troubleshooting/common-issues/">troubleshooting/common-issues.md</a></li>
+<li>exact support surface: <a href="reference/feature-matrix/">reference/feature-matrix.md</a></li>
+</ul>
+<p>For the canonical examples and exact commands:</p>
+<ul>
+<li>working config snippets: <a href="configuration/examples/">configuration/examples.md</a></li>
+<li>full config semantics: <a href="configuration/reference/">configuration/reference.md</a></li>
+<li>Control API and metrics examples: <a href="api/overview/">api/overview.md</a></li>
+<li>log levels and logging config: <a href="configuration/reference/#logging-configuration">configuration/reference.md</a></li>
+</ul>
 <hr />
 <h2 id="external-standards">External standards</h2>
 <ul>
@@ -2211,10 +2213,18 @@ curl -k https://127.0.0.1:9902/ready
         
         
         
-        <a href="#where-to-start"
+        <a href="#start-here"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#where-to-start');">
-            Where to start
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#start-here');">
+            Start Here
+        </a>
+        
+
+        
+        <a href="#documentation-paths"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#documentation-paths');">
+            Documentation Paths
         </a>
         
         
@@ -2230,10 +2240,10 @@ curl -k https://127.0.0.1:9902/ready
             Architecture — understand the runtime and subsystem ownership
         </a>
         
-        <a href="#control-plane-and-operations-runtime-control-observability-and-failure-handling"
+        <a href="#control-api-and-operations-runtime-control-observability-and-failure-handling"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#control-plane-and-operations-runtime-control-observability-and-failure-handling');">
-            Control Plane and Operations — runtime control, observability, and failure handling
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#control-api-and-operations-runtime-control-observability-and-failure-handling');">
+            Control API and Operations — runtime control, observability, and failure handling
         </a>
         
         <a href="#protocol-traffic-and-policy-reference"
@@ -2270,26 +2280,6 @@ curl -k https://127.0.0.1:9902/ready
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#quick-reference');">
             Quick reference
         </a>
-        
-        
-        <a href="#minimal-working-config"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#minimal-working-config');">
-            Minimal working config
-        </a>
-        
-        <a href="#common-commands"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#common-commands');">
-            Common commands
-        </a>
-        
-        <a href="#log-levels"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#log-levels');">
-            Log levels
-        </a>
-        
         
 
         

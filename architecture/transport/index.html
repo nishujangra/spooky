@@ -1428,9 +1428,9 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>This document explains what the transport layer owns, what it deliberately hides, and where <code>edge</code> should stop reasoning about H1/H2 backend details.</p>
+    <p>This document explains what the transport layer owns, what it deliberately hides, and where <code>edge</code> should stop reasoning about backend protocol details.</p>
 <h2 id="purpose">Purpose</h2>
-<p>The transport refactor established one rule:</p>
+<p>The transport boundary is based on one rule:</p>
 <ul>
 <li><code>edge</code> owns request orchestration</li>
 <li><code>transport</code> owns backend protocol execution</li>
@@ -1448,7 +1448,7 @@
 <li>rotate a backend client when refresh or lifecycle logic requires it</li>
 <li>build the runtime transport pool from interpreted runtime config</li>
 </ul>
-<p>This is the place where backend protocol choice becomes a resolved runtime concern.</p>
+<p>This is the point where runtime backend transport policy becomes a concrete execution choice.</p>
 <h2 id="what-transport-owns">What Transport Owns</h2>
 <p>Transport owns the parts of backend execution that should not leak into request orchestration code.</p>
 <h3 id="runtime-selected-protocol-dispatch">Runtime-selected protocol dispatch</h3>
@@ -1457,7 +1457,7 @@
 <li>HTTP/1.1</li>
 <li>HTTP/2</li>
 </ul>
-<p>That mapping is resolved from runtime config and hidden behind the transport façade.</p>
+<p>That mapping is resolved from interpreted runtime config and hidden behind the transport façade. Higher layers should not infer it from raw scheme strings or recreate their own selection logic.</p>
 <h3 id="connection-reuse">Connection reuse</h3>
 <p>Transport owns:</p>
 <ul>
@@ -1469,7 +1469,7 @@
 <h3 id="transport-level-timeout-application">Transport-level timeout application</h3>
 <p>Transport owns:</p>
 <ul>
-<li>connect-level timeout behavior</li>
+<li>connect timeout behavior</li>
 <li>execution timeout around backend send operations</li>
 <li>protocol/client-level timeout handling that belongs to transport execution</li>
 </ul>
@@ -1495,6 +1495,14 @@
 <li>outcome recording</li>
 </ul>
 <p>Edge should not own how a chosen backend gets executed as H1 or H2.</p>
+<h2 id="what-flows-into-transport">What Flows Into Transport</h2>
+<p>Transport expects higher layers to arrive with:</p>
+<ul>
+<li>a resolved backend identity</li>
+<li>a canonical upstream request</li>
+<li>retry and hedge decisions that have already been made for this attempt</li>
+</ul>
+<p>Transport is not where route matching, quota, auth, or backend eligibility are decided.</p>
 <h2 id="internal-transport-structure">Internal Transport Structure</h2>
 <p>The transport façade hides the protocol-specific implementation modules.</p>
 <p>Internally, transport still has:</p>
@@ -1556,7 +1564,7 @@
 <li>how H2 rotates clients</li>
 <li>whether one protocol exposes generation movement differently</li>
 </ul>
-<p>Transport should expose one canonical rotation result so lifecycle code can reason in transport-neutral terms.</p>
+<p>Transport exposes one canonical rotation result so lifecycle code can reason in transport-neutral terms.</p>
 <h2 id="error-mapping-boundary">Error Mapping Boundary</h2>
 <p>Transport is responsible for mapping protocol/pool execution failures into canonical transport-facing errors.</p>
 <p>Shared upstream error classification then interprets those errors for:</p>
@@ -1566,6 +1574,13 @@
 <li>metrics/logging reason mapping</li>
 </ul>
 <p>This keeps transport from owning request policy while also keeping edge from digging into protocol implementation details.</p>
+<h2 id="relationship-to-backend-lifecycle">Relationship to Backend Lifecycle</h2>
+<p>Transport and backend lifecycle are adjacent but distinct:</p>
+<ul>
+<li>transport executes a request or rotates a client</li>
+<li>backend lifecycle records what that meant for backend health, resolution, and operator views</li>
+</ul>
+<p>Transport should not own long-lived health-state transitions. It should surface canonical results that lifecycle code can consume.</p>
 <h2 id="contributor-rules">Contributor Rules</h2>
 <p>When adding code:</p>
 <ul>
@@ -2076,6 +2091,14 @@
         
 
         
+        <a href="#what-flows-into-transport"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#what-flows-into-transport');">
+            What Flows Into Transport
+        </a>
+        
+
+        
         <a href="#internal-transport-structure"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#internal-transport-structure');">
@@ -2142,6 +2165,14 @@
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#error-mapping-boundary');">
             Error Mapping Boundary
+        </a>
+        
+
+        
+        <a href="#relationship-to-backend-lifecycle"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#relationship-to-backend-lifecycle');">
+            Relationship to Backend Lifecycle
         </a>
         
 

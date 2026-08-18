@@ -1454,89 +1454,106 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>This page documents how to think about Spooky sizing. Exact safe numbers must still be validated against your own traffic shape.</p>
-<h2 id="capacity-inputs-that-matter">Capacity Inputs That Matter</h2>
+    <p>This page explains how to size Spooky nodes and how to think about safe concurrency. Exact numbers must be validated against your own workload.</p>
+<h2 id="inputs-that-matter-most">Inputs That Matter Most</h2>
+<p>Safe capacity depends primarily on:</p>
 <ul>
 <li>concurrent downstream connections</li>
 <li>concurrent in-flight requests</li>
-<li>request and response body sizes</li>
-<li>percentage of long-lived streams</li>
 <li>backend latency distribution</li>
-<li>number of distinct upstreams and backends</li>
-<li>enabled observability and logging volume</li>
+<li>request and response body sizes</li>
+<li>percentage of long-lived or streaming traffic</li>
+<li>number of distinct routes, upstreams, and backends</li>
+<li>enabled logging, metrics, tracing, auth, quota, retry, and hedge policy</li>
 </ul>
+<h2 id="start-with-a-traffic-model">Start With a Traffic Model</h2>
+<p>Before tuning limits, write down:</p>
+<ol>
+<li>expected steady-state requests per second</li>
+<li>expected peak requests per second</li>
+<li>expected concurrent connections</li>
+<li>longest common request and response durations</li>
+<li>largest realistic request and response sizes</li>
+<li>backend p95 and p99 latency under load</li>
+</ol>
+<p>Without that model, capacity tuning becomes guesswork.</p>
 <h2 id="cpu-guidance">CPU Guidance</h2>
 <p>Use more CPU when you expect:</p>
 <ul>
 <li>high QUIC handshake churn</li>
-<li>many concurrent active streams</li>
 <li>heavy TLS activity</li>
-<li>many latency-sensitive routing decisions</li>
-<li>lots of slow-stream and timeout management</li>
+<li>many active concurrent streams</li>
+<li>many routes with latency-sensitive traffic</li>
+<li>aggressive retry, hedge, auth, or quota evaluation volume</li>
 </ul>
-<p>Start with:</p>
+<p>Reasonable starting points:</p>
 <ul>
-<li>small rollout: 2 to 4 cores</li>
-<li>serious production edge node: 4 to 8 cores</li>
-<li>high-throughput nodes: validate upward from there with real load</li>
+<li>small controlled rollout: 2 to 4 cores</li>
+<li>serious production node: 4 to 8 cores</li>
+<li>higher-throughput nodes: scale upward only after workload validation</li>
 </ul>
 <h2 id="memory-guidance">Memory Guidance</h2>
-<p>Memory use is strongly shaped by:</p>
+<p>Memory use is driven mainly by:</p>
 <ul>
 <li>active connection count</li>
 <li>inflight request count</li>
-<li>request buffering under slow upstream conditions</li>
-<li>unknown-length response prebuffering</li>
-<li>configured body-size caps</li>
+<li>buffered request bodies</li>
+<li>buffered or prebuffered response bodies</li>
+<li>long-lived streams during drain or overload</li>
+<li>body-size caps and queue caps</li>
 </ul>
-<p>Do not size memory only from idle or smoke-test behavior. Validate under:</p>
+<p>Do not size memory from idle behavior or smoke tests. Validate under:</p>
 <ul>
-<li>high connection churn</li>
-<li>large request bodies</li>
-<li>streaming responses</li>
-<li>overload conditions</li>
-<li>brownout or queueing conditions</li>
+<li>peak connection churn</li>
+<li>slow backends</li>
+<li>large bodies</li>
+<li>streaming traffic</li>
+<li>overload and brownout conditions</li>
 </ul>
-<h2 id="worker-and-shard-guidance">Worker And Shard Guidance</h2>
-<ul>
-<li>start with one worker per core as a baseline</li>
-<li>increase packet sharding only when you have evidence the extra dispatch layer helps</li>
-<li>use reuseport for multi-worker deployments</li>
-<li>enable worker pinning only after measuring benefit on the target host</li>
-</ul>
-<h2 id="limit-tuning-guidance">Limit Tuning Guidance</h2>
-<p>Treat these as capacity controls, not just feature toggles:</p>
+<h2 id="concurrency-guidance">Concurrency Guidance</h2>
+<p>The important question is not only "how many requests can the node accept" but also "how many should it admit before self-protection is healthier than continuing."</p>
+<p>Treat these as protection boundaries, not throughput goals:</p>
 <ul>
 <li><code>global_inflight_limit</code></li>
 <li><code>per_upstream_inflight_limit</code></li>
 <li><code>per_backend_inflight_limit</code></li>
 <li><code>max_active_connections</code></li>
-<li><code>max_request_body_bytes</code></li>
-<li><code>max_response_body_bytes</code></li>
 <li><code>request_buffer_global_cap_bytes</code></li>
+<li>body-size limits</li>
 </ul>
-<p>Increase them only after validating:</p>
+<p>If you increase them, confirm:</p>
 <ul>
-<li>memory headroom</li>
-<li>tail latency</li>
-<li>overload recovery behavior</li>
-<li>backend tolerance for the higher concurrency</li>
+<li>node memory still has headroom</li>
+<li>backend latency does not collapse</li>
+<li>overload recovery is still fast</li>
+<li>tail latency does not become unacceptable</li>
 </ul>
-<h2 id="operational-rule">Operational Rule</h2>
-<p>If you need to raise limits to stop 503s, first determine whether:</p>
+<h2 id="worker-and-shard-guidance">Worker And Shard Guidance</h2>
 <ul>
-<li>the limits are genuinely too low</li>
-<li>the backend fleet is unhealthy</li>
-<li>the routing policy is concentrating load incorrectly</li>
-<li>the system is correctly shedding to protect itself</li>
+<li>start with one worker per core</li>
+<li>add packet sharding only when packet-rate pressure or worker imbalance justifies it</li>
+<li>use <code>SO_REUSEPORT</code> style multi-worker ingress as the baseline deployment model</li>
+<li>enable worker pinning only after testing on the production host class</li>
 </ul>
-<h2 id="recommended-practice">Recommended Practice</h2>
+<h2 id="when-503s-appear">When 503s Appear</h2>
+<p>If you see 503s, do not immediately widen limits.</p>
+<p>First decide whether the cause is:</p>
 <ul>
-<li>establish a known-good baseline config</li>
-<li>benchmark and soak-test from that baseline</li>
-<li>change one high-impact limit at a time</li>
-<li>record resulting latency, memory, and shed behavior</li>
+<li>overload shedding</li>
+<li>backend timeout or backend failure</li>
+<li>quota backend failure under fail-closed policy</li>
+<li>mis-sized concurrency limits</li>
+<li>routing concentration on too few backends</li>
 </ul>
+<p>The answer determines whether you should add capacity, fix backends, adjust policy, or change limits.</p>
+<h2 id="recommended-capacity-process">Recommended Capacity Process</h2>
+<ol>
+<li>Establish a known-good baseline config.</li>
+<li>Benchmark and soak-test from that baseline.</li>
+<li>Increase one high-impact limit at a time.</li>
+<li>Record latency, memory, shed rate, and backend health effects.</li>
+<li>Re-run validation after enabling more advanced features such as quota, retries, hedging, or heavier auth paths.</li>
+</ol>
   </div>
   
   <script>
@@ -1993,10 +2010,18 @@
         
         
         
-        <a href="#capacity-inputs-that-matter"
+        <a href="#inputs-that-matter-most"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#capacity-inputs-that-matter');">
-            Capacity Inputs That Matter
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#inputs-that-matter-most');">
+            Inputs That Matter Most
+        </a>
+        
+
+        
+        <a href="#start-with-a-traffic-model"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#start-with-a-traffic-model');">
+            Start With a Traffic Model
         </a>
         
 
@@ -2017,6 +2042,14 @@
         
 
         
+        <a href="#concurrency-guidance"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#concurrency-guidance');">
+            Concurrency Guidance
+        </a>
+        
+
+        
         <a href="#worker-and-shard-guidance"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#worker-and-shard-guidance');">
@@ -2025,26 +2058,18 @@
         
 
         
-        <a href="#limit-tuning-guidance"
+        <a href="#when-503s-appear"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#limit-tuning-guidance');">
-            Limit Tuning Guidance
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#when-503s-appear');">
+            When 503s Appear
         </a>
         
 
         
-        <a href="#operational-rule"
+        <a href="#recommended-capacity-process"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#operational-rule');">
-            Operational Rule
-        </a>
-        
-
-        
-        <a href="#recommended-practice"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#recommended-practice');">
-            Recommended Practice
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#recommended-capacity-process');">
+            Recommended Capacity Process
         </a>
         
 

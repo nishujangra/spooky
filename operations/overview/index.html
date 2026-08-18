@@ -1454,31 +1454,152 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>This section is for deployment, rollout, validation, and production operation of Spooky.</p>
+    <p>This section is the main entry point for deploying, rolling out, operating, and recovering Spooky in production.</p>
+<p>Use it to answer where Spooky fits well today, how to prepare hosts and capacity, how to roll out config and binary changes safely, and where to look during an incident.</p>
 <h2 id="start-here">Start Here</h2>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Goal</th>
+<th>Document</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Decide whether the current release is ready for your environment</td>
+<td><a href="../production-readiness/">Production Readiness</a></td>
+</tr>
+<tr>
+<td>Prepare a production host and service layout</td>
+<td><a href="../../deployment/production/">Production Deployment</a></td>
+</tr>
+<tr>
+<td>Understand safe activation, restart-required changes, drain, and rollback</td>
+<td><a href="../reload-and-drain/">Reload and Drain</a></td>
+</tr>
+<tr>
+<td>Plan host sizing and concurrency limits</td>
+<td><a href="../sizing-and-capacity/">Sizing And Capacity</a></td>
+</tr>
+<tr>
+<td>Tune the host OS and runtime environment</td>
+<td><a href="../host-tuning/">Host Tuning</a></td>
+</tr>
+<tr>
+<td>Choose a rollout shape</td>
+<td><a href="../deployment-patterns/">Deployment Patterns</a></td>
+</tr>
+<tr>
+<td>Validate before and after a change</td>
+<td><a href="../../deployment/validation/">Validation</a></td>
+</tr>
+<tr>
+<td>Troubleshoot incidents quickly</td>
+<td><a href="../runbook/">Runbook</a></td>
+</tr>
+<tr>
+<td>Interpret visible failures and status codes</td>
+<td><a href="../failure-modes/">Failure Modes</a></td>
+</tr>
+<tr>
+<td>Operate distributed quota safely</td>
+<td><a href="../distributed-quota/">Distributed Quota</a></td>
+</tr>
+<tr>
+<td>Use the shipped dashboards, alerts, and SLO views</td>
+<td><a href="../observability-bundle/">Observability Operator Bundle</a></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="canonical-sources-by-topic">Canonical Sources By Topic</h2>
+<p>Use this page for workflow and navigation. Use the pages below for authoritative detail:</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Topic</th>
+<th>Canonical page</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>exact Control API endpoint behavior</td>
+<td><a href="../../reference/control-api-reference/">Control API Reference</a></td>
+</tr>
+<tr>
+<td>exact metric names and labels</td>
+<td><a href="../../reference/metrics-reference/">Metrics Reference</a></td>
+</tr>
+<tr>
+<td>exact configuration shape and runtime semantics</td>
+<td><a href="../../configuration/reference/">Configuration Reference</a></td>
+</tr>
+<tr>
+<td>symptom-driven incident diagnosis</td>
+<td><a href="../../troubleshooting/common-issues/">Troubleshooting</a></td>
+</tr>
+<tr>
+<td>runtime protection dashboards, alerts, and SLOs</td>
+<td><a href="../observability-bundle/">Observability Operator Bundle</a></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="core-operating-model">Core Operating Model</h2>
+<p>Spooky has three distinct change paths:</p>
+<ol>
+<li>Runtime-managed config changes
+   Use the Control API staged flow: <code>validate</code>, <code>preview</code>, then <code>activate</code>. This is the normal path for routes, upstreams, backends, timeouts, resilience policy, and other live-reloadable runtime state.</li>
+<li>Certificate-only changes
+   Use <code>POST /admin/runtime/reload-certs</code>. This updates listener TLS material for new handshakes only.</li>
+<li>Restart-required changes
+   Use a drain-aware restart or instance replacement workflow when the change affects startup-owned state such as listener bind changes, control-plane bind changes, tracing startup settings, or logging sink configuration.</li>
+</ol>
+<p>Do not treat all changes as restarts, and do not treat all changes as live-reloadable.</p>
+<h2 id="common-workflows">Common Workflows</h2>
+<h3 id="deploy-a-new-environment">Deploy a new environment</h3>
+<p>Start with:</p>
 <ul>
-<li><a href="../production-readiness/">Production Readiness</a> defines what is ready today and what still blocks a broader production claim.</li>
-<li><a href="../../deployment/production/">Production Deployment</a> covers host preparation, service layout, and runtime posture.</li>
-<li><a href="../../deployment/validation/">Validation</a> covers pre-production and post-change validation patterns.</li>
-<li><a href="../../deployment/migration/">Migration</a> covers moving traffic from an existing proxy stack.</li>
-<li><a href="../distributed-quota/">Distributed Quota</a> covers policy examples, Redis backend rollout, degraded-mode behavior, and operator interpretation.</li>
-<li><a href="../observability-bundle/">Observability Operator Bundle</a> covers the shipped dashboards, alerts, SLO package, and cross-surface incident workflow.</li>
-<li><a href="../runbook/">Runbook</a> is the incident and maintenance quick-reference.</li>
-<li><a href="../sizing-and-capacity/">Sizing And Capacity</a> covers the main host and concurrency inputs that shape safe operation.</li>
-<li><a href="../host-tuning/">Host Tuning</a> groups host-level guidance.</li>
-<li><a href="../deployment-patterns/">Deployment Patterns</a> explains where Spooky fits best today.</li>
-<li><a href="../failure-modes/">Failure Modes</a> documents the major operator-visible failure classes.</li>
-<li><a href="../../troubleshooting/common-issues/">Troubleshooting</a> covers common failure signatures and operator checks.</li>
+<li><a href="../production-readiness/">Production Readiness</a></li>
+<li><a href="../../deployment/production/">Production Deployment</a></li>
+<li><a href="../host-tuning/">Host Tuning</a></li>
+<li><a href="../sizing-and-capacity/">Sizing And Capacity</a></li>
 </ul>
-<h2 id="what-this-section-covers">What This Section Covers</h2>
+<h3 id="roll-out-a-runtime-config-change">Roll out a runtime config change</h3>
+<p>Start with:</p>
 <ul>
-<li>rollout posture</li>
-<li>deployment patterns</li>
-<li>validation workflow</li>
-<li>migration planning</li>
-<li>operational debugging</li>
-<li>incident response</li>
-<li>capacity and host planning</li>
+<li><a href="../../deployment/validation/">Validation</a></li>
+<li><a href="../reload-and-drain/">Reload and Drain</a></li>
+<li><a href="../runbook/">Runbook</a></li>
+</ul>
+<h3 id="roll-out-a-binary-upgrade-or-restart-required-config-change">Roll out a binary upgrade or restart-required config change</h3>
+<p>Start with:</p>
+<ul>
+<li><a href="../deployment-patterns/">Deployment Patterns</a></li>
+<li><a href="../../deployment/production/">Production Deployment</a></li>
+<li><a href="../reload-and-drain/">Reload and Drain</a></li>
+</ul>
+<h3 id="investigate-production-failures">Investigate production failures</h3>
+<p>Start with:</p>
+<ul>
+<li><a href="../runbook/">Runbook</a></li>
+<li><a href="../failure-modes/">Failure Modes</a></li>
+<li><a href="../observability-bundle/">Observability Operator Bundle</a></li>
+<li><a href="../../troubleshooting/common-issues/">Troubleshooting</a></li>
+</ul>
+<h2 id="operator-rules">Operator Rules</h2>
+<ul>
+<li>Keep the Control API on loopback or a strongly isolated admin network.</li>
+<li>Use <code>--http1.1</code> for all <code>curl</code> calls to the Control API.</li>
+<li>Prefer <code>validate</code> and <code>activate</code> over the legacy <code>reload</code> shortcut in production automation.</li>
+<li>Pass <code>expected_generation</code> on activation and rollback workflows so concurrent changes fail safely.</li>
+<li>Keep at least one known-good rollback target and one known-good binary available during every rollout.</li>
+<li>Treat quota denials and overload shedding as separate operational signals.</li>
+</ul>
+<h2 id="related-pages">Related Pages</h2>
+<ul>
+<li><a href="../../api/overview/">API Overview</a></li>
+<li><a href="../../reference/control-api-reference/">Control API Reference</a></li>
+<li><a href="../../reference/metrics-reference/">Metrics Reference</a></li>
+<li><a href="../../troubleshooting/common-issues/">Troubleshooting</a></li>
 </ul>
   </div>
   
@@ -1944,10 +2065,68 @@
         
 
         
-        <a href="#what-this-section-covers"
+        <a href="#canonical-sources-by-topic"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#what-this-section-covers');">
-            What This Section Covers
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#canonical-sources-by-topic');">
+            Canonical Sources By Topic
+        </a>
+        
+
+        
+        <a href="#core-operating-model"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#core-operating-model');">
+            Core Operating Model
+        </a>
+        
+
+        
+        <a href="#common-workflows"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#common-workflows');">
+            Common Workflows
+        </a>
+        
+        
+        <a href="#deploy-a-new-environment"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#deploy-a-new-environment');">
+            Deploy a new environment
+        </a>
+        
+        <a href="#roll-out-a-runtime-config-change"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#roll-out-a-runtime-config-change');">
+            Roll out a runtime config change
+        </a>
+        
+        <a href="#roll-out-a-binary-upgrade-or-restart-required-config-change"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#roll-out-a-binary-upgrade-or-restart-required-config-change');">
+            Roll out a binary upgrade or restart-required config change
+        </a>
+        
+        <a href="#investigate-production-failures"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#investigate-production-failures');">
+            Investigate production failures
+        </a>
+        
+        
+
+        
+        <a href="#operator-rules"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#operator-rules');">
+            Operator Rules
+        </a>
+        
+
+        
+        <a href="#related-pages"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#related-pages');">
+            Related Pages
         </a>
         
 

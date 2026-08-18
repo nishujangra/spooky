@@ -1454,7 +1454,59 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>This page standardizes the core terms used across the docs.</p>
+    <p>Use this page as the source of truth for reader-facing product terms.</p>
+<h2 id="quick-lookup">Quick Lookup</h2>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Need</th>
+<th>Term</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>downstream ingress socket and TLS identity</td>
+<td><code>listener</code></td>
+</tr>
+<tr>
+<td>named routing target</td>
+<td><code>upstream</code></td>
+</tr>
+<tr>
+<td>single origin endpoint inside an upstream</td>
+<td><code>backend</code></td>
+</tr>
+<tr>
+<td>request match conditions</td>
+<td><code>route</code></td>
+</tr>
+<tr>
+<td>request policy gate before backend execution</td>
+<td><code>admission</code></td>
+</tr>
+<tr>
+<td>contract-style request limiting</td>
+<td><code>quota</code></td>
+</tr>
+<tr>
+<td>runtime self-protection under pressure</td>
+<td><code>overload</code></td>
+</tr>
+<tr>
+<td>privileged admin HTTP surface</td>
+<td><code>Control API</code></td>
+</tr>
+<tr>
+<td>operator-facing history of admin actions</td>
+<td><code>audit</code></td>
+</tr>
+<tr>
+<td>atomically swapped active runtime version</td>
+<td><code>runtime generation</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Use these definitions and preferred phrases consistently across product-reference pages.</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1477,15 +1529,47 @@
 </tr>
 <tr>
 <td>Backend</td>
-<td>A single origin endpoint inside an upstream pool.</td>
+<td>A single origin endpoint inside an upstream.</td>
 </tr>
 <tr>
 <td>Route</td>
 <td>The match conditions that decide which upstream handles a request.</td>
 </tr>
 <tr>
+<td>Admission</td>
+<td>The shared request-policy gate that evaluates route-level rejection, scoped rate limits, quota, brownout, overload, and permit checks before backend execution.</td>
+</tr>
+<tr>
+<td>Auth</td>
+<td>Request-path authentication and authorization decisions, including local auth and external auth integration.</td>
+</tr>
+<tr>
+<td>Quota</td>
+<td>Contract-style request limiting based on explicit selectors and windows. Quota is separate from overload control.</td>
+</tr>
+<tr>
+<td>Overload</td>
+<td>Runtime protection behavior that sheds or delays work to keep the system stable under pressure.</td>
+</tr>
+<tr>
+<td>Brownout</td>
+<td>A specific overload mode in which non-core or lower-priority traffic is shed to preserve core traffic.</td>
+</tr>
+<tr>
 <td>Control API</td>
 <td>The privileged operator-facing admin HTTP surface.</td>
+</tr>
+<tr>
+<td>Control plane</td>
+<td>The broader operator-facing management layer around the Control API, runtime views, watchdog, metrics endpoint, and related admin services.</td>
+</tr>
+<tr>
+<td>Audit</td>
+<td>The operator-facing record of control API actions and runtime-management events.</td>
+</tr>
+<tr>
+<td>Runtime generation</td>
+<td>One active version of the normalized runtime state. New generations are produced during validated runtime activation and swap into service atomically.</td>
 </tr>
 <tr>
 <td>Metrics endpoint</td>
@@ -1501,6 +1585,130 @@
 </tr>
 </tbody>
 </table></div>
+<h2 id="preferred-usage">Preferred Usage</h2>
+<p>Use these phrases consistently unless a page is quoting a metric name, config key, or code identifier.</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Prefer</th>
+<th>Avoid when possible</th>
+<th>Reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>listener</code></td>
+<td><code>proxy listener</code>, <code>socket listener</code></td>
+<td><code>listener</code> is the canonical runtime term.</td>
+</tr>
+<tr>
+<td><code>route</code></td>
+<td><code>routing rule</code> for the main noun</td>
+<td><code>route</code> is shorter and already defined.</td>
+</tr>
+<tr>
+<td><code>upstream</code></td>
+<td><code>upstream pool</code> as the default term</td>
+<td><code>upstream</code> is the canonical routing target; mention its backends when needed.</td>
+</tr>
+<tr>
+<td><code>backend</code></td>
+<td><code>origin server</code> unless external comparison requires it</td>
+<td><code>backend</code> matches config, metrics, and runtime views.</td>
+</tr>
+<tr>
+<td><code>admission</code></td>
+<td><code>admission control</code> everywhere</td>
+<td>use <code>admission</code> as the general subsystem name; use <code>admission control</code> only when the longer phrase materially helps.</td>
+</tr>
+<tr>
+<td><code>auth</code></td>
+<td>mixed <code>authentication</code> / <code>authorization</code> wording for shared request-path decisions</td>
+<td><code>auth</code> is the shortest shared label for the request-path decision layer.</td>
+</tr>
+<tr>
+<td><code>quota</code></td>
+<td><code>rate limiting</code> when the feature is specifically quota</td>
+<td>quota has different semantics from scoped rate limiting.</td>
+</tr>
+<tr>
+<td><code>overload</code></td>
+<td><code>rate limiting</code> or <code>quota</code> when the meaning is runtime protection</td>
+<td>keep contract failure and runtime protection separate.</td>
+</tr>
+<tr>
+<td><code>brownout</code></td>
+<td>vague phrases like <code>degraded mode</code> when the specific overload mode is meant</td>
+<td>brownout is a distinct runtime behavior.</td>
+</tr>
+<tr>
+<td><code>Control API</code></td>
+<td><code>admin API</code> as the primary product term</td>
+<td><code>Control API</code> is the canonical product surface.</td>
+</tr>
+<tr>
+<td><code>control plane</code></td>
+<td><code>control-plane services</code> for the general system every time</td>
+<td>use <code>control plane</code> for the broader management layer; use <code>Control API</code> for the HTTP admin surface.</td>
+</tr>
+<tr>
+<td><code>audit</code></td>
+<td><code>audit log</code> as the only term</td>
+<td><code>audit</code> covers the event stream and operator history more cleanly.</td>
+</tr>
+<tr>
+<td><code>runtime generation</code></td>
+<td><code>generation</code> alone on first mention</td>
+<td>spell out the full phrase on first mention for clarity.</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="search-aliases">Search Aliases</h2>
+<p>These aliases are common search terms, but they are not the preferred product wording:</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Search term</th>
+<th>Canonical term</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>admin API</td>
+<td><code>Control API</code></td>
+</tr>
+<tr>
+<td>origin server</td>
+<td><code>backend</code></td>
+</tr>
+<tr>
+<td>routing rule</td>
+<td><code>route</code></td>
+</tr>
+<tr>
+<td>rate limiting, when the meaning is contract exhaustion</td>
+<td><code>quota</code></td>
+</tr>
+<tr>
+<td>degraded mode, when the meaning is selective overload shedding</td>
+<td><code>brownout</code></td>
+</tr>
+<tr>
+<td>config version swap</td>
+<td><code>runtime generation</code></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="writing-style">Writing Style</h2>
+<p>Use these style rules across product-reference pages:</p>
+<ul>
+<li>Prefer short, direct sentences.</li>
+<li>Use the canonical term on first mention, then keep using the same term.</li>
+<li>Separate request-path policy concepts from runtime protection concepts.</li>
+<li>Use <code>Control API</code> for the admin HTTP surface and <code>control plane</code> for the broader operator layer.</li>
+<li>Use <code>upstream</code> for the named routing target and <code>backend</code> for individual endpoints inside it.</li>
+<li>Avoid mixing code names, config keys, and reader-facing terms in ordinary prose unless needed for precision.</li>
+</ul>
   </div>
   
   <script>
@@ -1953,6 +2161,44 @@
                                 <div id="toc" view-transition-name="toc" class="no-scrollbar overflow-y-auto px-8">
     <div class="flex flex-col gap-2 p-4 pt-0 text-sm">
         <p class="text-muted-foreground bg-background sticky top-0 h-6 text-xs">On This Page</p>
+        
+        
+        
+        
+        <a href="#quick-lookup"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#quick-lookup');">
+            Quick Lookup
+        </a>
+        
+
+        
+        <a href="#preferred-usage"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#preferred-usage');">
+            Preferred Usage
+        </a>
+        
+
+        
+        <a href="#search-aliases"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#search-aliases');">
+            Search Aliases
+        </a>
+        
+
+        
+        <a href="#writing-style"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#writing-style');">
+            Writing Style
+        </a>
+        
+
+        
+        
+        
         
 
     </div>

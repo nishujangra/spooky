@@ -1428,175 +1428,154 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>This document explains what changes live in Spooky, what requires restart, and what operators should expect during reload and drain workflows.</p>
-<h2 id="purpose">Purpose</h2>
-<p>Spooky now has a clearer runtime generation model:</p>
+    <p>This document explains which changes activate live, which changes require a restart, and what operators should expect from reload, rollback, cert reload, and drain workflows.</p>
+<h2 id="core-rule">Core Rule</h2>
+<p>Spooky does not patch runtime state in place. It prepares a complete next runtime generation and swaps it atomically when the change is compatible.</p>
+<p>That means:</p>
 <ul>
-<li>startup-owned state</li>
-<li>generation-owned state</li>
-<li>long-lived shared services</li>
+<li>readers observe complete generations, not partial mutation</li>
+<li>in-flight requests continue on the generation they started with</li>
+<li>rejected activations leave the active generation unchanged</li>
 </ul>
-<p>Reload and drain behavior follows that model.</p>
-<h2 id="runtime-reload-model">Runtime Reload Model</h2>
-<p>Runtime reload works by preparing a complete next runtime bundle and atomically swapping it into place.</p>
-<p>Important properties:</p>
+<h2 id="preferred-runtime-change-workflow">Preferred Runtime Change Workflow</h2>
+<p>For normal runtime-managed changes, use the staged Control API flow:</p>
+<ol>
+<li><code>POST /admin/runtime/validate</code>
+   Confirms whether the candidate config can be activated and reports rejected domains.</li>
+<li><code>POST /admin/runtime/preview</code>
+   Produces the same planning result, but records the attempt in operator history.</li>
+<li><code>POST /admin/runtime/activate</code>
+   Commits the compatible candidate generation.</li>
+<li><code>GET /admin/runtime/history</code>
+   Confirms the active generation and retains a rollback target.</li>
+</ol>
+<p>Use <code>expected_generation</code> on activation so concurrent changes fail with <code>409</code> instead of silently overwriting each other.</p>
+<h2 id="what-activates-live">What Activates Live</h2>
+<p>Live activation is the normal path for runtime-managed domains such as:</p>
 <ul>
-<li>readers observe whole bundles, not partial in-place mutation</li>
-<li>the previous generation remains valid for in-flight work that still holds it</li>
-<li>generation-scoped tasks for the previous bundle are retired after replacement</li>
+<li>routes and upstream definitions</li>
+<li>backend sets and backend weights</li>
+<li>load-balancing policy</li>
+<li>admission, overload, retry, hedge, and quota policy</li>
+<li>runtime timeout and transport policy</li>
+<li><code>log.level</code></li>
 </ul>
-<p>This means reload is a generation swap, not a best-effort patch of live state.</p>
-<h2 id="what-reload-changes-live">What Reload Changes Live</h2>
-<p>Runtime reload is intended for changes such as:</p>
-<ul>
-<li>routing and upstream policy changes</li>
-<li>backend set changes</li>
-<li>load-balancing changes</li>
-<li>admission and resilience policy changes</li>
-<li>runtime timeout and transport policy changes that are modeled as reloadable generation state</li>
-<li><code>log.level</code> changes</li>
-</ul>
-<p>When the reload succeeds:</p>
+<p>After a successful activation:</p>
 <ul>
 <li>new requests use the new generation immediately</li>
-<li>in-flight work on the old generation drains naturally</li>
+<li>existing requests continue on the previous generation until they complete or are otherwise terminated by normal request-path behavior</li>
 </ul>
-<h2 id="what-does-not-reload-live">What Does Not Reload Live</h2>
-<p>Some changes are restart-required because they belong to startup-owned or separately bound service domains.</p>
-<p>Examples include:</p>
+<h2 id="what-requires-restart">What Requires Restart</h2>
+<p>Some changes are restart-required because they affect startup-owned or separately bound service domains.</p>
+<p>Plan a drain-aware restart or node replacement for changes such as:</p>
 <ul>
-<li>non-live logging sink settings such as log file path and log format</li>
-<li>tracing enablement and related startup-owned tracing settings</li>
-<li>some bind and service-surface compatibility changes that require new listeners or rebind validation</li>
+<li>listener removal</li>
+<li>listener bind-address or port changes</li>
+<li>control-plane or metrics bind changes</li>
+<li>logging sink settings such as log format or file output</li>
+<li>tracing startup configuration</li>
+<li>control-plane thread-count changes</li>
 </ul>
-<p>The system should reject these as incompatible reloads rather than partially applying them.</p>
-<h2 id="reload-compatibility-checks">Reload Compatibility Checks</h2>
-<p>Reload compatibility is validated centrally before swap.</p>
-<p>The control-plane reload flow checks:</p>
+<p>These changes should be rejected during activation planning, not partially applied.</p>
+<h2 id="legacy-runtime-reload-shortcut">Legacy Runtime Reload Shortcut</h2>
+<p><code>POST /admin/runtime/reload</code> still exists, but it is a compatibility shortcut.</p>
+<p>Use it only when:</p>
 <ul>
-<li>listener/runtime compatibility</li>
-<li>control API compatibility</li>
-<li>metrics endpoint compatibility</li>
-<li>startup-owned state compatibility</li>
+<li>you intentionally want a direct apply path</li>
+<li>you do not need the fuller staged diff and rejection reporting from <code>activate</code></li>
 </ul>
-<p>Operators should expect:</p>
+<p>For production automation, prefer <code>validate</code> plus <code>activate</code>.</p>
+<h2 id="certificate-reload">Certificate Reload</h2>
+<p><code>POST /admin/runtime/reload-certs</code> is only for listener TLS material and related trust material used by new downstream handshakes.</p>
+<p>It does not:</p>
 <ul>
-<li>an explicit rejection when a reload is not safe</li>
-<li>the currently active generation to remain authoritative when rejection occurs</li>
+<li>rebuild the full runtime generation</li>
+<li>mutate route or policy state</li>
+<li>change existing live sessions</li>
 </ul>
-<h2 id="control-api-reload-endpoints">Control API Reload Endpoints</h2>
-<p>Two control-plane actions matter here:</p>
+<p>Use it for certificate rotation when only the cert or trust material changed.</p>
+<h2 id="rollback">Rollback</h2>
+<p>Rollback restores a previously retained runtime generation through <code>POST /admin/runtime/rollback</code>.</p>
+<p>Operator rules:</p>
 <ul>
-<li>runtime reload</li>
-<li>certificate reload</li>
+<li>choose a target from <code>GET /admin/runtime/history</code></li>
+<li>confirm <code>rollback_candidate: true</code></li>
+<li>pass <code>expected_active_generation</code></li>
+<li>treat rollback as a first-class production workflow, not as a last-minute improvisation</li>
 </ul>
-<h3 id="runtime-reload">Runtime reload</h3>
-<p>This rebuilds and validates a new runtime generation and swaps it if allowed.</p>
-<h3 id="certificate-reload">Certificate reload</h3>
-<p>This reloads listener TLS material for new handshakes only. It is not the same as full runtime config reload.</p>
-<h2 id="runtime-generation-visibility">Runtime Generation Visibility</h2>
-<p>Operators should verify reload outcomes using:</p>
-<ul>
-<li>control API runtime generation id</li>
-<li>reload response payloads</li>
-<li>logs around reload rejection or generation swap</li>
-</ul>
-<p>Do not assume that file edits on disk imply the active runtime changed. The authoritative signal is the committed active generation.</p>
+<p>Retained generations are bounded. Do not assume very old generations are still available.</p>
 <h2 id="drain-semantics">Drain Semantics</h2>
-<p>Drain is the controlled path for stopping new useful work while letting existing work finish when possible.</p>
-<p>At a high level, drain means:</p>
+<p>Drain is the controlled path for stopping admission of new useful work while allowing existing work to finish when possible.</p>
+<p>At a high level:</p>
 <ul>
-<li>listener enters draining mode</li>
-<li>existing active streams are allowed to finish if possible</li>
-<li>if no active streams remain, connections are closed and the listener can stop</li>
-<li>if the drain timeout expires, remaining connections are closed</li>
+<li>the listener enters draining mode</li>
+<li>new connection or request admission is reduced or stopped according to lifecycle behavior</li>
+<li>in-flight work is given time to finish</li>
+<li>when the drain timeout is reached, remaining work is force-closed</li>
 </ul>
-<p>Drain is part of graceful shutdown and also part of watchdog-driven restart workflows.</p>
-<h2 id="watchdog-driven-restart-flow">Watchdog-Driven Restart Flow</h2>
-<p>The watchdog can request a restart when runtime progress degrades beyond policy thresholds.</p>
-<p>The expected flow is:</p>
+<p>Drain is distinct from activation:</p>
+<ul>
+<li>activation swaps runtime generations</li>
+<li>drain moves the process toward restart or shutdown</li>
+</ul>
+<h2 id="restart-workflow">Restart Workflow</h2>
+<p>A restart can be operator-initiated or watchdog-initiated, but operators should expect the same high-level lifecycle:</p>
 <ol>
-<li>watchdog requests restart and records a reason</li>
-<li>listener sees the restart request and enters draining mode</li>
-<li>workers eventually report drained state</li>
-<li>watchdog completes the restart cycle once the workflow is done</li>
+<li>restart is requested</li>
+<li>the runtime enters draining mode</li>
+<li>workers drain or the configured drain grace elapses</li>
+<li>the process or node completes the restart workflow</li>
 </ol>
-<p>Operators should expect readiness and runtime snapshot state to reflect this transition rather than needing to infer it from scattered logs.</p>
-<h2 id="what-happens-to-in-flight-requests">What Happens to In-Flight Requests</h2>
-<h3 id="on-reload">On reload</h3>
+<p>Use restart for:</p>
 <ul>
-<li>existing requests continue on the generation they started with</li>
-<li>new requests use the new generation after the swap</li>
+<li>binary upgrades</li>
+<li>restart-required config changes</li>
+<li>controlled maintenance windows</li>
 </ul>
-<h3 id="on-drain">On drain</h3>
+<h2 id="what-operators-should-verify">What Operators Should Verify</h2>
+<p>After activation:</p>
 <ul>
-<li>active requests may complete if they finish before drain timeout and before forced close</li>
-<li>if graceful completion is not possible, remaining connections are closed</li>
+<li>the active generation changed as expected</li>
+<li>runtime history recorded the action</li>
+<li>the diff matches the intended change</li>
+<li>route, backend, quota, and overload metrics still look healthy</li>
 </ul>
-<p>This is why generation ownership and drain lifecycle are distinct concerns.</p>
-<h2 id="operator-expectations">Operator Expectations</h2>
-<p>Operators should expect reload to answer:</p>
+<p>After cert reload:</p>
 <ul>
-<li>did compatibility validation pass</li>
-<li>was a new generation committed</li>
-<li>what generation is active now</li>
+<li>new handshakes present the expected certificate</li>
+<li>certificate-expiry and handshake dashboards stay healthy</li>
 </ul>
-<p>Operators should expect drain to answer:</p>
+<p>During drain:</p>
 <ul>
-<li>is draining active</li>
-<li>did the watchdog request it</li>
-<li>how long has restart been pending</li>
-<li>have workers drained yet</li>
+<li>readiness state reflects the transition</li>
+<li>worker drain progresses</li>
+<li>drain duration stays within the configured budget</li>
+<li>remaining traffic is handled by other healthy instances</li>
 </ul>
-<h2 id="recommended-workflow">Recommended Workflow</h2>
-<p>For routine runtime changes:</p>
-<ol>
-<li>update config on disk</li>
-<li>call runtime reload</li>
-<li>verify the active generation changed</li>
-<li>verify control API snapshot and metrics align with expected state</li>
-</ol>
-<p>For restart-required changes:</p>
-<ol>
-<li>stage the config change</li>
-<li>use maintenance orchestration or restart workflow</li>
-<li>treat the restart as a controlled drain event, not as a hot reload</li>
-</ol>
-<p>For certificate-only changes:</p>
-<ol>
-<li>update TLS material</li>
-<li>use certificate reload</li>
-<li>verify new handshakes use the refreshed material</li>
-</ol>
 <h2 id="failure-expectations">Failure Expectations</h2>
-<p>If reload fails:</p>
+<p>If activation fails:</p>
 <ul>
-<li>active generation remains unchanged</li>
-<li>rejection should be explicit</li>
-<li>operators should not assume partial progress</li>
+<li>the active generation remains unchanged</li>
+<li>the rejection should identify the incompatible or invalid domain</li>
+<li>operators should correct the config or use a restart path if the change is restart-required</li>
+</ul>
+<p>If rollback fails:</p>
+<ul>
+<li>inspect retained-generation history first</li>
+<li>confirm the target still has a retained bundle</li>
+<li>confirm the active generation did not move unexpectedly</li>
 </ul>
 <p>If drain times out:</p>
 <ul>
 <li>remaining connections are closed</li>
-<li>the process should still complete shutdown/restart progression rather than hanging indefinitely</li>
-</ul>
-<h2 id="contributor-rules">Contributor Rules</h2>
-<p>When adding new reloadable state:</p>
-<ul>
-<li>decide whether it is startup-owned, generation-owned, or process-shared</li>
-<li>make reload compatibility explicit</li>
-<li>expose reload result through canonical runtime generation/state surfaces</li>
-</ul>
-<p>Do not:</p>
-<ul>
-<li>add silent partial reload behavior</li>
-<li>let control-plane code invent its own reload compatibility rules outside the canonical path</li>
-<li>mutate active runtime state in place when the generation model expects replacement</li>
+<li>the workflow should still complete rather than hanging indefinitely</li>
+<li>treat repeated drain timeout as a signal to inspect long-lived streams, drain budget, and restart policy</li>
 </ul>
 <h2 id="related-pages">Related Pages</h2>
 <ul>
-<li><a href="../../architecture/runtime-generation/">Runtime Generation Model</a></li>
-<li><a href="../control-plane/">Control Plane</a></li>
+<li><a href="../../deployment/production/">Production Deployment</a></li>
+<li><a href="../production-readiness/">Production Readiness</a></li>
+<li><a href="../runbook/">Runbook</a></li>
 <li><a href="../../reference/control-api-reference/">Control API Reference</a></li>
 </ul>
   </div>
@@ -2029,72 +2008,58 @@
         
         
         
-        <a href="#purpose"
+        <a href="#core-rule"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#purpose');">
-            Purpose
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#core-rule');">
+            Core Rule
         </a>
         
 
         
-        <a href="#runtime-reload-model"
+        <a href="#preferred-runtime-change-workflow"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#runtime-reload-model');">
-            Runtime Reload Model
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#preferred-runtime-change-workflow');">
+            Preferred Runtime Change Workflow
         </a>
         
 
         
-        <a href="#what-reload-changes-live"
+        <a href="#what-activates-live"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#what-reload-changes-live');">
-            What Reload Changes Live
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#what-activates-live');">
+            What Activates Live
         </a>
         
 
         
-        <a href="#what-does-not-reload-live"
+        <a href="#what-requires-restart"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#what-does-not-reload-live');">
-            What Does Not Reload Live
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#what-requires-restart');">
+            What Requires Restart
         </a>
         
 
         
-        <a href="#reload-compatibility-checks"
+        <a href="#legacy-runtime-reload-shortcut"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#reload-compatibility-checks');">
-            Reload Compatibility Checks
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#legacy-runtime-reload-shortcut');">
+            Legacy Runtime Reload Shortcut
         </a>
         
 
-        
-        <a href="#control-api-reload-endpoints"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#control-api-reload-endpoints');">
-            Control API Reload Endpoints
-        </a>
-        
-        
-        <a href="#runtime-reload"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#runtime-reload');">
-            Runtime reload
-        </a>
         
         <a href="#certificate-reload"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#certificate-reload');">
-            Certificate reload
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#certificate-reload');">
+            Certificate Reload
         </a>
-        
         
 
         
-        <a href="#runtime-generation-visibility"
+        <a href="#rollback"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#runtime-generation-visibility');">
-            Runtime Generation Visibility
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#rollback');">
+            Rollback
         </a>
         
 
@@ -2107,48 +2072,18 @@
         
 
         
-        <a href="#watchdog-driven-restart-flow"
+        <a href="#restart-workflow"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#watchdog-driven-restart-flow');">
-            Watchdog-Driven Restart Flow
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#restart-workflow');">
+            Restart Workflow
         </a>
         
 
         
-        <a href="#what-happens-to-in-flight-requests"
+        <a href="#what-operators-should-verify"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#what-happens-to-in-flight-requests');">
-            What Happens to In-Flight Requests
-        </a>
-        
-        
-        <a href="#on-reload"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#on-reload');">
-            On reload
-        </a>
-        
-        <a href="#on-drain"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#on-drain');">
-            On drain
-        </a>
-        
-        
-
-        
-        <a href="#operator-expectations"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#operator-expectations');">
-            Operator Expectations
-        </a>
-        
-
-        
-        <a href="#recommended-workflow"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#recommended-workflow');">
-            Recommended Workflow
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#what-operators-should-verify');">
+            What Operators Should Verify
         </a>
         
 
@@ -2157,14 +2092,6 @@
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#failure-expectations');">
             Failure Expectations
-        </a>
-        
-
-        
-        <a href="#contributor-rules"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#contributor-rules');">
-            Contributor Rules
         </a>
         
 

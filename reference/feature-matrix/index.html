@@ -1454,15 +1454,58 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>This matrix describes the current feature surface from the source tree as it exists today.</p>
-<p>Legend:</p>
+    <p>Use this page to check whether a feature is implemented, partially implemented, or missing.</p>
+<p>Status legend:</p>
 <ul>
-<li><code>Done</code>: implemented and clearly present in the codebase</li>
-<li><code>Partial</code>: implemented with important caveats or limited scope</li>
+<li><code>Done</code>: implemented and supported in the current product</li>
+<li><code>Partial</code>: implemented with important limits or caveats</li>
 <li><code>Missing</code>: not implemented as a first-class feature</li>
 </ul>
-<h2 id="refactor-foundations">Refactor Foundations</h2>
-<p>These are architectural foundations rather than user-facing product features, but they now materially define how the codebase behaves and how future work should be added.</p>
+<h2 id="quick-lookup">Quick Lookup</h2>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>If you need to check</th>
+<th>Start here</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>protocol support</td>
+<td><a href="#protocols">Protocols</a></td>
+</tr>
+<tr>
+<td>route matching</td>
+<td><a href="#routing">Routing</a></td>
+</tr>
+<tr>
+<td>balancing strategy</td>
+<td><a href="#load-balancing">Load Balancing</a></td>
+</tr>
+<tr>
+<td>TLS or trust behavior</td>
+<td><a href="#tls-and-trust">TLS And Trust</a></td>
+</tr>
+<tr>
+<td>resilience and protection features</td>
+<td><a href="#resilience-and-safety">Resilience And Safety</a></td>
+</tr>
+<tr>
+<td>runtime control and discovery</td>
+<td><a href="#control-plane-and-discovery">Control Plane And Discovery</a></td>
+</tr>
+<tr>
+<td>auth, policy, and platform features</td>
+<td><a href="#policy-security-and-platform-features">Policy, Security, And Platform Features</a></td>
+</tr>
+<tr>
+<td>observability and packaging</td>
+<td><a href="#observability-and-ops">Observability And Ops</a></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="runtime-foundations">Runtime Foundations</h2>
+<p>These items are not user-facing features, but they are important product foundations.</p>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
@@ -1475,7 +1518,7 @@
 <tr>
 <td>Request admission and policy evaluation</td>
 <td><code>Done</code></td>
-<td>Shared admission flow covers auth checks, scoped rate limits, brownout, overload, and rejection mapping</td>
+<td>Shared flow covers auth, scoped rate limits, quota, brownout, overload, and rejection mapping</td>
 </tr>
 <tr>
 <td>Route resolution and backend selection pipeline</td>
@@ -1530,7 +1573,7 @@
 <tr>
 <td>Public API and visibility hardening</td>
 <td><code>Done</code></td>
-<td>Canonical crate façades and reduced accidental exports across edge, config, bridge, lb, transport, and errors</td>
+<td>Canonical crate facades and reduced accidental exports across edge, config, bridge, lb, transport, and errors</td>
 </tr>
 </tbody>
 </table></div>
@@ -1823,9 +1866,9 @@
 <td>Implemented</td>
 </tr>
 <tr>
-<td>Rate limiting</td>
+<td>Rate limiting and quota</td>
 <td><code>Done</code></td>
-<td>scoped local rules plus distributed quota policy with burst/sustained contracts and Redis-backed counters</td>
+<td>Scoped local rules plus distributed quota policy with burst and sustained contracts and Redis-backed counters</td>
 </tr>
 </tbody>
 </table></div>
@@ -1871,8 +1914,8 @@
 </tr>
 <tr>
 <td>Dynamic route updates</td>
-<td><code>Done via config reload</code></td>
-<td>routing index rebuilt + swapped</td>
+<td><code>Partial</code></td>
+<td>Supported through runtime activation or reload, not through a dedicated per-route mutation API</td>
 </tr>
 <tr>
 <td>Dynamic upstream membership API</td>
@@ -1934,12 +1977,12 @@
 <tr>
 <td>External auth integration</td>
 <td><code>Done</code></td>
-<td>Async HTTP subrequest per upstream; non-blocking, fail-open/fail-closed configurable</td>
+<td>Async HTTP subrequest per upstream with fail-open or fail-closed behavior</td>
 </tr>
 <tr>
 <td>OIDC / auth gateway</td>
 <td><code>Partial</code></td>
-<td>Discovery + token introspection; no interactive login/session-cookie flows. Local signature validation is available via JWT <code>jwks_url</code></td>
+<td>Discovery and token introspection only; no interactive login or session-cookie flows. Local signature validation is available through JWT <code>jwks_url</code></td>
 </tr>
 <tr>
 <td>WAF capabilities</td>
@@ -2001,7 +2044,7 @@
 <tr>
 <td>Admin source-IP allowlisting</td>
 <td><code>Done</code></td>
-<td>CIDR gate evaluated before credential validation; TCP peer address only</td>
+<td>CIDR gate runs before credential validation; TCP peer address only</td>
 </tr>
 <tr>
 <td>OTLP tracing hooks</td>
@@ -2026,25 +2069,10 @@
 <tr>
 <td>Production runbook maturity</td>
 <td><code>Partial</code></td>
-<td>Present, but should be expanded and tightened</td>
+<td>Present, but still being tightened</td>
 </tr>
 </tbody>
 </table></div>
-<h2 id="practical-summary">Practical Summary</h2>
-<p>Spooky is strongest today as:</p>
-<ul>
-<li>an HTTP/3-first edge proxy</li>
-<li>a deterministic routing and balancing layer with scheme-driven H1/H2 upstream transport</li>
-<li>a proxy with strong resource-bound and teardown behavior</li>
-<li>a codebase with shared policy/runtime boundaries in place across request path, runtime ownership, backend lifecycle, transport, and observability</li>
-</ul>
-<p>Spooky is not yet strongest as:</p>
-<ul>
-<li>a general-purpose legacy protocol proxy</li>
-<li>a dynamic fleet-managed control-plane-driven proxy</li>
-<li>a fully featured API gateway</li>
-<li>a highly extensible filter platform</li>
-</ul>
 <h2 id="related-pages">Related Pages</h2>
 <ul>
 <li><a href="../../operations/production-readiness/">Production Readiness</a></li>
@@ -2507,10 +2535,18 @@
         
         
         
-        <a href="#refactor-foundations"
+        <a href="#quick-lookup"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#refactor-foundations');">
-            Refactor Foundations
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#quick-lookup');">
+            Quick Lookup
+        </a>
+        
+
+        
+        <a href="#runtime-foundations"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#runtime-foundations');">
+            Runtime Foundations
         </a>
         
 
@@ -2575,14 +2611,6 @@
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#observability-and-ops');">
             Observability And Ops
-        </a>
-        
-
-        
-        <a href="#practical-summary"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#practical-summary');">
-            Practical Summary
         </a>
         
 

@@ -1454,819 +1454,491 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Technical reference for diagnosing and resolving operational issues in Spooky HTTP/3 edge proxy deployments.</p>
-<h2 id="configuration-errors">Configuration Errors</h2>
-<h3 id="invalid-configuration-schema">Invalid Configuration Schema</h3>
-<p><strong>Error Messages</strong>:</p>
-<pre><code>Invalid version: found '2', supported versions are [1]
-Invalid protocol: expected 'http3', found 'http2'
-Invalid log level: debug-verbose
-Invalid load balancing type: 'weighted' for upstream 'api'
-</code></pre>
-<p><strong>Root Causes</strong>:
-- Configuration schema version mismatch
-- Unsupported protocol specification
-- Invalid log level (valid: <code>whisper</code>, <code>haunt</code>, <code>spooky</code>, <code>scream</code>, <code>poltergeist</code>, <code>silence</code>, <code>trace</code>, <code>debug</code>, <code>info</code>, <code>warn</code>, <code>error</code>, <code>off</code>)
-- Unsupported load balancing algorithm (valid: <code>random</code>, <code>round-robin</code>, <code>round_robin</code>, <code>rr</code>, <code>consistent-hash</code>, <code>consistent_hash</code>, <code>ch</code>, <code>least-connections</code>, <code>least_connections</code>, <code>lc</code>, <code>latency-aware</code>, <code>latency_aware</code>, <code>la</code>, <code>sticky-cid</code>, <code>sticky_cid</code>, <code>cid-sticky</code>, <code>cid_sticky</code>)</p>
-<p><strong>Diagnostic Commands</strong>:</p>
-<pre><code class="language-bash"># Validate YAML syntax
-python3 -c &quot;import yaml; yaml.safe_load(open('config.yaml'))&quot; 2&gt;&amp;1
-
-# Check configuration structure
-grep -E &quot;^version:|^listen:|^upstream:&quot; config.yaml
-
-# Verify log level
-grep &quot;log:&quot; -A 2 config.yaml
-
-# Check load balancing configuration
-grep &quot;load_balancing:&quot; -A 2 config.yaml
-</code></pre>
-<p><strong>Resolution</strong>:
-- Set <code>version</code> to one of the supported schema versions (currently: <code>1</code>)
-- Use <code>protocol: http3</code> for listen configuration
-- Correct log levels according to valid options
-- Update load balancing type to supported algorithms</p>
-<h3 id="listen-configuration-errors">Listen Configuration Errors</h3>
-<p><strong>Error Messages</strong>:</p>
-<pre><code>Listen address is empty
-Invalid listen port: 0 (must be between 1 and 65535)
-Invalid listen port: 70000 (must be between 1 and 65535)
-Failed to bind UDP socket
-</code></pre>
-<p><strong>Root Causes</strong>:
-- Missing or empty listen address
-- Port number outside valid range (1-65535)
-- Port already in use by another process
-- Insufficient privileges for privileged ports (&lt;1024)</p>
-<p><strong>Diagnostic Commands</strong>:</p>
-<pre><code class="language-bash"># Check port availability (UDP)
-sudo ss -ulnp | grep :443
-
-# Identify process using port
-sudo lsof -i UDP:443
-
-# Check socket permissions
-sudo setcap -v 'cap_net_bind_service=+ep' /usr/local/bin/spooky
-
-# Verify listen configuration
-grep -A 5 &quot;^listen:&quot; config.yaml
-</code></pre>
-<p><strong>Resolution</strong>:</p>
-<pre><code class="language-bash"># Grant capability for privileged port binding
-sudo setcap 'cap_net_bind_service=+ep' /usr/local/bin/spooky
-
-# Or bind to non-privileged port
-sed -i 's/port: 443/port: 8443/' config.yaml
-
-# Kill conflicting process
-sudo fuser -k 443/udp
-</code></pre>
-<h3 id="upstream-pool-configuration-errors">Upstream Pool Configuration Errors</h3>
-<p><strong>Error Messages</strong>:</p>
-<pre><code>No upstreams configured
-Upstream name is empty
-Upstream 'api' has no backends configured
-Upstream 'api' must have either 'host' or 'path_prefix' route matcher
-Route path_prefix cannot be empty for upstream 'api'
-Route path_prefix must start with '/' for upstream 'api': api/v1
-</code></pre>
-<p><strong>Root Causes</strong>:
-- Empty upstream map in configuration
-- Missing route matching criteria (no <code>host</code> or <code>path_prefix</code>)
-- Invalid path prefix format (must start with <code>/</code>)
-- Empty backend list for upstream pool</p>
-<p><strong>Diagnostic Commands</strong>:</p>
-<pre><code class="language-bash"># List configured upstreams
-grep &quot;^upstream:&quot; -A 50 config.yaml | grep -E &quot;^  [a-z]&quot;
-
-# Check route configuration
-yq '.upstream[].route' config.yaml
-
-# Validate path prefixes
-grep &quot;path_prefix:&quot; config.yaml
-</code></pre>
-<p><strong>Resolution</strong>:</p>
-<pre><code class="language-yaml"># Correct upstream configuration
-upstream:
-  api:
-    route:
-      host: &quot;api.example.com&quot;      # Host-based routing
-      path_prefix: &quot;/api&quot;          # Must start with /
-    load_balancing:
-      type: round-robin
-    backends:
-      - id: backend1
-        address: &quot;10.0.1.10:8080&quot;
-        weight: 100
-</code></pre>
-<h3 id="backend-configuration-errors">Backend Configuration Errors</h3>
-<p><strong>Error Messages</strong>:</p>
-<pre><code>Backend ID is empty in upstream 'api'
-Backend address is empty for backend 'backend1' in upstream 'api'
-Backend address '10.0.1.10' in upstream 'api' must be in host:port format
-Backend 'backend1' in upstream 'api' has invalid weight (0)
-Health check interval is invalid (0) for backend 'backend1' in upstream 'api'
-Health check timeout is invalid (0) for backend 'backend1' in upstream 'api'
-Health check failure threshold is invalid (0) for backend 'backend1' in upstream 'api'
-Health check success threshold is invalid (0) for backend 'backend1' in upstream 'api'
-Health check cooldown is invalid (0) for backend 'backend1' in upstream 'api'
-</code></pre>
-<p><strong>Root Causes</strong>:
-- Missing or malformed backend address (accepted forms: <code>host:port</code>, <code>https://host:port</code>, <code>http://host:port</code>, or bare <code>host</code> — scheme-default port is inferred when omitted)
-- Zero values for weight or health check parameters
-- Invalid health check configuration</p>
-<p><strong>Diagnostic Commands</strong>:</p>
-<pre><code class="language-bash"># Validate backend addresses
-grep &quot;address:&quot; config.yaml | grep -v &quot;:&quot;
-
-# Check health check configuration
-yq '.upstream[].backends[].health_check' config.yaml
-
-# Verify backend weights
-yq '.upstream[].backends[].weight' config.yaml
-</code></pre>
-<p><strong>Resolution</strong>:</p>
-<pre><code class="language-yaml"># Correct backend configuration
-backends:
-  - id: backend1
-    address: &quot;10.0.1.10:8080&quot;     # Must include port
-    weight: 100                    # Must be &gt; 0
-    health_check:
-      path: &quot;/health&quot;
-      interval: 5000               # Must be &gt; 0 (milliseconds)
-      timeout_ms: 2000             # Must be &gt; 0
-      failure_threshold: 3         # Must be &gt; 0
-      success_threshold: 2         # Must be &gt; 0
-      cooldown_ms: 10000           # Must be &gt; 0
-</code></pre>
-<h2 id="tls-certificate-problems">TLS Certificate Problems</h2>
-<h3 id="certificate-file-access-errors">Certificate File Access Errors</h3>
-<p><strong>Error Messages</strong>:</p>
-<pre><code>TLS certificate file does not exist: /etc/spooky/certs/server.crt
-TLS private key file does not exist: /etc/spooky/certs/server.key
-Cannot read TLS certificate file '/etc/spooky/certs/server.crt': Permission denied
-Cannot read TLS private key file '/etc/spooky/certs/server.key': Permission denied
-Failed to load certificate '/etc/spooky/certs/server.crt': No such file or directory
-Failed to load key '/etc/spooky/certs/server.key': error:02001002:system library:fopen:No such file or directory
-</code></pre>
-<p><strong>Root Causes</strong>:
-- Certificate or key file path does not exist
-- Insufficient file permissions for Spooky process
-- Invalid PEM format
-- File ownership prevents access</p>
-<p><strong>Diagnostic Commands</strong>:</p>
-<pre><code class="language-bash"># Verify file existence and permissions
-ls -la /etc/spooky/certs/server.{crt,key}
-
-# Check file ownership
-stat /etc/spooky/certs/server.crt
-
-# Test read access
-sudo -u spooky cat /etc/spooky/certs/server.crt &gt; /dev/null
-
-# Validate PEM format
-openssl x509 -in /etc/spooky/certs/server.crt -text -noout
-openssl rsa -in /etc/spooky/certs/server.key -check -noout
-</code></pre>
-<p><strong>Resolution</strong>:</p>
-<pre><code class="language-bash"># Fix file permissions
-sudo chown spooky:spooky /etc/spooky/certs/server.{crt,key}
-sudo chmod 644 /etc/spooky/certs/server.crt
-sudo chmod 600 /etc/spooky/certs/server.key
-
-# Verify certificate chain
-openssl verify -CAfile ca.crt /etc/spooky/certs/server.crt
-
-# Test certificate-key pair match
-diff &lt;(openssl x509 -in server.crt -noout -modulus | openssl md5) \
-     &lt;(openssl rsa -in server.key -noout -modulus | openssl md5)
-</code></pre>
-<h3 id="tls-handshake-failures">TLS Handshake Failures</h3>
-<p><strong>Error Messages</strong>:</p>
-<pre><code>TLS configuration error during request processing: handshake failure
-Failed to load certificate: invalid certificate format
-QUIC recv failed: TlsFail
-</code></pre>
-<p><strong>Root Causes</strong>:
-- Certificate-key mismatch
-- Expired certificate
-- Incomplete certificate chain
-- Unsupported TLS version
-- Client does not support required ALPN protocols (<code>h3</code>, <code>h3-29</code>)</p>
-<p><strong>Diagnostic Commands</strong>:</p>
-<pre><code class="language-bash"># Check certificate expiration
-openssl x509 -in server.crt -noout -dates
-
-# Verify certificate chain
-openssl s_client -connect localhost:443 -showcerts &lt; /dev/null
-
-# Check ALPN negotiation (requires curl with HTTP/3 support)
-curl --http3 -v https://localhost:443 2&gt;&amp;1 | grep -i alpn
-
-# Monitor TLS handshake packets
-sudo tcpdump -i any -n udp port 443 -X | grep -A 20 &quot;Initial&quot;
-</code></pre>
-<p><strong>Resolution</strong>:</p>
-<pre><code class="language-bash"># Regenerate certificate with proper SAN
-openssl req -new -x509 -days 365 -key server.key -out server.crt \
-  -subj &quot;/CN=example.com&quot; \
-  -addext &quot;subjectAltName=DNS:example.com,DNS:*.example.com&quot;
-
-# Ensure certificate chain is complete
-cat server.crt intermediate.crt &gt; fullchain.crt
-
-# Update configuration
-sed -i 's|cert: .*|cert: /etc/spooky/certs/fullchain.crt|' config.yaml
-</code></pre>
-<h2 id="quic-connection-issues">QUIC Connection Issues</h2>
-<h3 id="connection-id-mismatch">Connection ID Mismatch</h3>
-<p><strong>Error Messages</strong>:</p>
-<pre><code>Wrong QUIC HEADER
-Non-Initial packet for unknown connection, ignoring
-Dropping packet for unknown connection from 192.168.1.10:52341 (DCID: a3f2...)
-</code></pre>
-<p><strong>Root Causes</strong>:
-- Client using stale connection ID after server restart
-- Connection ID collision or corruption
-- NAT rebinding without proper migration support
-- Packet reordering or duplication</p>
-<p><strong>Diagnostic Commands</strong>:</p>
-<pre><code class="language-bash"># Monitor connection IDs in logs
-journalctl -u spooky -f | grep -E &quot;DCID|SCID&quot;
-
-# Check active QUIC connections
-ss -u -a | grep :443
-
-# Capture QUIC packets for analysis
-sudo tcpdump -i any -w quic.pcap udp port 443
-tshark -r quic.pcap -Y quic
-
-# Count connection errors
-journalctl -u spooky --since &quot;1 hour ago&quot; | grep -c &quot;Wrong QUIC HEADER&quot;
-</code></pre>
-<p><strong>Resolution</strong>:
-- Issue is typically transient; clients will establish new connections
-- Ensure <code>set_disable_active_migration(true)</code> is set in QUIC config
-- Check for network middleboxes modifying UDP payloads
-- Increase <code>max_idle_timeout</code> if connections drop prematurely</p>
-<h3 id="version-negotiation-failures">Version Negotiation Failures</h3>
-<p><strong>Error Messages</strong>:</p>
-<pre><code>Version negotiation failed: buffer too short
-Failed to send version negotiation: Network unreachable
-</code></pre>
-<p><strong>Root Causes</strong>:
-- Client requesting unsupported QUIC version
-- MTU constraints preventing version negotiation packet transmission
-- Network path blocking UDP packets
-- Firewall stateful inspection interfering with QUIC</p>
-<p><strong>Diagnostic Commands</strong>:</p>
-<pre><code class="language-bash"># Check supported QUIC version
-journalctl -u spooky | grep &quot;PROTOCOL_VERSION&quot;
-
-# Test MTU path
-tracepath -n -b 443 target-host
-
-# Verify UDP egress
-nc -u -v -w 1 target-host 443 &lt; /dev/null
-
-# Monitor version negotiation packets
-sudo tcpdump -i any udp port 443 -v | grep -i version
-</code></pre>
-<p><strong>Resolution</strong>:</p>
-<pre><code class="language-bash"># Configure smaller UDP payload size
-# Edit config or quiche parameters:
-# set_max_recv_udp_payload_size(1200)
-# set_max_send_udp_payload_size(1200)
-
-# Adjust firewall rules
-sudo iptables -I INPUT -p udp --dport 443 -j ACCEPT
-sudo iptables -I OUTPUT -p udp --sport 443 -j ACCEPT
-</code></pre>
-<h3 id="quic-timeout-and-idle-connections">QUIC Timeout and Idle Connections</h3>
-<p><strong>Error Messages</strong>:</p>
-<pre><code>QUIC recv failed: Done
-Connection closed, not storing
-</code></pre>
-<p><strong>Root Causes</strong>:
-- Idle timeout exceeded (default 5000ms in Spooky)
-- Network path timeout
-- Client terminated connection without proper close
-- NAT binding expired</p>
-<p><strong>Diagnostic Commands</strong>:</p>
-<pre><code class="language-bash"># Check connection lifetimes
-journalctl -u spooky | grep -E &quot;Creating new connection|Connection closed&quot; | tail -20
-
-# Monitor timeout events
-journalctl -u spooky -f | grep &quot;on_timeout&quot;
-
-# Analyze connection duration distribution
-journalctl -u spooky --since &quot;1 hour ago&quot; | \
-  grep &quot;Creating new connection&quot; | wc -l
-
-# Check NAT timeout settings (if behind NAT)
-cat /proc/sys/net/netfilter/nf_conntrack_udp_timeout
-</code></pre>
-<p><strong>Resolution</strong>:</p>
-<pre><code class="language-rust">// Adjust idle timeout in quiche configuration
-quic_config.set_max_idle_timeout(10000);  // Increase to 10 seconds
-
-// Tune UDP stream limits
-quic_config.set_initial_max_streams_bidi(200);
-quic_config.set_initial_max_streams_uni(200);
-</code></pre>
-<h2 id="backend-connectivity-failures">Backend Connectivity Failures</h2>
-<h3 id="unknown-backend-errors">Unknown Backend Errors</h3>
-<p><strong>Error Messages</strong>:</p>
-<pre><code>No route found for path: /api/users (host: Some(&quot;api.example.com&quot;))
-Upstream pool not found for: api
-unknown backend: 10.0.1.10:8080
-</code></pre>
-<p><strong>Root Causes</strong>:
-- Request path/host does not match any configured upstream route
-- Upstream pool not properly initialized
-- Backend not registered in the upstream transport pool
-- Route matching logic precedence issue</p>
-<p><strong>Diagnostic Commands</strong>:</p>
-<pre><code class="language-bash"># List configured routes
-yq '.upstream[] | {route}' config.yaml
-
-# Test route matching
-journalctl -u spooky -f | grep &quot;No route found&quot;
-
-# Verify transport pool initialization
-journalctl -u spooky --since &quot;10 minutes ago&quot; | grep -i &quot;pool&quot;
-
-# Check backend registration
-ss -t | grep :8080 | wc -l
-</code></pre>
-<p><strong>Resolution</strong>:</p>
-<pre><code class="language-yaml"># Ensure proper route specificity (longest prefix matching)
-upstream:
-  api_v2:
-    route:
-      host: &quot;api.example.com&quot;
-      path_prefix: &quot;/api/v2&quot;   # More specific
-    backends: [...]
-
-  api_v1:
-    route:
-      host: &quot;api.example.com&quot;
-      path_prefix: &quot;/api&quot;      # Less specific
-    backends: [...]
-
-  default:
-    route:
-      path_prefix: &quot;/&quot;         # Catch-all
-    backends: [...]
-</code></pre>
-<h3 id="upstream-connection-pool-errors">Upstream Connection Pool Errors</h3>
-<p><strong>Error Messages</strong>:</p>
-<pre><code>pool error: send: connection error detected: frame with invalid size
-pool error: send: connection closed
-pool error: body: stream error received: stream no longer needed
-Backend timeout
-</code></pre>
-<p><strong>Root Causes</strong>:
-- Backend closed the connection unexpectedly
-- H2 frame size violation (HTTPS backends only)
-- Backend service crashed or restarted
-- Connection pool exhaustion (&gt;64 inflight requests per backend)
-- Network timeout (2s default in Spooky)
-- Transport mismatch: backend expects HTTP/1.1 but is addressed as <code>https://</code>, or vice versa</p>
-<p><strong>Diagnostic Commands</strong>:</p>
-<pre><code class="language-bash"># Monitor upstream pool errors
-journalctl -u spooky -f | grep &quot;pool error&quot;
-
-# Verify backend scheme matches backend capability
-# For https:// backends — check H2 support:
-curl -I --http2 https://10.0.1.10:8080/
-# For http:// backends — check plain HTTP/1.1:
-curl -v http://10.0.1.10:8080/health
-
-# Test backend health endpoint
-curl -v http://10.0.1.10:8080/health
-
-# Monitor connection pool saturation
-journalctl -u spooky | grep &quot;semaphore closed&quot;
-
-# Check backend service status
-systemctl status backend-service
-</code></pre>
-<p><strong>Resolution</strong>:</p>
-<pre><code class="language-bash"># Increase backend timeout if needed
-# Edit quic_listener.rs: BACKEND_TIMEOUT = Duration::from_secs(5);
-
-# Adjust max inflight requests per backend
-# Edit quic_listener.rs: MAX_INFLIGHT_PER_BACKEND = 128;
-
-# Restart backend service
-sudo systemctl restart backend-service
-
-# Monitor backend connection states
-watch -n 1 'ss -t -a | grep :8080'
-</code></pre>
-<h3 id="backend-health-check-failures">Backend Health Check Failures</h3>
-<p><strong>Error Messages</strong>:</p>
-<pre><code>Backend 10.0.1.10:8080 became unhealthy
-Health checks disabled: no Tokio runtime available
-</code></pre>
-<p><strong>Root Causes</strong>:
-- Backend failing health check endpoint
-- Health check timeout too aggressive
-- Backend intermittently unavailable
-- Network path to backend unreliable
-- Health check threshold too sensitive</p>
-<p><strong>Diagnostic Commands</strong>:</p>
-<pre><code class="language-bash"># Monitor health transitions
-journalctl -u spooky -f | grep -E &quot;became healthy|became unhealthy&quot;
-
-# Manual health check
-curl -w &quot;@-&quot; -o /dev/null -s http://10.0.1.10:8080/health &lt;&lt;&lt; \
-  'time_total: %{time_total}s\nhttp_code: %{http_code}\n'
-
-# Check health check configuration
-yq '.upstream[].backends[].health_check' config.yaml
-
-# Monitor backend response times
-httping -c 10 http://10.0.1.10:8080/health
-</code></pre>
-<p><strong>Resolution</strong>:</p>
-<pre><code class="language-yaml"># Adjust health check parameters for stability
-backends:
-  - id: backend1
-    address: &quot;10.0.1.10:8080&quot;
-    health_check:
-      path: &quot;/health&quot;
-      interval: 10000           # Increase interval
-      timeout_ms: 5000          # Increase timeout
-      failure_threshold: 5      # Require more failures
-      success_threshold: 2      # Require consecutive successes
-      cooldown_ms: 30000        # Longer cooldown
-</code></pre>
-<h2 id="load-balancing-issues">Load Balancing Issues</h2>
-<h3 id="no-healthy-backends-available">No Healthy Backends Available</h3>
-<p><strong>Error Messages</strong>:</p>
-<pre><code>no healthy servers
-no servers configured for upstream
-</code></pre>
-<p><strong>Root Causes</strong>:
-- All backends failed health checks
-- Empty backend list for upstream
-- Backends in cooldown period after failures
-- Circuit breaker triggered</p>
-<p><strong>Diagnostic Commands</strong>:</p>
-<pre><code class="language-bash"># Check backend health status
-journalctl -u spooky | grep -E &quot;became healthy|became unhealthy&quot; | tail -20
-
-# Monitor 503 Service Unavailable responses
-journalctl -u spooky | grep &quot;status 503&quot;
-
-# Count healthy vs total backends per upstream
-yq '.upstream[].backends | length' config.yaml
-
-# Check recent health transitions
-journalctl -u spooky --since &quot;5 minutes ago&quot; | grep &quot;Backend&quot;
-</code></pre>
-<p><strong>Resolution</strong>:</p>
-<pre><code class="language-bash"># Verify backend services are running
-for backend in 10.0.1.10:8080 10.0.1.11:8080; do
-  echo -n &quot;$backend: &quot;
-  curl -s -o /dev/null -w &quot;%{http_code}&quot; http://$backend/health || echo &quot;FAIL&quot;
-  echo
-done
-
-# Temporarily disable health checks for debugging
-# Set failure_threshold very high in config.yaml
-
-# Restart Spooky to reset health state
-sudo systemctl restart spooky
-</code></pre>
-<h3 id="uneven-load-distribution">Uneven Load Distribution</h3>
-<p><strong>Symptoms</strong>:
-- One backend receives disproportionate traffic
-- Round-robin not cycling through backends
-- Consistent hash not distributing evenly</p>
-<p><strong>Root Causes</strong>:
-- Backend weight misconfiguration
-- Inconsistent hash key selection (always same key)
-- Some backends marked unhealthy
-- Hash ring replica count too low for consistent-hash</p>
-<p><strong>Diagnostic Commands</strong>:</p>
-<pre><code class="language-bash"># Analyze backend selection distribution
-journalctl -u spooky | grep &quot;Selected backend&quot; | \
-  awk '{print $(NF-2)}' | sort | uniq -c
-
-# Check backend weights
-yq '.upstream[].backends[] | &quot;\(.id): \(.weight)&quot;' config.yaml
-
-# Monitor load balancing algorithm
-journalctl -u spooky | grep &quot;via round-robin\|via consistent-hash\|via random&quot;
-
-# Check hash key consistency
-journalctl -u spooky | grep &quot;request_hash_key&quot;
-</code></pre>
-<p><strong>Resolution</strong>:</p>
-<pre><code class="language-yaml"># Ensure proper weight distribution
-backends:
-  - id: backend1
-    address: &quot;10.0.1.10:8080&quot;
-    weight: 100
-  - id: backend2
-    address: &quot;10.0.1.11:8080&quot;
-    weight: 100    # Equal weight for even distribution
-
-# For consistent-hash, increase replica count
-# Edit lb/src/lib.rs: DEFAULT_REPLICAS = 128;
-</code></pre>
-<h2 id="performance-problems">Performance Problems</h2>
-<h3 id="high-latency">High Latency</h3>
-<p><strong>Symptoms</strong>:
-- <code>latency_ms</code> in logs consistently &gt;1000ms
-- Slow response times reported by clients
-- Backend timeout errors (503 status)</p>
-<p><strong>Root Causes</strong>:
-- Backend processing delay
-- Network congestion
-- Connection pool saturation
-- CPU saturation on Spooky host
-- Inefficient load balancing</p>
-<p><strong>Diagnostic Commands</strong>:</p>
-<pre><code class="language-bash"># Analyze latency distribution
-journalctl -u spooky --since &quot;1 hour ago&quot; | \
-  grep &quot;latency_ms&quot; | \
-  awk '{print $(NF)}' | \
-  sort -n | \
-  awk '{sum+=$1; arr[NR]=$1} END {
-    print &quot;min:&quot;, arr[1];
-    print &quot;p50:&quot;, arr[int(NR*0.5)];
-    print &quot;p95:&quot;, arr[int(NR*0.95)];
-    print &quot;p99:&quot;, arr[int(NR*0.99)];
-    print &quot;max:&quot;, arr[NR];
-    print &quot;avg:&quot;, sum/NR;
-  }'
-
-# Monitor CPU usage
-top -b -n 1 | grep spooky
-
-# Check connection pool contention
-journalctl -u spooky | grep &quot;semaphore&quot; | tail -20
-
-# Measure backend response time directly
-time curl http://10.0.1.10:8080/api/test
-</code></pre>
-<p><strong>Resolution</strong>:</p>
-<pre><code class="language-bash"># Increase backend timeout if backends are slow but reliable
-# Edit BACKEND_TIMEOUT in quic_listener.rs
-
-# Scale backend capacity
-# Add more backends to upstream pool
-
-# Increase connection pool size
-# Edit MAX_INFLIGHT_PER_BACKEND in quic_listener.rs
-
-# Optimize backend application
-# Profile and optimize backend code
-</code></pre>
-<h3 id="memory-growth">Memory Growth</h3>
-<p><strong>Symptoms</strong>:
-- RSS memory continuously increasing
-- Out of memory errors
-- System swapping</p>
-<p><strong>Root Causes</strong>:
-- Connection leak (connections not properly closed)
-- Request/response body buffering
-- Metrics accumulation
-- QUIC connection state not cleaned up</p>
-<p><strong>Diagnostic Commands</strong>:</p>
-<pre><code class="language-bash"># Monitor memory usage over time
-while true; do
-  ps -p $(pgrep spooky) -o pid,vsz,rss,cmd | tail -1
-  sleep 10
-done
-
-# Check connection count
-ss -u | grep -c :443
-
-# Analyze memory map
-sudo pmap -x $(pgrep spooky)
-
-# Check for file descriptor leaks
-ls -l /proc/$(pgrep spooky)/fd | wc -l
-</code></pre>
-<p><strong>Resolution</strong>:</p>
-<pre><code class="language-bash"># Restart Spooky periodically (temporary mitigation)
-sudo systemctl restart spooky
-
-# Monitor connection cleanup
-journalctl -u spooky -f | grep &quot;Connection closed&quot;
-
-# Reduce max idle timeout
-# Edit quic_config.set_max_idle_timeout(3000);
-
-# Limit connection count
-# Implement connection limit in accept logic
-</code></pre>
-<h3 id="udp-packet-loss">UDP Packet Loss</h3>
-<p><strong>Symptoms</strong>:
-- Retransmissions in QUIC logs
-- Client timeout errors
-- Degraded throughput</p>
-<p><strong>Root Causes</strong>:
-- Network congestion
-- UDP buffer overflow (receive buffer too small)
-- Firewall dropping packets
-- MTU fragmentation</p>
-<p><strong>Diagnostic Commands</strong>:</p>
-<pre><code class="language-bash"># Check UDP buffer sizes
-sysctl net.core.rmem_max net.core.rmem_default
-sysctl net.core.wmem_max net.core.wmem_default
-
-# Monitor UDP statistics
-netstat -su | grep -E &quot;packet receive errors|receive buffer errors&quot;
-
-# Capture packet loss
-sudo tcpdump -i any -c 1000 udp port 443 -w capture.pcap
-tshark -r capture.pcap -q -z io,stat,1
-
-# Check interface statistics
-ip -s link show eth0
-</code></pre>
-<p><strong>Resolution</strong>:</p>
-<pre><code class="language-bash"># Increase UDP buffer sizes
-sudo sysctl -w net.core.rmem_max=26214400
-sudo sysctl -w net.core.wmem_max=26214400
-sudo sysctl -w net.core.rmem_default=26214400
-sudo sysctl -w net.core.wmem_default=26214400
-
-# Make permanent
-echo &quot;net.core.rmem_max=26214400&quot; | sudo tee -a /etc/sysctl.conf
-echo &quot;net.core.wmem_max=26214400&quot; | sudo tee -a /etc/sysctl.conf
-sudo sysctl -p
-
-# Reduce UDP payload size
-# Edit quic_config.set_max_recv_udp_payload_size(1350);
-</code></pre>
-<h2 id="debugging-techniques">Debugging Techniques</h2>
-<h3 id="enable-debug-logging">Enable Debug Logging</h3>
-<pre><code class="language-yaml"># config.yaml
-log:
-  level: haunt  # debug level
-</code></pre>
-<pre><code class="language-bash"># Restart to apply
-sudo systemctl restart spooky
-
-# Monitor debug logs
-journalctl -u spooky -f --output=cat
-</code></pre>
-<h3 id="analyze-request-flow">Analyze Request Flow</h3>
-<pre><code class="language-bash"># Trace specific request path
-journalctl -u spooky | grep -E &quot;HTTP/3 request|Selected backend|Upstream.*status&quot; | \
-  grep &quot;/api/users&quot;
-
-# Monitor complete request lifecycle
-journalctl -u spooky -f | \
-  grep -E &quot;Creating new connection|HTTP/3 request|Selected backend|status.*latency_ms|Connection closed&quot;
-</code></pre>
-<h3 id="packet-capture-analysis">Packet Capture Analysis</h3>
-<pre><code class="language-bash"># Capture QUIC traffic
-sudo tcpdump -i any -w spooky.pcap udp port 443
-
-# Analyze with tshark
-tshark -r spooky.pcap -Y quic -T fields \
-  -e frame.time -e ip.src -e ip.dst -e quic.header_form
-
-# Decrypt QUIC (requires SSLKEYLOGFILE)
-SSLKEYLOGFILE=/tmp/keys.log curl --http3 https://localhost:443/
-tshark -r spooky.pcap -o tls.keylog_file:/tmp/keys.log -Y http3
-</code></pre>
-<h3 id="performance-profiling">Performance Profiling</h3>
-<pre><code class="language-bash"># CPU profiling with perf
-sudo perf record -F 99 -p $(pgrep spooky) -g -- sleep 30
-sudo perf report --stdio | head -50
-
-# Flamegraph generation
-sudo perf record -F 99 -p $(pgrep spooky) -g -- sleep 30
-sudo perf script | stackcollapse-perf.pl | flamegraph.pl &gt; flamegraph.svg
-
-# Memory profiling (if built with jemalloc)
-export MALLOC_CONF=prof:true,prof_prefix:/tmp/jeprof
-sudo systemctl restart spooky
-# Send traffic, then analyze with jeprof
-</code></pre>
-<h2 id="common-error-reference">Common Error Reference</h2>
+    <p>Use this page when Spooky is running but something is wrong in startup, traffic handling, backend behavior, TLS, the control plane, or observability.</p>
+<p>This is an operator guide, not a source-code debugging guide. Each section starts from a production symptom and gives the fastest path to confirm the cause and fix it.</p>
+<h2 id="start-here">Start Here</h2>
+<p>Use the same triage order for most incidents:</p>
+<ol>
+<li>check <code>GET /health</code> and <code>GET /ready</code></li>
+<li>inspect <code>GET /admin/runtime</code> for active generation, backend health, quota backend health, and watchdog state</li>
+<li>inspect <code>GET /metrics</code> for trend and rate</li>
+<li>inspect runtime logs and control-plane audit events for the request, actor, or generation involved</li>
+</ol>
+<p>Canonical references for the checks above:</p>
+<ul>
+<li>exact admin endpoints and curl flows: <a href="../../reference/control-api-reference/">Control API Reference</a></li>
+<li>exact metric names and labels: <a href="../../reference/metrics-reference/">Metrics Reference</a></li>
+<li>dashboard and alert interpretation: <a href="../../operations/observability-bundle/">Observability Operator Bundle</a></li>
+<li>rollout, drain, and rollback workflow: <a href="../../operations/runbook/">Runbook</a> and <a href="../../operations/reload-and-drain/">Reload and Drain</a></li>
+</ul>
+<h2 id="symptom-index">Symptom Index</h2>
 <div class="table-wrapper"><table>
 <thead>
 <tr>
-<th>Error Message</th>
-<th>HTTP Status</th>
-<th>Cause</th>
-<th>Resolution</th>
+<th>Symptom</th>
+<th>First checks</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>invalid request</code></td>
-<td>400</td>
-<td>Malformed HTTP/3 headers</td>
-<td>Check client request format</td>
+<td>process starts but never becomes ready</td>
+<td><code>/health</code>, <code>/ready</code>, startup logs, <code>/admin/runtime</code></td>
 </tr>
 <tr>
-<td><code>no servers configured for upstream</code></td>
-<td>503</td>
-<td>Empty backend list</td>
-<td>Add backends to upstream config</td>
+<td>requests reach Spooky but do not reach the expected upstream</td>
+<td>route config, <code>/admin/runtime</code>, request logs, upstream/backend request metrics</td>
 </tr>
 <tr>
-<td><code>no healthy servers</code></td>
-<td>503</td>
-<td>All backends unhealthy</td>
-<td>Check backend health, adjust thresholds</td>
+<td>clients receive <code>429</code> or other contract-style denials</td>
+<td>quota metrics, scoped rate-limit metrics, policy config in <code>/admin/runtime</code></td>
 </tr>
 <tr>
-<td><code>invalid server</code></td>
-<td>503</td>
-<td>Backend index out of bounds</td>
-<td>Configuration reload race condition</td>
+<td>clients receive <code>503</code> during pressure</td>
+<td>overload metrics, brownout state, backend timeout pressure, watchdog state</td>
 </tr>
 <tr>
-<td><code>upstream error</code></td>
-<td>502</td>
-<td>Backend connection failed</td>
-<td>Verify backend connectivity</td>
+<td>backend failures or timeouts are rising</td>
+<td>backend metrics, active health results, retry metrics, backend inventory in <code>/admin/runtime</code></td>
 </tr>
 <tr>
-<td><code>upstream timeout</code></td>
-<td>503</td>
-<td>Backend exceeded 2s timeout</td>
-<td>Increase BACKEND_TIMEOUT or optimize backend</td>
+<td>all backends look unhealthy</td>
+<td>health-check config, backend reachability, backend health summary, passive failure metrics</td>
 </tr>
 <tr>
-<td><code>internal server error</code></td>
-<td>500</td>
-<td>TLS configuration error</td>
-<td>Check certificate/key files</td>
+<td>TLS handshakes are failing</td>
+<td>TLS metrics, certificate state, listener config, client handshake logs</td>
 </tr>
 <tr>
-<td><code>Wrong QUIC HEADER</code></td>
-<td>(dropped)</td>
-<td>Malformed QUIC packet</td>
-<td>Check for network corruption</td>
+<td>control API calls fail or runtime changes do not apply</td>
+<td>control-plane auth, audit events, runtime history, activation metrics</td>
 </tr>
 <tr>
-<td><code>No route found for path</code></td>
-<td>(internal)</td>
-<td>No matching upstream route</td>
-<td>Add route configuration</td>
-</tr>
-<tr>
-<td><code>Upstream pool not found</code></td>
-<td>(internal)</td>
-<td>Pool initialization failure</td>
-<td>Check logs for startup errors</td>
+<td>Grafana or Prometheus shows missing or empty data</td>
+<td><code>/metrics</code>, scrape path, target state, dashboard queries, traffic generation</td>
 </tr>
 </tbody>
 </table></div>
-<h2 id="support-and-escalation">Support and Escalation</h2>
-<p>When reporting issues, include:</p>
-<pre><code class="language-bash"># 1. Version information
-spooky --version
-
-# 2. Configuration (sanitized)
-yq eval 'del(.listen.tls.key, .listen.tls.cert)' config.yaml
-
-# 3. System information
-uname -a
-cat /etc/os-release
-
-# 4. Error logs (last 100 lines)
-journalctl -u spooky --no-pager -n 100 --since &quot;1 hour ago&quot;
-
-# 5. Resource utilization
-ps aux | grep spooky
-ss -u | grep -c :443
-free -h
-
-# 6. Network diagnostics
-ss -ulnp | grep spooky
-sudo iptables -L -n -v | grep 443
+<h2 id="process-starts-but-never-becomes-ready">Process Starts but Never Becomes Ready</h2>
+<h3 id="symptom">Symptom</h3>
+<ul>
+<li>the process is up, but <code>GET /ready</code> does not return ready</li>
+<li>the control plane reports degraded startup state</li>
+<li>listeners are not accepting traffic after boot</li>
+</ul>
+<h3 id="likely-causes">Likely Causes</h3>
+<ul>
+<li>invalid or incomplete configuration</li>
+<li>listener bind failure</li>
+<li>TLS file or certificate loading failure</li>
+<li>runtime generation could not activate cleanly</li>
+<li>required control-plane service failed during startup</li>
+</ul>
+<h3 id="verification-steps">Verification Steps</h3>
+<ol>
+<li>check <code>GET /health</code> and <code>GET /ready</code></li>
+<li>inspect startup logs for configuration, bind, TLS, or runtime-activation failures</li>
+<li>inspect <code>GET /admin/runtime</code> for:</li>
+<li><code>current_generation</code></li>
+<li>backend health summary</li>
+<li>quota backend health summary</li>
+<li>watchdog state</li>
+<li>inspect <code>GET /admin/runtime/history</code> for the most recent activation or rollback result</li>
+<li>if a staged change was just applied, run <code>POST /admin/runtime/validate</code> or <code>POST /admin/runtime/preview</code> again with the same candidate</li>
+</ol>
+<h3 id="fix-steps">Fix Steps</h3>
+<ol>
+<li>correct the invalid config field, missing file path, or bind conflict</li>
+<li>validate the candidate config before activating it</li>
+<li>confirm certificate and key files are readable by the Spooky process</li>
+<li>activate the corrected generation or roll back to the last healthy generation</li>
+<li>confirm <code>/ready</code> becomes healthy before restoring traffic</li>
+</ol>
+<h3 id="relevant-logs-metrics-and-endpoints">Relevant Logs, Metrics, and Endpoints</h3>
+<ul>
+<li>endpoints: <code>/health</code>, <code>/ready</code>, <code>/admin/runtime</code>, <code>/admin/runtime/history</code></li>
+<li>metrics: <code>spooky_runtime_activation_total</code>, <code>spooky_runtime_rejections_total</code>, <code>spooky_runtime_active_generation</code>, <code>spooky_runtime_history_depth</code></li>
+<li>logs: startup logs, bind failures, TLS load failures, runtime activation failures</li>
+<li>audit: validate, preview, activate, rollback attempts and outcomes</li>
+</ul>
+<h2 id="requests-reach-spooky-but-not-the-expected-upstream">Requests Reach Spooky but Not the Expected Upstream</h2>
+<h3 id="symptom_1">Symptom</h3>
+<ul>
+<li>traffic reaches the listener, but the selected route or upstream is not the one you expected</li>
+<li>clients receive failures that point to missing routing or backend selection</li>
+<li>one upstream shows no traffic even though clients are sending requests</li>
+</ul>
+<h3 id="likely-causes_1">Likely Causes</h3>
+<ul>
+<li>route matchers do not match the request host, path, or method as intended</li>
+<li>a more specific or earlier route is taking precedence</li>
+<li>the upstream exists in config, but the active generation is not the one you expect</li>
+<li>the upstream has no usable backends</li>
+</ul>
+<h3 id="verification-steps_1">Verification Steps</h3>
+<ol>
+<li>inspect the request shape actually sent by the client:</li>
+<li>host</li>
+<li>path</li>
+<li>method</li>
+<li>inspect <code>GET /admin/runtime</code> and confirm the active generation contains the expected route and upstream</li>
+<li>inspect <code>GET /admin/runtime/history</code> if a recent activation may have changed route precedence</li>
+<li>inspect request logs for route resolution, selected upstream, and selected backend</li>
+<li>inspect:</li>
+<li><code>spooky_upstream_requests_total</code></li>
+<li><code>spooky_backend_requests_total</code></li>
+<li><code>spooky_policy_denied</code></li>
+</ol>
+<h3 id="fix-steps_1">Fix Steps</h3>
+<ol>
+<li>make the route matcher explicit and unambiguous</li>
+<li>ensure the intended route is more specific than fallback routes</li>
+<li>activate the corrected generation</li>
+<li>verify the expected upstream starts receiving request volume</li>
+</ol>
+<h3 id="relevant-logs-metrics-and-endpoints_1">Relevant Logs, Metrics, and Endpoints</h3>
+<ul>
+<li>endpoints: <code>/admin/runtime</code>, <code>/admin/runtime/history</code></li>
+<li>metrics: <code>spooky_upstream_requests_total</code>, <code>spooky_backend_requests_total</code>, <code>spooky_route_latency_ms_p50</code>, <code>spooky_route_latency_ms_p95</code>, <code>spooky_route_latency_ms_p99</code></li>
+<li>logs: route-resolution logs, selected upstream/backend logs, policy-denial logs</li>
+</ul>
+<h2 id="clients-receive-429-or-other-contract-style-denials">Clients Receive <code>429</code> or Other Contract-Style Denials</h2>
+<h3 id="symptom_2">Symptom</h3>
+<ul>
+<li>clients receive contract-style rejections during otherwise healthy backend conditions</li>
+<li>denial volume rises without a matching rise in overload shedding</li>
+<li>operators need to know whether the cause is scoped rate limiting or quota</li>
+</ul>
+<h3 id="likely-causes_2">Likely Causes</h3>
+<ul>
+<li>scoped request rate limits are configured and firing</li>
+<li>quota policy burst or sustained windows are exhausted</li>
+<li>quota backend is degraded and the configured failure policy is affecting decisions</li>
+<li>a selector is matching a broader set of traffic than intended</li>
+</ul>
+<h3 id="verification-steps_2">Verification Steps</h3>
+<ol>
+<li>inspect:</li>
+<li><code>spooky_request_rate_limited</code></li>
+<li><code>spooky_quota_policy_outcomes_total</code></li>
+<li><code>spooky_quota_backend_health_total</code></li>
+<li>separate the decision types:</li>
+<li>scoped rate limiting uses <code>spooky_request_rate_limited</code></li>
+<li>quota decisions use <code>spooky_quota_policy_outcomes_total</code></li>
+<li>overload uses <code>spooky_overload_shed_by_reason_total</code></li>
+<li>inspect <code>GET /admin/runtime</code> for configured quota policies, backend mode, and quota backend health summary</li>
+<li>inspect request logs for matched policy, selector dimensions, decision, and reason</li>
+<li>confirm whether the denial reason is expected for the caller:</li>
+<li>route</li>
+<li>tenant</li>
+<li>token</li>
+<li>client</li>
+</ol>
+<h3 id="fix-steps_2">Fix Steps</h3>
+<ol>
+<li>adjust the policy scope if the selector is too broad</li>
+<li>adjust burst or sustained limits if the contract is too small for the intended traffic pattern</li>
+<li>correct caller identity extraction if the wrong tenant, token, or client key is being used</li>
+<li>restore quota backend availability if the issue is backend degradation</li>
+<li>keep quota and overload actions separate in analysis and remediation</li>
+</ol>
+<h3 id="relevant-logs-metrics-and-endpoints_2">Relevant Logs, Metrics, and Endpoints</h3>
+<ul>
+<li>endpoints: <code>/admin/runtime</code></li>
+<li>metrics: <code>spooky_request_rate_limited</code>, <code>spooky_quota_policy_outcomes_total</code>, <code>spooky_quota_backend_health_total</code></li>
+<li>logs: admission logs with matched quota policy, decision, deny reason, selector dimensions, backend mode</li>
+</ul>
+<h2 id="clients-receive-503-during-pressure">Clients Receive <code>503</code> During Pressure</h2>
+<h3 id="symptom_3">Symptom</h3>
+<ul>
+<li><code>503</code> responses rise during load or backend stress</li>
+<li>dashboard panels show overload shedding or brownout activity</li>
+<li>operators need to confirm whether the failure is overload protection or backend failure</li>
+</ul>
+<h3 id="likely-causes_3">Likely Causes</h3>
+<ul>
+<li>adaptive admission is shedding requests</li>
+<li>circuit-open protection is rejecting traffic</li>
+<li>backend timeout pressure is forcing overload controls</li>
+<li>brownout mode is active because the system is protecting itself</li>
+</ul>
+<h3 id="verification-steps_3">Verification Steps</h3>
+<ol>
+<li>inspect:</li>
+<li><code>spooky_overload_shed</code></li>
+<li><code>spooky_overload_shed_by_reason_total</code></li>
+<li><code>spooky_brownout_active</code></li>
+<li><code>spooky_backend_timeouts</code></li>
+<li><code>spooky_circuit_breaker_rejected_total</code></li>
+<li>inspect <code>GET /admin/runtime</code> for current backend and watchdog summaries</li>
+<li>confirm whether <code>503</code> is paired with rising backend timeout and error pressure</li>
+<li>inspect logs for overload reason, circuit-open decisions, and adaptive admission behavior</li>
+<li>compare with quota metrics to confirm this is not a contract failure being misread as overload</li>
+</ol>
+<h3 id="fix-steps_3">Fix Steps</h3>
+<ol>
+<li>reduce backend latency or error pressure first</li>
+<li>restore unhealthy backends before increasing admitted load</li>
+<li>scale backend capacity or reduce concurrency pressure upstream</li>
+<li>review overload thresholds only after verifying the backend path is healthy</li>
+<li>confirm brownout clears after the pressure event ends</li>
+</ol>
+<h3 id="relevant-logs-metrics-and-endpoints_3">Relevant Logs, Metrics, and Endpoints</h3>
+<ul>
+<li>endpoints: <code>/admin/runtime</code></li>
+<li>metrics: <code>spooky_overload_shed</code>, <code>spooky_overload_shed_by_reason_total</code>, <code>spooky_brownout_active</code>, <code>spooky_circuit_breaker_rejected_total</code>, <code>spooky_backend_timeouts</code>, <code>spooky_backend_errors</code></li>
+<li>logs: overload decisions, brownout transitions, circuit-open rejects, backend timeout spikes</li>
+</ul>
+<h2 id="backend-failures-or-timeouts-are-rising">Backend Failures or Timeouts Are Rising</h2>
+<h3 id="symptom_4">Symptom</h3>
+<ul>
+<li>requests fail with timeout, transport, or backend-error outcomes</li>
+<li>retries or hedges increase</li>
+<li>one upstream or backend is clearly worse than the rest</li>
+</ul>
+<h3 id="likely-causes_4">Likely Causes</h3>
+<ul>
+<li>backend application latency is rising</li>
+<li>backend transport or TLS failures are occurring</li>
+<li>a bad deployment has made one backend unhealthy</li>
+<li>retries are being consumed by repeated timeout or transport failures</li>
+<li>DNS or address rotation changed the backend set</li>
+</ul>
+<h3 id="verification-steps_4">Verification Steps</h3>
+<ol>
+<li>inspect:</li>
+<li><code>spooky_backend_timeouts</code></li>
+<li><code>spooky_backend_errors</code></li>
+<li><code>spooky_backend_requests_total</code></li>
+<li><code>spooky_upstream_requests_total</code></li>
+<li><code>spooky_retry_attempts_total</code></li>
+<li><code>spooky_retry_denied_total</code></li>
+<li><code>spooky_hedge_triggered_total</code></li>
+<li>inspect passive health reasons in <code>spooky_health_failures_total</code></li>
+<li>inspect DNS and rotation metrics if failures started after a backend-address change:</li>
+<li><code>spooky_backend_dns_refresh_success_total</code></li>
+<li><code>spooky_backend_dns_refresh_failure_total</code></li>
+<li><code>spooky_backend_dns_address_set_changes_total</code></li>
+<li><code>spooky_backend_client_rotations_total</code></li>
+<li>inspect <code>GET /admin/runtime</code> for backend health summary and backend inventory</li>
+<li>compare backend-specific failures instead of looking only at total request failure rate</li>
+</ol>
+<h3 id="fix-steps_4">Fix Steps</h3>
+<ol>
+<li>remove or drain the failing backend if one backend is responsible for most failures</li>
+<li>fix backend latency or transport health before increasing retry aggressiveness</li>
+<li>correct DNS or service-discovery issues if the backend set changed unexpectedly</li>
+<li>verify upstream TLS settings if failures are isolated to secure backends</li>
+<li>confirm success and latency normalize after the backend recovers</li>
+</ol>
+<h3 id="relevant-logs-metrics-and-endpoints_4">Relevant Logs, Metrics, and Endpoints</h3>
+<ul>
+<li>endpoints: <code>/admin/runtime</code></li>
+<li>metrics: <code>spooky_backend_timeouts</code>, <code>spooky_backend_errors</code>, <code>spooky_backend_requests_total</code>, <code>spooky_upstream_requests_total</code>, <code>spooky_retry_attempts_total</code>, <code>spooky_retry_denied_total</code>, <code>spooky_hedge_triggered_total</code>, <code>spooky_hedge_won_total</code>, <code>spooky_hedge_wasted_total</code>, <code>spooky_health_failures_total</code></li>
+<li>logs: backend transport failures, timeout errors, retry reasons, hedge activity, DNS refresh and rotation logs</li>
+</ul>
+<h2 id="all-backends-look-unhealthy">All Backends Look Unhealthy</h2>
+<h3 id="symptom_5">Symptom</h3>
+<ul>
+<li>one or more upstreams have no healthy backends</li>
+<li>traffic fails even though the listener is healthy</li>
+<li>health checks and passive health signals both show sustained failures</li>
+</ul>
+<h3 id="likely-causes_5">Likely Causes</h3>
+<ul>
+<li>active health checks are failing</li>
+<li>backend health endpoint is wrong or too strict</li>
+<li>timeout thresholds are too aggressive for the workload</li>
+<li>the backend application is down or unreachable</li>
+<li>all backends entered failure or cooldown state together</li>
+</ul>
+<h3 id="verification-steps_5">Verification Steps</h3>
+<ol>
+<li>inspect <code>GET /admin/runtime</code> for backend health summary</li>
+<li>inspect:</li>
+<li><code>spooky_health_checks_total</code></li>
+<li><code>spooky_health_checks_success</code></li>
+<li><code>spooky_health_checks_failure</code></li>
+<li><code>spooky_health_failures_total</code></li>
+<li>confirm the configured backend health endpoint and timeout match the real backend behavior</li>
+<li>test the backend health endpoint directly from the same network where Spooky runs</li>
+<li>inspect logs for health transitions and repeated passive-failure reasons</li>
+</ol>
+<h3 id="fix-steps_5">Fix Steps</h3>
+<ol>
+<li>restore backend process availability or network reachability</li>
+<li>correct health endpoint path, port, TLS mode, or timeout settings</li>
+<li>make thresholds less sensitive only if the backend is healthy but noisy</li>
+<li>reactivate traffic gradually and confirm healthy backend count recovers</li>
+</ol>
+<h3 id="relevant-logs-metrics-and-endpoints_5">Relevant Logs, Metrics, and Endpoints</h3>
+<ul>
+<li>endpoints: <code>/admin/runtime</code></li>
+<li>metrics: <code>spooky_health_checks_total</code>, <code>spooky_health_checks_success</code>, <code>spooky_health_checks_failure</code>, <code>spooky_health_failures_total</code></li>
+<li>logs: backend health transitions, health-check timeouts, passive health failures</li>
+</ul>
+<h2 id="tls-handshakes-are-failing">TLS Handshakes Are Failing</h2>
+<h3 id="symptom_6">Symptom</h3>
+<ul>
+<li>clients cannot establish downstream TLS or QUIC sessions</li>
+<li>upstream secure backends fail during TLS connection setup</li>
+<li>certificate panels show abnormal expiry or selection behavior</li>
+</ul>
+<h3 id="likely-causes_6">Likely Causes</h3>
+<ul>
+<li>expired, missing, or unreadable certificates</li>
+<li>server name or certificate selection mismatch</li>
+<li>unsupported protocol or ALPN mismatch</li>
+<li>upstream TLS verification or handshake failure</li>
+<li>clients are speaking plain HTTP to a TLS listener</li>
+</ul>
+<h3 id="verification-steps_6">Verification Steps</h3>
+<ol>
+<li>inspect downstream TLS metrics:</li>
+<li><code>spooky_downstream_tls_handshake_success_total</code></li>
+<li><code>spooky_downstream_tls_handshake_failure_total</code></li>
+<li><code>spooky_downstream_tls_certificate_selection_total</code></li>
+<li><code>spooky_downstream_tls_alpn_total</code></li>
+<li><code>spooky_downstream_tls_certificate_days_remaining</code></li>
+<li>inspect upstream TLS metrics:</li>
+<li><code>spooky_upstream_tls_failure_total</code></li>
+<li>inspect listener and backend TLS configuration in the active runtime</li>
+<li>inspect logs for handshake-failure reason, certificate-selection result, and SNI context</li>
+<li>verify certificate expiration and client compatibility outside the data path if needed</li>
+</ol>
+<h3 id="fix-steps_6">Fix Steps</h3>
+<ol>
+<li>replace expired or invalid certificates</li>
+<li>correct listener certificate selection or server-name configuration</li>
+<li>confirm clients are using the expected protocol and ALPN</li>
+<li>correct upstream CA, hostname, or TLS settings for secure backends</li>
+<li>verify handshake failures return to baseline after the fix</li>
+</ol>
+<h3 id="relevant-logs-metrics-and-endpoints_6">Relevant Logs, Metrics, and Endpoints</h3>
+<ul>
+<li>endpoints: <code>/admin/runtime</code></li>
+<li>metrics: <code>spooky_downstream_tls_handshake_success_total</code>, <code>spooky_downstream_tls_handshake_failure_total</code>, <code>spooky_downstream_tls_certificate_selection_total</code>, <code>spooky_downstream_tls_alpn_total</code>, <code>spooky_downstream_tls_certificate_not_after_seconds</code>, <code>spooky_downstream_tls_certificate_days_remaining</code>, <code>spooky_upstream_tls_failure_total</code></li>
+<li>logs: downstream handshake failures, certificate-selection anomalies, upstream TLS failure logs</li>
+</ul>
+<h2 id="control-api-calls-fail-or-runtime-changes-do-not-apply">Control API Calls Fail or Runtime Changes Do Not Apply</h2>
+<h3 id="symptom_7">Symptom</h3>
+<ul>
+<li>control API requests return <code>401</code>, <code>403</code>, <code>404</code>, or handshake failure</li>
+<li>validate, preview, activate, rollback, reload, or restart actions fail</li>
+<li>operators are unsure whether the runtime changed or not</li>
+</ul>
+<h3 id="likely-causes_7">Likely Causes</h3>
+<ul>
+<li>wrong control API protocol or path</li>
+<li>missing or invalid bearer token</li>
+<li>authenticated caller does not have the required role</li>
+<li>control API mTLS is required and the client certificate is missing or invalid</li>
+<li>the candidate config is incompatible with the active runtime</li>
+<li>rollback target is not available in retained history</li>
+</ul>
+<h3 id="verification-steps_7">Verification Steps</h3>
+<ol>
+<li>confirm the control API is called with HTTP/1.1 over TLS</li>
+<li>confirm the request is using the correct path and admin credentials</li>
+<li>inspect <code>GET /admin/runtime</code> and <code>GET /admin/runtime/history</code></li>
+<li>inspect:</li>
+<li><code>spooky_runtime_validation_attempts_total</code></li>
+<li><code>spooky_runtime_preview_attempts_total</code></li>
+<li><code>spooky_runtime_activation_total</code></li>
+<li><code>spooky_runtime_rollback_total</code></li>
+<li><code>spooky_runtime_rejections_total</code></li>
+<li><code>spooky_control_api_connection_limit_drops</code></li>
+<li>inspect audit events for actor, action, result, reason, and failure class</li>
+<li>inspect logs for authn failure, authz failure, mTLS failure, or generation-activation failure</li>
+</ol>
+<h3 id="fix-steps_7">Fix Steps</h3>
+<ol>
+<li>use the correct protocol, path, and credentials</li>
+<li>fix client certificate or token issues before retrying the admin action</li>
+<li>validate and preview the candidate config before activation</li>
+<li>roll back to the last healthy generation if the latest activation degraded runtime behavior</li>
+<li>confirm the active generation changed only after activation succeeds</li>
+</ol>
+<h3 id="relevant-logs-metrics-and-endpoints_7">Relevant Logs, Metrics, and Endpoints</h3>
+<ul>
+<li>endpoints: <code>/admin/runtime</code>, <code>/admin/runtime/history</code>, <code>/admin/runtime/history/{generation}</code>, <code>/admin/runtime/validate</code>, <code>/admin/runtime/preview</code>, <code>/admin/runtime/activate</code>, <code>/admin/runtime/rollback</code></li>
+<li>metrics: <code>spooky_runtime_validation_attempts_total</code>, <code>spooky_runtime_preview_attempts_total</code>, <code>spooky_runtime_activation_total</code>, <code>spooky_runtime_rollback_total</code>, <code>spooky_runtime_rejections_total</code>, <code>spooky_control_api_connection_limit_drops</code></li>
+<li>logs: control-plane authn/authz failures, mTLS handshake failures, runtime activation/rollback logs</li>
+<li>audit: actor, action, target generation, result, reason, failure class</li>
+</ul>
+<h2 id="grafana-or-prometheus-shows-missing-or-empty-data">Grafana or Prometheus Shows Missing or Empty Data</h2>
+<h3 id="symptom_8">Symptom</h3>
+<ul>
+<li>Prometheus target is down</li>
+<li>dashboards render without series even though traffic exists</li>
+<li>only coarse request totals move while richer dashboards stay empty</li>
+</ul>
+<h3 id="likely-causes_8">Likely Causes</h3>
+<ul>
+<li>Prometheus is scraping the wrong host, port, or path</li>
+<li>the metrics endpoint is disabled or not reachable from the scraper</li>
+<li>dashboards are querying labeled metrics but only low traffic or the wrong labels are present</li>
+<li>no signal has been generated for the specific feature being viewed</li>
+<li>the runtime generation changed but dashboards or annotations are pointed at stale state</li>
+</ul>
+<h3 id="verification-steps_8">Verification Steps</h3>
+<ol>
+<li>open the Prometheus target page and confirm the Spooky target is up</li>
+<li>curl the metrics endpoint directly and confirm the configured path returns Prometheus text</li>
+<li>inspect whether the expected families exist:</li>
+<li>request and latency metrics</li>
+<li>overload and quota metrics</li>
+<li>backend, retry, hedge, and DNS metrics</li>
+<li>TLS and control-plane metrics</li>
+<li>confirm dashboard queries use canonical labels and existing label values</li>
+<li>confirm real traffic was generated for the feature area you are testing</li>
+</ol>
+<h3 id="fix-steps_8">Fix Steps</h3>
+<ol>
+<li>fix the scrape address, port, or path</li>
+<li>expose the metrics endpoint to Prometheus from the correct network</li>
+<li>update dashboards to use canonical metric names and stable label values</li>
+<li>generate traffic that exercises the exact feature under test</li>
+<li>verify data appears first in Prometheus, then in recording rules, then in Grafana</li>
+</ol>
+<h3 id="relevant-logs-metrics-and-endpoints_8">Relevant Logs, Metrics, and Endpoints</h3>
+<ul>
+<li>endpoints: <code>/metrics</code>, <code>/admin/runtime</code></li>
+<li>metrics: all families in <a href="../../reference/metrics-reference/">Metrics Reference</a></li>
+<li>logs: metrics endpoint startup logs, scrape-path mismatches, observability package deployment logs</li>
+</ul>
+<h2 id="capture-a-useful-incident-bundle">Capture a Useful Incident Bundle</h2>
+<p>When you need to escalate an incident or hand it to another operator, capture:</p>
+<ol>
+<li>active runtime generation and recent generation history</li>
+<li>current backend health summary and quota backend health summary</li>
+<li>request, overload, quota, backend, TLS, and control-plane metrics</li>
+<li>relevant runtime logs for the incident window</li>
+<li>relevant audit events for admin actions in the same window</li>
+</ol>
+<p>Recommended capture checklist:</p>
+<pre><code class="language-bash">curl -k --http1.1 https://127.0.0.1:9902/health
+curl -k --http1.1 https://127.0.0.1:9902/ready
+curl -k --http1.1 -H &quot;Authorization: Bearer &lt;token&gt;&quot; https://127.0.0.1:9902/admin/runtime
+curl -k --http1.1 -H &quot;Authorization: Bearer &lt;token&gt;&quot; https://127.0.0.1:9902/admin/runtime/history
+curl -s http://127.0.0.1:9901/metrics
 </code></pre>
-<p>For production incidents, capture diagnostic bundle:</p>
-<pre><code class="language-bash">#!/bin/bash
-mkdir -p spooky-diagnostics
-cd spooky-diagnostics
-
-spooky --version &gt; version.txt
-uname -a &gt; system.txt
-journalctl -u spooky --no-pager -n 500 &gt; logs.txt
-yq eval 'del(.listen.tls.key, .listen.tls.cert)' ../config.yaml &gt; config.yaml
-ps aux | grep spooky &gt; processes.txt
-ss -tulnp &gt; sockets.txt
-free -h &gt; memory.txt
-sudo tcpdump -i any -c 100 -w capture.pcap udp port 443
-
-cd ..
-tar czf spooky-diagnostics-$(date +%Y%m%d-%H%M%S).tar.gz spooky-diagnostics/
-</code></pre>
+<p>Also capture:</p>
+<ul>
+<li>startup and incident-window logs</li>
+<li>the sanitized config that produced the active generation</li>
+<li>the exact time window of the incident</li>
+<li>the caller, tenant, route, upstream, backend, or generation involved</li>
+</ul>
+<h2 id="related-pages">Related Pages</h2>
+<ul>
+<li><a href="../../operations/overview/">Operations Overview</a></li>
+<li><a href="../../operations/runbook/">Runbook</a></li>
+<li><a href="../../reference/metrics-reference/">Metrics Reference</a></li>
+<li><a href="../../reference/control-api-reference/">Control API Reference</a></li>
+<li><a href="../../operations/control-plane/">Control Plane</a></li>
+<li><a href="../../operations/observability-bundle/">Observability Operator Bundle</a></li>
+<li><a href="../../operations/metrics-and-alerts/">Metrics and Alerts</a></li>
+</ul>
   </div>
   
   <script>
@@ -2723,214 +2395,394 @@ tar czf spooky-diagnostics-$(date +%Y%m%d-%H%M%S).tar.gz spooky-diagnostics/
         
         
         
-        <a href="#configuration-errors"
+        <a href="#start-here"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#configuration-errors');">
-            Configuration Errors
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#start-here');">
+            Start Here
+        </a>
+        
+
+        
+        <a href="#symptom-index"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#symptom-index');">
+            Symptom Index
+        </a>
+        
+
+        
+        <a href="#process-starts-but-never-becomes-ready"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#process-starts-but-never-becomes-ready');">
+            Process Starts but Never Becomes Ready
         </a>
         
         
-        <a href="#invalid-configuration-schema"
+        <a href="#symptom"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#invalid-configuration-schema');">
-            Invalid Configuration Schema
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#symptom');">
+            Symptom
         </a>
         
-        <a href="#listen-configuration-errors"
+        <a href="#likely-causes"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#listen-configuration-errors');">
-            Listen Configuration Errors
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#likely-causes');">
+            Likely Causes
         </a>
         
-        <a href="#upstream-pool-configuration-errors"
+        <a href="#verification-steps"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#upstream-pool-configuration-errors');">
-            Upstream Pool Configuration Errors
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#verification-steps');">
+            Verification Steps
         </a>
         
-        <a href="#backend-configuration-errors"
+        <a href="#fix-steps"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#backend-configuration-errors');">
-            Backend Configuration Errors
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#fix-steps');">
+            Fix Steps
+        </a>
+        
+        <a href="#relevant-logs-metrics-and-endpoints"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#relevant-logs-metrics-and-endpoints');">
+            Relevant Logs, Metrics, and Endpoints
         </a>
         
         
 
         
-        <a href="#tls-certificate-problems"
+        <a href="#requests-reach-spooky-but-not-the-expected-upstream"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#tls-certificate-problems');">
-            TLS Certificate Problems
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#requests-reach-spooky-but-not-the-expected-upstream');">
+            Requests Reach Spooky but Not the Expected Upstream
         </a>
         
         
-        <a href="#certificate-file-access-errors"
+        <a href="#symptom_1"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#certificate-file-access-errors');">
-            Certificate File Access Errors
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#symptom_1');">
+            Symptom
         </a>
         
-        <a href="#tls-handshake-failures"
+        <a href="#likely-causes_1"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#tls-handshake-failures');">
-            TLS Handshake Failures
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#likely-causes_1');">
+            Likely Causes
         </a>
         
-        
-
-        
-        <a href="#quic-connection-issues"
+        <a href="#verification-steps_1"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#quic-connection-issues');">
-            QUIC Connection Issues
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#verification-steps_1');">
+            Verification Steps
         </a>
         
-        
-        <a href="#connection-id-mismatch"
+        <a href="#fix-steps_1"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#connection-id-mismatch');">
-            Connection ID Mismatch
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#fix-steps_1');">
+            Fix Steps
         </a>
         
-        <a href="#version-negotiation-failures"
+        <a href="#relevant-logs-metrics-and-endpoints_1"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#version-negotiation-failures');">
-            Version Negotiation Failures
-        </a>
-        
-        <a href="#quic-timeout-and-idle-connections"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#quic-timeout-and-idle-connections');">
-            QUIC Timeout and Idle Connections
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#relevant-logs-metrics-and-endpoints_1');">
+            Relevant Logs, Metrics, and Endpoints
         </a>
         
         
 
         
-        <a href="#backend-connectivity-failures"
+        <a href="#clients-receive-429-or-other-contract-style-denials"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#backend-connectivity-failures');">
-            Backend Connectivity Failures
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#clients-receive-429-or-other-contract-style-denials');">
+            Clients Receive 429 or Other Contract-Style Denials
         </a>
         
         
-        <a href="#unknown-backend-errors"
+        <a href="#symptom_2"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#unknown-backend-errors');">
-            Unknown Backend Errors
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#symptom_2');">
+            Symptom
         </a>
         
-        <a href="#upstream-connection-pool-errors"
+        <a href="#likely-causes_2"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#upstream-connection-pool-errors');">
-            Upstream Connection Pool Errors
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#likely-causes_2');">
+            Likely Causes
         </a>
         
-        <a href="#backend-health-check-failures"
+        <a href="#verification-steps_2"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#backend-health-check-failures');">
-            Backend Health Check Failures
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#verification-steps_2');">
+            Verification Steps
         </a>
         
-        
-
-        
-        <a href="#load-balancing-issues"
+        <a href="#fix-steps_2"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#load-balancing-issues');">
-            Load Balancing Issues
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#fix-steps_2');">
+            Fix Steps
         </a>
         
-        
-        <a href="#no-healthy-backends-available"
+        <a href="#relevant-logs-metrics-and-endpoints_2"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#no-healthy-backends-available');">
-            No Healthy Backends Available
-        </a>
-        
-        <a href="#uneven-load-distribution"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#uneven-load-distribution');">
-            Uneven Load Distribution
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#relevant-logs-metrics-and-endpoints_2');">
+            Relevant Logs, Metrics, and Endpoints
         </a>
         
         
 
         
-        <a href="#performance-problems"
+        <a href="#clients-receive-503-during-pressure"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#performance-problems');">
-            Performance Problems
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#clients-receive-503-during-pressure');">
+            Clients Receive 503 During Pressure
         </a>
         
         
-        <a href="#high-latency"
+        <a href="#symptom_3"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#high-latency');">
-            High Latency
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#symptom_3');">
+            Symptom
         </a>
         
-        <a href="#memory-growth"
+        <a href="#likely-causes_3"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#memory-growth');">
-            Memory Growth
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#likely-causes_3');">
+            Likely Causes
         </a>
         
-        <a href="#udp-packet-loss"
+        <a href="#verification-steps_3"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#udp-packet-loss');">
-            UDP Packet Loss
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#verification-steps_3');">
+            Verification Steps
         </a>
         
-        
-
-        
-        <a href="#debugging-techniques"
+        <a href="#fix-steps_3"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#debugging-techniques');">
-            Debugging Techniques
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#fix-steps_3');">
+            Fix Steps
         </a>
         
-        
-        <a href="#enable-debug-logging"
+        <a href="#relevant-logs-metrics-and-endpoints_3"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#enable-debug-logging');">
-            Enable Debug Logging
-        </a>
-        
-        <a href="#analyze-request-flow"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#analyze-request-flow');">
-            Analyze Request Flow
-        </a>
-        
-        <a href="#packet-capture-analysis"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#packet-capture-analysis');">
-            Packet Capture Analysis
-        </a>
-        
-        <a href="#performance-profiling"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#performance-profiling');">
-            Performance Profiling
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#relevant-logs-metrics-and-endpoints_3');">
+            Relevant Logs, Metrics, and Endpoints
         </a>
         
         
 
         
-        <a href="#common-error-reference"
+        <a href="#backend-failures-or-timeouts-are-rising"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#common-error-reference');">
-            Common Error Reference
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#backend-failures-or-timeouts-are-rising');">
+            Backend Failures or Timeouts Are Rising
+        </a>
+        
+        
+        <a href="#symptom_4"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#symptom_4');">
+            Symptom
+        </a>
+        
+        <a href="#likely-causes_4"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#likely-causes_4');">
+            Likely Causes
+        </a>
+        
+        <a href="#verification-steps_4"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#verification-steps_4');">
+            Verification Steps
+        </a>
+        
+        <a href="#fix-steps_4"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#fix-steps_4');">
+            Fix Steps
+        </a>
+        
+        <a href="#relevant-logs-metrics-and-endpoints_4"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#relevant-logs-metrics-and-endpoints_4');">
+            Relevant Logs, Metrics, and Endpoints
+        </a>
+        
+        
+
+        
+        <a href="#all-backends-look-unhealthy"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#all-backends-look-unhealthy');">
+            All Backends Look Unhealthy
+        </a>
+        
+        
+        <a href="#symptom_5"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#symptom_5');">
+            Symptom
+        </a>
+        
+        <a href="#likely-causes_5"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#likely-causes_5');">
+            Likely Causes
+        </a>
+        
+        <a href="#verification-steps_5"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#verification-steps_5');">
+            Verification Steps
+        </a>
+        
+        <a href="#fix-steps_5"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#fix-steps_5');">
+            Fix Steps
+        </a>
+        
+        <a href="#relevant-logs-metrics-and-endpoints_5"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#relevant-logs-metrics-and-endpoints_5');">
+            Relevant Logs, Metrics, and Endpoints
+        </a>
+        
+        
+
+        
+        <a href="#tls-handshakes-are-failing"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#tls-handshakes-are-failing');">
+            TLS Handshakes Are Failing
+        </a>
+        
+        
+        <a href="#symptom_6"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#symptom_6');">
+            Symptom
+        </a>
+        
+        <a href="#likely-causes_6"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#likely-causes_6');">
+            Likely Causes
+        </a>
+        
+        <a href="#verification-steps_6"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#verification-steps_6');">
+            Verification Steps
+        </a>
+        
+        <a href="#fix-steps_6"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#fix-steps_6');">
+            Fix Steps
+        </a>
+        
+        <a href="#relevant-logs-metrics-and-endpoints_6"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#relevant-logs-metrics-and-endpoints_6');">
+            Relevant Logs, Metrics, and Endpoints
+        </a>
+        
+        
+
+        
+        <a href="#control-api-calls-fail-or-runtime-changes-do-not-apply"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#control-api-calls-fail-or-runtime-changes-do-not-apply');">
+            Control API Calls Fail or Runtime Changes Do Not Apply
+        </a>
+        
+        
+        <a href="#symptom_7"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#symptom_7');">
+            Symptom
+        </a>
+        
+        <a href="#likely-causes_7"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#likely-causes_7');">
+            Likely Causes
+        </a>
+        
+        <a href="#verification-steps_7"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#verification-steps_7');">
+            Verification Steps
+        </a>
+        
+        <a href="#fix-steps_7"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#fix-steps_7');">
+            Fix Steps
+        </a>
+        
+        <a href="#relevant-logs-metrics-and-endpoints_7"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#relevant-logs-metrics-and-endpoints_7');">
+            Relevant Logs, Metrics, and Endpoints
+        </a>
+        
+        
+
+        
+        <a href="#grafana-or-prometheus-shows-missing-or-empty-data"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#grafana-or-prometheus-shows-missing-or-empty-data');">
+            Grafana or Prometheus Shows Missing or Empty Data
+        </a>
+        
+        
+        <a href="#symptom_8"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#symptom_8');">
+            Symptom
+        </a>
+        
+        <a href="#likely-causes_8"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#likely-causes_8');">
+            Likely Causes
+        </a>
+        
+        <a href="#verification-steps_8"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#verification-steps_8');">
+            Verification Steps
+        </a>
+        
+        <a href="#fix-steps_8"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#fix-steps_8');">
+            Fix Steps
+        </a>
+        
+        <a href="#relevant-logs-metrics-and-endpoints_8"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#relevant-logs-metrics-and-endpoints_8');">
+            Relevant Logs, Metrics, and Endpoints
+        </a>
+        
+        
+
+        
+        <a href="#capture-a-useful-incident-bundle"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#capture-a-useful-incident-bundle');">
+            Capture a Useful Incident Bundle
         </a>
         
 
         
-        <a href="#support-and-escalation"
+        <a href="#related-pages"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#support-and-escalation');">
-            Support and Escalation
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#related-pages');">
+            Related Pages
         </a>
         
 

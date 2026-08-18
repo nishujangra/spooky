@@ -1454,7 +1454,7 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>This guide covers how to validate a Spooky configuration change or binary upgrade before it touches production traffic. Target audience: SREs and platform engineers preparing a deployment of Spooky v0.1.1-beta or later.</p>
+    <p>This guide covers how to validate a Spooky configuration change or binary upgrade before it touches production traffic. Target audience: SREs and platform engineers preparing a deployment of the current beta release.</p>
 <p>The goal is to catch problems at each stage of deployment, not after the restart.</p>
 <hr />
 <h2 id="config-validation-before-restart">Config Validation Before Restart</h2>
@@ -1485,7 +1485,7 @@
 <p>After starting Spooky against the new config (in a staging environment, or as a canary instance before routing real traffic), verify that all upstream backends have been probed and are healthy before you shift traffic to the instance.</p>
 <h3 id="1-poll-adminruntime">1. Poll /admin/runtime</h3>
 <p>The <code>/admin/runtime</code> endpoint returns the current runtime state of every upstream pool, including per-backend health status. Query it within the first 30 seconds of startup:</p>
-<pre><code class="language-bash">curl -sk https://127.0.0.1:9902/admin/runtime | jq .
+<pre><code class="language-bash">curl -sk --http1.1 https://127.0.0.1:9902/admin/runtime | jq .
 </code></pre>
 <p>A healthy response looks like this:</p>
 <pre><code class="language-json">{
@@ -1648,7 +1648,7 @@ in the <code>/admin/runtime</code> snapshot.)</p>
 <p>A timeout spike after restart is a strong signal that backend addresses changed to something unreachable, or that connection timeout values in the config are now too low for the backend's actual response time. Distinguish from backend errors: errors indicate a response was received (and was a failure); timeouts indicate no timely response at all.</p>
 <p><strong>4. Backend health state via /admin/runtime</strong></p>
 <p>Poll this endpoint repeatedly in the first few minutes after restart:</p>
-<pre><code class="language-bash">watch -n 5 'curl -sk https://127.0.0.1:9902/admin/runtime | jq &quot;.upstreams | to_entries[] | {pool: .key, healthy: .value.healthy_count, total: .value.total_count}&quot;'
+<pre><code class="language-bash">watch -n 5 'curl -sk --http1.1 https://127.0.0.1:9902/admin/runtime | jq &quot;.upstreams | to_entries[] | {pool: .key, healthy: .value.healthy_count, total: .value.total_count}&quot;'
 </code></pre>
 <p>Any pool where <code>healthy</code> is less than <code>total</code> after 60 seconds of uptime should be investigated. If a backend was healthy before the restart and is now unhealthy, the new config is likely pointing to a wrong address or using a different TLS mode that the backend does not expect.</p>
 <p><strong>5. Process RSS memory</strong></p>

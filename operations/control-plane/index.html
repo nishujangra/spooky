@@ -1429,12 +1429,21 @@
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <p>This document explains the operator-facing control-plane services in Spooky and the boundaries each service is allowed to know about runtime state.</p>
+<h2 id="operator-fast-path">Operator Fast Path</h2>
+<p>Use the control plane to answer four questions quickly:</p>
+<ol>
+<li>what runtime generation is active now</li>
+<li>what changed recently</li>
+<li>what is the current backend, quota, or watchdog state</li>
+<li>can an operator action proceed safely</li>
+</ol>
 <h2 id="services">Services</h2>
-<p>The control plane consists of three main service surfaces:</p>
+<p>The control plane consists of four main operator-facing surfaces:</p>
 <ul>
 <li>control API</li>
 <li>metrics endpoint</li>
 <li>watchdog service</li>
+<li>audit stream</li>
 </ul>
 <p>These services are not listener sidecars anymore. They are explicit services built from canonical runtime views and shared services.</p>
 <h2 id="control-api">Control API</h2>
@@ -1443,7 +1452,8 @@
 <ul>
 <li>health and readiness checks</li>
 <li>runtime snapshot rendering</li>
-<li>runtime reload</li>
+<li>staged runtime operations such as validate, preview, activate, and rollback</li>
+<li>legacy runtime reload</li>
 <li>listener certificate reload</li>
 <li>controlled restart requests</li>
 </ul>
@@ -1622,6 +1632,25 @@
 <li>watchdog state</li>
 </ul>
 <p>It should not depend on listener-local internals that only exist because a particular ingress path happens to hold them.</p>
+<h3 id="runtime-introspection-contract">Runtime introspection contract</h3>
+<p>For operators, the highest-value reads are:</p>
+<ul>
+<li><code>GET /admin/runtime</code></li>
+<li><code>GET /admin/runtime/history</code></li>
+<li><code>GET /admin/runtime/history/{generation}</code></li>
+</ul>
+<p>Those views should provide:</p>
+<ul>
+<li>active generation</li>
+<li>runtime history and rollback candidates</li>
+<li>backend health summary</li>
+<li>quota backend health summary</li>
+<li>watchdog state</li>
+<li>observability contract version</li>
+<li>audit schema version</li>
+<li>dashboard and documentation references</li>
+<li>recent admin actions</li>
+</ul>
 <h2 id="metrics-endpoint">Metrics Endpoint</h2>
 <p>The metrics endpoint is the Prometheus scrape surface.</p>
 <p>Its responsibilities are:</p>
@@ -1638,6 +1667,11 @@
 <li>metrics are rendered from the canonical shared metrics registry</li>
 </ul>
 <p>The metrics endpoint is intentionally simpler than the control API. It is a read-only scrape surface, not an administration interface.</p>
+<p>Operator rule:</p>
+<ul>
+<li>use metrics for trend, rate, and alerting</li>
+<li>use the control API for current state and generation-aware introspection</li>
+</ul>
 <h2 id="watchdog-service">Watchdog Service</h2>
 <p>The watchdog is the control-plane coordinator for runtime liveness degradation and controlled restart workflows.</p>
 <p>Its responsibilities are:</p>
@@ -1658,6 +1692,16 @@
 <li>whether all expected workers have drained</li>
 </ul>
 <p>This state is surfaced through control-plane runtime views rather than by reading listener internals directly.</p>
+<h2 id="audit-stream">Audit Stream</h2>
+<p>The audit stream is the control-plane history surface.</p>
+<p>Use it when you need:</p>
+<ul>
+<li>actor attribution</li>
+<li>authn and authz failure history</li>
+<li>attempt versus result history for runtime operations</li>
+<li>reasoned failure records for restart, activate, rollback, reload, or cert reload</li>
+</ul>
+<p>The audit stream is low-cardinality and operator-oriented. It is not a request-body or request-header log.</p>
 <h2 id="runtime-view-contract">Runtime View Contract</h2>
 <p>All control-plane services should depend on the same runtime model:</p>
 <ul>
@@ -1685,6 +1729,15 @@ packaged observability bundle.</p>
 <li>dashboard definition references</li>
 <li>documentation references</li>
 </ul>
+<p>This is what lets operators move from:</p>
+<ul>
+<li>metric</li>
+<li>to dashboard</li>
+<li>to runtime snapshot</li>
+<li>to generation history</li>
+<li>to audit attribution</li>
+</ul>
+<p>without changing vocabulary.</p>
 <p>These references are repository asset paths, not UI URLs. Operators and automation should treat
 them as stable package identifiers that can be mapped into Grafana imports, runbooks, or internal
 control-plane tooling without assuming one frontend.</p>
@@ -1731,6 +1784,8 @@ control-plane tooling without assuming one frontend.</p>
 <li>is the watchdog degraded or requesting restart</li>
 <li>what do backend health and placement look like</li>
 <li>can a reload be applied safely</li>
+<li>what observability package version and audit schema version the node is serving</li>
+<li>what recent admin actions have been recorded</li>
 </ul>
 <p>They should not need to infer those answers indirectly from unrelated logs.</p>
 <h2 id="failure-behavior">Failure Behavior</h2>
@@ -1763,6 +1818,7 @@ control-plane tooling without assuming one frontend.</p>
 <h2 id="related-pages">Related Pages</h2>
 <ul>
 <li><a href="../../architecture/observability-contract/">Observability Contract</a></li>
+<li><a href="../observability-bundle/">Observability Operator Bundle</a></li>
 <li><a href="../reload-and-drain/">Reload and Drain</a></li>
 <li><a href="../metrics-and-alerts/">Metrics and Alerts</a></li>
 <li><a href="../../reference/control-api-reference/">Control API Reference</a></li>
@@ -2197,6 +2253,14 @@ control-plane tooling without assuming one frontend.</p>
         
         
         
+        <a href="#operator-fast-path"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#operator-fast-path');">
+            Operator Fast Path
+        </a>
+        
+
+        
         <a href="#services"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#services');">
@@ -2248,6 +2312,12 @@ control-plane tooling without assuming one frontend.</p>
             What the control API is allowed to know
         </a>
         
+        <a href="#runtime-introspection-contract"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#runtime-introspection-contract');">
+            Runtime introspection contract
+        </a>
+        
         
 
         
@@ -2280,6 +2350,14 @@ control-plane tooling without assuming one frontend.</p>
             Important watchdog state
         </a>
         
+        
+
+        
+        <a href="#audit-stream"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#audit-stream');">
+            Audit Stream
+        </a>
         
 
         

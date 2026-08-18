@@ -1454,9 +1454,16 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>Guide for configuring TLS certificates for HTTP/3 connections in Spooky.</p>
+    <p>This page explains how to configure downstream TLS certificates and upstream trust behavior in Spooky.</p>
 <h2 id="overview">Overview</h2>
 <p>HTTP/3 uses QUIC as its transport protocol, which requires TLS 1.3 for encryption and authentication. Spooky requires valid TLS certificates to establish secure connections with clients.</p>
+<p>Use this page when you need to answer:</p>
+<ul>
+<li>what certificate and key formats Spooky accepts</li>
+<li>how to configure one or many TLS identities on a listener</li>
+<li>how to set file paths and permissions safely</li>
+<li>what TLS changes require reload versus restart</li>
+</ul>
 <h2 id="requirements">Requirements</h2>
 <h3 id="protocol-requirements">Protocol Requirements</h3>
 <ul>
@@ -1587,10 +1594,14 @@ openssl x509 -req -in server-ec.csr -signkey server-ec-pkcs8.key \
   protocol: http3
   port: 9889
   address: &quot;0.0.0.0&quot;
-  tls:
-    cert: &quot;/path/to/certificate.pem&quot;
-    key: &quot;/path/to/private-key.pem&quot;
+tls:
+  cert: &quot;/path/to/certificate.pem&quot;
+  key: &quot;/path/to/private-key.pem&quot;
 </code></pre>
+<p>Operational implication:</p>
+<ul>
+<li>if you do not configure a valid certificate and key, Spooky will fail before serving traffic</li>
+</ul>
 <h3 id="path-specifications">Path Specifications</h3>
 <p>Paths can be absolute or relative:</p>
 <pre><code class="language-yaml"># Absolute paths (recommended for production)
@@ -1646,6 +1657,11 @@ openssl req -new -x509 -key server.key -out server.crt -days 365 \
 <li>If the client sends an SNI hostname that is not present in <code>listen.tls.certificates</code>, Spooky serves the default identity rather than rejecting the handshake.</li>
 <li>Startup rejects any <code>listen.tls.certificates[].server_name</code> mapping whose configured certificate SANs do not cover that hostname.</li>
 </ul>
+<p>Common mistakes:</p>
+<ul>
+<li>expecting wildcard lookup behavior from <code>server_name</code> entries instead of from certificate SANs</li>
+<li>forgetting that one default identity is still needed for non-SNI or unmatched-SNI handshakes</li>
+</ul>
 <h2 id="file-permissions-and-security">File Permissions and Security</h2>
 <h3 id="recommended-permissions">Recommended Permissions</h3>
 <p>Restrict access to certificate files:</p>
@@ -1666,6 +1682,11 @@ ls -l /etc/spooky/certs/
 -rw-r--r-- 1 spooky spooky 1234 Dec 15 10:00 server.crt
 -rw------- 1 spooky spooky 1704 Dec 15 10:00 server.key
 </code></pre>
+<p>Operational implications:</p>
+<ul>
+<li>key readability must match the runtime user model; overly strict permissions can block startup</li>
+<li>overly broad permissions create unnecessary key-exposure risk</li>
+</ul>
 <h3 id="security-best-practices">Security Best Practices</h3>
 <ol>
 <li><strong>Private Key Protection</strong></li>
@@ -1752,6 +1773,7 @@ sudo certbot renew
 
 # Reload listener certificates for new handshakes
 curl -X POST \
+  --http1.1 \
   -H &quot;Authorization: Bearer ${SPOOKY_CONTROL_API_TOKEN}&quot; \
   https://127.0.0.1:9902/admin/runtime/reload-certs
 </code></pre>
@@ -1771,6 +1793,7 @@ sudo chmod 600 /etc/spooky/certs/server.key
 
 # Reload listener certificates for new handshakes
 curl -X POST \
+  --http1.1 \
   -H &quot;Authorization: Bearer ${SPOOKY_CONTROL_API_TOKEN}&quot; \
   https://127.0.0.1:9902/admin/runtime/reload-certs
 

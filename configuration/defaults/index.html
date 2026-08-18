@@ -1461,6 +1461,14 @@
 <li>what value or behavior Spooky applies when they are omitted</li>
 </ul>
 <p>This page reflects the defaults defined in <code>crates/config/src/default.rs</code> and the <code>Default</code>-backed config structs in <code>crates/config/src/config.rs</code>.</p>
+<h2 id="when-to-use-this-page">When To Use This Page</h2>
+<p>Use this page when you need to answer:</p>
+<ul>
+<li>what happens if a field is omitted</li>
+<li>whether a behavior is explicit or inherited by default</li>
+<li>which defaults are safe enough to keep for an initial rollout</li>
+</ul>
+<p>Use <a href="../reference/">Configuration Reference</a> when you need exact field semantics and validation rules. Use <a href="../examples/">Configuration Examples</a> when you need working end-to-end templates.</p>
 <h2 id="how-defaults-work">How Defaults Work</h2>
 <p>Spooky applies defaults in three different ways:</p>
 <ul>
@@ -1474,6 +1482,12 @@
 <li><code>observability.control_api.enabled</code> defaults to <code>false</code></li>
 <li><code>observability.control_api.auth_token</code> defaults to <code>null</code></li>
 <li>if you set <code>observability.control_api.enabled: true</code>, validation then requires <code>auth_token</code></li>
+</ul>
+<h2 id="common-mistakes">Common Mistakes</h2>
+<ul>
+<li>assuming <code>null</code> and omission mean the same thing for every nested field</li>
+<li>assuming defaults make a section production-safe without reviewing operational implications</li>
+<li>reading defaults without also checking whether a related feature becomes required when enabled</li>
 </ul>
 <h2 id="important-non-defaults">Important Non-Defaults</h2>
 <p>The following top-level and structural fields are still required and do not have a default:</p>
@@ -3066,10 +3080,26 @@
         
         
         
+        <a href="#when-to-use-this-page"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#when-to-use-this-page');">
+            When To Use This Page
+        </a>
+        
+
+        
         <a href="#how-defaults-work"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#how-defaults-work');">
             How Defaults Work
+        </a>
+        
+
+        
+        <a href="#common-mistakes"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#common-mistakes');">
+            Common Mistakes
         </a>
         
 

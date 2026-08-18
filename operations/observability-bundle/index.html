@@ -1448,6 +1448,56 @@
 <a href="../../architecture/observability-contract/"><code>docs/architecture/observability-contract.md</code></a>
 and <code>crates/edge/src/observability/mod.rs</code>. This page describes the shipped
 operator experience built on top of that contract.</p>
+<h2 id="open-this-first">Open This First</h2>
+<p>Use this table when you need a fast starting point during an incident:</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>First dashboard</th>
+<th>First runtime view</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>customer-visible 5xx or latency regression</td>
+<td><code>edge-traffic.json</code></td>
+<td><code>GET /admin/runtime</code></td>
+<td>start broad, then localize by upstream or backend</td>
+</tr>
+<tr>
+<td>rising 429s or policy denials</td>
+<td><code>admission-overload.json</code></td>
+<td><code>GET /admin/runtime</code></td>
+<td>separates quota, overload, auth, and rate-limit outcomes</td>
+</tr>
+<tr>
+<td>rising backend timeouts or backend 5xx concentration</td>
+<td><code>backend-health.json</code></td>
+<td><code>GET /admin/runtime</code></td>
+<td>ties request failures to backend lifecycle and DNS state</td>
+</tr>
+<tr>
+<td>retry or hedge growth</td>
+<td><code>retries-hedges.json</code></td>
+<td><code>GET /admin/runtime</code></td>
+<td>shows whether resilience is helping or amplifying failure</td>
+</tr>
+<tr>
+<td>handshake or certificate trouble</td>
+<td><code>tls-certificates.json</code></td>
+<td><code>GET /admin/runtime</code></td>
+<td>separates downstream TLS, upstream TLS, and cert expiry</td>
+</tr>
+<tr>
+<td>activation, rollback, or restart trouble</td>
+<td><code>control-plane.json</code></td>
+<td><code>GET /admin/runtime/history</code></td>
+<td>shows runtime generation state and recent control-plane activity</td>
+</tr>
+</tbody>
+</table></div>
 <h2 id="shipped-package">Shipped Package</h2>
 <p>The current package is made of four layers:</p>
 <ol>
@@ -1544,6 +1594,7 @@ the control API runtime views. At this point the packaged values are:</p>
 <ul>
 <li>this is the entry dashboard for customer-visible traffic symptoms</li>
 <li>use it to decide whether the problem is broad, upstream-localized, or backend-localized before opening specialized dashboards</li>
+<li>from here, the most common next move is either <code>backend-health.json</code> for timeout-heavy failures or <code>admission-overload.json</code> for 503s that might be self-protection</li>
 </ul>
 <h3 id="admission-overloadjson"><code>admission-overload.json</code></h3>
 <p>Dashboard:</p>
@@ -1578,6 +1629,7 @@ the control API runtime views. At this point the packaged values are:</p>
 <li>preserve the runtime boundary between overload control and policy-contract failure</li>
 <li>do not interpret quota denial as overload</li>
 <li>do not interpret auth unavailability as quota exhaustion</li>
+<li>if quota-backend degradation is visible here, confirm runtime state in <code>GET /admin/runtime</code> before changing policy</li>
 </ul>
 <h3 id="backend-healthjson"><code>backend-health.json</code></h3>
 <p>Dashboard:</p>
@@ -1611,6 +1663,7 @@ the control API runtime views. At this point the packaged values are:</p>
 <ul>
 <li>separate active health probes from passive request-path failures</li>
 <li>show when DNS churn or stale resolver state is the real cause of backend instability</li>
+<li>if this dashboard shows churn or degraded health while traffic is failing, the next control-plane read should usually be <code>GET /admin/runtime</code></li>
 </ul>
 <h3 id="retries-hedgesjson"><code>retries-hedges.json</code></h3>
 <p>Dashboard:</p>
@@ -1642,6 +1695,7 @@ the control API runtime views. At this point the packaged values are:</p>
 <ul>
 <li>distinguish resilience behavior that is helping from resilience behavior that is amplifying failure</li>
 <li>read retry growth and hedge waste together with backend timeout pressure</li>
+<li>if hedge growth is high but user-visible latency is still rising, treat it as backend stress rather than success</li>
 </ul>
 <h3 id="tls-certificatesjson"><code>tls-certificates.json</code></h3>
 <p>Dashboard:</p>
@@ -1672,6 +1726,7 @@ the control API runtime views. At this point the packaged values are:</p>
 <ul>
 <li>separate downstream handshake problems from upstream TLS request-path failures</li>
 <li>make certificate expiry and unexpected selection behavior visible before client impact broadens</li>
+<li>after a certificate change, confirm both the dashboard and the runtime snapshot before expanding rollout</li>
 </ul>
 <h3 id="control-planejson"><code>control-plane.json</code></h3>
 <p>Dashboard:</p>
@@ -1704,6 +1759,34 @@ the control API runtime views. At this point the packaged values are:</p>
 <li>this is the admin-plane dashboard, not a traffic dashboard</li>
 <li>use it to correlate runtime operations with emitted audit events and to verify whether the control plane is healthy enough to support incident response</li>
 </ul>
+<h2 id="runtime-introspection-entry-points">Runtime Introspection Entry Points</h2>
+<p>The control plane is part of the observability bundle, not a separate concern.</p>
+<p>Use these endpoints as the runtime-introspection entry points:</p>
+<ul>
+<li><code>GET /admin/runtime</code>
+  Use this for current runtime state, observability package metadata, backend health summary, quota backend health summary, watchdog state, and recent admin actions.</li>
+<li><code>GET /admin/runtime/history</code>
+  Use this for retained generations, activation history, rollback candidates, and generation-scoped operator history.</li>
+<li><code>GET /admin/runtime/history/{generation}</code>
+  Use this when one generation needs focused review during rollback or activation debugging.</li>
+</ul>
+<p>When dashboards show trend but not current state, these are the next calls to make.</p>
+<h2 id="audit-as-the-operator-history-surface">Audit As The Operator History Surface</h2>
+<p>The audit stream is the control-plane event history for:</p>
+<ul>
+<li>authentication and authorization outcomes</li>
+<li>validate, preview, activate, rollback, reload, restart, and cert reload attempts</li>
+<li>attempt versus result correlation</li>
+<li>actor attribution and peer attribution</li>
+</ul>
+<p>The current audit schema version is <code>v1</code>, which matches the code-defined <code>ADMIN_AUDIT_SCHEMA_VERSION</code>.</p>
+<p>Operators should treat audit as:</p>
+<ul>
+<li>the source of truth for who initiated a control-plane action</li>
+<li>the source of truth for whether the action succeeded, was denied, or failed</li>
+<li>the place to verify <code>requested_by</code>, actor roles, authn mechanisms, generation movement, and canonical reason or failure class</li>
+</ul>
+<p>Metrics show rate and trend. Audit shows action sequence and attribution.</p>
 <h2 id="alert-severity-and-runbook-mapping">Alert Severity And Runbook Mapping</h2>
 <p>The alert package has two severities:</p>
 <ul>
@@ -1929,6 +2012,15 @@ surface and move to the others without translating vocabulary.</p>
 </ul>
 <p>The main runtime entry points are documented in
 <a href="../control-plane/">Control Plane</a>.</p>
+<p>When the runtime snapshot is open, the high-signal fields to inspect first are:</p>
+<ul>
+<li><code>observability.contract_version</code></li>
+<li><code>observability.audit_schema_version</code></li>
+<li><code>observability.current_generation</code></li>
+<li><code>observability.backend_health_summary</code></li>
+<li><code>observability.quota_backend_health_summary</code></li>
+<li><code>observability.recent_admin_actions</code></li>
+</ul>
 <h3 id="dashboard-to-logs-and-traces">Dashboard to logs and traces</h3>
 <p>Use logs and traces when the packaged metrics explain the class of failure but
 not the specific request path.</p>
@@ -1950,6 +2042,20 @@ not the specific request path.</p>
 <p>Audit is the source of truth for control-plane action history. Metrics and
 dashboards show rate and trend; audit shows who did what, against which target,
 with which generation and result.</p>
+<h3 id="metrics-to-audit">Metrics to audit</h3>
+<p>Move directly from metrics to audit when:</p>
+<ul>
+<li>control-plane errors or restart requests rise</li>
+<li>runtime activation or rollback outcomes change unexpectedly</li>
+<li>auth failures are clearly on the admin plane rather than the request path</li>
+</ul>
+<p>Typical sequence:</p>
+<ol>
+<li>identify the metric family and time window</li>
+<li>open <code>control-plane.json</code></li>
+<li>read <code>GET /admin/runtime</code> or <code>GET /admin/runtime/history</code></li>
+<li>use audit events for actor, action, and result attribution</li>
+</ol>
 <h2 id="incident-workflows">Incident Workflows</h2>
 <h3 id="rising-5xx-or-latency-page">Rising 5xx or latency page</h3>
 <ol>
@@ -2458,6 +2564,14 @@ contract.</p>
         
         
         
+        <a href="#open-this-first"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#open-this-first');">
+            Open This First
+        </a>
+        
+
+        
         <a href="#shipped-package"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#shipped-package');">
@@ -2543,6 +2657,22 @@ contract.</p>
             control-plane.json
         </a>
         
+        
+
+        
+        <a href="#runtime-introspection-entry-points"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#runtime-introspection-entry-points');">
+            Runtime Introspection Entry Points
+        </a>
+        
+
+        
+        <a href="#audit-as-the-operator-history-surface"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#audit-as-the-operator-history-surface');">
+            Audit As The Operator History Surface
+        </a>
         
 
         
@@ -2643,6 +2773,12 @@ contract.</p>
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#control-api-to-audit');">
             Control API to audit
+        </a>
+        
+        <a href="#metrics-to-audit"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#metrics-to-audit');">
+            Metrics to audit
         </a>
         
         

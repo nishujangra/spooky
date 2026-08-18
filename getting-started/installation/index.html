@@ -1454,7 +1454,15 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <h2 id="system-requirements">System Requirements</h2>
+    <p>This page helps you install Spooky on a host and reach the point where you can run it safely.</p>
+<h2 id="start-here">Start Here</h2>
+<ul>
+<li>Want the fastest local success path: <a href="../../tutorials/quickstart/">Quickstart</a></li>
+<li>Want a container-first path: <a href="../docker/">Docker</a></li>
+<li>Want to install on a Linux host: continue below</li>
+<li>Want the minimum safe production posture after install: <a href="../minimum-production/">Minimum Production</a></li>
+</ul>
+<h2 id="system-requirements">System Requirements</h2>
 <p><strong>Hardware:</strong>
 - CPU: 1 core minimum (2+ cores recommended for production)
 - Memory: 256MB RAM minimum (1GB+ recommended)
@@ -1625,6 +1633,20 @@ log:
     path: /var/log/spooky/spooky.log
 </code></pre>
 <p>See <a href="../../configuration/reference/">Configuration Reference</a> for all options.</p>
+<h2 id="first-run-after-installation">First Run After Installation</h2>
+<p>Once the binary, certificates, and config are in place:</p>
+<ol>
+<li>start Spooky with your config</li>
+<li>verify the control API health endpoint</li>
+<li>send one proxied request</li>
+<li>move to the minimum-production checklist before serving real traffic</li>
+</ol>
+<p>Recommended next pages:</p>
+<ul>
+<li><a href="../../tutorials/quickstart/">Quickstart</a></li>
+<li><a href="../minimum-production/">Minimum Production</a></li>
+<li><a href="../../deployment/production/">Production Deployment</a></li>
+</ul>
 <h3 id="log-rotation">Log Rotation</h3>
 <p>Configure log rotation for file-based logging. Create <code>/etc/logrotate.d/spooky</code>:</p>
 <pre><code>/var/log/spooky/*.log {
@@ -2189,6 +2211,14 @@ Verify paths in config match actual file locations. Validate format:</p>
         
         
         
+        <a href="#start-here"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#start-here');">
+            Start Here
+        </a>
+        
+
+        
         <a href="#system-requirements"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#system-requirements');">
@@ -2265,6 +2295,16 @@ Verify paths in config match actual file locations. Validate format:</p>
             data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#configuration-file');">
             Configuration File
         </a>
+        
+        
+
+        
+        <a href="#first-run-after-installation"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#first-run-after-installation');">
+            First Run After Installation
+        </a>
+        
         
         <a href="#log-rotation"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"

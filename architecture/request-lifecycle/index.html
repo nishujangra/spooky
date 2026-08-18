@@ -1428,17 +1428,19 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>This document describes the canonical request path through Spooky after the refactor work that split admission, auth, resolution, transport, normalization, streaming, and outcome recording into shared layers.</p>
+    <p>This document describes the canonical request path through Spooky. It explains the product flow that both ingress paths should follow after intake: shared admission, auth, routing, transport execution, response normalization, streaming guardrails, and outcome recording.</p>
 <h2 id="purpose">Purpose</h2>
 <p>The request path should be understandable as one ordered flow:</p>
 <ol>
 <li>intake</li>
 <li>admission</li>
 <li>auth</li>
-<li>route resolution</li>
+<li>route resolution and backend selection</li>
+<li>canonical request building</li>
 <li>backend dispatch</li>
 <li>response normalization</li>
 <li>body streaming and guardrails</li>
+<li>retry and hedge evaluation when needed</li>
 <li>outcome recording</li>
 </ol>
 <p>That flow should be shared conceptually across:</p>
@@ -1447,6 +1449,14 @@
 <li>bootstrap compatibility ingress</li>
 </ul>
 <p>The two paths differ in ingress and egress mechanics, not in core policy meaning.</p>
+<h2 id="one-request-two-ingress-paths">One Request, Two Ingress Paths</h2>
+<p>The product-level rule is simple:</p>
+<ul>
+<li>QUIC and bootstrap may parse requests differently</li>
+<li>they should reach the same internal policy decisions for the same logical request</li>
+<li>they should emit the same canonical observability reasons for the same outcome</li>
+</ul>
+<p>If those paths disagree semantically, the shared boundary is in the wrong place.</p>
 <h2 id="main-ownership-boundaries">Main Ownership Boundaries</h2>
 <h3 id="edgequic_listener"><code>edge::quic_listener</code></h3>
 <p>Owns ingress mechanics and request orchestration.</p>
@@ -1510,16 +1520,22 @@
 <p>Admission is the first shared policy gate.</p>
 <p>Admission covers:</p>
 <ul>
-<li>local auth prerequisites where applicable</li>
+<li>quota and scoped rate-limit decisions</li>
+<li>overload and brownout shedding</li>
 <li>route-level policy rejection</li>
-<li>scoped rate-limit decisions</li>
-<li>brownout and overload shedding</li>
+<li>local auth prerequisites where applicable</li>
 <li>permit acquisition and admission execution checks</li>
 </ul>
 <p>Admission should produce typed policy results, not direct response I/O decisions scattered across intake code.</p>
 <p>Both QUIC forwarding and bootstrap compatibility code should route these checks through the same admission layer.</p>
-<h2 id="step-3-external-auth-and-auth-decisions">Step 3: External Auth and Auth Decisions</h2>
-<p>If external auth is configured, the request enters the shared auth-decision layer.</p>
+<p>Quota and overload are intentionally separate:</p>
+<ul>
+<li>quota describes contract or entitlement enforcement</li>
+<li>overload describes runtime self-protection</li>
+</ul>
+<p>They may both reject a request, but they should not collapse into one policy meaning.</p>
+<h2 id="step-3-auth-decisions">Step 3: Auth Decisions</h2>
+<p>If external auth is configured, the request enters the shared auth decision layer.</p>
 <p>This layer owns:</p>
 <ul>
 <li>timeout handling</li>
@@ -1529,12 +1545,13 @@
 <li>header mutation validation and safety checks</li>
 <li>OIDC helper checks where configured</li>
 </ul>
-<p>Ingress-specific code should only orchestrate the auth request and apply the shared decision result.</p>
+<p>Ingress-specific code should only orchestrate the auth request and apply the shared auth decision result.</p>
 <h2 id="step-4-route-resolution-and-backend-selection">Step 4: Route Resolution and Backend Selection</h2>
 <p>After admission and auth, the request enters the shared resolution pipeline.</p>
 <p>Resolution covers:</p>
 <ul>
-<li>route matching</li>
+<li>listener-aware route matching</li>
+<li>host and path-based route matching</li>
 <li>upstream lookup</li>
 <li>load-balancing strategy selection</li>
 <li>canonical load-balancing key extraction</li>
@@ -1542,7 +1559,7 @@
 <li>backend-selection logging and telemetry</li>
 </ul>
 <p>The result of this phase should be a typed resolved target, not a mix of route, upstream, and backend values reconstructed later by dispatch code.</p>
-<h2 id="step-5-request-building">Step 5: Request Building</h2>
+<h2 id="step-5-canonical-request-building">Step 5: Canonical Request Building</h2>
 <p>Once a backend is selected, ingress code shapes the request into the canonical bridge input.</p>
 <p>This phase covers:</p>
 <ul>
@@ -1566,7 +1583,7 @@
 <ul>
 <li>send this canonical request to this backend</li>
 </ul>
-<p>Transport decides how that backend is executed.</p>
+<p>Transport decides how that backend is executed according to the runtime-selected backend transport kind.</p>
 <h2 id="step-7-response-normalization">Step 7: Response Normalization</h2>
 <p>When an upstream response arrives, it is normalized before downstream emission.</p>
 <p>This shared layer covers:</p>
@@ -1634,6 +1651,14 @@
 <li>QUIC-specific stream progression details</li>
 </ul>
 <p>If a new policy exists only in one path, it usually belongs in a shared layer instead.</p>
+<h2 id="routing-transport-and-lifecycle-relationship">Routing, Transport, and Lifecycle Relationship</h2>
+<p>The request path depends on three adjacent subsystems:</p>
+<ul>
+<li>routing decides which upstream and backend should receive the request</li>
+<li>transport decides how that backend request is executed on the wire</li>
+<li>backend lifecycle decides how request feedback changes backend health and operator-visible state</li>
+</ul>
+<p>Those concerns are related, but they should not collapse into one module.</p>
 <h2 id="contributor-rules">Contributor Rules</h2>
 <p>When adding a new request-path feature:</p>
 <ul>
@@ -2099,6 +2124,14 @@
         
 
         
+        <a href="#one-request-two-ingress-paths"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#one-request-two-ingress-paths');">
+            One Request, Two Ingress Paths
+        </a>
+        
+
+        
         <a href="#main-ownership-boundaries"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#main-ownership-boundaries');">
@@ -2169,10 +2202,10 @@
         
 
         
-        <a href="#step-3-external-auth-and-auth-decisions"
+        <a href="#step-3-auth-decisions"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#step-3-external-auth-and-auth-decisions');">
-            Step 3: External Auth and Auth Decisions
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#step-3-auth-decisions');">
+            Step 3: Auth Decisions
         </a>
         
 
@@ -2185,10 +2218,10 @@
         
 
         
-        <a href="#step-5-request-building"
+        <a href="#step-5-canonical-request-building"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#step-5-request-building');">
-            Step 5: Request Building
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#step-5-canonical-request-building');">
+            Step 5: Canonical Request Building
         </a>
         
 
@@ -2237,6 +2270,14 @@
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#quic-vs-bootstrap-differences');">
             QUIC vs Bootstrap Differences
+        </a>
+        
+
+        
+        <a href="#routing-transport-and-lifecycle-relationship"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#routing-transport-and-lifecycle-relationship');">
+            Routing, Transport, and Lifecycle Relationship
         </a>
         
 

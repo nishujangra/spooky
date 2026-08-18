@@ -1455,7 +1455,39 @@
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <h2 id="introduction">Introduction</h2>
-<p>Spooky is an HTTP/3 edge proxy and load balancer implemented in Rust. It terminates QUIC connections at the edge and forwards HTTP requests to HTTP/2 backend servers, enabling modern HTTP/3 clients to communicate with existing HTTP/2 infrastructure without requiring backend modifications.</p>
+<p>Spooky is a Rust edge runtime for API traffic. It accepts HTTP/3 over QUIC as the primary downstream path, exposes a bootstrap HTTP/1.1 and HTTP/2 compatibility path for clients that are not using native HTTP/3, applies shared policy and routing decisions, and forwards requests to upstream backends over runtime-selected HTTP/1.1 or HTTP/2 transport.</p>
+<h2 id="read-this-section">Read This Section</h2>
+<p>Use this page as the architecture entry point, then go deeper where needed:</p>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Topic</th>
+<th>Document</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Product flow from ingress to response</td>
+<td><a href="../request-lifecycle/">Request Lifecycle</a></td>
+</tr>
+<tr>
+<td>QUIC path versus bootstrap compatibility path</td>
+<td><a href="../bootstrap-vs-quic/">Bootstrap vs QUIC</a></td>
+</tr>
+<tr>
+<td>Backend execution and H1/H2 transport boundary</td>
+<td><a href="../transport/">Transport Boundary</a></td>
+</tr>
+<tr>
+<td>Backend resolution, health, and lifecycle state</td>
+<td><a href="../backend-lifecycle/">Backend Lifecycle</a></td>
+</tr>
+<tr>
+<td>Runtime reload and generation ownership</td>
+<td><a href="../runtime-generation/">Runtime Generation Model</a></td>
+</tr>
+</tbody>
+</table></div>
 <h2 id="design-principles">Design Principles</h2>
 <h3 id="performance">Performance</h3>
 <p>Spooky is designed for high-performance operation with minimal overhead:
@@ -1475,7 +1507,7 @@
 - Single binary deployment
 - YAML-based configuration with validation
 - Graceful shutdown with connection draining
-- Hot configuration reload (planned)
+- Generation-based runtime reload, staged activation, and rollback for runtime-managed settings
 - Comprehensive metrics and logging</p>
 <h3 id="modularity">Modularity</h3>
 <p>Clear separation of concerns across crate boundaries:
@@ -1485,124 +1517,170 @@
 - Reusable utility components</p>
 <h2 id="system-architecture">System Architecture</h2>
 <h3 id="high-level-view">High-Level View</h3>
-<pre><code>┌─────────────────┐
-│ HTTP/3 Clients  │
-└────────┬────────┘
-         │ QUIC/UDP
-         │ TLS 1.3
-         ▼
-┌─────────────────────────────────────────┐
-│             Spooky Edge                  │
-│                                          │
-│  ┌────────────────────────────────┐     │
-│  │  QUIC Listener (quiche)        │     │
-│  │  - Connection management       │     │
-│  │  - Stream multiplexing         │     │
-│  │  - TLS termination             │     │
-│  └───────────┬────────────────────┘     │
-│              │                           │
-│  ┌───────────▼────────────────────┐     │
-│  │  Protocol Bridge               │     │
-│  │  - HTTP/3 → HTTP/2 conversion  │     │
-│  │  - Header normalization        │     │
-│  │  - Streaming body via ChannelBody (mpsc-backed)        │     │
-│  └───────────┬────────────────────┘     │
-│              │                           │
-│  ┌───────────▼────────────────────┐     │
-│  │  Router &amp; Load Balancer        │     │
-│  │  - Path/host matching          │     │
-│  │  - Upstream selection          │     │
-│  │  - Health tracking             │     │
-│  └───────────┬────────────────────┘     │
-│              │                           │
-│  ┌───────────▼────────────────────┐     │
-│  │  HTTP/2 Connection Pool        │     │
-│  │  - Connection reuse            │     │
-│  │  - Request forwarding          │     │
-│  │  - Per-frame response streaming                        │     │
-│  └───────────┬────────────────────┘     │
-└──────────────┼──────────────────────────┘
-               │ HTTP/2
-               ▼
-       ┌───────────────┐
-       │ Backend Pool  │
-       └───────────────┘
+<pre><code class="language-mermaid">flowchart TB
+    client_h3[&quot;HTTP/3 clients&quot;]
+    client_bootstrap[&quot;HTTP/1.1 and HTTP/2 clients&quot;]
+
+    subgraph spooky[&quot;Spooky edge runtime&quot;]
+        ingress[&quot;Ingress
+        HTTP/3 over QUIC
+        bootstrap HTTP/1.1 and HTTP/2
+        TLS termination&quot;]
+        admission[&quot;Shared request policy path
+        admission
+        auth
+        route resolution&quot;]
+        execution[&quot;Upstream execution
+        canonical request building
+        backend selection
+        resilience&quot;]
+        transport[&quot;Transport boundary
+        runtime-selected HTTP/1.1 or HTTP/2
+        connection reuse
+        response streaming&quot;]
+        observability[&quot;Outcome recording
+        metrics
+        logs
+        traces
+        backend feedback&quot;]
+    end
+
+    control[&quot;Control plane
+    runtime activation and rollback
+    health checks
+    metrics endpoint
+    Control API
+    watchdog&quot;]
+
+    backends[&quot;Upstream backends&quot;]
+
+    client_h3 --&gt; ingress
+    client_bootstrap --&gt; ingress
+    ingress --&gt; admission
+    admission --&gt; execution
+    execution --&gt; transport
+    transport --&gt; backends
+    execution --&gt; observability
+    control -. reads and updates runtime state .-&gt; spooky
 </code></pre>
+<h3 id="plane-comparison">Plane Comparison</h3>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Plane</th>
+<th>Primary responsibility</th>
+<th>Examples</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Data plane</td>
+<td>Accept, evaluate, route, and forward requests</td>
+<td>QUIC ingress, bootstrap ingress, admission, auth, backend selection, transport execution</td>
+</tr>
+<tr>
+<td>Control plane</td>
+<td>Inspect, activate, protect, and observe the runtime</td>
+<td>Control API, runtime history, metrics endpoint, watchdog, cert reload, health checks</td>
+</tr>
+</tbody>
+</table></div>
 <h3 id="data-plane-and-control-plane">Data Plane and Control Plane</h3>
-<p>The architecture separates data plane operations (request forwarding) from control plane operations (configuration, health checks, metrics):</p>
+<p>The architecture separates data-plane request handling from operator-facing control-plane work such as configuration activation, health checks, runtime views, and metrics exposure.</p>
 <p><strong>Data Plane:</strong>
-- QUIC packet processing
-- HTTP/3 stream handling
-- Protocol conversion
-- Backend request forwarding
-- Response streaming</p>
+- QUIC or bootstrap ingress
+- request admission and auth
+- route resolution and backend selection
+- upstream request execution
+- response normalization and streaming</p>
 <p><strong>Control Plane:</strong>
-- Configuration loading and validation
+- Configuration loading, validation, preview, activation, and rollback
 - Health check execution
-- Backend state management
-- Metrics collection
-- Connection lifecycle management</p>
-<p>This separation ensures that control plane operations do not block request processing on the hot path.</p>
+- Backend state and runtime-generation views
+- Metrics, readiness, and Control API services
+- Watchdog and restart coordination</p>
+<p>This separation keeps operator tasks out of the hot path and makes runtime state easier to reason about.</p>
 <h2 id="request-processing-pipeline">Request Processing Pipeline</h2>
-<h3 id="1-connection-establishment">1. Connection Establishment</h3>
-<p>When a client initiates a connection:
-1. UDP packets arrive at the bound socket
-2. QUIC handshake is performed using quiche
-3. TLS 1.3 credentials are validated
-4. HTTP/3 session is established over QUIC
-5. Connection state is tracked in the connections HashMap</p>
-<h3 id="2-request-reception">2. Request Reception</h3>
-<p>For each incoming HTTP/3 stream:
-1. QUIC stream data is received
-2. HTTP/3 headers are decoded via QPACK
-3. Request envelope is created with method, path, authority, headers
-4. Body data is accumulated as stream frames arrive
-5. Stream state is maintained until request is complete</p>
-<h3 id="3-routing-and-backend-selection">3. Routing and Backend Selection</h3>
-<p>Once request headers are available:
-1. Router matches request path and host against upstream pool routes
-2. Longest matching path prefix wins for overlapping routes
-3. Host-based routing is applied if configured
-4. Selected upstream pool's load balancing strategy is invoked
-5. Backend index is selected from healthy backends only
-6. Backend address is retrieved from pool</p>
-<h3 id="4-protocol-translation">4. Protocol Translation</h3>
-<p>Before forwarding to backend:
-1. HTTP/3 pseudo-headers (:method, :path, :authority) are extracted
-2. HTTP/2 request is built with proper URI and method
-3. Regular headers are copied, filtering hop-by-hop headers
-4. Content-Length is set based on body size
-5. Host header is ensured (using authority or backend address)</p>
-<h3 id="5-backend-forwarding">5. Backend Forwarding</h3>
-<p>Request is sent to selected backend:
-1. HTTP/2 connection pool provides connection for backend address
-2. Semaphore-based flow control limits concurrent requests per backend
-3. Request is sent over HTTP/2 connection
-4. Timeout is enforced at the transport layer
-5. Backend response is awaited</p>
-<h3 id="6-response-handling">6. Response Handling</h3>
-<p>Backend response is processed:
-1. HTTP/2 response is received from backend
-2. Status code and headers are extracted
-3. Response is written back to HTTP/3 stream
-4. Body is streamed to client per frame via incremental <code>h3.send_body</code> calls
-5. Stream is finalized when response is complete</p>
-<h3 id="7-health-management">7. Health Management</h3>
-<p>Backend health is tracked continuously:
-1. Successful requests increment success counter
-2. Failed requests increment failure counter
-3. Consecutive failures beyond threshold mark backend unhealthy
-4. Unhealthy backends enter cooldown period
-5. Successful requests during recovery increment recovery counter
-6. Backends return to healthy state after success threshold is met</p>
-<h3 id="8-metrics-collection">8. Metrics Collection</h3>
-<p>Throughout the pipeline, metrics are recorded:
-- Total requests received
-- Successful responses
-- Failed requests
-- Backend timeouts
-- Backend errors
-- Request latency (start to completion time)</p>
+<p>Spooky has two ingress paths, but both are expected to converge on the same internal request flow as early as possible.</p>
+<h3 id="request-flow-at-a-glance">Request Flow At A Glance</h3>
+<pre><code class="language-mermaid">flowchart LR
+    ingress[&quot;Ingress&quot;] --&gt; admission[&quot;Admission&quot;]
+    admission --&gt; auth[&quot;Auth&quot;]
+    auth --&gt; routing[&quot;Route and backend selection&quot;]
+    routing --&gt; bridge[&quot;Canonical request building&quot;]
+    bridge --&gt; transport[&quot;Transport execution&quot;]
+    transport --&gt; response[&quot;Response normalization and streaming&quot;]
+    response --&gt; outcome[&quot;Outcome recording and backend feedback&quot;]
+</code></pre>
+<h3 id="1-ingress">1. Ingress</h3>
+<p>The request begins on one of two downstream paths:</p>
+<ol>
+<li>QUIC ingress accepts UDP, performs the QUIC and TLS handshake, and opens HTTP/3 streams.</li>
+<li>Bootstrap ingress accepts HTTP/1.1 or HTTP/2 requests on the compatibility path.</li>
+<li>In either case, ingress builds a canonical request context containing method, path, authority, headers, and body-stream state.</li>
+</ol>
+<h3 id="2-admission">2. Admission</h3>
+<p>Admission is the first shared policy gate. It evaluates whether the request should proceed before upstream work begins.</p>
+<p>This stage covers:</p>
+<ul>
+<li>quota and scoped rate-limit decisions</li>
+<li>overload and brownout shedding</li>
+<li>inflight and buffer protection</li>
+<li>admission permit acquisition and route-level caps</li>
+</ul>
+<p>Quota policy and overload policy are intentionally separate concepts even when both can reject a request.</p>
+<h3 id="3-auth">3. Auth</h3>
+<p>If auth is configured, the request moves through a shared auth decision layer that can:</p>
+<ul>
+<li>allow the request</li>
+<li>deny the request</li>
+<li>challenge or redirect where supported</li>
+<li>fail open or fail closed, depending on policy</li>
+</ul>
+<h3 id="4-routing-and-backend-selection">4. Routing and Backend Selection</h3>
+<p>After admission and auth succeed:</p>
+<ol>
+<li>the routing index matches the request to a route</li>
+<li>the route resolves to an upstream</li>
+<li>the upstream load-balancing policy selects an eligible backend</li>
+<li>backend identity and route identity are attached to the request context for observability and downstream policy</li>
+</ol>
+<h3 id="5-canonical-request-building">5. Canonical Request Building</h3>
+<p>Spooky converts ingress-specific request data into a canonical upstream request:</p>
+<ul>
+<li>pseudo-header and regular-header handling</li>
+<li>host and forwarded-header policy</li>
+<li>websocket and upgrade shaping where bootstrap compatibility requires it</li>
+<li>body mode and streaming decisions</li>
+</ul>
+<p>This is the <code>bridge</code> boundary, not per-ingress custom header logic.</p>
+<h3 id="6-backend-transport-execution">6. Backend Transport Execution</h3>
+<p>The request is handed to the transport layer together with the selected backend identity.</p>
+<p>Transport owns:</p>
+<ul>
+<li>runtime-selected HTTP/1.1 or HTTP/2 execution</li>
+<li>connection reuse</li>
+<li>connect and execution timeouts</li>
+<li>backend client rotation</li>
+</ul>
+<p>The edge layer still owns retry and hedge orchestration, but it does not own protocol-specific client behavior.</p>
+<h3 id="7-response-normalization-and-streaming">7. Response Normalization and Streaming</h3>
+<p>When the backend responds:</p>
+<ol>
+<li>the canonical response-normalization layer strips hop-by-hop headers and applies shared bodyless and no-content rules</li>
+<li>the ingress path emits the normalized result back to the downstream protocol</li>
+<li>guardrails enforce body size and idle or total streaming timeouts while bytes continue to flow</li>
+</ol>
+<p>QUIC and bootstrap differ here only in downstream write mechanics.</p>
+<h3 id="8-outcome-recording-and-backend-feedback">8. Outcome Recording and Backend Feedback</h3>
+<p>Every terminal request path records a shared outcome vocabulary for:</p>
+<ul>
+<li>route and backend outcome metrics</li>
+<li>auth, quota, and overload reason mapping</li>
+<li>retry and hedge results</li>
+<li>backend request feedback and health observations</li>
+</ul>
+<p>This is how Spooky keeps observability and backend lifecycle state aligned across both ingress paths.</p>
 <h2 id="concurrency-model">Concurrency Model</h2>
 <h3 id="async-runtime">Async Runtime</h3>
 <p>Spooky uses Tokio as its asynchronous runtime:
@@ -1613,7 +1691,7 @@
 <h3 id="state-management">State Management</h3>
 <p>Shared state is managed carefully:
 - <code>Arc&lt;T&gt;</code> for shared ownership (including <code>Arc&lt;Metrics&gt;</code> shared across all workers)
-- <code>RwLock&lt;T&gt;</code> for mutable shared state (upstream pools)
+- <code>RwLock&lt;T&gt;</code> for mutable shared state (upstreams and backend lifecycle state)
 - <code>AtomicU64</code> for lock-free counters (metrics)
 - A <code>RuntimeBundleHandle</code> provides an atomically swappable snapshot of runtime state, enabling
   config hot reload without restarting the process</p>
@@ -1635,8 +1713,8 @@ state, and leverages Tokio's async capabilities for backend I/O.</p>
 - Cause process to exit before binding sockets
 - Examples: invalid TLS paths, malformed YAML, missing required fields</p>
 <p><strong>Protocol Errors:</strong>
-- QUIC connection failures, stream errors, invalid HTTP/3
-- Isolated to individual connections or streams
+- QUIC connection failures, bootstrap request-parse failures, invalid downstream protocol behavior
+- Usually isolated to individual connections, requests, or streams
 - Do not affect other active connections
 - Logged for debugging</p>
 <p><strong>Transport Errors:</strong>
@@ -1686,25 +1764,29 @@ state, and leverages Tokio's async capabilities for backend I/O.</p>
 2. TLS certificate/key file existence checks
 3. Backend address format validation
 4. Load balancing mode validation
-5. Route conflict detection (planned)</p>
+5. Route conflict detection hardening and broader validation ergonomics</p>
 <h3 id="runtime-behavior">Runtime Behavior</h3>
-<p>Current configuration is immutable at runtime:
-- Loaded once at startup
-- Shared via Arc across components
-- Hot reload implemented with atomic swap</p>
+<p>Runtime configuration is loaded at startup and then exposed through a generation-based runtime bundle:</p>
+<ul>
+<li>startup-owned state stays fixed until restart</li>
+<li>generation-owned state is replaced on successful reload</li>
+<li>readers observe complete runtime generations through an atomic bundle swap</li>
+</ul>
+<p>See <a href="../runtime-generation/">Runtime Generation Model</a> for the exact ownership split.</p>
 <h2 id="security-considerations">Security Considerations</h2>
 <h3 id="transport-security">Transport Security</h3>
 <ul>
 <li>TLS 1.3 required for all client connections</li>
 <li>Certificate chain validation via rustls</li>
 <li>Private key protection (file permissions)</li>
-<li>ALPN negotiation ensures HTTP/3</li>
+<li>ALPN negotiation selects the downstream protocol where TLS listeners require it</li>
 </ul>
 <h3 id="backend-communication">Backend Communication</h3>
 <ul>
-<li>Currently plaintext HTTP/2</li>
-<li>upstream TLS shipped, verify-on by default (server-side; note true mTLS/client-cert to backends is the actual gap)</li>
-<li>Connection reuse reduces handshake overhead</li>
+<li>Upstream execution currently uses HTTP/1.1 or HTTP/2 transport</li>
+<li>HTTPS backends use upstream TLS with certificate verification enabled by default</li>
+<li>Backend mTLS client-certificate authentication remains a gap</li>
+<li>Connection reuse reduces repeated handshake cost</li>
 </ul>
 <h3 id="attack-surface">Attack Surface</h3>
 <ul>
@@ -1737,21 +1819,20 @@ state, and leverages Tokio's async capabilities for backend I/O.</p>
 <h3 id="latency">Latency</h3>
 <ul>
 <li>QUIC handshake: 1-RTT with TLS 1.3</li>
-<li>Proxy overhead: sub-millisecond (header conversion, routing)</li>
-<li>Backend latency: dependent on backend response time</li>
-<li>End-to-end: dominated by backend latency</li>
+<li>Proxy-added latency is primarily routing, request shaping, and transport dispatch overhead</li>
+<li>Backend latency usually dominates end-to-end request time</li>
+<li>Streaming responses remain sensitive to downstream and upstream pacing, not only header processing time</li>
 </ul>
 <h3 id="throughput">Throughput</h3>
 <ul>
-<li>Concurrent connections: 10,000+ QUIC connections</li>
-<li>Requests per second: 100,000+ on multi-core hardware</li>
-<li>Per-connection overhead: 1-2KB memory</li>
-<li>CPU: primarily driven by QUIC crypto and serialization</li>
+<li>Throughput depends on worker count, packet sharding, backend behavior, and TLS or QUIC cost</li>
+<li>CPU pressure is typically driven by QUIC crypto, request volume, and backend protocol execution</li>
+<li>Capacity planning should be validated with workload-specific benchmarking rather than fixed headline numbers</li>
 </ul>
 <h3 id="scalability">Scalability</h3>
 <ul>
 <li>Horizontal: stateless design allows multiple instances</li>
-<li>Vertical: work-stealing scheduler utilizes all cores</li>
+<li>Vertical: multi-worker ingress and Tokio-based backend execution scale across cores</li>
 <li>Backend scaling: dynamic health-based routing</li>
 <li>Connection scaling: bounded by file descriptors and memory</li>
 </ul>
@@ -2237,6 +2318,14 @@ inspection and hot reload.</em></p>
         
 
         
+        <a href="#read-this-section"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#read-this-section');">
+            Read This Section
+        </a>
+        
+
+        
         <a href="#design-principles"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#design-principles');">
@@ -2284,6 +2373,12 @@ inspection and hot reload.</em></p>
             High-Level View
         </a>
         
+        <a href="#plane-comparison"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#plane-comparison');">
+            Plane Comparison
+        </a>
+        
         <a href="#data-plane-and-control-plane"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#data-plane-and-control-plane');">
@@ -2300,52 +2395,58 @@ inspection and hot reload.</em></p>
         </a>
         
         
-        <a href="#1-connection-establishment"
+        <a href="#request-flow-at-a-glance"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#1-connection-establishment');">
-            1. Connection Establishment
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#request-flow-at-a-glance');">
+            Request Flow At A Glance
         </a>
         
-        <a href="#2-request-reception"
+        <a href="#1-ingress"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#2-request-reception');">
-            2. Request Reception
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#1-ingress');">
+            1. Ingress
         </a>
         
-        <a href="#3-routing-and-backend-selection"
+        <a href="#2-admission"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#3-routing-and-backend-selection');">
-            3. Routing and Backend Selection
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#2-admission');">
+            2. Admission
         </a>
         
-        <a href="#4-protocol-translation"
+        <a href="#3-auth"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#4-protocol-translation');">
-            4. Protocol Translation
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#3-auth');">
+            3. Auth
         </a>
         
-        <a href="#5-backend-forwarding"
+        <a href="#4-routing-and-backend-selection"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#5-backend-forwarding');">
-            5. Backend Forwarding
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#4-routing-and-backend-selection');">
+            4. Routing and Backend Selection
         </a>
         
-        <a href="#6-response-handling"
+        <a href="#5-canonical-request-building"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#6-response-handling');">
-            6. Response Handling
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#5-canonical-request-building');">
+            5. Canonical Request Building
         </a>
         
-        <a href="#7-health-management"
+        <a href="#6-backend-transport-execution"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#7-health-management');">
-            7. Health Management
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#6-backend-transport-execution');">
+            6. Backend Transport Execution
         </a>
         
-        <a href="#8-metrics-collection"
+        <a href="#7-response-normalization-and-streaming"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#8-metrics-collection');">
-            8. Metrics Collection
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#7-response-normalization-and-streaming');">
+            7. Response Normalization and Streaming
+        </a>
+        
+        <a href="#8-outcome-recording-and-backend-feedback"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#8-outcome-recording-and-backend-feedback');">
+            8. Outcome Recording and Backend Feedback
         </a>
         
         
