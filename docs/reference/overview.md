@@ -1,6 +1,13 @@
 # Reference Overview
 
-This section is the canonical source for exact behavior and supported surface area.
+This section is the canonical source for exact product behavior, supported surface area, and current limits.
+
+Use this section when you need to answer:
+
+- where strict product reference lives
+- what is implemented, partial, or missing
+- what the current limits are
+- what exact configuration or API behavior means
 
 ## Start Here
 
@@ -10,6 +17,15 @@ This section is the canonical source for exact behavior and supported surface ar
 - [Configuration Reference](../configuration/reference.md) is the authoritative schema and runtime-semantics guide.
 - [TLS Setup](../configuration/tls.md) explains certificate and trust configuration.
 - [API Overview](../api/overview.md) summarizes the current operator-facing control and metrics endpoints.
+
+## Use This Section For
+
+- exact feature support: [Feature Matrix](feature-matrix.md)
+- current limits: [Limitations](limitations.md)
+- exact config semantics: [Configuration Reference](../configuration/reference.md)
+- exact control-plane interfaces: [Control API Reference](control-api-reference.md)
+- canonical metrics and labels: [Metrics Reference](metrics-reference.md)
+- canonical terminology: [Terminology](terminology.md)
 
 ## What This Section Covers
 

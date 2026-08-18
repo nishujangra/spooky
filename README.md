@@ -198,7 +198,14 @@ See:
 
 The full documentation index is at [docs/README.md](docs/README.md).
 
-Recommended entry points:
+Use these entry points first:
+
+- Start here: [Getting Started](docs/getting-started/overview.md)
+- Deploy and operate: [Operations Overview](docs/operations/overview.md)
+- Troubleshoot: [Common Issues](docs/troubleshooting/common-issues.md)
+- Exact product support and limits: [Reference Overview](docs/reference/overview.md)
+
+Recommended deep links:
 
 - [Architecture Overview](docs/architecture/overview.md)
 - [Request Lifecycle](docs/architecture/request-lifecycle.md)

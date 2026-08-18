@@ -1,8 +1,24 @@
-Spooky is an open-source HTTP/3 (QUIC) edge reverse proxy written in Rust that terminates QUIC connections and forwards traffic to HTTP/2 backends.
+Spooky is a modern edge runtime for high-trust APIs. This documentation set is organized so readers can quickly answer five questions:
+
+- what Spooky is
+- where to start
+- where to deploy and operate it
+- where to troubleshoot issues
+- where exact product reference lives
 
 ---
 
-## Where to start
+## Start Here
+
+| Goal | Go to |
+| --- | --- |
+| Understand the product | [README](../README.md) and [Getting Started Overview](getting-started/overview.md) |
+| Install and run Spooky | [Getting Started](getting-started/overview.md) |
+| Prepare for deployment | [Operations Overview](operations/overview.md) and [Production Deployment](deployment/production.md) |
+| Troubleshoot issues | [Common Issues](troubleshooting/common-issues.md) and [Runbook](operations/runbook.md) |
+| Find exact supported behavior | [Reference Overview](reference/overview.md) |
+
+## Documentation Paths
 
 ### Operator — install, configure, run in production
 
@@ -14,6 +30,8 @@ Spooky is an open-source HTTP/3 (QUIC) edge reverse proxy written in Rust that t
 | [TLS Setup](configuration/tls.md) | Certificate generation, mTLS client auth, key ownership and permissions |
 | [Production Deployment](deployment/production.md) | Systemd unit, privilege drop, sysctl tuning, canary rollout guidance |
 | [Production Readiness](operations/production-readiness.md) | Canonical statement of what is production-ready today and what still blocks GA |
+| [Operations Overview](operations/overview.md) | Main entry point for deployment, rollout, observability, and failure handling |
+| [Troubleshooting](troubleshooting/common-issues.md) | Symptom-driven diagnostics and operator checks |
 | [Limitations](reference/limitations.md) | The current hard product limits, without marketing language |
 
 ### Architecture — understand the runtime and subsystem ownership
@@ -64,9 +82,9 @@ Spooky is an open-source HTTP/3 (QUIC) edge reverse proxy written in Rust that t
 
 | Document | What you'll find |
 |---|---|
+| [Reference Overview](reference/overview.md) | Main entry point for exact behavior, product limits, and authoritative reference pages |
 | [Configuration Reference](configuration/reference.md) | Authoritative schema reference for every configuration block |
 | [Feature Matrix](reference/feature-matrix.md) | Strict feature-by-feature inventory of what is done, partial, and missing |
-| [Reference Overview](reference/overview.md) | Index of the strict reference material and product limits |
 | [Roadmap](roadmap.md) | Planned features, GA exit criteria, known limitations |
 | [Changelog](changelog.md) | Version history with added, fixed, and changed entries |
 
@@ -87,6 +105,14 @@ Controlled production rollout is supported. See [release-maturity.md](release-ma
 ---
 
 ## Quick reference
+
+If you are in a hurry:
+
+- first run: [getting-started/overview.md](getting-started/overview.md)
+- production deployment: [deployment/production.md](deployment/production.md)
+- incident response: [operations/runbook.md](operations/runbook.md)
+- troubleshooting: [troubleshooting/common-issues.md](troubleshooting/common-issues.md)
+- exact support surface: [reference/feature-matrix.md](reference/feature-matrix.md)
 
 ### Minimal working config
 

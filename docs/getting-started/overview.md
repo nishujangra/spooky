@@ -1,10 +1,29 @@
 # Overview
 
-Spooky is an HTTP/3 edge proxy and load balancer. It terminates QUIC connections at the edge and forwards requests to HTTP/2 backends, enabling HTTP/3 client support without modifying existing infrastructure.
+This section is the fastest path to understanding Spooky, getting it running, and sending first traffic successfully.
+
+Use this section when you need to answer:
+
+- what Spooky is
+- how to install it
+- how to run it locally or in a container
+- what a minimum safe production posture looks like
+
+## Start Here
+
+- Want the shortest first-run path: [Quickstart](../tutorials/quickstart.md)
+- Need installation and runtime requirements: [Installation](installation.md)
+- Want a container-based setup: [Docker](docker.md)
+- Want the smallest production checklist: [Minimum Production](minimum-production.md)
+- Need exact config keys and defaults: [Configuration Reference](../configuration/reference.md)
+
+## What Spooky Is
+
+Spooky is an HTTP/3 edge runtime and load balancer. It terminates QUIC at the edge, accepts compatibility traffic for HTTP/1.1 and HTTP/2 clients, and forwards requests to existing upstream services through its canonical request, routing, policy, and transport pipeline.
 
 ## What Spooky Does
 
-Spooky bridges the gap between modern HTTP/3 clients and production HTTP/2 backends by:
+Spooky is built to:
 
 - Terminating QUIC connections with TLS 1.3
 - Converting HTTP/3 streams to HTTP/2 requests
@@ -150,8 +169,9 @@ See [Release Maturity](../release-maturity.md) for beta scope and GA promotion c
 
 ## Next Steps
 
-- [Installation Guide](installation.md) - Complete installation instructions
-- [Configuration Reference](../configuration/reference.md) - Full configuration documentation
-- [TLS Setup](../configuration/tls.md) - Certificate generation and configuration
-- [Load Balancing Guide](../user-guide/load-balancing.md) - Backend selection strategies
-- [Production Deployment](../deployment/production.md) - Production deployment guidelines
+- [Installation Guide](installation.md) - complete installation instructions
+- [Configuration Reference](../configuration/reference.md) - exact configuration schema and defaults
+- [TLS Setup](../configuration/tls.md) - certificate generation and trust configuration
+- [Production Deployment](../deployment/production.md) - deployment and rollout guidance
+- [Operations Overview](../operations/overview.md) - where to go once you are ready to operate Spooky
+- [Troubleshooting](../troubleshooting/common-issues.md) - common failure signatures and checks
