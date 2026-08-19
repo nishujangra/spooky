@@ -27,7 +27,10 @@ impl RuntimeUpstream {
             route: route.clone(),
             policy,
             effective_tls: effective_tls.clone(),
-            backend_tls_policy: RuntimeBackendTlsPolicy::from_effective_tls(&effective_tls),
+            backend_tls_policy: RuntimeBackendTlsPolicy::from_effective_tls(
+                &effective_tls,
+                &format!("upstream '{name}' tls"),
+            )?,
             backends: upstream
                 .backends
                 .iter()

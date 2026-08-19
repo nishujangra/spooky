@@ -1,0 +1,631 @@
+use std::{
+    fmt,
+    fs,
+    sync::Arc,
+};
+
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+use sha2::{Digest, Sha256};
+
+use crate::config::{Config, ControlApiBearerToken, ExternalAuth, SecretRef};
+
+use super::RuntimeConfigError;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSecretSourceKind {
+    Literal,
+    File,
+}
+
+impl RuntimeSecretSourceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Literal => "literal",
+            Self::File => "file",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeSecretResolutionErrorKind {
+    ConflictingSources,
+    MissingSource,
+    UnsupportedScheme,
+    MalformedReference,
+    FileNotFound,
+    PermissionDenied,
+    NotAFile,
+    EmptySecret,
+    Io,
+    InvalidUtf8,
+    MalformedPemCertificate,
+    MalformedPemPrivateKey,
+}
+
+impl RuntimeSecretResolutionErrorKind {
+    pub fn slug(self) -> &'static str {
+        match self {
+            Self::ConflictingSources => "conflicting_sources",
+            Self::MissingSource => "missing_source",
+            Self::UnsupportedScheme => "unsupported_scheme",
+            Self::MalformedReference => "malformed_reference",
+            Self::FileNotFound => "file_not_found",
+            Self::PermissionDenied => "permission_denied",
+            Self::NotAFile => "not_a_file",
+            Self::EmptySecret => "empty_secret",
+            Self::Io => "io_error",
+            Self::InvalidUtf8 => "invalid_utf8",
+            Self::MalformedPemCertificate => "malformed_pem_certificate",
+            Self::MalformedPemPrivateKey => "malformed_pem_private_key",
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct RuntimeResolvedSecretMetadata {
+    pub source_kind: RuntimeSecretSourceKind,
+    pub fingerprint_sha256: String,
+    pub byte_len: usize,
+}
+
+impl fmt::Debug for RuntimeResolvedSecretMetadata {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RuntimeResolvedSecretMetadata")
+            .field("source_kind", &self.source_kind)
+            .field("fingerprint_sha256", &self.fingerprint_sha256)
+            .field("byte_len", &self.byte_len)
+            .finish()
+    }
+}
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct RuntimeResolvedSecret {
+    bytes: Vec<u8>,
+    metadata: RuntimeResolvedSecretMetadata,
+}
+
+impl RuntimeResolvedSecret {
+    pub fn metadata(&self) -> &RuntimeResolvedSecretMetadata {
+        &self.metadata
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+
+    pub fn into_string(self, field_name: &str) -> Result<String, RuntimeSecretResolutionError> {
+        String::from_utf8(self.bytes).map_err(|_| RuntimeSecretResolutionError::new(
+            field_name,
+            Some(self.metadata.source_kind),
+            RuntimeSecretResolutionErrorKind::InvalidUtf8,
+        ))
+    }
+
+    pub fn parse_pem_certificates(
+        &self,
+        field_name: &str,
+    ) -> Result<Vec<CertificateDer<'static>>, RuntimeSecretResolutionError> {
+        let certs = CertificateDer::pem_slice_iter(&self.bytes)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|_| {
+                RuntimeSecretResolutionError::new(
+                    field_name,
+                    Some(self.metadata.source_kind),
+                    RuntimeSecretResolutionErrorKind::MalformedPemCertificate,
+                )
+            })?;
+        if certs.is_empty() {
+            return Err(RuntimeSecretResolutionError::new(
+                field_name,
+                Some(self.metadata.source_kind),
+                RuntimeSecretResolutionErrorKind::MalformedPemCertificate,
+            ));
+        }
+        Ok(certs)
+    }
+
+    pub fn parse_pem_private_key(
+        &self,
+        field_name: &str,
+    ) -> Result<PrivateKeyDer<'static>, RuntimeSecretResolutionError> {
+        PrivateKeyDer::from_pem_slice(&self.bytes).map_err(|_| {
+            RuntimeSecretResolutionError::new(
+                field_name,
+                Some(self.metadata.source_kind),
+                RuntimeSecretResolutionErrorKind::MalformedPemPrivateKey,
+            )
+        })
+    }
+}
+
+impl fmt::Debug for RuntimeResolvedSecret {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RuntimeResolvedSecret")
+            .field("metadata", &self.metadata)
+            .field("value", &"<redacted>")
+            .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RuntimeSecretResolutionError {
+    field_name: String,
+    source_kind: Option<RuntimeSecretSourceKind>,
+    kind: RuntimeSecretResolutionErrorKind,
+}
+
+impl RuntimeSecretResolutionError {
+    pub fn new(
+        field_name: impl Into<String>,
+        source_kind: Option<RuntimeSecretSourceKind>,
+        kind: RuntimeSecretResolutionErrorKind,
+    ) -> Self {
+        Self {
+            field_name: field_name.into(),
+            source_kind,
+            kind,
+        }
+    }
+
+    pub fn field_name(&self) -> &str {
+        &self.field_name
+    }
+
+    pub fn source_kind(&self) -> Option<RuntimeSecretSourceKind> {
+        self.source_kind
+    }
+
+    pub fn kind(&self) -> RuntimeSecretResolutionErrorKind {
+        self.kind
+    }
+}
+
+impl fmt::Display for RuntimeSecretResolutionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(source_kind) = self.source_kind {
+            write!(
+                f,
+                "{} secret resolution failed for {}: {}",
+                source_kind.as_str(),
+                self.field_name,
+                self.kind.slug()
+            )
+        } else {
+            write!(
+                f,
+                "secret resolution failed for {}: {}",
+                self.field_name,
+                self.kind.slug()
+            )
+        }
+    }
+}
+
+impl std::error::Error for RuntimeSecretResolutionError {}
+
+pub trait RuntimeSecretProvider: fmt::Debug + Send + Sync {
+    fn source_kind(&self) -> RuntimeSecretSourceKind;
+    fn supports_scheme(&self, scheme: &str) -> bool;
+    fn resolve(
+        &self,
+        secret_ref: &SecretRef,
+        field_name: &str,
+    ) -> Result<RuntimeResolvedSecret, RuntimeSecretResolutionError>;
+}
+
+#[derive(Debug, Default)]
+pub struct LiteralSecretProvider;
+
+impl RuntimeSecretProvider for LiteralSecretProvider {
+    fn source_kind(&self) -> RuntimeSecretSourceKind {
+        RuntimeSecretSourceKind::Literal
+    }
+
+    fn supports_scheme(&self, scheme: &str) -> bool {
+        scheme == "literal"
+    }
+
+    fn resolve(
+        &self,
+        secret_ref: &SecretRef,
+        field_name: &str,
+    ) -> Result<RuntimeResolvedSecret, RuntimeSecretResolutionError> {
+        let Some(value) = secret_ref.raw_value().strip_prefix("literal:") else {
+            return Err(RuntimeSecretResolutionError::new(
+                field_name,
+                Some(self.source_kind()),
+                RuntimeSecretResolutionErrorKind::MalformedReference,
+            ));
+        };
+        if value.is_empty() {
+            return Err(RuntimeSecretResolutionError::new(
+                field_name,
+                Some(self.source_kind()),
+                RuntimeSecretResolutionErrorKind::EmptySecret,
+            ));
+        }
+        Ok(resolved_secret(self.source_kind(), value.as_bytes().to_vec()))
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct FilesystemSecretProvider;
+
+impl RuntimeSecretProvider for FilesystemSecretProvider {
+    fn source_kind(&self) -> RuntimeSecretSourceKind {
+        RuntimeSecretSourceKind::File
+    }
+
+    fn supports_scheme(&self, scheme: &str) -> bool {
+        scheme == "file"
+    }
+
+    fn resolve(
+        &self,
+        secret_ref: &SecretRef,
+        field_name: &str,
+    ) -> Result<RuntimeResolvedSecret, RuntimeSecretResolutionError> {
+        let Some(path) = secret_ref.raw_value().strip_prefix("file://") else {
+            return Err(RuntimeSecretResolutionError::new(
+                field_name,
+                Some(self.source_kind()),
+                RuntimeSecretResolutionErrorKind::MalformedReference,
+            ));
+        };
+        resolve_file_bytes(path, field_name)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct RuntimeSecretResolver {
+    providers: Vec<Arc<dyn RuntimeSecretProvider>>,
+}
+
+impl Default for RuntimeSecretResolver {
+    fn default() -> Self {
+        Self {
+            providers: vec![
+                Arc::new(LiteralSecretProvider),
+                Arc::new(FilesystemSecretProvider),
+            ],
+        }
+    }
+}
+
+impl RuntimeSecretResolver {
+    pub fn resolve(
+        &self,
+        secret_ref: &SecretRef,
+        field_name: &str,
+    ) -> Result<RuntimeResolvedSecret, RuntimeSecretResolutionError> {
+        let Some(scheme) = secret_ref.scheme() else {
+            return Err(RuntimeSecretResolutionError::new(
+                field_name,
+                None,
+                RuntimeSecretResolutionErrorKind::MalformedReference,
+            ));
+        };
+        let provider = self
+            .providers
+            .iter()
+            .find(|provider| provider.supports_scheme(scheme))
+            .ok_or_else(|| {
+                RuntimeSecretResolutionError::new(
+                    field_name,
+                    None,
+                    RuntimeSecretResolutionErrorKind::UnsupportedScheme,
+                )
+            })?;
+        provider.resolve(secret_ref, field_name)
+    }
+
+    pub fn resolve_from_sources(
+        &self,
+        literal_value: Option<&str>,
+        secret_ref: Option<&SecretRef>,
+        field_name: &str,
+    ) -> Result<RuntimeResolvedSecret, RuntimeSecretResolutionError> {
+        match (
+            literal_value.filter(|value| !value.is_empty()),
+            secret_ref,
+        ) {
+            (Some(_), Some(_)) => Err(RuntimeSecretResolutionError::new(
+                field_name,
+                None,
+                RuntimeSecretResolutionErrorKind::ConflictingSources,
+            )),
+            (Some(value), None) => Ok(resolved_secret(
+                RuntimeSecretSourceKind::Literal,
+                value.as_bytes().to_vec(),
+            )),
+            (None, Some(secret_ref)) => self.resolve(secret_ref, field_name),
+            (None, None) => Err(RuntimeSecretResolutionError::new(
+                field_name,
+                None,
+                RuntimeSecretResolutionErrorKind::MissingSource,
+            )),
+        }
+    }
+}
+
+pub fn resolve_config_secrets(config: &Config) -> Result<Config, RuntimeConfigError> {
+    let resolver = RuntimeSecretResolver::default();
+    let mut resolved = config.clone();
+
+    for (upstream_name, upstream) in &mut resolved.upstream {
+        if let Some(jwt) = upstream.auth.jwt.as_mut()
+            && jwt.secret_ref.is_some()
+        {
+            let secret = resolver
+                .resolve_from_sources(
+                    (!jwt.secret.trim().is_empty()).then_some(jwt.secret.trim()),
+                    jwt.secret_ref.as_ref(),
+                    &format!("upstream '{upstream_name}' auth.jwt.secret_ref"),
+                )
+                .map_err(runtime_secret_config_error)?;
+            jwt.secret = secret
+                .into_string(&format!("upstream '{upstream_name}' auth.jwt.secret_ref"))
+                .map_err(runtime_secret_config_error)?;
+            jwt.secret_ref = None;
+        }
+
+        if let Some(ExternalAuth::Oidc {
+            client_secret,
+            client_secret_ref,
+            ..
+        }) = upstream.auth.external_auth.as_mut()
+            && client_secret_ref.is_some()
+        {
+            let resolved_secret = resolver
+                .resolve_from_sources(
+                    client_secret
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|value| !value.is_empty()),
+                    client_secret_ref.as_ref(),
+                    &format!("upstream '{upstream_name}' auth.external_auth.oidc.client_secret_ref"),
+                )
+                .map_err(runtime_secret_config_error)?;
+            *client_secret = Some(
+                resolved_secret
+                    .into_string(&format!(
+                        "upstream '{upstream_name}' auth.external_auth.oidc.client_secret_ref"
+                    ))
+                    .map_err(runtime_secret_config_error)?,
+            );
+            *client_secret_ref = None;
+        }
+    }
+
+    if resolved.observability.control_api.auth_token_ref.is_some() {
+        let token = resolver
+            .resolve_from_sources(
+                resolved
+                    .observability
+                    .control_api
+                    .auth_token
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty()),
+                resolved.observability.control_api.auth_token_ref.as_ref(),
+                "observability.control_api.auth_token_ref",
+            )
+            .map_err(runtime_secret_config_error)?;
+        resolved.observability.control_api.auth_token = Some(
+            token
+                .into_string("observability.control_api.auth_token_ref")
+                .map_err(runtime_secret_config_error)?,
+        );
+        resolved.observability.control_api.auth_token_ref = None;
+    }
+
+    for (index, token) in resolved
+        .observability
+        .control_api
+        .auth
+        .bearer_tokens
+        .iter_mut()
+        .enumerate()
+    {
+        resolve_control_api_bearer_token(&resolver, token, index).map_err(runtime_secret_config_error)?;
+    }
+
+    Ok(resolved)
+}
+
+fn resolve_control_api_bearer_token(
+    resolver: &RuntimeSecretResolver,
+    token: &mut ControlApiBearerToken,
+    index: usize,
+) -> Result<(), RuntimeSecretResolutionError> {
+    if token.token_ref.is_none() {
+        return Ok(());
+    }
+
+    let resolved = resolver.resolve_from_sources(
+        (!token.token.trim().is_empty()).then_some(token.token.trim()),
+        token.token_ref.as_ref(),
+        &format!("observability.control_api.auth.bearer_tokens[{index}].token_ref"),
+    )?;
+    token.token = resolved
+        .into_string(&format!(
+            "observability.control_api.auth.bearer_tokens[{index}].token_ref"
+        ))?;
+    token.token_ref = None;
+    Ok(())
+}
+
+pub fn resolve_file_secret_path(
+    path: &str,
+    field_name: &str,
+) -> Result<RuntimeResolvedSecret, RuntimeSecretResolutionError> {
+    resolve_file_bytes(path, field_name)
+}
+
+fn resolve_file_bytes(
+    path: &str,
+    field_name: &str,
+) -> Result<RuntimeResolvedSecret, RuntimeSecretResolutionError> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return Err(RuntimeSecretResolutionError::new(
+            field_name,
+            Some(RuntimeSecretSourceKind::File),
+            RuntimeSecretResolutionErrorKind::MalformedReference,
+        ));
+    }
+
+    let metadata = fs::metadata(trimmed).map_err(|err| map_io_error(field_name, err.kind()))?;
+    if !metadata.is_file() {
+        return Err(RuntimeSecretResolutionError::new(
+            field_name,
+            Some(RuntimeSecretSourceKind::File),
+            RuntimeSecretResolutionErrorKind::NotAFile,
+        ));
+    }
+
+    let bytes = fs::read(trimmed).map_err(|err| map_io_error(field_name, err.kind()))?;
+    if bytes.is_empty() {
+        return Err(RuntimeSecretResolutionError::new(
+            field_name,
+            Some(RuntimeSecretSourceKind::File),
+            RuntimeSecretResolutionErrorKind::EmptySecret,
+        ));
+    }
+
+    Ok(resolved_secret(RuntimeSecretSourceKind::File, bytes))
+}
+
+fn resolved_secret(source_kind: RuntimeSecretSourceKind, bytes: Vec<u8>) -> RuntimeResolvedSecret {
+    let fingerprint_sha256 = hex::encode(Sha256::digest(&bytes));
+    RuntimeResolvedSecret {
+        metadata: RuntimeResolvedSecretMetadata {
+            source_kind,
+            fingerprint_sha256,
+            byte_len: bytes.len(),
+        },
+        bytes,
+    }
+}
+
+fn map_io_error(field_name: &str, kind: std::io::ErrorKind) -> RuntimeSecretResolutionError {
+    let mapped = match kind {
+        std::io::ErrorKind::NotFound => RuntimeSecretResolutionErrorKind::FileNotFound,
+        std::io::ErrorKind::PermissionDenied => RuntimeSecretResolutionErrorKind::PermissionDenied,
+        _ => RuntimeSecretResolutionErrorKind::Io,
+    };
+    RuntimeSecretResolutionError::new(field_name, Some(RuntimeSecretSourceKind::File), mapped)
+}
+
+fn runtime_secret_config_error(err: RuntimeSecretResolutionError) -> RuntimeConfigError {
+    RuntimeConfigError::SecretResolutionFailed(err.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    use tempfile::tempdir;
+
+    use super::*;
+
+    #[test]
+    fn literal_provider_resolves_bytes_and_stable_fingerprint() {
+        let resolver = RuntimeSecretResolver::default();
+        let secret = resolver
+            .resolve(
+                &SecretRef {
+                    reference: "literal:super-secret".to_string(),
+                },
+                "auth.jwt.secret_ref",
+            )
+            .expect("literal secret");
+
+        assert_eq!(secret.bytes(), b"super-secret");
+        assert_eq!(secret.metadata().source_kind, RuntimeSecretSourceKind::Literal);
+        assert_eq!(secret.metadata().byte_len, 12);
+    }
+
+    #[test]
+    fn file_provider_rejects_missing_file_with_sanitized_error() {
+        let err = resolve_file_secret_path("/definitely/missing/secret.txt", "auth.jwt.secret_ref")
+            .expect_err("missing file");
+
+        assert_eq!(err.kind(), RuntimeSecretResolutionErrorKind::FileNotFound);
+        assert_eq!(
+            err.to_string(),
+            "file secret resolution failed for auth.jwt.secret_ref: file_not_found"
+        );
+    }
+
+    #[test]
+    fn file_provider_rejects_unreadable_file() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("secret.txt");
+        fs::write(&path, b"secret").expect("write");
+        let mut perms = fs::metadata(&path).expect("metadata").permissions();
+        perms.set_mode(0o000);
+        fs::set_permissions(&path, perms).expect("chmod");
+
+        let err = resolve_file_secret_path(path.to_string_lossy().as_ref(), "auth.jwt.secret_ref")
+            .expect_err("permission denied");
+
+        assert_eq!(
+            err.kind(),
+            RuntimeSecretResolutionErrorKind::PermissionDenied
+        );
+    }
+
+    #[test]
+    fn file_provider_rejects_empty_file() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("secret.txt");
+        fs::write(&path, b"").expect("write");
+
+        let err = resolve_file_secret_path(path.to_string_lossy().as_ref(), "auth.jwt.secret_ref")
+            .expect_err("empty file");
+
+        assert_eq!(err.kind(), RuntimeSecretResolutionErrorKind::EmptySecret);
+    }
+
+    #[test]
+    fn pem_helpers_reject_malformed_material() {
+        let secret = resolved_secret(RuntimeSecretSourceKind::Literal, b"not-pem".to_vec());
+        assert_eq!(
+            secret
+                .parse_pem_certificates("tls.client_certificate_ref")
+                .expect_err("bad cert")
+                .kind(),
+            RuntimeSecretResolutionErrorKind::MalformedPemCertificate
+        );
+        assert_eq!(
+            secret
+                .parse_pem_private_key("tls.client_key_ref")
+                .expect_err("bad key")
+                .kind(),
+            RuntimeSecretResolutionErrorKind::MalformedPemPrivateKey
+        );
+    }
+
+    #[test]
+    fn fingerprint_changes_when_file_contents_rotate() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("secret.txt");
+        fs::write(&path, b"first-secret").expect("write");
+        let first = resolve_file_secret_path(path.to_string_lossy().as_ref(), "auth.jwt.secret_ref")
+            .expect("first");
+        fs::write(&path, b"second-secret").expect("rewrite");
+        let second =
+            resolve_file_secret_path(path.to_string_lossy().as_ref(), "auth.jwt.secret_ref")
+                .expect("second");
+
+        assert_ne!(
+            first.metadata().fingerprint_sha256,
+            second.metadata().fingerprint_sha256
+        );
+    }
+}

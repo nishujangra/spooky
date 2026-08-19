@@ -4,7 +4,9 @@ use super::config_invalid;
 use crate::{
     backend_endpoint::{BackendEndpoint, BackendScheme},
     config::{HealthCheck, Performance, UpstreamTls},
-    runtime::RuntimeConfigError,
+    runtime::{
+        RuntimeConfigError, RuntimeResolvedSecret, resolve_file_secret_path,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,16 +135,36 @@ pub struct RuntimeBackendTlsPolicy {
     pub strict_sni: bool,
     pub ca_file: Option<String>,
     pub ca_dir: Option<String>,
+    pub client_certificate: Option<RuntimeResolvedSecret>,
+    pub client_key: Option<RuntimeResolvedSecret>,
 }
 
 impl RuntimeBackendTlsPolicy {
-    pub(crate) fn from_effective_tls(effective_tls: &UpstreamTls) -> Self {
-        Self {
+    pub(crate) fn from_effective_tls(
+        effective_tls: &UpstreamTls,
+        field_prefix: &str,
+    ) -> Result<Self, RuntimeConfigError> {
+        let client_certificate = resolve_optional_secret_material(
+            effective_tls.client_certificate.as_deref(),
+            effective_tls.client_certificate_ref.as_ref(),
+            &format!("{field_prefix}.client_certificate"),
+            true,
+        )?;
+        let client_key = resolve_optional_secret_material(
+            effective_tls.client_key.as_deref(),
+            effective_tls.client_key_ref.as_ref(),
+            &format!("{field_prefix}.client_key"),
+            false,
+        )?;
+
+        Ok(Self {
             verify_certificates: effective_tls.verify_certificates,
             strict_sni: effective_tls.strict_sni,
             ca_file: effective_tls.ca_file.clone(),
             ca_dir: effective_tls.ca_dir.clone(),
-        }
+            client_certificate,
+            client_key,
+        })
     }
 
     pub(crate) fn as_upstream_tls(&self) -> UpstreamTls {
@@ -156,6 +178,50 @@ impl RuntimeBackendTlsPolicy {
             client_key: None,
             client_key_ref: None,
         }
+    }
+}
+
+fn resolve_optional_secret_material(
+    legacy_path: Option<&str>,
+    secret_ref: Option<&crate::config::SecretRef>,
+    field_name: &str,
+    expect_certificate_pem: bool,
+) -> Result<Option<RuntimeResolvedSecret>, RuntimeConfigError> {
+    let material = match (
+        legacy_path.map(str::trim).filter(|value| !value.is_empty()),
+        secret_ref,
+    ) {
+        (Some(path), None) => Some(
+            resolve_file_secret_path(path, field_name)
+                .map_err(|err| RuntimeConfigError::SecretResolutionFailed(err.to_string()))?,
+        ),
+        (None, Some(secret_ref)) => Some(
+            crate::runtime::RuntimeSecretResolver::default()
+                .resolve(secret_ref, field_name)
+                .map_err(|err| RuntimeConfigError::SecretResolutionFailed(err.to_string()))?,
+        ),
+        (Some(_), Some(_)) => {
+            return Err(RuntimeConfigError::SecretResolutionFailed(format!(
+                "secret resolution failed for {}: conflicting_sources",
+                field_name
+            )));
+        }
+        (None, None) => None,
+    };
+
+    if let Some(material) = material {
+        if expect_certificate_pem {
+            material
+                .parse_pem_certificates(field_name)
+                .map_err(|err| RuntimeConfigError::TlsMaterialInvalid(err.to_string()))?;
+        } else {
+            material
+                .parse_pem_private_key(field_name)
+                .map_err(|err| RuntimeConfigError::TlsMaterialInvalid(err.to_string()))?;
+        }
+        Ok(Some(material))
+    } else {
+        Ok(None)
     }
 }
 
@@ -264,7 +330,11 @@ mod tests {
             client_key_ref: None,
         };
 
-        let policy = RuntimeBackendTlsPolicy::from_effective_tls(&effective_tls);
+        let policy = RuntimeBackendTlsPolicy::from_effective_tls(
+            &effective_tls,
+            "upstream 'payments' tls",
+        )
+        .expect("backend tls policy");
 
         assert_eq!(
             policy,
@@ -273,6 +343,8 @@ mod tests {
                 strict_sni: false,
                 ca_file: Some("/etc/spooky/ca.pem".to_string()),
                 ca_dir: Some("/etc/spooky/ca.d".to_string()),
+                client_certificate: None,
+                client_key: None,
             }
         );
         let roundtrip = policy.as_upstream_tls();

@@ -14,6 +14,7 @@ use crate::config::{
 
 mod listeners;
 mod policies;
+mod secrets;
 mod upstreams;
 
 pub use self::policies::{
@@ -32,6 +33,12 @@ pub use self::policies::{
     RuntimeRouteQueuePolicy, RuntimeScopedRateLimitPolicy, RuntimeTimeoutPolicy,
     RuntimeTransportPolicy, RuntimeWatchdogPolicy,
 };
+pub use self::secrets::{
+    FilesystemSecretProvider, LiteralSecretProvider, RuntimeResolvedSecret,
+    RuntimeResolvedSecretMetadata, RuntimeSecretProvider, RuntimeSecretResolutionError,
+    RuntimeSecretResolutionErrorKind, RuntimeSecretResolver, RuntimeSecretSourceKind,
+    resolve_config_secrets, resolve_file_secret_path,
+};
 
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
@@ -47,16 +54,17 @@ pub struct RuntimeConfig {
 
 impl RuntimeConfig {
     pub fn from_config(config: &Config) -> Result<Self, RuntimeConfigError> {
-        let policies = RuntimePolicySet::from_config(config)?;
+        let resolved_config = resolve_config_secrets(config)?;
+        let policies = RuntimePolicySet::from_config(&resolved_config)?;
         Ok(Self {
-            version: config.version,
-            listeners: listeners::runtime_listeners(config)?,
-            upstreams: upstreams::normalize_upstreams(config, &policies)?,
+            version: resolved_config.version,
+            listeners: listeners::runtime_listeners(&resolved_config)?,
+            upstreams: upstreams::normalize_upstreams(&resolved_config, &policies)?,
             policies,
-            performance: config.performance.clone(),
-            observability: config.observability.clone(),
-            resilience: config.resilience.clone(),
-            security: config.security.clone(),
+            performance: resolved_config.performance.clone(),
+            observability: resolved_config.observability.clone(),
+            resilience: resolved_config.resilience.clone(),
+            security: resolved_config.security.clone(),
         })
     }
 
@@ -98,6 +106,7 @@ impl RuntimeConfig {
 pub enum RuntimeConfigError {
     ConfigInvalid(String),
     TlsMaterialInvalid(String),
+    SecretResolutionFailed(String),
     BackendAddressInvalid {
         upstream: String,
         backend: String,
@@ -125,6 +134,7 @@ impl RuntimeConfigError {
         match self {
             Self::ConfigInvalid(_) => "config_invalid",
             Self::TlsMaterialInvalid(_) => "tls_material_invalid",
+            Self::SecretResolutionFailed(_) => "secret_resolution_failed",
             Self::BackendAddressInvalid { .. } => "backend_address_invalid",
             Self::DuplicateRouteAmbiguity { .. } => "duplicate_route_ambiguity",
             Self::ListenerBindConflict { .. } => "listener_bind_conflict",
@@ -138,6 +148,7 @@ impl fmt::Display for RuntimeConfigError {
         match self {
             Self::ConfigInvalid(message)
             | Self::TlsMaterialInvalid(message)
+            | Self::SecretResolutionFailed(message)
             | Self::UnsupportedPolicyCombination(message) => {
                 write!(f, "{}: {}", self.category(), message)
             }
