@@ -131,8 +131,11 @@ pub(super) fn normalize_upstreams(
         if upstream_uses_https_backends {
             validate_runtime_upstream_tls(
                 upstream_name,
-                &runtime_upstream.backend_tls_policy.as_upstream_tls(),
+                &runtime_upstream.effective_tls,
+                true,
             )?;
+        } else {
+            validate_runtime_upstream_tls(upstream_name, &runtime_upstream.effective_tls, false)?;
         }
 
         normalized.insert(upstream_name.clone(), runtime_upstream);
@@ -689,7 +692,32 @@ fn validate_upstream_policy(
 fn validate_runtime_upstream_tls(
     upstream_name: &str,
     tls: &UpstreamTls,
+    uses_https_backends: bool,
 ) -> Result<(), RuntimeConfigError> {
+    let has_client_certificate = tls
+        .client_certificate
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        || tls.client_certificate_ref.is_some();
+    let has_client_key = tls
+        .client_key
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        || tls.client_key_ref.is_some();
+
+    if has_client_certificate != has_client_key {
+        return Err(RuntimeConfigError::UnsupportedPolicyCombination(format!(
+            "upstream '{upstream_name}' tls.client_certificate and tls.client_key must be configured as a complete mTLS pair"
+        )));
+    }
+    if (has_client_certificate || has_client_key) && !uses_https_backends {
+        return Err(RuntimeConfigError::UnsupportedPolicyCombination(format!(
+            "upstream '{upstream_name}' tls.client_certificate/tls.client_key require at least one HTTPS backend"
+        )));
+    }
+    if !uses_https_backends {
+        return Ok(());
+    }
     if tls
         .ca_file
         .as_deref()

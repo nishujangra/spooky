@@ -5,7 +5,7 @@ use crate::{
     backend_endpoint::{BackendEndpoint, BackendScheme},
     config::{HealthCheck, Performance, UpstreamTls},
     runtime::{
-        RuntimeConfigError, RuntimeResolvedSecret, resolve_file_secret_path,
+        RuntimeConfigError, RuntimeResolvedSecretMetadata, resolve_file_secret_path,
     },
 };
 
@@ -135,8 +135,8 @@ pub struct RuntimeBackendTlsPolicy {
     pub strict_sni: bool,
     pub ca_file: Option<String>,
     pub ca_dir: Option<String>,
-    pub client_certificate: Option<RuntimeResolvedSecret>,
-    pub client_key: Option<RuntimeResolvedSecret>,
+    pub client_certificate: Option<RuntimeResolvedSecretMetadata>,
+    pub client_key: Option<RuntimeResolvedSecretMetadata>,
 }
 
 impl RuntimeBackendTlsPolicy {
@@ -167,18 +167,6 @@ impl RuntimeBackendTlsPolicy {
         })
     }
 
-    pub(crate) fn as_upstream_tls(&self) -> UpstreamTls {
-        UpstreamTls {
-            verify_certificates: self.verify_certificates,
-            strict_sni: self.strict_sni,
-            ca_file: self.ca_file.clone(),
-            ca_dir: self.ca_dir.clone(),
-            client_certificate: None,
-            client_certificate_ref: None,
-            client_key: None,
-            client_key_ref: None,
-        }
-    }
 }
 
 fn resolve_optional_secret_material(
@@ -186,7 +174,7 @@ fn resolve_optional_secret_material(
     secret_ref: Option<&crate::config::SecretRef>,
     field_name: &str,
     expect_certificate_pem: bool,
-) -> Result<Option<RuntimeResolvedSecret>, RuntimeConfigError> {
+) -> Result<Option<RuntimeResolvedSecretMetadata>, RuntimeConfigError> {
     let material = match (
         legacy_path.map(str::trim).filter(|value| !value.is_empty()),
         secret_ref,
@@ -219,7 +207,7 @@ fn resolve_optional_secret_material(
                 .parse_pem_private_key(field_name)
                 .map_err(|err| RuntimeConfigError::TlsMaterialInvalid(err.to_string()))?;
         }
-        Ok(Some(material))
+        Ok(Some(material.metadata().clone()))
     } else {
         Ok(None)
     }
@@ -347,14 +335,6 @@ mod tests {
                 client_key: None,
             }
         );
-        let roundtrip = policy.as_upstream_tls();
-        assert_eq!(
-            roundtrip.verify_certificates,
-            effective_tls.verify_certificates
-        );
-        assert_eq!(roundtrip.strict_sni, effective_tls.strict_sni);
-        assert_eq!(roundtrip.ca_file, effective_tls.ca_file);
-        assert_eq!(roundtrip.ca_dir, effective_tls.ca_dir);
     }
 
     #[test]
