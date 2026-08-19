@@ -32,6 +32,7 @@ pub(crate) fn sample_config() -> Config {
         upstream: HashMap::new(),
         load_balancing: None,
         upstream_tls: UpstreamTls::default(),
+        secrets: Default::default(),
         log: Log::default(),
         performance: Performance::default(),
         observability: Observability::default(),

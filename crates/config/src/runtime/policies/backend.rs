@@ -151,6 +151,10 @@ impl RuntimeBackendTlsPolicy {
             strict_sni: self.strict_sni,
             ca_file: self.ca_file.clone(),
             ca_dir: self.ca_dir.clone(),
+            client_certificate: None,
+            client_certificate_ref: None,
+            client_key: None,
+            client_key_ref: None,
         }
     }
 }
@@ -254,6 +258,10 @@ mod tests {
             strict_sni: false,
             ca_file: Some("/etc/spooky/ca.pem".to_string()),
             ca_dir: Some("/etc/spooky/ca.d".to_string()),
+            client_certificate: None,
+            client_certificate_ref: None,
+            client_key: None,
+            client_key_ref: None,
         };
 
         let policy = RuntimeBackendTlsPolicy::from_effective_tls(&effective_tls);

@@ -307,6 +307,7 @@ mod tests {
             upstream: HashMap::new(),
             load_balancing: None,
             upstream_tls: UpstreamTls::default(),
+            secrets: Default::default(),
             log: crate::config::Log::default(),
             performance: Performance::default(),
             observability: Observability::default(),
@@ -364,6 +365,10 @@ mod tests {
             strict_sni: false,
             ca_file: Some("/tmp/upstream-ca.pem".to_string()),
             ca_dir: None,
+            client_certificate: None,
+            client_certificate_ref: None,
+            client_key: None,
+            client_key_ref: None,
         });
         config.resilience.scoped_rate_limits = vec![crate::config::ScopedRateLimit {
             name: "client-default".to_string(),

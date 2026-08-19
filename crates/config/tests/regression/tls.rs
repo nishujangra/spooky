@@ -18,12 +18,20 @@ fn runtime_config_lowers_effective_tls_and_upstream_policy_wrappers() {
             strict_sni: true,
             ca_file: Some("/tmp/roots/global.pem".to_string()),
             ca_dir: None,
+            client_certificate: None,
+            client_certificate_ref: None,
+            client_key: None,
+            client_key_ref: None,
         };
         api_upstream_mut(config).tls = Some(UpstreamTls {
             verify_certificates: false,
             strict_sni: false,
             ca_file: Some("/tmp/roots/upstream.pem".to_string()),
             ca_dir: Some("/tmp/roots/upstream".to_string()),
+            client_certificate: None,
+            client_certificate_ref: None,
+            client_key: None,
+            client_key_ref: None,
         });
     });
     let upstream = api_runtime_upstream(&runtime);
@@ -81,6 +89,10 @@ fn runtime_config_skips_per_upstream_tls_validation_for_http_only_upstreams() {
             strict_sni: true,
             ca_file: Some("   ".to_string()),
             ca_dir: Some("   ".to_string()),
+            client_certificate: None,
+            client_certificate_ref: None,
+            client_key: None,
+            client_key_ref: None,
         });
     });
     let upstream = api_runtime_upstream(&runtime);

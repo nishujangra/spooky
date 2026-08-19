@@ -20,5 +20,6 @@ mod backends;
 mod defaults;
 mod policy;
 mod reload_boundaries;
+mod secrets;
 mod timeouts;
 mod tls;

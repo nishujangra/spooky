@@ -197,6 +197,7 @@ impl RuntimeJwtAuth {
     pub(crate) fn as_config(&self) -> crate::config::JwtAuth {
         crate::config::JwtAuth {
             secret: self.secret.clone(),
+            secret_ref: None,
             issuer: self.issuer.clone(),
             audience: self.audience.clone(),
             issuers: (!self.issuers.is_empty()).then_some(self.issuers.clone()),
@@ -516,6 +517,7 @@ impl RuntimeExternalAuth {
                 issuer_url,
                 client_id,
                 client_secret,
+                client_secret_ref: _,
                 audience,
                 scopes,
                 request_headers,
@@ -595,6 +597,7 @@ impl RuntimeExternalAuth {
                 issuer_url: issuer_url.clone(),
                 client_id: client_id.clone(),
                 client_secret: client_secret.clone(),
+                client_secret_ref: None,
                 audience: audience.clone(),
                 scopes: scopes.clone(),
                 request_headers: request_headers.iter().map(Self::header_as_config).collect(),
@@ -755,6 +758,7 @@ mod tests {
             issuer_url: Some(" https://issuer.example ".into()),
             client_id: "  spooky-edge  ".to_string(),
             client_secret: Some("  secret-value  ".to_string()),
+            client_secret_ref: None,
             audience: Some("  payments-api  ".to_string()),
             scopes: vec!["openid".to_string(), " profile ".to_string()],
             request_headers: vec![ExternalAuthRequestHeader {
@@ -864,6 +868,7 @@ mod tests {
             issuer_url: None,
             client_id: "   ".to_string(),
             client_secret: None,
+            client_secret_ref: None,
             audience: None,
             scopes: vec!["openid".to_string()],
             request_headers: Vec::new(),
