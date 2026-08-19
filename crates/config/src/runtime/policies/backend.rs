@@ -1,4 +1,7 @@
-use std::time::Duration;
+use std::{ffi::OsStr, fs, path::Path, time::Duration};
+
+use rustls_pki_types::{CertificateDer, pem::PemObject};
+use sha2::{Digest, Sha256};
 
 use super::config_invalid;
 use crate::{
@@ -134,7 +137,9 @@ pub struct RuntimeBackendTlsPolicy {
     pub verify_certificates: bool,
     pub strict_sni: bool,
     pub ca_file: Option<String>,
+    pub ca_file_fingerprint_sha256: Option<String>,
     pub ca_dir: Option<String>,
+    pub ca_dir_fingerprint_sha256: Option<String>,
     pub client_certificate: Option<RuntimeResolvedSecretMetadata>,
     pub client_key: Option<RuntimeResolvedSecretMetadata>,
 }
@@ -156,17 +161,22 @@ impl RuntimeBackendTlsPolicy {
             &format!("{field_prefix}.client_key"),
             false,
         )?;
+        let ca_file_fingerprint_sha256 =
+            fingerprint_optional_ca_file(effective_tls.ca_file.as_deref(), &format!("{field_prefix}.ca_file"))?;
+        let ca_dir_fingerprint_sha256 =
+            fingerprint_optional_ca_dir(effective_tls.ca_dir.as_deref(), &format!("{field_prefix}.ca_dir"))?;
 
         Ok(Self {
             verify_certificates: effective_tls.verify_certificates,
             strict_sni: effective_tls.strict_sni,
             ca_file: effective_tls.ca_file.clone(),
+            ca_file_fingerprint_sha256,
             ca_dir: effective_tls.ca_dir.clone(),
+            ca_dir_fingerprint_sha256,
             client_certificate,
             client_key,
         })
     }
-
 }
 
 fn resolve_optional_secret_material(
@@ -213,6 +223,87 @@ fn resolve_optional_secret_material(
     }
 }
 
+fn fingerprint_optional_ca_file(
+    ca_file: Option<&str>,
+    field_name: &str,
+) -> Result<Option<String>, RuntimeConfigError> {
+    let Some(ca_file) = ca_file.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let secret = resolve_file_secret_path(ca_file, field_name)
+        .map_err(|err| RuntimeConfigError::SecretResolutionFailed(err.to_string()))?;
+    secret
+        .parse_pem_certificates(field_name)
+        .map_err(|err| RuntimeConfigError::TlsMaterialInvalid(err.to_string()))?;
+    Ok(Some(secret.metadata().fingerprint_sha256.clone()))
+}
+
+fn fingerprint_optional_ca_dir(
+    ca_dir: Option<&str>,
+    field_name: &str,
+) -> Result<Option<String>, RuntimeConfigError> {
+    let Some(ca_dir) = ca_dir.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Ok(None);
+    };
+    let dir = Path::new(ca_dir);
+    let entries = fs::read_dir(dir)
+        .map_err(|err| RuntimeConfigError::TlsMaterialInvalid(format!("failed to read {field_name} '{ca_dir}': {err}")))?;
+
+    let mut pem_files = entries
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| RuntimeConfigError::TlsMaterialInvalid(format!("failed to read entry in {field_name} '{ca_dir}': {err}")))?
+        .into_iter()
+        .map(|entry| entry.path())
+        .filter(|path| path.is_file() && is_pem_like_path(path))
+        .collect::<Vec<_>>();
+    pem_files.sort();
+
+    let mut hasher = Sha256::new();
+    let mut loaded = 0usize;
+    for path in pem_files {
+        let bytes = fs::read(&path).map_err(|err| {
+            RuntimeConfigError::TlsMaterialInvalid(format!(
+                "failed to read {field_name} entry '{}': {err}",
+                path.display()
+            ))
+        })?;
+        let certs = CertificateDer::pem_slice_iter(&bytes)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|err| {
+                RuntimeConfigError::TlsMaterialInvalid(format!(
+                    "failed to parse PEM certificates from {field_name} entry '{}': {err}",
+                    path.display()
+                ))
+            })?;
+        if certs.is_empty() {
+            return Err(RuntimeConfigError::TlsMaterialInvalid(format!(
+                "{field_name} entry '{}' does not contain any PEM certificates",
+                path.display()
+            )));
+        }
+        loaded = loaded.saturating_add(certs.len());
+        hasher.update(path.to_string_lossy().as_bytes());
+        hasher.update([0u8]);
+        hasher.update(&bytes);
+        hasher.update([0u8]);
+    }
+
+    if loaded == 0 {
+        return Err(RuntimeConfigError::TlsMaterialInvalid(format!(
+            "{field_name} '{ca_dir}' did not contain any readable PEM certificates"
+        )));
+    }
+
+    Ok(Some(hex::encode(hasher.finalize())))
+}
+
+fn is_pem_like_path(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(OsStr::to_str),
+        Some("pem" | "crt" | "cer" | "PEM" | "CRT" | "CER")
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuntimeBackendDnsPolicy {
     pub refresh_enabled: bool,
@@ -232,11 +323,24 @@ impl RuntimeBackendDnsPolicy {
 mod tests {
     use super::*;
     use crate::runtime::RuntimeBackendTransportKind;
+    use rcgen::{Certificate, CertificateParams, SanType};
+    use tempfile::tempdir;
 
     fn assert_config_invalid(err: RuntimeConfigError, expected: impl AsRef<str>) {
         let expected = expected.as_ref();
         assert_eq!(err.category(), "config_invalid");
         assert_eq!(err.to_string(), format!("config_invalid: {expected}"));
+    }
+
+    fn write_test_cert(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+        let mut params = CertificateParams::new(vec!["localhost".into()]);
+        params
+            .subject_alt_names
+            .push(SanType::IpAddress("127.0.0.1".parse().expect("ip")));
+        let cert = Certificate::from_params(params).expect("cert");
+        let path = dir.join(name);
+        std::fs::write(&path, cert.serialize_pem().expect("serialize cert")).expect("write cert");
+        path
     }
 
     #[test]
@@ -307,11 +411,17 @@ mod tests {
 
     #[test]
     fn runtime_backend_tls_policy_shapes_effective_tls_settings() {
+        let dir = tempdir().expect("tempdir");
+        let ca_file = write_test_cert(dir.path(), "ca.pem");
+        let ca_dir = dir.path().join("ca.d");
+        std::fs::create_dir_all(&ca_dir).expect("create ca dir");
+        let ca_dir_entry = write_test_cert(&ca_dir, "ca-entry.pem");
+
         let effective_tls = UpstreamTls {
             verify_certificates: false,
             strict_sni: false,
-            ca_file: Some("/etc/spooky/ca.pem".to_string()),
-            ca_dir: Some("/etc/spooky/ca.d".to_string()),
+            ca_file: Some(ca_file.to_string_lossy().to_string()),
+            ca_dir: Some(ca_dir.to_string_lossy().to_string()),
             client_certificate: None,
             client_certificate_ref: None,
             client_key: None,
@@ -329,8 +439,27 @@ mod tests {
             RuntimeBackendTlsPolicy {
                 verify_certificates: false,
                 strict_sni: false,
-                ca_file: Some("/etc/spooky/ca.pem".to_string()),
-                ca_dir: Some("/etc/spooky/ca.d".to_string()),
+                ca_file: Some(ca_file.to_string_lossy().to_string()),
+                ca_file_fingerprint_sha256: Some(
+                    resolve_file_secret_path(
+                        &ca_file.to_string_lossy(),
+                        "upstream 'payments' tls.ca_file",
+                    )
+                    .expect("ca file secret")
+                    .metadata()
+                    .fingerprint_sha256
+                    .clone(),
+                ),
+                ca_dir: Some(ca_dir.to_string_lossy().to_string()),
+                ca_dir_fingerprint_sha256: Some({
+                    let bytes = std::fs::read(&ca_dir_entry).expect("read ca dir entry");
+                    let mut hasher = Sha256::new();
+                    hasher.update(ca_dir_entry.to_string_lossy().as_bytes());
+                    hasher.update([0u8]);
+                    hasher.update(bytes);
+                    hasher.update([0u8]);
+                    hex::encode(hasher.finalize())
+                }),
                 client_certificate: None,
                 client_key: None,
             }

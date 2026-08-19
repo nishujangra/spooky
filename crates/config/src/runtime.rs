@@ -361,6 +361,13 @@ mod tests {
 
     #[test]
     fn runtime_upstream_carries_canonical_lb_auth_and_tls_shapes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ca = rcgen::generate_simple_self_signed(vec!["upstream-ca".to_string()])
+            .expect("build upstream ca");
+        let ca_path = dir.path().join("upstream-ca.pem");
+        std::fs::write(&ca_path, ca.serialize_pem().expect("serialize upstream ca"))
+            .expect("write upstream ca");
+
         let mut config = sample_config();
         let upstream = config.upstream.get_mut("api").expect("api upstream");
         upstream.load_balancing = LoadBalancing {
@@ -374,7 +381,7 @@ mod tests {
         upstream.tls = Some(UpstreamTls {
             verify_certificates: false,
             strict_sni: false,
-            ca_file: Some("/tmp/upstream-ca.pem".to_string()),
+            ca_file: Some(ca_path.to_string_lossy().to_string()),
             ca_dir: None,
             client_certificate: None,
             client_certificate_ref: None,
@@ -409,7 +416,7 @@ mod tests {
         );
         assert_eq!(
             api.backend_tls_policy().ca_file.as_deref(),
-            Some("/tmp/upstream-ca.pem")
+            Some(ca_path.to_string_lossy().as_ref())
         );
         assert_eq!(
             runtime.policies.transport.backend_connections.max_inflight,

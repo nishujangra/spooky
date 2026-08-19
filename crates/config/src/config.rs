@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 pub const CURRENT_CONFIG_VERSION: u32 = 1;
 pub const SUPPORTED_CONFIG_VERSIONS: &[u32] = &[CURRENT_CONFIG_VERSION];
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default = "Config::default_version")] // Make version optional with default
@@ -196,7 +196,7 @@ impl Default for UpstreamTls {
     }
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Upstream {
     #[serde(default)]
@@ -459,7 +459,7 @@ pub struct UpstreamHostPolicy {
     pub host: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Backend {
     pub id: String, // "backend1"
@@ -481,7 +481,7 @@ impl Backend {
     }
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct RouteMatch {
@@ -492,7 +492,7 @@ pub struct RouteMatch {
     pub method: Option<String>, // Optional HTTP method filtering (GET, POST, etc.)
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct HealthCheck {

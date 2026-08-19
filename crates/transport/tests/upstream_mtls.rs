@@ -201,7 +201,9 @@ fn backend_tls(
         verify_certificates: true,
         strict_sni: true,
         ca_file: Some(ca_cert_path.to_string_lossy().to_string()),
+        ca_file_fingerprint_sha256: None,
         ca_dir: None,
+        ca_dir_fingerprint_sha256: None,
         client_certificate: client_identity.map(|identity| {
             TlsClientMaterialSource::SecretRef(SecretRef {
                 reference: format!("file://{}", identity.cert_path.display()),

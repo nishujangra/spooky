@@ -10,9 +10,16 @@ use std::{
 
 use bytes::Bytes;
 use http_body_util::Full;
+use rcgen::{
+    BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType,
+    ExtendedKeyUsagePurpose, IsCa, KeyUsagePurpose, SanType,
+};
 use serial_test::serial;
-use spooky_config::config::{Backend, Config, LoadBalancing, RouteMatch, Upstream};
+use spooky_config::config::{
+    Backend, Config, LoadBalancing, RouteMatch, SecretRef, Upstream, UpstreamTls,
+};
 use spooky_edge::runtime::policy::{LifecycleTransitionResult, RuntimeLifecyclePhase};
+use tempfile::{TempDir, tempdir};
 
 mod support;
 
@@ -22,7 +29,125 @@ use support::{
     runtime_swap::RuntimeSwapHarness,
 };
 
+struct MtlsRuntimeMaterial {
+    _dir: TempDir,
+    ca: Certificate,
+    ca_cert_path: String,
+    client_cert_path: String,
+    client_key_path: String,
+    server_cert_path: String,
+    server_key_path: String,
+}
+
+impl MtlsRuntimeMaterial {
+    fn localhost() -> Self {
+        let dir = tempdir().expect("tempdir");
+        let ca = build_ca("Spooky Runtime Swap CA");
+        let (server_cert, server_key) = signed_cert(
+            "localhost",
+            &ca,
+            vec!["localhost".to_string()],
+            vec![
+                SanType::DnsName("localhost".to_string()),
+                SanType::IpAddress(std::net::IpAddr::from([127, 0, 0, 1])),
+            ],
+            ExtendedKeyUsagePurpose::ServerAuth,
+        );
+        let (client_cert, client_key) = signed_cert(
+            "runtime-client",
+            &ca,
+            Vec::new(),
+            Vec::new(),
+            ExtendedKeyUsagePurpose::ClientAuth,
+        );
+
+        let ca_cert_path = dir.path().join("ca.pem");
+        let client_cert_path = dir.path().join("client-cert.pem");
+        let client_key_path = dir.path().join("client-key.pem");
+        let server_cert_path = dir.path().join("server-cert.pem");
+        let server_key_path = dir.path().join("server-key.pem");
+
+        std::fs::write(&ca_cert_path, ca.serialize_pem().expect("serialize ca")).expect("write ca");
+        std::fs::write(&client_cert_path, client_cert).expect("write client cert");
+        std::fs::write(&client_key_path, client_key).expect("write client key");
+        std::fs::write(&server_cert_path, server_cert).expect("write server cert");
+        std::fs::write(&server_key_path, server_key).expect("write server key");
+
+        Self {
+            _dir: dir,
+            ca,
+            ca_cert_path: ca_cert_path.to_string_lossy().to_string(),
+            client_cert_path: client_cert_path.to_string_lossy().to_string(),
+            client_key_path: client_key_path.to_string_lossy().to_string(),
+            server_cert_path: server_cert_path.to_string_lossy().to_string(),
+            server_key_path: server_key_path.to_string_lossy().to_string(),
+        }
+    }
+
+    fn rotate_client_identity(&self, common_name: &str) {
+        let (client_cert, client_key) = signed_cert(
+            common_name,
+            &self.ca,
+            Vec::new(),
+            Vec::new(),
+            ExtendedKeyUsagePurpose::ClientAuth,
+        );
+        std::fs::write(&self.client_cert_path, client_cert).expect("rotate client cert");
+        std::fs::write(&self.client_key_path, client_key).expect("rotate client key");
+    }
+}
+
+fn build_ca(common_name: &str) -> Certificate {
+    let mut params = CertificateParams::new(Vec::new());
+    params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    params.key_usages = vec![
+        KeyUsagePurpose::KeyCertSign,
+        KeyUsagePurpose::DigitalSignature,
+        KeyUsagePurpose::CrlSign,
+    ];
+    let mut distinguished_name = DistinguishedName::new();
+    distinguished_name.push(DnType::CommonName, common_name);
+    params.distinguished_name = distinguished_name;
+    Certificate::from_params(params).expect("build ca")
+}
+
+fn signed_cert(
+    common_name: &str,
+    ca: &Certificate,
+    dns_names: Vec<String>,
+    subject_alt_names: Vec<SanType>,
+    usage: ExtendedKeyUsagePurpose,
+) -> (String, String) {
+    let mut params = CertificateParams::new(dns_names);
+    params.extended_key_usages = vec![usage];
+    params.key_usages = vec![
+        KeyUsagePurpose::DigitalSignature,
+        KeyUsagePurpose::KeyEncipherment,
+    ];
+    params.subject_alt_names = subject_alt_names;
+    let mut distinguished_name = DistinguishedName::new();
+    distinguished_name.push(DnType::CommonName, common_name);
+    params.distinguished_name = distinguished_name;
+    let cert = Certificate::from_params(params).expect("build cert");
+    (
+        cert.serialize_pem_with_signer(ca)
+            .expect("serialize signed cert"),
+        cert.serialize_private_key_pem(),
+    )
+}
+
 fn single_backend_upstream(backend_addr: std::net::SocketAddr) -> Upstream {
+    single_backend_upstream_with_address(format!("http://{backend_addr}"), None)
+}
+
+fn single_backend_upstream_with_tls(
+    backend_addr: std::net::SocketAddr,
+    tls: Option<UpstreamTls>,
+) -> Upstream {
+    single_backend_upstream_with_address(format!("http://{backend_addr}"), tls)
+}
+
+fn single_backend_upstream_with_address(address: String, tls: Option<UpstreamTls>) -> Upstream {
     Upstream {
         load_balancing: LoadBalancing {
             lb_type: "round-robin".to_string(),
@@ -31,14 +156,14 @@ fn single_backend_upstream(backend_addr: std::net::SocketAddr) -> Upstream {
         auth: Default::default(),
         host_policy: Default::default(),
         forwarded_headers: Default::default(),
-        tls: None,
+        tls,
         route: RouteMatch {
             path_prefix: Some("/".to_string()),
             ..Default::default()
         },
         backends: vec![Backend {
             id: "backend-a".to_string(),
-            address: format!("http://{backend_addr}"),
+            address,
             weight: 1,
             health_check: None,
         }],
@@ -107,6 +232,25 @@ fn assert_watchdog_restart_drains_listener(harness: &RuntimeSwapHarness, reason:
         "watchdog restart request should be accepted"
     );
     assert_listener_stops_accepting_fresh_quic_connections(harness);
+}
+
+fn backend_policy_diff_summary(history_generation: &serde_json::Value) -> String {
+    history_generation["entries"]
+        .as_array()
+        .expect("history entries")
+        .iter()
+        .flat_map(|entry| {
+            entry["diff"]["entries"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|diff_entry| diff_entry["domain"] == "backend_policies")
+                .filter_map(|diff_entry| diff_entry["summary"].as_str())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .next()
+        .expect("backend_policies diff summary")
 }
 
 // Domain: reload swap.
@@ -234,6 +378,194 @@ fn generation_owned_reload_swaps_backend_targets_without_changing_listener_ident
             .expect("reloaded tls listener object"),
         &startup_tls,
         "startup-owned listener TLS identity should not change across generation-only reloads"
+    );
+}
+
+#[test]
+#[serial]
+fn listener_cert_rotation_stays_scoped_to_reload_certs_and_does_not_activate_generation() {
+    let Some(harness) = start_static_runtime_swap_listener(b"listener-cert-reload", |_| {}) else {
+        return;
+    };
+
+    let startup_snapshot = harness
+        .runtime_snapshot()
+        .expect("startup runtime snapshot");
+    let listener_label = format!(
+        "{}:{}",
+        startup_snapshot["runtime"]["config_path"]
+            .as_str()
+            .and_then(|_| Some("127.0.0.1"))
+            .unwrap_or("127.0.0.1"),
+        harness.listen_addr().expect("listen addr").port()
+    );
+    let tls_before = startup_snapshot["tls"]["listeners"][&listener_label]["generation"]
+        .as_u64()
+        .expect("listener tls generation before");
+    let generation_before = startup_snapshot["runtime"]["generation"]
+        .as_u64()
+        .expect("runtime generation before");
+    let history_before = harness.runtime_history().expect("startup runtime history");
+    let history_entries_before = history_before["entries"]
+        .as_array()
+        .expect("startup history entries")
+        .len();
+
+    let rotated = MtlsRuntimeMaterial::localhost();
+    let (listener_cert_path, listener_key_path) = harness.listener_tls_paths();
+    std::fs::copy(&rotated.server_cert_path, listener_cert_path).expect("rotate listener cert");
+    std::fs::copy(&rotated.server_key_path, listener_key_path).expect("rotate listener key");
+
+    let reload = harness
+        .trigger_runtime_reload_certs()
+        .expect("trigger listener cert reload");
+    assert_eq!(reload["reloaded"], true);
+
+    let after_snapshot = harness
+        .runtime_snapshot()
+        .expect("post-reload runtime snapshot");
+    assert_eq!(
+        after_snapshot["runtime"]["generation"].as_u64(),
+        Some(generation_before),
+        "listener cert reload must not create a new runtime generation"
+    );
+    assert!(
+        after_snapshot["tls"]["listeners"][&listener_label]["generation"]
+            .as_u64()
+            .expect("listener tls generation after")
+            > tls_before,
+        "reload-certs must rotate listener TLS material in place"
+    );
+
+    let history_after = harness.runtime_history().expect("post-reload runtime history");
+    assert_eq!(
+        history_after["entries"]
+            .as_array()
+            .expect("post-reload history entries")
+            .len(),
+        history_entries_before,
+        "reload-certs must not record a generation activation event"
+    );
+}
+
+#[test]
+#[serial]
+fn upstream_client_cert_rotation_uses_activation_and_same_path_fingerprint_change() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = RuntimeSwapHarness::new();
+    let material = MtlsRuntimeMaterial::localhost();
+    let backend_addr = harness.start_h2_backend_with_client_auth(
+        &material.server_cert_path,
+        &material.server_key_path,
+        &material.ca_cert_path,
+        move |_req| async move { Ok::<_, std::convert::Infallible>(static_full_response(b"mtls-ok")) },
+    );
+    let upstream = single_backend_upstream_with_address(
+        format!("https://{backend_addr}"),
+        Some(UpstreamTls {
+            verify_certificates: true,
+            strict_sni: false,
+            ca_file: Some(material.ca_cert_path.clone()),
+            ca_dir: None,
+            client_certificate: None,
+            client_certificate_ref: Some(SecretRef {
+                reference: format!("file://{}", material.client_cert_path),
+            }),
+            client_key: None,
+            client_key_ref: Some(SecretRef {
+                reference: format!("file://{}", material.client_key_path),
+            }),
+        }),
+    );
+    let config = harness.make_config(HashMap::from([("api".to_string(), upstream)]));
+    harness.start_listener(config).expect("start runtime swap listener");
+
+    let before = harness
+        .run_request(H3RequestSpec::get("localhost", "/"))
+        .expect("request before client cert rotation");
+    before.assert_status(200);
+    before.assert_body_bytes(b"mtls-ok");
+    assert_eq!(harness.current_generation().expect("generation before"), 0);
+
+    material.rotate_client_identity("runtime-client-rotated");
+
+    let reload = harness
+        .trigger_runtime_reload()
+        .expect("trigger activation for upstream client cert rotation");
+    assert_eq!(reload["reloaded"], true);
+    assert_eq!(reload["generation"], 1);
+
+    let after = harness
+        .run_request(H3RequestSpec::get("localhost", "/"))
+        .expect("request after client cert rotation");
+    after.assert_status(200);
+    after.assert_body_bytes(b"mtls-ok");
+
+    let history_generation = harness
+        .runtime_history_generation(1)
+        .expect("runtime history generation 1");
+    let diff_summary = backend_policy_diff_summary(&history_generation);
+    assert!(
+        diff_summary.contains("client_cert_fp=") && diff_summary.contains("client_key_fp="),
+        "activation diff should record upstream client identity fingerprint changes, got: {diff_summary}"
+    );
+}
+
+#[test]
+#[serial]
+fn upstream_ca_rotation_uses_activation_even_when_config_path_is_unchanged() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = RuntimeSwapHarness::new();
+    let material = MtlsRuntimeMaterial::localhost();
+    let backend_addr = harness.start_h2_backend_with_client_auth(
+        &material.server_cert_path,
+        &material.server_key_path,
+        &material.ca_cert_path,
+        move |_req| async move { Ok::<_, std::convert::Infallible>(static_full_response(b"ca-rotate")) },
+    );
+    let upstream = single_backend_upstream_with_address(
+        format!("https://{backend_addr}"),
+        Some(UpstreamTls {
+            verify_certificates: true,
+            strict_sni: false,
+            ca_file: Some(material.ca_cert_path.clone()),
+            ca_dir: None,
+            client_certificate: None,
+            client_certificate_ref: Some(SecretRef {
+                reference: format!("file://{}", material.client_cert_path),
+            }),
+            client_key: None,
+            client_key_ref: Some(SecretRef {
+                reference: format!("file://{}", material.client_key_path),
+            }),
+        }),
+    );
+    let config = harness.make_config(HashMap::from([("api".to_string(), upstream)]));
+    harness.start_listener(config).expect("start runtime swap listener");
+    assert_eq!(harness.current_generation().expect("generation before"), 0);
+
+    let rotated = MtlsRuntimeMaterial::localhost();
+    std::fs::copy(&rotated.ca_cert_path, &material.ca_cert_path).expect("rotate upstream ca file");
+
+    let reload = harness
+        .trigger_runtime_reload()
+        .expect("trigger activation for upstream ca rotation");
+    assert_eq!(reload["reloaded"], true);
+    assert_eq!(reload["generation"], 1);
+
+    let history_generation = harness
+        .runtime_history_generation(1)
+        .expect("runtime history generation 1");
+    let diff_summary = backend_policy_diff_summary(&history_generation);
+    assert!(
+        diff_summary.contains("ca_fp="),
+        "activation diff should record upstream ca fingerprint changes, got: {diff_summary}"
     );
 }
 

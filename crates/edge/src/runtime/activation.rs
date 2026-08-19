@@ -1898,10 +1898,24 @@ fn summarize_backend_policies(bundle: &RuntimeBundle) -> String {
                 .collect::<Vec<_>>()
                 .join(",");
             format!(
-                "{}:tls(v={},sni={}):dns(enabled={},refresh={}s):{}",
+                "{}:tls(v={},sni={},ca_file={:?},ca_fp={:?},ca_dir={:?},ca_dir_fp={:?},client_cert_fp={:?},client_key_fp={:?}):dns(enabled={},refresh={}s):{}",
                 name,
                 upstream.backend_tls_policy().verify_certificates,
                 upstream.backend_tls_policy().strict_sni,
+                upstream.backend_tls_policy().ca_file,
+                upstream.backend_tls_policy().ca_file_fingerprint_sha256,
+                upstream.backend_tls_policy().ca_dir,
+                upstream.backend_tls_policy().ca_dir_fingerprint_sha256,
+                upstream
+                    .backend_tls_policy()
+                    .client_certificate
+                    .as_ref()
+                    .map(|metadata| metadata.fingerprint_sha256.as_str()),
+                upstream
+                    .backend_tls_policy()
+                    .client_key
+                    .as_ref()
+                    .map(|metadata| metadata.fingerprint_sha256.as_str()),
                 bundle
                     .runtime_config
                     .performance
