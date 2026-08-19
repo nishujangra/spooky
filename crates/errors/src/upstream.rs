@@ -34,8 +34,32 @@ pub fn classify_upstream_error_detail(
     }
 
     if is_connect {
+        if normalized.contains("client_certificate_missing") {
+            return UpstreamErrorClassification::tls(UpstreamTlsReason::ClientCertificateMissing);
+        }
+        if normalized.contains("client_key_missing") {
+            return UpstreamErrorClassification::tls(UpstreamTlsReason::ClientKeyMissing);
+        }
+        if normalized.contains("client_identity_invalid") {
+            return UpstreamErrorClassification::tls(UpstreamTlsReason::ClientIdentityInvalid);
+        }
+        if normalized.contains("client_certificate_expired") {
+            return UpstreamErrorClassification::tls(UpstreamTlsReason::ClientCertificateExpired);
+        }
+        if normalized.contains("client_auth_rejected")
+            || normalized.contains("certificate required")
+            || normalized.contains("peer sent no certificates")
+            || normalized.contains("bad certificate")
+            || normalized.contains("certificate unknown")
+            || normalized.contains("unknown ca")
+        {
+            return UpstreamErrorClassification::tls(UpstreamTlsReason::ClientAuthRejected);
+        }
         if normalized.contains("unknownissuer") || normalized.contains("unknown issuer") {
             return UpstreamErrorClassification::tls(UpstreamTlsReason::UnknownIssuer);
+        }
+        if normalized.contains("expired") && normalized.contains("client") {
+            return UpstreamErrorClassification::tls(UpstreamTlsReason::ClientCertificateExpired);
         }
         if normalized.contains("expired")
             || normalized.contains("not yet valid")
@@ -94,6 +118,11 @@ pub enum UpstreamTlsReason {
     HostnameMismatch,
     Alpn,
     Handshake,
+    ClientCertificateMissing,
+    ClientKeyMissing,
+    ClientIdentityInvalid,
+    ClientAuthRejected,
+    ClientCertificateExpired,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -162,6 +191,11 @@ impl UpstreamErrorClassification {
                     UpstreamTlsReason::HostnameMismatch => "hostname_mismatch",
                     UpstreamTlsReason::Alpn => "alpn",
                     UpstreamTlsReason::Handshake => "handshake",
+                    UpstreamTlsReason::ClientCertificateMissing => "client_certificate_missing",
+                    UpstreamTlsReason::ClientKeyMissing => "client_key_missing",
+                    UpstreamTlsReason::ClientIdentityInvalid => "client_identity_invalid",
+                    UpstreamTlsReason::ClientAuthRejected => "client_auth_rejected",
+                    UpstreamTlsReason::ClientCertificateExpired => "client_certificate_expired",
                 },
             },
             UpstreamErrorCategory::Protocol | UpstreamErrorCategory::Internal => {

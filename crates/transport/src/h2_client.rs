@@ -29,19 +29,35 @@ use log::warn;
 use rustls::{
     ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme,
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
-    pki_types::{CertificateDer, ServerName, UnixTime},
+    pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime},
 };
 use rustls_pki_types::pem::PemObject;
-use spooky_config::runtime::RuntimeBackendTlsPolicy;
+use spooky_config::{
+    config::{SecretRef, UpstreamTls},
+    runtime::{
+        RuntimeBackendTlsPolicy, RuntimeResolvedSecret, RuntimeSecretResolutionErrorKind,
+        RuntimeSecretResolver, RuntimeUpstream, resolve_file_secret_path,
+    },
+};
 use tower_service::Service;
 
 /// TLS client policy applied to HTTP/2 backend connections.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TlsClientMaterialSource {
+    LegacyFile(String),
+    SecretRef(SecretRef),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TlsClientConfig {
     pub verify_certificates: bool,
     pub strict_sni: bool,
     pub ca_file: Option<String>,
     pub ca_dir: Option<String>,
+    pub client_certificate: Option<TlsClientMaterialSource>,
+    pub client_key: Option<TlsClientMaterialSource>,
+    pub client_certificate_fingerprint_sha256: Option<String>,
+    pub client_key_fingerprint_sha256: Option<String>,
 }
 
 impl Default for TlsClientConfig {
@@ -51,6 +67,10 @@ impl Default for TlsClientConfig {
             strict_sni: true,
             ca_file: None,
             ca_dir: None,
+            client_certificate: None,
+            client_key: None,
+            client_certificate_fingerprint_sha256: None,
+            client_key_fingerprint_sha256: None,
         }
     }
 }
@@ -62,6 +82,58 @@ impl From<&RuntimeBackendTlsPolicy> for TlsClientConfig {
             strict_sni: value.strict_sni,
             ca_file: value.ca_file.clone(),
             ca_dir: value.ca_dir.clone(),
+            client_certificate: None,
+            client_key: None,
+            client_certificate_fingerprint_sha256: value
+                .client_certificate
+                .as_ref()
+                .map(|metadata| metadata.fingerprint_sha256.clone()),
+            client_key_fingerprint_sha256: value
+                .client_key
+                .as_ref()
+                .map(|metadata| metadata.fingerprint_sha256.clone()),
+        }
+    }
+}
+
+impl TlsClientConfig {
+    pub fn from_runtime_upstream(upstream: &RuntimeUpstream) -> Self {
+        let effective_tls: &UpstreamTls = &upstream.effective_tls;
+        let policy = upstream.backend_tls_policy();
+
+        Self {
+            verify_certificates: policy.verify_certificates,
+            strict_sni: policy.strict_sni,
+            ca_file: policy.ca_file.clone(),
+            ca_dir: policy.ca_dir.clone(),
+            client_certificate: effective_tls
+                .client_certificate
+                .clone()
+                .map(TlsClientMaterialSource::LegacyFile)
+                .or_else(|| {
+                    effective_tls
+                        .client_certificate_ref
+                        .clone()
+                        .map(TlsClientMaterialSource::SecretRef)
+                }),
+            client_key: effective_tls
+                .client_key
+                .clone()
+                .map(TlsClientMaterialSource::LegacyFile)
+                .or_else(|| {
+                    effective_tls
+                        .client_key_ref
+                        .clone()
+                        .map(TlsClientMaterialSource::SecretRef)
+                }),
+            client_certificate_fingerprint_sha256: policy
+                .client_certificate
+                .as_ref()
+                .map(|metadata| metadata.fingerprint_sha256.clone()),
+            client_key_fingerprint_sha256: policy
+                .client_key
+                .as_ref()
+                .map(|metadata| metadata.fingerprint_sha256.clone()),
         }
     }
 }
@@ -371,13 +443,13 @@ where
 }
 
 fn build_tls_config(tls: &TlsClientConfig) -> Result<ClientConfig, String> {
+    let client_identity = load_client_identity(tls)?;
+
     if !tls.verify_certificates {
         warn!(
             "upstream TLS certificate verification is disabled (upstream_tls.verify_certificates=false); this is insecure and should only be used in trusted environments"
         );
-        let mut cfg = ClientConfig::builder()
-            .with_root_certificates(RootCertStore::empty())
-            .with_no_client_auth();
+        let mut cfg = build_rustls_client_config(RootCertStore::empty(), client_identity)?;
         cfg.enable_sni = tls.strict_sni;
         cfg.dangerous()
             .set_certificate_verifier(Arc::new(InsecureServerCertVerifier));
@@ -410,11 +482,75 @@ fn build_tls_config(tls: &TlsClientConfig) -> Result<ClientConfig, String> {
         }
     }
 
-    let mut cfg = ClientConfig::builder()
-        .with_root_certificates(roots)
-        .with_no_client_auth();
+    let mut cfg = build_rustls_client_config(roots, client_identity)?;
     cfg.enable_sni = tls.strict_sni;
     Ok(cfg)
+}
+
+fn build_rustls_client_config(
+    roots: RootCertStore,
+    client_identity: Option<(Vec<rustls::pki_types::CertificateDer<'static>>, PrivateKeyDer<'static>)>,
+) -> Result<ClientConfig, String> {
+    let builder = ClientConfig::builder().with_root_certificates(roots);
+    match client_identity {
+        Some((chain, key)) => builder.with_client_auth_cert(chain, key).map_err(|err| {
+            format!("client_identity_invalid: failed to build upstream TLS client identity: {err}")
+        }),
+        None => Ok(builder.with_no_client_auth()),
+    }
+}
+
+fn load_client_identity(
+    tls: &TlsClientConfig,
+) -> Result<Option<(Vec<rustls::pki_types::CertificateDer<'static>>, PrivateKeyDer<'static>)>, String>
+{
+    match (&tls.client_certificate, &tls.client_key) {
+        (None, None) => Ok(None),
+        (None, Some(_)) => Err("client_certificate_missing: upstream TLS client certificate source is not configured".to_string()),
+        (Some(_), None) => Err("client_key_missing: upstream TLS client private key source is not configured".to_string()),
+        (Some(cert_source), Some(key_source)) => {
+            let cert = resolve_client_material(cert_source, "upstream_tls.client_certificate")
+                .map_err(|err| classify_client_material_error(err, true))?;
+            let key = resolve_client_material(key_source, "upstream_tls.client_key")
+                .map_err(|err| classify_client_material_error(err, false))?;
+
+            let certs = cert
+                .parse_pem_certificates("upstream_tls.client_certificate")
+                .map_err(|err| format!("client_identity_invalid: {err}"))?;
+            let key = key
+                .parse_pem_private_key("upstream_tls.client_key")
+                .map_err(|err| format!("client_identity_invalid: {err}"))?;
+            Ok(Some((certs, key)))
+        }
+    }
+}
+
+fn resolve_client_material(
+    source: &TlsClientMaterialSource,
+    field_name: &str,
+) -> Result<RuntimeResolvedSecret, spooky_config::runtime::RuntimeSecretResolutionError> {
+    match source {
+        TlsClientMaterialSource::LegacyFile(path) => resolve_file_secret_path(path, field_name),
+        TlsClientMaterialSource::SecretRef(secret_ref) => {
+            RuntimeSecretResolver::default().resolve(secret_ref, field_name)
+        }
+    }
+}
+
+fn classify_client_material_error(
+    err: spooky_config::runtime::RuntimeSecretResolutionError,
+    certificate: bool,
+) -> String {
+    let prefix = match (certificate, err.kind()) {
+        (true, RuntimeSecretResolutionErrorKind::FileNotFound | RuntimeSecretResolutionErrorKind::MissingSource) => {
+            "client_certificate_missing"
+        }
+        (false, RuntimeSecretResolutionErrorKind::FileNotFound | RuntimeSecretResolutionErrorKind::MissingSource) => {
+            "client_key_missing"
+        }
+        _ => "client_identity_invalid",
+    };
+    format!("{prefix}: {err}")
 }
 
 fn read_pem_certificates(path: &Path) -> Result<Vec<CertificateDer<'static>>, String> {
@@ -577,6 +713,10 @@ mod tests {
                 strict_sni: true,
                 ca_file: Some(path.to_string_lossy().to_string()),
                 ca_dir: None,
+                client_certificate: None,
+                client_key: None,
+                client_certificate_fingerprint_sha256: None,
+                client_key_fingerprint_sha256: None,
             },
             SharedDnsResolver::new(),
         );
@@ -596,6 +736,10 @@ mod tests {
                 strict_sni: true,
                 ca_file: None,
                 ca_dir: None,
+                client_certificate: None,
+                client_key: None,
+                client_certificate_fingerprint_sha256: None,
+                client_key_fingerprint_sha256: None,
             },
             SharedDnsResolver::new(),
         );

@@ -1,6 +1,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BackendClientRotationState {
     MissingBackend,
+    Unchanged,
     Recreated,
     Rotated {
         previous_generation: u64,
@@ -26,6 +27,12 @@ impl BackendClientRotation {
         }
     }
 
+    pub(crate) fn unchanged(_generation: u64) -> Self {
+        Self {
+            state: BackendClientRotationState::Unchanged,
+        }
+    }
+
     pub(crate) fn rotated(previous_generation: u64, current_generation: u64) -> Self {
         Self {
             state: BackendClientRotationState::Rotated {
@@ -36,7 +43,10 @@ impl BackendClientRotation {
     }
 
     pub(crate) fn changed(self) -> bool {
-        !matches!(self.state, BackendClientRotationState::MissingBackend)
+        matches!(
+            self.state,
+            BackendClientRotationState::Recreated | BackendClientRotationState::Rotated { .. }
+        )
     }
 
     pub(crate) fn generations(self) -> Option<(u64, u64)> {

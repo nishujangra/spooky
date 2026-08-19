@@ -12,22 +12,120 @@ use std::{
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
+use rcgen::{
+    BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType,
+    ExtendedKeyUsagePurpose, IsCa, KeyUsagePurpose, SanType,
+};
 use hyper::{Response, body::Incoming};
 use serial_test::serial;
 use spooky_config::config::{
     ApiKeyAuth, ExternalAuth, ExternalAuthFailureMode, ExternalAuthRequestHeader, RouteAuth,
-    ScopedRateLimit, ScopedRateLimitScope, UpstreamTls,
+    ScopedRateLimit, ScopedRateLimitScope, SecretRef, UpstreamTls,
 };
+use tempfile::{TempDir, tempdir};
 
 mod support;
 
 use support::{
     net::local_listener_bind_available,
     request_path::{
-        H3RequestSpec, QuicRequestPathHarness, make_backend, make_upstream, run_request_to,
-        run_two_chunk_post_to, run_two_chunk_post_to_with_response_timeout,
+        H3RequestSpec, QuicRequestPathHarness, make_backend, make_upstream,
+        run_request_to, run_two_chunk_post_to, run_two_chunk_post_to_with_response_timeout,
     },
 };
+
+struct MtlsTestMaterial {
+    _dir: TempDir,
+    ca_cert_path: String,
+    server_cert_path: String,
+    server_key_path: String,
+    client_cert_path: String,
+    client_key_path: String,
+}
+
+impl MtlsTestMaterial {
+    fn localhost() -> Self {
+        let dir = tempdir().expect("tempdir");
+        let ca = build_ca("Spooky Edge Test CA");
+        let (server_cert, server_key) = signed_cert(
+            "localhost",
+            &ca,
+            vec!["localhost".to_string()],
+            vec![
+                SanType::DnsName("localhost".to_string()),
+                SanType::IpAddress(std::net::IpAddr::from([127, 0, 0, 1])),
+            ],
+            ExtendedKeyUsagePurpose::ServerAuth,
+        );
+        let (client_cert, client_key) = signed_cert(
+            "edge-client",
+            &ca,
+            Vec::new(),
+            Vec::new(),
+            ExtendedKeyUsagePurpose::ClientAuth,
+        );
+
+        let ca_cert_path = dir.path().join("ca.pem");
+        let server_cert_path = dir.path().join("server-cert.pem");
+        let server_key_path = dir.path().join("server-key.pem");
+        let client_cert_path = dir.path().join("client-cert.pem");
+        let client_key_path = dir.path().join("client-key.pem");
+
+        std::fs::write(&ca_cert_path, ca.serialize_pem().expect("serialize ca")).expect("write ca");
+        std::fs::write(&server_cert_path, server_cert).expect("write server cert");
+        std::fs::write(&server_key_path, server_key).expect("write server key");
+        std::fs::write(&client_cert_path, client_cert).expect("write client cert");
+        std::fs::write(&client_key_path, client_key).expect("write client key");
+
+        Self {
+            _dir: dir,
+            ca_cert_path: ca_cert_path.to_string_lossy().to_string(),
+            server_cert_path: server_cert_path.to_string_lossy().to_string(),
+            server_key_path: server_key_path.to_string_lossy().to_string(),
+            client_cert_path: client_cert_path.to_string_lossy().to_string(),
+            client_key_path: client_key_path.to_string_lossy().to_string(),
+        }
+    }
+}
+
+fn build_ca(common_name: &str) -> Certificate {
+    let mut params = CertificateParams::new(Vec::new());
+    params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    params.key_usages = vec![
+        KeyUsagePurpose::KeyCertSign,
+        KeyUsagePurpose::DigitalSignature,
+        KeyUsagePurpose::CrlSign,
+    ];
+    let mut distinguished_name = DistinguishedName::new();
+    distinguished_name.push(DnType::CommonName, common_name);
+    params.distinguished_name = distinguished_name;
+    Certificate::from_params(params).expect("build ca")
+}
+
+fn signed_cert(
+    common_name: &str,
+    ca: &Certificate,
+    dns_names: Vec<String>,
+    subject_alt_names: Vec<SanType>,
+    usage: ExtendedKeyUsagePurpose,
+) -> (String, String) {
+    let mut params = CertificateParams::new(dns_names);
+    params.extended_key_usages = vec![usage];
+    params.key_usages = vec![
+        KeyUsagePurpose::DigitalSignature,
+        KeyUsagePurpose::KeyEncipherment,
+    ];
+    params.subject_alt_names = subject_alt_names;
+    let mut distinguished_name = DistinguishedName::new();
+    distinguished_name.push(DnType::CommonName, common_name);
+    params.distinguished_name = distinguished_name;
+    let cert = Certificate::from_params(params).expect("build cert");
+    (
+        cert.serialize_pem_with_signer(ca)
+            .expect("serialize signed cert"),
+        cert.serialize_private_key_pem(),
+    )
+}
 
 fn response_line(body: &str, prefix: &str) -> String {
     body.lines()
@@ -472,6 +570,109 @@ fn quic_to_h2_success_path_streams_response_body_to_completion() {
         .expect("h3 request");
     response.assert_status(200);
     response.assert_body_text("h2-chunk-1:h2-chunk-2:h2-chunk-3");
+}
+
+#[test]
+#[serial]
+fn quic_to_h2_upstream_mtls_requires_client_certificate() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = QuicRequestPathHarness::new();
+    let mtls = MtlsTestMaterial::localhost();
+    let backend_addr = harness.start_h2_backend_with_client_auth(
+        &mtls.server_cert_path,
+        &mtls.server_key_path,
+        &mtls.ca_cert_path,
+        move |_req| async move {
+            Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(b"unexpected"))))
+        },
+    );
+
+    let before_metrics = harness.metrics_text().unwrap_or_default();
+    start_single_backend_listener(
+        &mut harness,
+        "/mtls-required",
+        "h2-mtls",
+        format!("https://localhost:{}", backend_addr.port()),
+        |config| {
+            config.upstream_tls = UpstreamTls {
+                verify_certificates: true,
+                strict_sni: true,
+                ca_file: Some(mtls.ca_cert_path.clone()),
+                ca_dir: None,
+                client_certificate: None,
+                client_certificate_ref: None,
+                client_key: None,
+                client_key_ref: None,
+            };
+        },
+    );
+
+    let response = harness
+        .run_request(H3RequestSpec::get("public.example.com", "/mtls-required"))
+        .expect("h3 request");
+    response.assert_status(502);
+
+    let after_metrics = harness.metrics_text().unwrap_or_default();
+    assert!(
+        after_metrics.contains("reason=\"client_auth_rejected\"")
+            || metrics_delta(
+                &before_metrics,
+                &after_metrics,
+                "spooky_request_outcome_total{outcome=\"failure\",reason=\"backend_tls_failed\"} ",
+            ) > 0,
+        "expected upstream mTLS failure metrics to record the backend TLS failure"
+    );
+}
+
+#[test]
+#[serial]
+fn quic_to_h2_upstream_mtls_succeeds_with_client_certificate() {
+    if !local_listener_bind_available() {
+        return;
+    }
+
+    let mut harness = QuicRequestPathHarness::new();
+    let mtls = MtlsTestMaterial::localhost();
+    let backend_addr = harness.start_h2_backend_with_client_auth(
+        &mtls.server_cert_path,
+        &mtls.server_key_path,
+        &mtls.ca_cert_path,
+        move |_req| async move {
+            Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(b"mtls-edge-ok"))))
+        },
+    );
+
+    start_single_backend_listener(
+        &mut harness,
+        "/mtls-success",
+        "h2-mtls",
+        format!("https://localhost:{}", backend_addr.port()),
+        |config| {
+            config.upstream_tls = UpstreamTls {
+                verify_certificates: true,
+                strict_sni: true,
+                ca_file: Some(mtls.ca_cert_path.clone()),
+                ca_dir: None,
+                client_certificate: None,
+                client_certificate_ref: Some(SecretRef {
+                    reference: format!("file://{}", mtls.client_cert_path),
+                }),
+                client_key: None,
+                client_key_ref: Some(SecretRef {
+                    reference: format!("file://{}", mtls.client_key_path),
+                }),
+            };
+        },
+    );
+
+    let response = harness
+        .run_request(H3RequestSpec::get("public.example.com", "/mtls-success"))
+        .expect("h3 request");
+    response.assert_status(200);
+    response.assert_body_text("mtls-edge-ok");
 }
 
 // Rejection path contracts

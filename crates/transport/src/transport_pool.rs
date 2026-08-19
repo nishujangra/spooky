@@ -172,10 +172,7 @@ impl UpstreamTransportPool {
                     backend.endpoint.transport_kind,
                     RuntimeBackendTransportKind::H2
                 ) {
-                    backend_tls.insert(
-                        backend_addr,
-                        TlsClientConfig::from(upstream.backend_tls_policy()),
-                    );
+                    backend_tls.insert(backend_addr, TlsClientConfig::from_runtime_upstream(upstream));
                 }
             }
         }
@@ -226,6 +223,26 @@ impl UpstreamTransportPool {
             Some(BackendTransportEntry::H2) => self
                 .h2_pool
                 .rotate_backend_client(backend)
+                .map(Self::transport_rotation),
+            None => Ok(TransportClientRotation {
+                rotation: BackendClientRotation::missing_backend(),
+            }),
+        }
+    }
+
+    pub fn rotate_backend_client_with_tls(
+        &self,
+        backend: &str,
+        tls: TlsClientConfig,
+    ) -> Result<TransportClientRotation, String> {
+        match self.backend_entry(backend) {
+            Some(BackendTransportEntry::Http1) => self
+                .h1_pool
+                .rotate_backend_client(backend)
+                .map(Self::transport_rotation),
+            Some(BackendTransportEntry::H2) => self
+                .h2_pool
+                .rotate_backend_client_with_tls(backend, tls)
                 .map(Self::transport_rotation),
             None => Ok(TransportClientRotation {
                 rotation: BackendClientRotation::missing_backend(),
@@ -332,6 +349,7 @@ mod tests {
             upstream: upstreams,
             load_balancing: None,
             upstream_tls: UpstreamTls::default(),
+            secrets: Default::default(),
             log: Log::default(),
             performance: Performance::default(),
             observability: Observability::default(),
