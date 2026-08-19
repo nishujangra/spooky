@@ -21,6 +21,17 @@ listen:
       ca_file: null              # PEM CA bundle for verifying client certs; null = system store
 
 # ---------------------------------------------------------------------------
+# secrets — file-backed provider for *_ref fields (e.g. upstream mTLS client
+# cert/key below). Prefer *_ref over plaintext paths for anything sensitive.
+# ---------------------------------------------------------------------------
+secrets:
+  default_provider: local_filesystem
+  providers:
+    local_filesystem:
+      kind: file
+      base_dir: "/etc/spooky/secrets"
+
+# ---------------------------------------------------------------------------
 # upstream_tls — how Spooky validates TLS on backend connections
 # verify_certificates and strict_sni are both true by default (safe-by-default).
 # Override per-backend only in break-glass situations.
@@ -49,6 +60,15 @@ upstream:
 
     route:
       path_prefix: "/api"   # longest-match; takes priority over the web pool's "/"
+
+    # tls: per-upstream mTLS — required if the API backend enforces client certs.
+    # tls:
+    #   verify_certificates: true
+    #   strict_sni: true
+    #   client_certificate_ref:
+    #     ref: "file:///etc/spooky/secrets/upstream/api-client.crt"
+    #   client_key_ref:
+    #     ref: "file:///etc/spooky/secrets/upstream/api-client.key"
 
     backends:
       - id: "api-1"
