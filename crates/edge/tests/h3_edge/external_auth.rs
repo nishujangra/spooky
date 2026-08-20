@@ -38,6 +38,7 @@ fn configure_oidc_external_auth(
         issuer_url: Some("https://issuer.example.com".to_string()),
         client_id: "edge-client".to_string(),
         client_secret: Some("edge-secret".to_string()),
+        client_secret_ref: None,
         audience: Some("api://edge".to_string()),
         scopes: vec!["read".to_string()],
         request_headers: vec![],
