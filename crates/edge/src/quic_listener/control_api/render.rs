@@ -810,29 +810,40 @@ impl ControlApiRuntimePayload {
                                     .ca_dir_fingerprint_sha256
                                     .as_deref()
                                     .map(fingerprint_surrogate),
-                                client_certificate: tls_policy.client_certificate.as_ref().map(|metadata| {
-                                    ControlApiSecretMaterialPayload {
+                                client_certificate: tls_policy.client_certificate.as_ref().map(
+                                    |metadata| ControlApiSecretMaterialPayload {
                                         scope: format!("upstream.{name}.tls.client_certificate"),
                                         source_kind: metadata.source_kind.as_str(),
                                         reference: sanitize_optional_secret_reference(
-                                            effective_tls.client_certificate_ref.as_ref().map(|secret_ref| secret_ref.reference.as_str()),
+                                            effective_tls
+                                                .client_certificate_ref
+                                                .as_ref()
+                                                .map(|secret_ref| secret_ref.reference.as_str()),
                                             effective_tls.client_certificate.as_deref(),
                                         ),
-                                        fingerprint: fingerprint_surrogate(&metadata.fingerprint_sha256),
+                                        fingerprint: fingerprint_surrogate(
+                                            &metadata.fingerprint_sha256,
+                                        ),
                                         last_loaded_at_unix_ms: metadata.loaded_at_unix_ms,
                                         last_reload_status: "loaded".to_string(),
-                                        expiry_not_after_unix_seconds: tls_policy.client_certificate_not_after_unix_seconds,
-                                    }
-                                }),
+                                        expiry_not_after_unix_seconds: tls_policy
+                                            .client_certificate_not_after_unix_seconds,
+                                    },
+                                ),
                                 client_key: tls_policy.client_key.as_ref().map(|metadata| {
                                     ControlApiSecretMaterialPayload {
                                         scope: format!("upstream.{name}.tls.client_key"),
                                         source_kind: metadata.source_kind.as_str(),
                                         reference: sanitize_optional_secret_reference(
-                                            effective_tls.client_key_ref.as_ref().map(|secret_ref| secret_ref.reference.as_str()),
+                                            effective_tls
+                                                .client_key_ref
+                                                .as_ref()
+                                                .map(|secret_ref| secret_ref.reference.as_str()),
                                             effective_tls.client_key.as_deref(),
                                         ),
-                                        fingerprint: fingerprint_surrogate(&metadata.fingerprint_sha256),
+                                        fingerprint: fingerprint_surrogate(
+                                            &metadata.fingerprint_sha256,
+                                        ),
                                         last_loaded_at_unix_ms: metadata.loaded_at_unix_ms,
                                         last_reload_status: "loaded".to_string(),
                                         expiry_not_after_unix_seconds: None,
@@ -880,13 +891,17 @@ impl ControlApiRuntimePayload {
                                 scope: format!("upstream.{name}.tls.client_certificate"),
                                 source_kind: metadata.source_kind.as_str(),
                                 reference: sanitize_optional_secret_reference(
-                                    effective_tls.client_certificate_ref.as_ref().map(|secret_ref| secret_ref.reference.as_str()),
+                                    effective_tls
+                                        .client_certificate_ref
+                                        .as_ref()
+                                        .map(|secret_ref| secret_ref.reference.as_str()),
                                     effective_tls.client_certificate.as_deref(),
                                 ),
                                 fingerprint: fingerprint_surrogate(&metadata.fingerprint_sha256),
                                 last_loaded_at_unix_ms: metadata.loaded_at_unix_ms,
                                 last_reload_status: "loaded".to_string(),
-                                expiry_not_after_unix_seconds: tls_policy.client_certificate_not_after_unix_seconds,
+                                expiry_not_after_unix_seconds: tls_policy
+                                    .client_certificate_not_after_unix_seconds,
                             });
                         }
                         if let Some(metadata) = tls_policy.client_key.as_ref() {
@@ -894,7 +909,10 @@ impl ControlApiRuntimePayload {
                                 scope: format!("upstream.{name}.tls.client_key"),
                                 source_kind: metadata.source_kind.as_str(),
                                 reference: sanitize_optional_secret_reference(
-                                    effective_tls.client_key_ref.as_ref().map(|secret_ref| secret_ref.reference.as_str()),
+                                    effective_tls
+                                        .client_key_ref
+                                        .as_ref()
+                                        .map(|secret_ref| secret_ref.reference.as_str()),
                                     effective_tls.client_key.as_deref(),
                                 ),
                                 fingerprint: fingerprint_surrogate(&metadata.fingerprint_sha256),
@@ -933,7 +951,10 @@ fn sanitize_path(path: &str) -> String {
         .unwrap_or_else(|| "<path>".to_string())
 }
 
-fn sanitize_optional_secret_reference(secret_ref: Option<&str>, legacy_path: Option<&str>) -> String {
+fn sanitize_optional_secret_reference(
+    secret_ref: Option<&str>,
+    legacy_path: Option<&str>,
+) -> String {
     if let Some(secret_ref) = secret_ref {
         if let Some(path) = secret_ref.strip_prefix("file://") {
             return format!("file://{}", sanitize_path(path));
