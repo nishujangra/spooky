@@ -237,7 +237,9 @@ fn runtime_config_fingerprints_same_path_upstream_client_tls_material_changes() 
         };
     });
 
-    let first_policy = api_runtime_upstream(&first_runtime).backend_tls_policy().clone();
+    let first_policy = api_runtime_upstream(&first_runtime)
+        .backend_tls_policy()
+        .clone();
 
     let _ = write_test_key_pair(dir.path(), "client-cert.pem", "client-key.pem");
     let second_runtime = sample_runtime_config_with(|config| {
@@ -256,7 +258,9 @@ fn runtime_config_fingerprints_same_path_upstream_client_tls_material_changes() 
             }),
         };
     });
-    let second_policy = api_runtime_upstream(&second_runtime).backend_tls_policy().clone();
+    let second_policy = api_runtime_upstream(&second_runtime)
+        .backend_tls_policy()
+        .clone();
 
     assert_ne!(
         first_policy
@@ -298,7 +302,9 @@ fn runtime_config_fingerprints_same_path_upstream_ca_changes() {
             client_key_ref: None,
         });
     });
-    let first_policy = api_runtime_upstream(&first_runtime).backend_tls_policy().clone();
+    let first_policy = api_runtime_upstream(&first_runtime)
+        .backend_tls_policy()
+        .clone();
 
     let next_ca = write_test_cert(dir.path(), "ca-next.pem");
     std::fs::copy(next_ca, &ca_path).expect("rotated ca");
@@ -314,7 +320,9 @@ fn runtime_config_fingerprints_same_path_upstream_ca_changes() {
             client_key_ref: None,
         });
     });
-    let second_policy = api_runtime_upstream(&second_runtime).backend_tls_policy().clone();
+    let second_policy = api_runtime_upstream(&second_runtime)
+        .backend_tls_policy()
+        .clone();
 
     assert_ne!(
         first_policy.ca_file_fingerprint_sha256,

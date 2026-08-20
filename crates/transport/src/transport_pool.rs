@@ -172,7 +172,10 @@ impl UpstreamTransportPool {
                     backend.endpoint.transport_kind,
                     RuntimeBackendTransportKind::H2
                 ) {
-                    backend_tls.insert(backend_addr, TlsClientConfig::from_runtime_upstream(upstream));
+                    backend_tls.insert(
+                        backend_addr,
+                        TlsClientConfig::from_runtime_upstream(upstream),
+                    );
                 }
             }
         }

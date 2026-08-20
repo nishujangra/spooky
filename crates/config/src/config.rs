@@ -1571,11 +1571,14 @@ impl std::fmt::Debug for ControlApiBearerToken {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ControlApiBearerToken")
             .field("token", &"<redacted>")
-            .field("token_ref", &self.token_ref.as_ref().map(|_| "<configured>"))
+            .field(
+                "token_ref",
+                &self.token_ref.as_ref().map(|_| "<configured>"),
+            )
             .field("role", &self.role)
             .field("actor_id", &self.actor_id)
             .finish()
-        }
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default, Eq, PartialEq)]

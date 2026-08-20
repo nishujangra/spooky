@@ -129,11 +129,7 @@ pub(super) fn normalize_upstreams(
         }
 
         if upstream_uses_https_backends {
-            validate_runtime_upstream_tls(
-                upstream_name,
-                &runtime_upstream.effective_tls,
-                true,
-            )?;
+            validate_runtime_upstream_tls(upstream_name, &runtime_upstream.effective_tls, true)?;
         } else {
             validate_runtime_upstream_tls(upstream_name, &runtime_upstream.effective_tls, false)?;
         }

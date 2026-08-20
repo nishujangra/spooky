@@ -156,9 +156,7 @@ fn validate_secret_ref(secret_ref: &SecretRef, field_name: &str) -> bool {
             return false;
         }
         None => {
-            validation_error!(
-                "{field_name}.ref must include a supported secret scheme prefix"
-            );
+            validation_error!("{field_name}.ref must include a supported secret scheme prefix");
             return false;
         }
     }
@@ -173,9 +171,7 @@ fn validate_secret_source_exclusivity(
     ref_field_name: &str,
 ) -> bool {
     if literal_present && secret_ref.is_some() {
-        validation_error!(
-            "{literal_field_name} and {ref_field_name} cannot both be set"
-        );
+        validation_error!("{literal_field_name} and {ref_field_name} cannot both be set");
         return false;
     }
     if let Some(secret_ref) = secret_ref
@@ -294,9 +290,11 @@ fn validate_control_api_authentication(control_api: &ControlApi) -> bool {
         .as_deref()
         .is_some_and(|token| !token.trim().is_empty())
         || control_api.auth_token_ref.is_some();
-    let has_static_tokens = control_api.auth.bearer_tokens.iter().any(|token| {
-        !token.token.trim().is_empty() || token.token_ref.is_some()
-    });
+    let has_static_tokens = control_api
+        .auth
+        .bearer_tokens
+        .iter()
+        .any(|token| !token.token.trim().is_empty() || token.token_ref.is_some());
     match control_api.tls.client_auth.mode {
         ControlApiClientAuthMode::Disabled => {
             if !has_legacy_token && !has_static_tokens {

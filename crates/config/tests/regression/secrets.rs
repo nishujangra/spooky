@@ -237,9 +237,11 @@ fn runtime_config_materializes_control_api_token_refs_before_runtime_snapshot() 
         runtime.observability.control_api.auth.bearer_tokens[0].token,
         "viewer-secret-token"
     );
-    assert!(runtime.observability.control_api.auth.bearer_tokens[0]
-        .token_ref
-        .is_none());
+    assert!(
+        runtime.observability.control_api.auth.bearer_tokens[0]
+            .token_ref
+            .is_none()
+    );
 }
 
 #[test]

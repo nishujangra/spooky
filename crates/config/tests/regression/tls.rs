@@ -176,8 +176,14 @@ fn runtime_config_lowers_upstream_mtls_metadata_for_https_backends() {
     let upstream = api_runtime_upstream(&runtime);
     let tls_policy = upstream.backend_tls_policy();
 
-    assert_eq!(tls_policy.ca_file.as_deref(), Some(ca_file.to_string_lossy().as_ref()));
-    assert_eq!(tls_policy.ca_dir.as_deref(), Some(ca_dir.to_string_lossy().as_ref()));
+    assert_eq!(
+        tls_policy.ca_file.as_deref(),
+        Some(ca_file.to_string_lossy().as_ref())
+    );
+    assert_eq!(
+        tls_policy.ca_dir.as_deref(),
+        Some(ca_dir.to_string_lossy().as_ref())
+    );
     assert!(!tls_policy.strict_sni);
     assert_eq!(
         tls_policy
@@ -187,17 +193,28 @@ fn runtime_config_lowers_upstream_mtls_metadata_for_https_backends() {
         Some("file")
     );
     assert_eq!(
-        tls_policy.client_key.as_ref().map(|metadata| metadata.source_kind.as_str()),
+        tls_policy
+            .client_key
+            .as_ref()
+            .map(|metadata| metadata.source_kind.as_str()),
         Some("file")
     );
-    assert!(tls_policy
-        .client_certificate
-        .as_ref()
-        .is_some_and(|metadata| !metadata.fingerprint_sha256.is_empty() && metadata.byte_len > 0));
-    assert!(tls_policy
-        .client_key
-        .as_ref()
-        .is_some_and(|metadata| !metadata.fingerprint_sha256.is_empty() && metadata.byte_len > 0));
+    assert!(
+        tls_policy
+            .client_certificate
+            .as_ref()
+            .is_some_and(
+                |metadata| !metadata.fingerprint_sha256.is_empty() && metadata.byte_len > 0
+            )
+    );
+    assert!(
+        tls_policy
+            .client_key
+            .as_ref()
+            .is_some_and(
+                |metadata| !metadata.fingerprint_sha256.is_empty() && metadata.byte_len > 0
+            )
+    );
 }
 
 #[test]

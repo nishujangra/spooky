@@ -497,7 +497,10 @@ fn build_tls_config(tls: &TlsClientConfig) -> Result<ClientConfig, String> {
 
 fn build_rustls_client_config(
     roots: RootCertStore,
-    client_identity: Option<(Vec<rustls::pki_types::CertificateDer<'static>>, PrivateKeyDer<'static>)>,
+    client_identity: Option<(
+        Vec<rustls::pki_types::CertificateDer<'static>>,
+        PrivateKeyDer<'static>,
+    )>,
 ) -> Result<ClientConfig, String> {
     let builder = ClientConfig::builder().with_root_certificates(roots);
     match client_identity {
@@ -510,12 +513,23 @@ fn build_rustls_client_config(
 
 fn load_client_identity(
     tls: &TlsClientConfig,
-) -> Result<Option<(Vec<rustls::pki_types::CertificateDer<'static>>, PrivateKeyDer<'static>)>, String>
-{
+) -> Result<
+    Option<(
+        Vec<rustls::pki_types::CertificateDer<'static>>,
+        PrivateKeyDer<'static>,
+    )>,
+    String,
+> {
     match (&tls.client_certificate, &tls.client_key) {
         (None, None) => Ok(None),
-        (None, Some(_)) => Err("client_certificate_missing: upstream TLS client certificate source is not configured".to_string()),
-        (Some(_), None) => Err("client_key_missing: upstream TLS client private key source is not configured".to_string()),
+        (None, Some(_)) => Err(
+            "client_certificate_missing: upstream TLS client certificate source is not configured"
+                .to_string(),
+        ),
+        (Some(_), None) => Err(
+            "client_key_missing: upstream TLS client private key source is not configured"
+                .to_string(),
+        ),
         (Some(cert_source), Some(key_source)) => {
             let cert = resolve_client_material(cert_source, "upstream_tls.client_certificate")
                 .map_err(|err| classify_client_material_error(err, true))?;
@@ -550,12 +564,16 @@ fn classify_client_material_error(
     certificate: bool,
 ) -> String {
     let prefix = match (certificate, err.kind()) {
-        (true, RuntimeSecretResolutionErrorKind::FileNotFound | RuntimeSecretResolutionErrorKind::MissingSource) => {
-            "client_certificate_missing"
-        }
-        (false, RuntimeSecretResolutionErrorKind::FileNotFound | RuntimeSecretResolutionErrorKind::MissingSource) => {
-            "client_key_missing"
-        }
+        (
+            true,
+            RuntimeSecretResolutionErrorKind::FileNotFound
+            | RuntimeSecretResolutionErrorKind::MissingSource,
+        ) => "client_certificate_missing",
+        (
+            false,
+            RuntimeSecretResolutionErrorKind::FileNotFound
+            | RuntimeSecretResolutionErrorKind::MissingSource,
+        ) => "client_key_missing",
         _ => "client_identity_invalid",
     };
     format!("{prefix}: {err}")

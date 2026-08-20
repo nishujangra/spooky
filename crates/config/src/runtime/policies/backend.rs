@@ -7,9 +7,7 @@ use super::config_invalid;
 use crate::{
     backend_endpoint::{BackendEndpoint, BackendScheme},
     config::{HealthCheck, Performance, UpstreamTls},
-    runtime::{
-        RuntimeConfigError, RuntimeResolvedSecretMetadata, resolve_file_secret_path,
-    },
+    runtime::{RuntimeConfigError, RuntimeResolvedSecretMetadata, resolve_file_secret_path},
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,10 +160,14 @@ impl RuntimeBackendTlsPolicy {
             &format!("{field_prefix}.client_key"),
             false,
         )?;
-        let ca_file_fingerprint_sha256 =
-            fingerprint_optional_ca_file(effective_tls.ca_file.as_deref(), &format!("{field_prefix}.ca_file"))?;
-        let ca_dir_fingerprint_sha256 =
-            fingerprint_optional_ca_dir(effective_tls.ca_dir.as_deref(), &format!("{field_prefix}.ca_dir"))?;
+        let ca_file_fingerprint_sha256 = fingerprint_optional_ca_file(
+            effective_tls.ca_file.as_deref(),
+            &format!("{field_prefix}.ca_file"),
+        )?;
+        let ca_dir_fingerprint_sha256 = fingerprint_optional_ca_dir(
+            effective_tls.ca_dir.as_deref(),
+            &format!("{field_prefix}.ca_dir"),
+        )?;
 
         Ok(Self {
             verify_certificates: effective_tls.verify_certificates,
@@ -180,7 +182,9 @@ impl RuntimeBackendTlsPolicy {
             client_certificate_not_after_unix_seconds: client_certificate
                 .as_ref()
                 .and_then(|material| material.not_after_unix_seconds),
-            client_key: client_key.as_ref().map(|material| material.metadata.clone()),
+            client_key: client_key
+                .as_ref()
+                .map(|material| material.metadata.clone()),
         })
     }
 }
@@ -262,12 +266,19 @@ fn fingerprint_optional_ca_dir(
         return Ok(None);
     };
     let dir = Path::new(ca_dir);
-    let entries = fs::read_dir(dir)
-        .map_err(|err| RuntimeConfigError::TlsMaterialInvalid(format!("failed to read {field_name} '{ca_dir}': {err}")))?;
+    let entries = fs::read_dir(dir).map_err(|err| {
+        RuntimeConfigError::TlsMaterialInvalid(format!(
+            "failed to read {field_name} '{ca_dir}': {err}"
+        ))
+    })?;
 
     let mut pem_files = entries
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| RuntimeConfigError::TlsMaterialInvalid(format!("failed to read entry in {field_name} '{ca_dir}': {err}")))?
+        .map_err(|err| {
+            RuntimeConfigError::TlsMaterialInvalid(format!(
+                "failed to read entry in {field_name} '{ca_dir}': {err}"
+            ))
+        })?
         .into_iter()
         .map(|entry| entry.path())
         .filter(|path| path.is_file() && is_pem_like_path(path))
@@ -444,11 +455,9 @@ mod tests {
             client_key_ref: None,
         };
 
-        let policy = RuntimeBackendTlsPolicy::from_effective_tls(
-            &effective_tls,
-            "upstream 'payments' tls",
-        )
-        .expect("backend tls policy");
+        let policy =
+            RuntimeBackendTlsPolicy::from_effective_tls(&effective_tls, "upstream 'payments' tls")
+                .expect("backend tls policy");
 
         assert_eq!(
             policy,

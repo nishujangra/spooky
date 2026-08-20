@@ -1,6 +1,5 @@
 use std::{
-    fmt,
-    fs,
+    fmt, fs,
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -101,11 +100,13 @@ impl RuntimeResolvedSecret {
     }
 
     pub fn into_string(self, field_name: &str) -> Result<String, RuntimeSecretResolutionError> {
-        String::from_utf8(self.bytes).map_err(|_| RuntimeSecretResolutionError::new(
-            field_name,
-            Some(self.metadata.source_kind),
-            RuntimeSecretResolutionErrorKind::InvalidUtf8,
-        ))
+        String::from_utf8(self.bytes).map_err(|_| {
+            RuntimeSecretResolutionError::new(
+                field_name,
+                Some(self.metadata.source_kind),
+                RuntimeSecretResolutionErrorKind::InvalidUtf8,
+            )
+        })
     }
 
     pub fn parse_pem_certificates(
@@ -251,7 +252,10 @@ impl RuntimeSecretProvider for LiteralSecretProvider {
                 RuntimeSecretResolutionErrorKind::EmptySecret,
             ));
         }
-        Ok(resolved_secret(self.source_kind(), value.as_bytes().to_vec()))
+        Ok(resolved_secret(
+            self.source_kind(),
+            value.as_bytes().to_vec(),
+        ))
     }
 }
 
@@ -332,10 +336,7 @@ impl RuntimeSecretResolver {
         secret_ref: Option<&SecretRef>,
         field_name: &str,
     ) -> Result<RuntimeResolvedSecret, RuntimeSecretResolutionError> {
-        match (
-            literal_value.filter(|value| !value.is_empty()),
-            secret_ref,
-        ) {
+        match (literal_value.filter(|value| !value.is_empty()), secret_ref) {
             (Some(_), Some(_)) => Err(RuntimeSecretResolutionError::new(
                 field_name,
                 None,
@@ -390,7 +391,9 @@ pub fn resolve_config_secrets(config: &Config) -> Result<Config, RuntimeConfigEr
                         .map(str::trim)
                         .filter(|value| !value.is_empty()),
                     client_secret_ref.as_ref(),
-                    &format!("upstream '{upstream_name}' auth.external_auth.oidc.client_secret_ref"),
+                    &format!(
+                        "upstream '{upstream_name}' auth.external_auth.oidc.client_secret_ref"
+                    ),
                 )
                 .map_err(runtime_secret_config_error)?;
             *client_secret = Some(
@@ -434,7 +437,8 @@ pub fn resolve_config_secrets(config: &Config) -> Result<Config, RuntimeConfigEr
         .iter_mut()
         .enumerate()
     {
-        resolve_control_api_bearer_token(&resolver, token, index).map_err(runtime_secret_config_error)?;
+        resolve_control_api_bearer_token(&resolver, token, index)
+            .map_err(runtime_secret_config_error)?;
     }
 
     Ok(resolved)
@@ -454,10 +458,9 @@ fn resolve_control_api_bearer_token(
         token.token_ref.as_ref(),
         &format!("observability.control_api.auth.bearer_tokens[{index}].token_ref"),
     )?;
-    token.token = resolved
-        .into_string(&format!(
-            "observability.control_api.auth.bearer_tokens[{index}].token_ref"
-        ))?;
+    token.token = resolved.into_string(&format!(
+        "observability.control_api.auth.bearer_tokens[{index}].token_ref"
+    ))?;
     token.token_ref = None;
     Ok(())
 }
@@ -553,7 +556,10 @@ mod tests {
             .expect("literal secret");
 
         assert_eq!(secret.bytes(), b"super-secret");
-        assert_eq!(secret.metadata().source_kind, RuntimeSecretSourceKind::Literal);
+        assert_eq!(
+            secret.metadata().source_kind,
+            RuntimeSecretSourceKind::Literal
+        );
         assert_eq!(secret.metadata().byte_len, 12);
     }
 
@@ -623,8 +629,9 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("secret.txt");
         fs::write(&path, b"first-secret").expect("write");
-        let first = resolve_file_secret_path(path.to_string_lossy().as_ref(), "auth.jwt.secret_ref")
-            .expect("first");
+        let first =
+            resolve_file_secret_path(path.to_string_lossy().as_ref(), "auth.jwt.secret_ref")
+                .expect("first");
         fs::write(&path, b"second-secret").expect("rewrite");
         let second =
             resolve_file_secret_path(path.to_string_lossy().as_ref(), "auth.jwt.secret_ref")

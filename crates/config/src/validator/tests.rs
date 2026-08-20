@@ -2039,10 +2039,7 @@ fn rejects_upstream_tls_partial_client_mtls_pair() {
     let (cert, key) = write_test_certs(dir.path());
 
     let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
-    cfg.upstream
-        .get_mut("test_upstream")
-        .expect("upstream")
-        .tls = Some(UpstreamTls {
+    cfg.upstream.get_mut("test_upstream").expect("upstream").tls = Some(UpstreamTls {
         verify_certificates: true,
         strict_sni: true,
         ca_file: None,
