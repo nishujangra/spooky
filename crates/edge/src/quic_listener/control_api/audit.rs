@@ -490,7 +490,9 @@ impl QUICListener {
             | AdminAuditEventType::RuntimeReload
             | AdminAuditEventType::RuntimeActivate
             | AdminAuditEventType::RuntimeRollback
-            | AdminAuditEventType::UpstreamMtlsMaterial => Some(AdminAuditFailureClass::RuntimeConfig),
+            | AdminAuditEventType::UpstreamMtlsMaterial => {
+                Some(AdminAuditFailureClass::RuntimeConfig)
+            }
             AdminAuditEventType::RuntimeRestart => Some(AdminAuditFailureClass::Watchdog),
             AdminAuditEventType::CertReload => Some(AdminAuditFailureClass::ListenerTls),
         }

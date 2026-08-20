@@ -1595,7 +1595,11 @@ fn successful_activation_result(
 }
 
 fn activation_summary_suffix(diff: &ReloadDiff) -> &'static str {
-    if diff.entries.iter().any(|entry| entry.secret_material_changed) {
+    if diff
+        .entries
+        .iter()
+        .any(|entry| entry.secret_material_changed)
+    {
         " [upstream_mtls_material_changed]"
     } else {
         ""
