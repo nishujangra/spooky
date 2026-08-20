@@ -81,6 +81,8 @@ It does not:
 
 Use it for certificate rotation when only the cert or trust material changed.
 
+Upstream client certificates, upstream CA bundles, and other secret-backed upstream TLS material are never rotated through `reload-certs` — they are generation-owned and go through `validate`/`preview`/`activate` instead. See [Secret and Certificate Rotation](secret-and-cert-rotation.md) for the full rotation and rollback runbook.
+
 ## Rollback
 
 Rollback restores a previously retained runtime generation through `POST /admin/runtime/rollback`.
@@ -171,4 +173,5 @@ If drain times out:
 - [Production Deployment](../deployment/production.md)
 - [Production Readiness](production-readiness.md)
 - [Runbook](runbook.md)
+- [Secret and Certificate Rotation](secret-and-cert-rotation.md)
 - [Control API Reference](../reference/control-api-reference.md)
