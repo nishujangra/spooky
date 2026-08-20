@@ -141,6 +141,7 @@ pub struct RuntimeBackendTlsPolicy {
     pub ca_dir: Option<String>,
     pub ca_dir_fingerprint_sha256: Option<String>,
     pub client_certificate: Option<RuntimeResolvedSecretMetadata>,
+    pub client_certificate_not_after_unix_seconds: Option<i64>,
     pub client_key: Option<RuntimeResolvedSecretMetadata>,
 }
 
@@ -173,10 +174,20 @@ impl RuntimeBackendTlsPolicy {
             ca_file_fingerprint_sha256,
             ca_dir: effective_tls.ca_dir.clone(),
             ca_dir_fingerprint_sha256,
-            client_certificate,
-            client_key,
+            client_certificate: client_certificate
+                .as_ref()
+                .map(|material| material.metadata.clone()),
+            client_certificate_not_after_unix_seconds: client_certificate
+                .as_ref()
+                .and_then(|material| material.not_after_unix_seconds),
+            client_key: client_key.as_ref().map(|material| material.metadata.clone()),
         })
     }
+}
+
+struct RuntimeSecretMaterial {
+    metadata: RuntimeResolvedSecretMetadata,
+    not_after_unix_seconds: Option<i64>,
 }
 
 fn resolve_optional_secret_material(
@@ -184,7 +195,7 @@ fn resolve_optional_secret_material(
     secret_ref: Option<&crate::config::SecretRef>,
     field_name: &str,
     expect_certificate_pem: bool,
-) -> Result<Option<RuntimeResolvedSecretMetadata>, RuntimeConfigError> {
+) -> Result<Option<RuntimeSecretMaterial>, RuntimeConfigError> {
     let material = match (
         legacy_path.map(str::trim).filter(|value| !value.is_empty()),
         secret_ref,
@@ -208,16 +219,21 @@ fn resolve_optional_secret_material(
     };
 
     if let Some(material) = material {
-        if expect_certificate_pem {
+        let not_after_unix_seconds = if expect_certificate_pem {
             material
                 .parse_pem_certificates(field_name)
                 .map_err(|err| RuntimeConfigError::TlsMaterialInvalid(err.to_string()))?;
+            None
         } else {
             material
                 .parse_pem_private_key(field_name)
                 .map_err(|err| RuntimeConfigError::TlsMaterialInvalid(err.to_string()))?;
-        }
-        Ok(Some(material.metadata().clone()))
+            None
+        };
+        Ok(Some(RuntimeSecretMaterial {
+            metadata: material.metadata().clone(),
+            not_after_unix_seconds,
+        }))
     } else {
         Ok(None)
     }
@@ -461,6 +477,7 @@ mod tests {
                     hex::encode(hasher.finalize())
                 }),
                 client_certificate: None,
+                client_certificate_not_after_unix_seconds: None,
                 client_key: None,
             }
         );

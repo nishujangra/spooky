@@ -615,6 +615,7 @@ mod tests {
                 key: None,
             }),
             upstream_tls: UpstreamTls::default(),
+            secrets: Default::default(),
             log: Log {
                 level: "info".to_string(),
                 file: LogFile {

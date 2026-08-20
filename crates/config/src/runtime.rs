@@ -8,7 +8,7 @@ use std::{collections::HashMap, fmt, net::IpAddr};
 
 use crate::config::{
     Backend, ClientAuth, Config, ForwardedHeaderPolicy, Listen, Observability, Performance,
-    ProtocolPolicy, Resilience, Security, TlsCertificate, Upstream, UpstreamHostPolicy,
+    ProtocolPolicy, Resilience, Secrets, Security, TlsCertificate, Upstream, UpstreamHostPolicy,
     UpstreamHostPolicyMode, UpstreamTls,
 };
 
@@ -45,6 +45,7 @@ pub struct RuntimeConfig {
     pub version: u32,
     pub listeners: Vec<RuntimeListener>,
     pub upstreams: HashMap<String, RuntimeUpstream>,
+    pub secrets: Secrets,
     pub policies: RuntimePolicySet,
     pub performance: Performance,
     pub observability: Observability,
@@ -60,6 +61,7 @@ impl RuntimeConfig {
             version: resolved_config.version,
             listeners: listeners::runtime_listeners(&resolved_config)?,
             upstreams: upstreams::normalize_upstreams(&resolved_config, &policies)?,
+            secrets: resolved_config.secrets.clone(),
             policies,
             performance: resolved_config.performance.clone(),
             observability: resolved_config.observability.clone(),

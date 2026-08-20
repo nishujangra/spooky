@@ -8,8 +8,11 @@ use spooky_errors::ProxyError;
 
 use crate::runtime::tls::inventory::ListenerTlsInventory;
 
+#[derive(Clone)]
 pub struct ListenerTlsReloadState {
     pub generation: u64,
+    pub loaded_at_unix_ms: u64,
+    pub last_reload_status: String,
     pub inventory: ListenerTlsInventory,
     pub bootstrap_server_config: Arc<RustlsServerConfig>,
 }
@@ -120,6 +123,18 @@ impl ListenerTlsReloadStore {
                 listeners
                     .iter()
                     .map(|(listener, state)| (listener.clone(), state.generation))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn snapshot_states(&self) -> HashMap<String, ListenerTlsReloadState> {
+        self.listeners
+            .read()
+            .map(|listeners| {
+                listeners
+                    .iter()
+                    .map(|(listener, state)| (listener.clone(), state.clone()))
                     .collect()
             })
             .unwrap_or_default()

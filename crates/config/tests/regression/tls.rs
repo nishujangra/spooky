@@ -27,13 +27,32 @@ fn write_test_certs(dir: &std::path::Path) -> (std::path::PathBuf, std::path::Pa
     (cert_path, key_path)
 }
 
+fn write_test_ca(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let cert = Certificate::from_params(CertificateParams::new(vec!["upstream-ca".into()]))
+        .expect("build ca");
+    let ca_file = dir.join("upstream-ca.pem");
+    let ca_dir = dir.join("ca-dir");
+    std::fs::create_dir_all(&ca_dir).expect("create ca dir");
+    std::fs::write(&ca_file, cert.serialize_pem().expect("serialize ca")).expect("write ca");
+    std::fs::write(
+        ca_dir.join("root.pem"),
+        cert.serialize_pem().expect("serialize ca dir root"),
+    )
+    .expect("write ca dir root");
+    (ca_file, ca_dir)
+}
+
 #[test]
 fn runtime_config_lowers_effective_tls_and_upstream_policy_wrappers() {
+    let dir = tempdir().expect("tempdir");
+    let (global_ca_file, _global_ca_dir) = write_test_ca(dir.path());
+    let (upstream_ca_file, upstream_ca_dir) = write_test_ca(dir.path());
+
     let runtime = sample_runtime_config_with(|config| {
         config.upstream_tls = UpstreamTls {
             verify_certificates: true,
             strict_sni: true,
-            ca_file: Some("/tmp/roots/global.pem".to_string()),
+            ca_file: Some(global_ca_file.to_string_lossy().to_string()),
             ca_dir: None,
             client_certificate: None,
             client_certificate_ref: None,
@@ -43,8 +62,8 @@ fn runtime_config_lowers_effective_tls_and_upstream_policy_wrappers() {
         api_upstream_mut(config).tls = Some(UpstreamTls {
             verify_certificates: false,
             strict_sni: false,
-            ca_file: Some("/tmp/roots/upstream.pem".to_string()),
-            ca_dir: Some("/tmp/roots/upstream".to_string()),
+            ca_file: Some(upstream_ca_file.to_string_lossy().to_string()),
+            ca_dir: Some(upstream_ca_dir.to_string_lossy().to_string()),
             client_certificate: None,
             client_certificate_ref: None,
             client_key: None,
@@ -58,7 +77,7 @@ fn runtime_config_lowers_effective_tls_and_upstream_policy_wrappers() {
     assert!(!upstream.effective_tls.strict_sni);
     assert_eq!(
         upstream.effective_tls.ca_file.as_deref(),
-        Some("/tmp/roots/upstream.pem")
+        Some(upstream_ca_file.to_string_lossy().as_ref())
     );
     assert_eq!(upstream.backends.len(), 1);
     assert_eq!(
@@ -73,7 +92,7 @@ fn runtime_config_lowers_effective_tls_and_upstream_policy_wrappers() {
     );
     assert_eq!(
         upstream.backend_tls_policy().ca_file.as_deref(),
-        Some("/tmp/roots/upstream.pem")
+        Some(upstream_ca_file.to_string_lossy().as_ref())
     );
     assert_eq!(upstream.policy.host.0.mode, UpstreamHostPolicyMode::Rewrite);
     assert_eq!(
@@ -136,13 +155,14 @@ fn runtime_config_requires_non_empty_effective_tls_fields_for_https_upstreams() 
 fn runtime_config_lowers_upstream_mtls_metadata_for_https_backends() {
     let dir = tempdir().expect("tempdir");
     let (cert_path, key_path) = write_test_certs(dir.path());
+    let (ca_file, ca_dir) = write_test_ca(dir.path());
 
     let runtime = sample_runtime_config_with(|config| {
         api_upstream_mut(config).tls = Some(UpstreamTls {
             verify_certificates: true,
             strict_sni: false,
-            ca_file: Some("/tmp/roots/upstream.pem".to_string()),
-            ca_dir: Some("/tmp/roots/upstream".to_string()),
+            ca_file: Some(ca_file.to_string_lossy().to_string()),
+            ca_dir: Some(ca_dir.to_string_lossy().to_string()),
             client_certificate: None,
             client_certificate_ref: Some(SecretRef {
                 reference: format!("file://{}", cert_path.display()),
@@ -156,8 +176,8 @@ fn runtime_config_lowers_upstream_mtls_metadata_for_https_backends() {
     let upstream = api_runtime_upstream(&runtime);
     let tls_policy = upstream.backend_tls_policy();
 
-    assert_eq!(tls_policy.ca_file.as_deref(), Some("/tmp/roots/upstream.pem"));
-    assert_eq!(tls_policy.ca_dir.as_deref(), Some("/tmp/roots/upstream"));
+    assert_eq!(tls_policy.ca_file.as_deref(), Some(ca_file.to_string_lossy().as_ref()));
+    assert_eq!(tls_policy.ca_dir.as_deref(), Some(ca_dir.to_string_lossy().as_ref()));
     assert!(!tls_policy.strict_sni);
     assert_eq!(
         tls_policy

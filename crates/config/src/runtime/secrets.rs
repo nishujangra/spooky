@@ -2,6 +2,7 @@ use std::{
     fmt,
     fs,
     sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
@@ -66,6 +67,7 @@ pub struct RuntimeResolvedSecretMetadata {
     pub source_kind: RuntimeSecretSourceKind,
     pub fingerprint_sha256: String,
     pub byte_len: usize,
+    pub loaded_at_unix_ms: u64,
 }
 
 impl fmt::Debug for RuntimeResolvedSecretMetadata {
@@ -74,6 +76,7 @@ impl fmt::Debug for RuntimeResolvedSecretMetadata {
             .field("source_kind", &self.source_kind)
             .field("fingerprint_sha256", &self.fingerprint_sha256)
             .field("byte_len", &self.byte_len)
+            .field("loaded_at_unix_ms", &self.loaded_at_unix_ms)
             .finish()
     }
 }
@@ -507,6 +510,10 @@ fn resolved_secret(source_kind: RuntimeSecretSourceKind, bytes: Vec<u8>) -> Runt
             source_kind,
             fingerprint_sha256,
             byte_len: bytes.len(),
+            loaded_at_unix_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|duration| duration.as_millis().try_into().unwrap_or(u64::MAX))
+                .unwrap_or(0),
         },
         bytes,
     }

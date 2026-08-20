@@ -848,6 +848,8 @@ impl QUICListener {
         )?);
         Ok(ListenerTlsReloadState {
             generation: 0,
+            loaded_at_unix_ms: crate::watchdog::time::now_millis(),
+            last_reload_status: "loaded".to_string(),
             inventory,
             bootstrap_server_config,
         })
