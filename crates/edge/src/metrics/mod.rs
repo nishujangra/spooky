@@ -137,6 +137,11 @@ pub struct Metrics {
     downstream_tls_alpn_negotiated: RwLock<HashMap<DownstreamTlsAlpnKey, u64>>,
     downstream_tls_cert_expiry: RwLock<HashMap<DownstreamTlsCertExpiryKey, i64>>,
     upstream_tls_failures: RwLock<HashMap<UpstreamTlsFailureKey, u64>>,
+    secret_reload_totals: RwLock<HashMap<SecretReloadKey, u64>>,
+    secret_resolve_totals: RwLock<HashMap<SecretResolveKey, u64>>,
+    secret_last_success_unixtime: RwLock<HashMap<SecretLastSuccessKey, u64>>,
+    upstream_client_cert_expiry: RwLock<HashMap<UpstreamClientCertExpiryKey, i64>>,
+    control_plane_cert_reload_totals: RwLock<HashMap<ControlPlaneCertReloadKey, u64>>,
 }
 
 #[derive(Default, Clone)]
@@ -236,8 +241,39 @@ pub(crate) struct DownstreamTlsAlpnKey {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct UpstreamTlsFailureKey {
+    pub(crate) upstream: String,
     pub(crate) backend: String,
     pub(crate) phase: String,
+    pub(crate) reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct SecretReloadKey {
+    pub(crate) scope: String,
+    pub(crate) result: String,
+    pub(crate) reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct SecretResolveKey {
+    pub(crate) provider: String,
+    pub(crate) result: String,
+    pub(crate) reason: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct SecretLastSuccessKey {
+    pub(crate) scope: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct UpstreamClientCertExpiryKey {
+    pub(crate) upstream: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) struct ControlPlaneCertReloadKey {
+    pub(crate) result: String,
     pub(crate) reason: String,
 }
 
@@ -612,6 +648,11 @@ impl Metrics {
             downstream_tls_alpn_negotiated: RwLock::new(HashMap::new()),
             downstream_tls_cert_expiry: RwLock::new(HashMap::new()),
             upstream_tls_failures: RwLock::new(HashMap::new()),
+            secret_reload_totals: RwLock::new(HashMap::new()),
+            secret_resolve_totals: RwLock::new(HashMap::new()),
+            secret_last_success_unixtime: RwLock::new(HashMap::new()),
+            upstream_client_cert_expiry: RwLock::new(HashMap::new()),
+            control_plane_cert_reload_totals: RwLock::new(HashMap::new()),
         }
     }
 
@@ -1327,9 +1368,98 @@ impl Metrics {
                     .map(|(key, value)| (key.clone(), *value))
                     .collect::<Vec<_>>();
                 entries.sort_by(|(left, _), (right, _)| {
-                    left.backend
-                        .cmp(&right.backend)
+                    left.upstream
+                        .cmp(&right.upstream)
+                        .then_with(|| left.backend.cmp(&right.backend))
                         .then_with(|| left.phase.cmp(&right.phase))
+                        .then_with(|| left.reason.cmp(&right.reason))
+                });
+                entries
+            })
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn snapshot_secret_reload_totals(&self) -> Vec<(SecretReloadKey, u64)> {
+        self.secret_reload_totals
+            .read()
+            .map(|guard| {
+                let mut entries = guard
+                    .iter()
+                    .map(|(key, value)| (key.clone(), *value))
+                    .collect::<Vec<_>>();
+                entries.sort_by(|(left, _), (right, _)| {
+                    left.scope
+                        .cmp(&right.scope)
+                        .then_with(|| left.result.cmp(&right.result))
+                        .then_with(|| left.reason.cmp(&right.reason))
+                });
+                entries
+            })
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn snapshot_secret_resolve_totals(&self) -> Vec<(SecretResolveKey, u64)> {
+        self.secret_resolve_totals
+            .read()
+            .map(|guard| {
+                let mut entries = guard
+                    .iter()
+                    .map(|(key, value)| (key.clone(), *value))
+                    .collect::<Vec<_>>();
+                entries.sort_by(|(left, _), (right, _)| {
+                    left.provider
+                        .cmp(&right.provider)
+                        .then_with(|| left.result.cmp(&right.result))
+                        .then_with(|| left.reason.cmp(&right.reason))
+                });
+                entries
+            })
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn snapshot_secret_last_success_unixtime(&self) -> Vec<(SecretLastSuccessKey, u64)> {
+        self.secret_last_success_unixtime
+            .read()
+            .map(|guard| {
+                let mut entries = guard
+                    .iter()
+                    .map(|(key, value)| (key.clone(), *value))
+                    .collect::<Vec<_>>();
+                entries.sort_by(|(left, _), (right, _)| left.scope.cmp(&right.scope));
+                entries
+            })
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn snapshot_upstream_client_cert_expiry(
+        &self,
+    ) -> Vec<(UpstreamClientCertExpiryKey, i64)> {
+        self.upstream_client_cert_expiry
+            .read()
+            .map(|guard| {
+                let mut entries = guard
+                    .iter()
+                    .map(|(key, value)| (key.clone(), *value))
+                    .collect::<Vec<_>>();
+                entries.sort_by(|(left, _), (right, _)| left.upstream.cmp(&right.upstream));
+                entries
+            })
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn snapshot_control_plane_cert_reload_totals(
+        &self,
+    ) -> Vec<(ControlPlaneCertReloadKey, u64)> {
+        self.control_plane_cert_reload_totals
+            .read()
+            .map(|guard| {
+                let mut entries = guard
+                    .iter()
+                    .map(|(key, value)| (key.clone(), *value))
+                    .collect::<Vec<_>>();
+                entries.sort_by(|(left, _), (right, _)| {
+                    left.result
+                        .cmp(&right.result)
                         .then_with(|| left.reason.cmp(&right.reason))
                 });
                 entries
@@ -1688,12 +1818,80 @@ impl Metrics {
         }
     }
 
-    pub fn record_upstream_tls_failure(&self, backend: &str, phase: &str, reason: &str) {
+    pub fn record_upstream_tls_failure(
+        &self,
+        upstream: &str,
+        backend: &str,
+        phase: &str,
+        reason: &str,
+    ) {
         if let Ok(mut guard) = self.upstream_tls_failures.write() {
             *guard
                 .entry(UpstreamTlsFailureKey {
+                    upstream: upstream.to_string(),
                     backend: backend.to_string(),
                     phase: phase.to_string(),
+                    reason: reason.to_string(),
+                })
+                .or_default() += 1;
+        }
+    }
+
+    pub fn record_secret_reload(&self, scope: &str, result: &str, reason: &str) {
+        if let Ok(mut guard) = self.secret_reload_totals.write() {
+            *guard
+                .entry(SecretReloadKey {
+                    scope: scope.to_string(),
+                    result: result.to_string(),
+                    reason: reason.to_string(),
+                })
+                .or_default() += 1;
+        }
+    }
+
+    pub fn record_secret_resolve(&self, provider: &str, result: &str, reason: &str) {
+        if let Ok(mut guard) = self.secret_resolve_totals.write() {
+            *guard
+                .entry(SecretResolveKey {
+                    provider: provider.to_string(),
+                    result: result.to_string(),
+                    reason: reason.to_string(),
+                })
+                .or_default() += 1;
+        }
+    }
+
+    pub fn set_secret_last_success_unixtime(&self, scope: &str, unix_seconds: u64) {
+        if let Ok(mut guard) = self.secret_last_success_unixtime.write() {
+            guard.insert(
+                SecretLastSuccessKey {
+                    scope: scope.to_string(),
+                },
+                unix_seconds,
+            );
+        }
+    }
+
+    pub fn replace_upstream_client_cert_expiry<I>(&self, certs: I)
+    where
+        I: IntoIterator<Item = (String, i64)>,
+    {
+        if let Ok(mut guard) = self.upstream_client_cert_expiry.write() {
+            guard.clear();
+            for (upstream, not_after_unix_seconds) in certs {
+                guard.insert(
+                    UpstreamClientCertExpiryKey { upstream },
+                    not_after_unix_seconds,
+                );
+            }
+        }
+    }
+
+    pub fn record_control_plane_cert_reload(&self, result: &str, reason: &str) {
+        if let Ok(mut guard) = self.control_plane_cert_reload_totals.write() {
+            *guard
+                .entry(ControlPlaneCertReloadKey {
+                    result: result.to_string(),
                     reason: reason.to_string(),
                 })
                 .or_default() += 1;
@@ -1866,6 +2064,51 @@ mod tests {
         ));
         assert!(rendered.contains(
             "spooky_quota_backend_health_total{backend_mode=\"redis_local_fallback_backend_timeout\",reason=\"timeout\"} 1"
+        ));
+    }
+
+    #[test]
+    fn prometheus_render_includes_secret_and_upstream_mtls_series() {
+        let metrics = Metrics::default();
+        metrics.record_secret_reload("listeners", "success", "cert_reload_applied");
+        metrics.record_secret_resolve("file", "success", "resolved");
+        metrics.record_secret_resolve("file", "failed", "file_not_found");
+        metrics.set_secret_last_success_unixtime("upstreams", 1_700_000_123);
+        metrics.record_upstream_tls_failure(
+            "payments",
+            "10.0.0.5:443",
+            "data_plane",
+            "client_auth_rejected",
+        );
+        metrics.replace_upstream_client_cert_expiry([("payments".to_string(), 1_800_000_000)]);
+        metrics.record_control_plane_cert_reload("success", "cert_reload_applied");
+
+        let rendered = metrics.render_prometheus();
+
+        assert!(rendered.contains(
+            "spooky_secret_reload_total{scope=\"listeners\",result=\"success\",reason=\"cert_reload_applied\"} 1"
+        ));
+        assert!(rendered.contains(
+            "spooky_secret_resolve_total{provider=\"file\",result=\"success\",reason=\"resolved\"} 1"
+        ));
+        assert!(rendered.contains(
+            "spooky_secret_resolve_total{provider=\"file\",result=\"failed\",reason=\"file_not_found\"} 1"
+        ));
+        assert!(
+            rendered
+                .contains("spooky_secret_last_success_unixtime{scope=\"upstreams\"} 1700000123")
+        );
+        assert!(rendered.contains(
+            "spooky_upstream_tls_failure_total{upstream=\"payments\",backend=\"10.0.0.5:443\",phase=\"data_plane\",reason=\"client_auth_rejected\"} 1"
+        ));
+        assert!(rendered.contains(
+            "spooky_upstream_mtls_handshake_failure_total{upstream=\"payments\",backend=\"10.0.0.5:443\",reason=\"client_auth_rejected\"} 1"
+        ));
+        assert!(rendered.contains(
+            "spooky_upstream_client_certificate_not_after_seconds{upstream=\"payments\"} 1800000000"
+        ));
+        assert!(rendered.contains(
+            "spooky_control_plane_cert_reload_total{result=\"success\",reason=\"cert_reload_applied\"} 1"
         ));
     }
 }

@@ -746,14 +746,98 @@ impl Metrics {
             ));
         }
         out.push_str(
-            "# HELP spooky_upstream_tls_failure_total Upstream TLS failures grouped by backend, request phase, and reason.\n",
+            "# HELP spooky_upstream_tls_failure_total Upstream TLS failures grouped by upstream, backend, request phase, and reason.\n",
         );
         out.push_str("# TYPE spooky_upstream_tls_failure_total counter\n");
         for (key, value) in self.snapshot_upstream_tls_failures() {
             out.push_str(&format!(
-                "spooky_upstream_tls_failure_total{{backend=\"{}\",phase=\"{}\",reason=\"{}\"}} {}\n",
+                "spooky_upstream_tls_failure_total{{upstream=\"{}\",backend=\"{}\",phase=\"{}\",reason=\"{}\"}} {}\n",
+                escape_prometheus_label(&key.upstream),
                 escape_prometheus_label(&key.backend),
                 escape_prometheus_label(&key.phase),
+                escape_prometheus_label(&key.reason),
+                value
+            ));
+        }
+        out.push_str(
+            "# HELP spooky_secret_reload_total Total secret or certificate reload outcomes grouped by scope, result, and reason.\n",
+        );
+        out.push_str("# TYPE spooky_secret_reload_total counter\n");
+        for (key, value) in self.snapshot_secret_reload_totals() {
+            out.push_str(&format!(
+                "spooky_secret_reload_total{{scope=\"{}\",result=\"{}\",reason=\"{}\"}} {}\n",
+                escape_prometheus_label(&key.scope),
+                escape_prometheus_label(&key.result),
+                escape_prometheus_label(&key.reason),
+                value
+            ));
+        }
+        out.push_str(
+            "# HELP spooky_secret_resolve_total Total secret resolution outcomes grouped by provider, result, and reason.\n",
+        );
+        out.push_str("# TYPE spooky_secret_resolve_total counter\n");
+        for (key, value) in self.snapshot_secret_resolve_totals() {
+            out.push_str(&format!(
+                "spooky_secret_resolve_total{{provider=\"{}\",result=\"{}\",reason=\"{}\"}} {}\n",
+                escape_prometheus_label(&key.provider),
+                escape_prometheus_label(&key.result),
+                escape_prometheus_label(&key.reason),
+                value
+            ));
+        }
+        out.push_str(
+            "# HELP spooky_secret_last_success_unixtime Unix timestamp of the last successful secret or certificate load by scope.\n",
+        );
+        out.push_str("# TYPE spooky_secret_last_success_unixtime gauge\n");
+        for (key, value) in self.snapshot_secret_last_success_unixtime() {
+            out.push_str(&format!(
+                "spooky_secret_last_success_unixtime{{scope=\"{}\"}} {}\n",
+                escape_prometheus_label(&key.scope),
+                value
+            ));
+        }
+        out.push_str(
+            "# HELP spooky_upstream_mtls_handshake_failure_total Upstream mTLS handshake failures grouped by upstream, backend, and reason.\n",
+        );
+        out.push_str("# TYPE spooky_upstream_mtls_handshake_failure_total counter\n");
+        for (key, value) in self.snapshot_upstream_tls_failures() {
+            out.push_str(&format!(
+                "spooky_upstream_mtls_handshake_failure_total{{upstream=\"{}\",backend=\"{}\",reason=\"{}\"}} {}\n",
+                escape_prometheus_label(&key.upstream),
+                escape_prometheus_label(&key.backend),
+                escape_prometheus_label(&key.reason),
+                value
+            ));
+        }
+        out.push_str(
+            "# HELP spooky_upstream_client_certificate_not_after_seconds Upstream client certificate expiration timestamps grouped by upstream.\n",
+        );
+        out.push_str("# TYPE spooky_upstream_client_certificate_not_after_seconds gauge\n");
+        out.push_str(
+            "# HELP spooky_upstream_client_certificate_days_remaining Estimated whole days remaining before upstream client certificate expiration.\n",
+        );
+        out.push_str("# TYPE spooky_upstream_client_certificate_days_remaining gauge\n");
+        for (key, value) in self.snapshot_upstream_client_cert_expiry() {
+            out.push_str(&format!(
+                "spooky_upstream_client_certificate_not_after_seconds{{upstream=\"{}\"}} {}\n",
+                escape_prometheus_label(&key.upstream),
+                value
+            ));
+            let days_remaining = ((value - now_unix_seconds).max(0) as f64) / 86_400.0;
+            out.push_str(&format!(
+                "spooky_upstream_client_certificate_days_remaining{{upstream=\"{}\"}} {:.6}\n",
+                escape_prometheus_label(&key.upstream),
+                days_remaining
+            ));
+        }
+        out.push_str(
+            "# HELP spooky_control_plane_cert_reload_total Total control-plane listener certificate reload outcomes grouped by result and reason.\n",
+        );
+        out.push_str("# TYPE spooky_control_plane_cert_reload_total counter\n");
+        for (key, value) in self.snapshot_control_plane_cert_reload_totals() {
+            out.push_str(&format!(
+                "spooky_control_plane_cert_reload_total{{result=\"{}\",reason=\"{}\"}} {}\n",
+                escape_prometheus_label(&key.result),
                 escape_prometheus_label(&key.reason),
                 value
             ));

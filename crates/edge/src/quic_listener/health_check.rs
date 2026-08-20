@@ -231,6 +231,7 @@ impl QUICListener {
             );
             record_classified_backend_failure_metrics(
                 "health_check",
+                "unknown",
                 backend_identity,
                 metrics,
                 &classified,

@@ -80,6 +80,8 @@ impl QUICListener {
         }
 
         if !failures.is_empty() {
+            metrics.record_control_plane_cert_reload("failed", "cert_reload_failed");
+            metrics.record_secret_reload("listeners", "failed", "cert_reload_failed");
             return Self::json_response(
                 StatusCode::INTERNAL_SERVER_ERROR,
                 json!({
@@ -93,6 +95,8 @@ impl QUICListener {
         let generations = match listener_tls_store.replace_listeners(&staged) {
             Ok(generations) => generations,
             Err(err) => {
+                metrics.record_control_plane_cert_reload("failed", "cert_reload_failed");
+                metrics.record_secret_reload("listeners", "failed", "cert_reload_failed");
                 return Self::json_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     json!({
@@ -105,12 +109,14 @@ impl QUICListener {
         };
 
         let mut reloaded = Vec::with_capacity(staged.len());
+        let mut last_loaded_at_unix_ms = 0u64;
         for (listener_label, reloaded_state) in staged {
             Self::update_listener_tls_expiry_metrics(
                 metrics,
                 &listener_label,
                 &reloaded_state.inventory,
             );
+            last_loaded_at_unix_ms = last_loaded_at_unix_ms.max(reloaded_state.loaded_at_unix_ms);
             reloaded.push(json!({
                 "listener": listener_label,
                 "status": reloaded_state.last_reload_status,
@@ -123,6 +129,11 @@ impl QUICListener {
                     .not_after_unix_seconds,
             }));
         }
+        if last_loaded_at_unix_ms > 0 {
+            metrics.set_secret_last_success_unixtime("listeners", last_loaded_at_unix_ms / 1_000);
+        }
+        metrics.record_control_plane_cert_reload("success", "cert_reload_applied");
+        metrics.record_secret_reload("listeners", "success", "cert_reload_applied");
 
         Self::json_response(
             StatusCode::ACCEPTED,
@@ -1244,6 +1255,7 @@ impl QUICListener {
         let metrics = Arc::clone(&current.shared_services().metrics);
         let outcome = activation.outcome_reason();
         metrics.record_runtime_activation_outcome(outcome);
+        record_control_api_secret_metrics(current.runtime_config(), metrics.as_ref(), activation);
         if let Some(reason) = activation.primary_rejection_reason() {
             metrics.inc_runtime_rejection_reason(reason);
             warn!(
@@ -1346,6 +1358,60 @@ fn legacy_reload_error_payload(activation: &ActivationResult, error: &str) -> se
     })
 }
 
+fn record_control_api_secret_metrics(
+    runtime_config: &spooky_config::runtime::RuntimeConfig,
+    metrics: &Metrics,
+    activation: &ActivationResult,
+) {
+    let reason = control_api_activation_reason(activation);
+    if activation.succeeded() {
+        if activation
+            .history_entry
+            .diff
+            .entries
+            .iter()
+            .any(|entry| entry.secret_material_changed)
+        {
+            metrics.record_secret_reload("upstreams", "success", &reason);
+            if let Some(last_loaded_at_unix_ms) = runtime_config
+                .upstreams
+                .values()
+                .flat_map(|upstream| {
+                    let policy = upstream.backend_tls_policy();
+                    [
+                        policy
+                            .client_certificate
+                            .as_ref()
+                            .map(|metadata| metadata.loaded_at_unix_ms),
+                        policy
+                            .client_key
+                            .as_ref()
+                            .map(|metadata| metadata.loaded_at_unix_ms),
+                    ]
+                })
+                .flatten()
+                .max()
+            {
+                metrics
+                    .set_secret_last_success_unixtime("upstreams", last_loaded_at_unix_ms / 1_000);
+            }
+        }
+        return;
+    }
+
+    if matches!(
+        classify_upstream_mtls_material_outcome(activation),
+        Some(UpstreamMtlsMaterialOutcome::ResolutionFailed | UpstreamMtlsMaterialOutcome::Invalid)
+    ) {
+        metrics.record_secret_reload("upstreams", "failed", &reason);
+    }
+    if let Some((provider, resolve_reason)) =
+        classify_secret_resolution_failure(activation_error(activation))
+    {
+        metrics.record_secret_resolve(provider, "failed", resolve_reason);
+    }
+}
+
 /// Secret/cert-specific classification of an activation outcome, shared by
 /// the operator-facing reason string and the dedicated audit event. Lets
 /// operators identify secret rotations and failures without parsing
@@ -1398,6 +1464,26 @@ fn classify_upstream_mtls_material_outcome(
         return Some(UpstreamMtlsMaterialOutcome::Invalid);
     }
     None
+}
+
+fn classify_secret_resolution_failure(error: &str) -> Option<(&'static str, &str)> {
+    if !error.contains("secret resolution failed") {
+        return None;
+    }
+
+    let provider = if error.contains("file secret resolution failed") {
+        "file"
+    } else if error.contains("literal secret resolution failed") {
+        "literal"
+    } else {
+        "unknown"
+    };
+    let reason = error.rsplit_once(':').map(|(_, reason)| reason.trim())?;
+    if reason.is_empty() {
+        None
+    } else {
+        Some((provider, reason))
+    }
 }
 
 /// Emits a dedicated, precisely-typed audit event when this activation

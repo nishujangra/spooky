@@ -513,6 +513,7 @@ impl QUICListener {
                     crate::runtime::connection::outcome::observe_classified_backend_failure_and_log(
                         crate::runtime::connection::outcome::ClassifiedBackendFailureInput {
                             metrics_phase: "data_plane",
+                            upstream_name: req.upstream_name.as_deref().unwrap_or("unknown"),
                             backend_addr,
                             backend_index,
                             upstream_pool: upstream_pool.as_ref(),
@@ -1264,6 +1265,7 @@ impl QUICListener {
                         let _ = crate::runtime::connection::outcome::observe_classified_backend_failure_and_log(
                             crate::runtime::connection::outcome::ClassifiedBackendFailureInput {
                                 metrics_phase: "data_plane",
+                                upstream_name: upstream_name.unwrap_or("unknown"),
                                 backend_addr: addr,
                                 backend_index: idx,
                                 upstream_pool,
