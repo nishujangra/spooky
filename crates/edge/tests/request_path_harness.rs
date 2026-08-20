@@ -12,11 +12,11 @@ use std::{
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
+use hyper::{Response, body::Incoming};
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType,
     ExtendedKeyUsagePurpose, IsCa, KeyUsagePurpose, SanType,
 };
-use hyper::{Response, body::Incoming};
 use serial_test::serial;
 use spooky_config::config::{
     ApiKeyAuth, ExternalAuth, ExternalAuthFailureMode, ExternalAuthRequestHeader, RouteAuth,
@@ -29,8 +29,8 @@ mod support;
 use support::{
     net::local_listener_bind_available,
     request_path::{
-        H3RequestSpec, QuicRequestPathHarness, make_backend, make_upstream,
-        run_request_to, run_two_chunk_post_to, run_two_chunk_post_to_with_response_timeout,
+        H3RequestSpec, QuicRequestPathHarness, make_backend, make_upstream, run_request_to,
+        run_two_chunk_post_to, run_two_chunk_post_to_with_response_timeout,
     },
 };
 
@@ -641,7 +641,9 @@ fn quic_to_h2_upstream_mtls_succeeds_with_client_certificate() {
         &mtls.server_key_path,
         &mtls.ca_cert_path,
         move |_req| async move {
-            Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(b"mtls-edge-ok"))))
+            Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(
+                b"mtls-edge-ok",
+            ))))
         },
     );
 

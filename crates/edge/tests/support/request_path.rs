@@ -44,8 +44,7 @@ use tokio::{
 use tokio_rustls::{
     TlsAcceptor, TlsConnector,
     rustls::{
-        ClientConfig, RootCertStore, ServerConfig,
-        pki_types::ServerName,
+        ClientConfig, RootCertStore, ServerConfig, pki_types::ServerName,
         server::WebPkiClientVerifier,
     },
 };
@@ -1320,9 +1319,9 @@ where
     F: Fn(Request<Incoming>) -> Fut + Send + Sync + 'static,
     Fut: Future<Output = Result<Response<Full<Bytes>>, Infallible>> + Send + 'static,
 {
-    let verifier = WebPkiClientVerifier::builder(
-        Arc::new(read_test_root_store(client_ca_path).expect("client auth root store")),
-    )
+    let verifier = WebPkiClientVerifier::builder(Arc::new(
+        read_test_root_store(client_ca_path).expect("client auth root store"),
+    ))
     .build()
     .expect("client verifier");
     let mut tls_config = ServerConfig::builder()

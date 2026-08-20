@@ -13,17 +13,12 @@ use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};
 use hyper::{Request, Response, body::Incoming, service::service_fn};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use rcgen::{
-    BasicConstraints, Certificate, CertificateParams, DistinguishedName,
-    DnType, ExtendedKeyUsagePurpose, IsCa, KeyUsagePurpose, SanType,
+    BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType,
+    ExtendedKeyUsagePurpose, IsCa, KeyUsagePurpose, SanType,
 };
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
-use spooky_config::{
-    config::SecretRef,
-    runtime::RuntimeBackendTransportKind,
-};
-use spooky_errors::{
-    ProxyError, UpstreamTlsReason, classify_upstream_proxy_error,
-};
+use spooky_config::{config::SecretRef, runtime::RuntimeBackendTransportKind};
+use spooky_errors::{ProxyError, UpstreamTlsReason, classify_upstream_proxy_error};
 use spooky_transport::{
     SharedDnsResolver, TlsClientConfig, TlsClientMaterialSource, UpstreamTransportPool,
 };
@@ -193,10 +188,7 @@ fn connection_policy() -> spooky_config::runtime::RuntimeBackendConnectionPolicy
     }
 }
 
-fn backend_tls(
-    ca_cert_path: &Path,
-    client_identity: Option<&PemIdentity>,
-) -> TlsClientConfig {
+fn backend_tls(ca_cert_path: &Path, client_identity: Option<&PemIdentity>) -> TlsClientConfig {
     TlsClientConfig {
         verify_certificates: true,
         strict_sni: true,
@@ -322,23 +314,23 @@ fn loopback_bind_restricted(err: &std::io::Error) -> bool {
 #[tokio::test]
 async fn h2_request_fails_without_client_certificate_when_backend_requires_mtls() {
     let fixture = MtlsFixture::new();
-    let port = match start_h2_mtls_backend(
-        &fixture.server,
-        &fixture.ca_cert_path,
-        |_req| async move {
+    let port =
+        match start_h2_mtls_backend(&fixture.server, &fixture.ca_cert_path, |_req| async move {
             Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(b"ok"))))
-        },
-    )
-    .await
-    {
-        Ok(port) => port,
-        Err(err) if loopback_bind_restricted(&err) => return,
-        Err(err) => panic!("backend: {err}"),
-    };
+        })
+        .await
+        {
+            Ok(port) => port,
+            Err(err) if loopback_bind_restricted(&err) => return,
+            Err(err) => panic!("backend: {err}"),
+        };
 
     let backend = format!("https://localhost:{port}");
     let resolver = SharedDnsResolver::new();
-    resolver.set_host_addrs("localhost", [std::net::SocketAddr::from(([127, 0, 0, 1], 0))]);
+    resolver.set_host_addrs(
+        "localhost",
+        [std::net::SocketAddr::from(([127, 0, 0, 1], 0))],
+    );
 
     let pool = UpstreamTransportPool::new_from_runtime_backends(
         [(backend.clone(), RuntimeBackendTransportKind::H2)],
@@ -362,23 +354,23 @@ async fn h2_request_fails_without_client_certificate_when_backend_requires_mtls(
 #[tokio::test]
 async fn h2_request_succeeds_with_valid_client_certificate() {
     let fixture = MtlsFixture::new();
-    let port = match start_h2_mtls_backend(
-        &fixture.server,
-        &fixture.ca_cert_path,
-        |_req| async move {
+    let port =
+        match start_h2_mtls_backend(&fixture.server, &fixture.ca_cert_path, |_req| async move {
             Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(b"mtls-ok"))))
-        },
-    )
-    .await
-    {
-        Ok(port) => port,
-        Err(err) if loopback_bind_restricted(&err) => return,
-        Err(err) => panic!("backend: {err}"),
-    };
+        })
+        .await
+        {
+            Ok(port) => port,
+            Err(err) if loopback_bind_restricted(&err) => return,
+            Err(err) => panic!("backend: {err}"),
+        };
 
     let backend = format!("https://localhost:{port}");
     let resolver = SharedDnsResolver::new();
-    resolver.set_host_addrs("localhost", [std::net::SocketAddr::from(([127, 0, 0, 1], 0))]);
+    resolver.set_host_addrs(
+        "localhost",
+        [std::net::SocketAddr::from(([127, 0, 0, 1], 0))],
+    );
 
     let pool = UpstreamTransportPool::new_from_runtime_backends(
         [(backend.clone(), RuntimeBackendTransportKind::H2)],
@@ -402,23 +394,23 @@ async fn h2_request_succeeds_with_valid_client_certificate() {
 #[tokio::test]
 async fn h2_request_fails_with_wrong_ca_or_wrong_client_identity() {
     let fixture = MtlsFixture::new();
-    let port = match start_h2_mtls_backend(
-        &fixture.server,
-        &fixture.ca_cert_path,
-        |_req| async move {
+    let port =
+        match start_h2_mtls_backend(&fixture.server, &fixture.ca_cert_path, |_req| async move {
             Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(b"unexpected"))))
-        },
-    )
-    .await
-    {
-        Ok(port) => port,
-        Err(err) if loopback_bind_restricted(&err) => return,
-        Err(err) => panic!("backend: {err}"),
-    };
+        })
+        .await
+        {
+            Ok(port) => port,
+            Err(err) if loopback_bind_restricted(&err) => return,
+            Err(err) => panic!("backend: {err}"),
+        };
 
     let backend = format!("https://localhost:{port}");
     let resolver = SharedDnsResolver::new();
-    resolver.set_host_addrs("localhost", [std::net::SocketAddr::from(([127, 0, 0, 1], 0))]);
+    resolver.set_host_addrs(
+        "localhost",
+        [std::net::SocketAddr::from(([127, 0, 0, 1], 0))],
+    );
 
     let wrong_ca_pool = UpstreamTransportPool::new_from_runtime_backends(
         [(backend.clone(), RuntimeBackendTransportKind::H2)],
@@ -464,23 +456,23 @@ async fn h2_request_fails_with_wrong_ca_or_wrong_client_identity() {
 #[tokio::test]
 async fn h2_pool_rotates_after_client_certificate_replacement() {
     let fixture = MtlsFixture::new();
-    let port = match start_h2_mtls_backend(
-        &fixture.server,
-        &fixture.ca_cert_path,
-        |_req| async move {
+    let port =
+        match start_h2_mtls_backend(&fixture.server, &fixture.ca_cert_path, |_req| async move {
             Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(b"rotated"))))
-        },
-    )
-    .await
-    {
-        Ok(port) => port,
-        Err(err) if loopback_bind_restricted(&err) => return,
-        Err(err) => panic!("backend: {err}"),
-    };
+        })
+        .await
+        {
+            Ok(port) => port,
+            Err(err) if loopback_bind_restricted(&err) => return,
+            Err(err) => panic!("backend: {err}"),
+        };
 
     let backend = format!("https://localhost:{port}");
     let resolver = SharedDnsResolver::new();
-    resolver.set_host_addrs("localhost", [std::net::SocketAddr::from(([127, 0, 0, 1], 0))]);
+    resolver.set_host_addrs(
+        "localhost",
+        [std::net::SocketAddr::from(([127, 0, 0, 1], 0))],
+    );
 
     let initial_tls = backend_tls(&fixture.ca_cert_path, Some(&fixture.client_a));
     let pool = UpstreamTransportPool::new_from_runtime_backends(
@@ -495,7 +487,10 @@ async fn h2_pool_rotates_after_client_certificate_replacement() {
         .send_backend_request(&backend, request(&format!("{backend}/")))
         .await
         .expect("initial request");
-    assert_eq!(read_body(first_response).await, Bytes::from_static(b"rotated"));
+    assert_eq!(
+        read_body(first_response).await,
+        Bytes::from_static(b"rotated")
+    );
 
     let unchanged = pool
         .rotate_backend_client_with_tls(&backend, initial_tls)
@@ -516,5 +511,8 @@ async fn h2_pool_rotates_after_client_certificate_replacement() {
         .send_backend_request(&backend, request(&format!("{backend}/")))
         .await
         .expect("request after rotation");
-    assert_eq!(read_body(second_response).await, Bytes::from_static(b"rotated"));
+    assert_eq!(
+        read_body(second_response).await,
+        Bytes::from_static(b"rotated")
+    );
 }

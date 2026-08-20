@@ -438,7 +438,9 @@ fn listener_cert_rotation_stays_scoped_to_reload_certs_and_does_not_activate_gen
         "reload-certs must rotate listener TLS material in place"
     );
 
-    let history_after = harness.runtime_history().expect("post-reload runtime history");
+    let history_after = harness
+        .runtime_history()
+        .expect("post-reload runtime history");
     assert_eq!(
         history_after["entries"]
             .as_array()
@@ -458,12 +460,15 @@ fn upstream_client_cert_rotation_uses_activation_and_same_path_fingerprint_chang
 
     let mut harness = RuntimeSwapHarness::new();
     let material = MtlsRuntimeMaterial::localhost();
-    let backend_addr = harness.start_h2_backend_with_client_auth(
-        &material.server_cert_path,
-        &material.server_key_path,
-        &material.ca_cert_path,
-        move |_req| async move { Ok::<_, std::convert::Infallible>(static_full_response(b"mtls-ok")) },
-    );
+    let backend_addr =
+        harness.start_h2_backend_with_client_auth(
+            &material.server_cert_path,
+            &material.server_key_path,
+            &material.ca_cert_path,
+            move |_req| async move {
+                Ok::<_, std::convert::Infallible>(static_full_response(b"mtls-ok"))
+            },
+        );
     let upstream = single_backend_upstream_with_address(
         format!("https://{backend_addr}"),
         Some(UpstreamTls {
@@ -482,7 +487,9 @@ fn upstream_client_cert_rotation_uses_activation_and_same_path_fingerprint_chang
         }),
     );
     let config = harness.make_config(HashMap::from([("api".to_string(), upstream)]));
-    harness.start_listener(config).expect("start runtime swap listener");
+    harness
+        .start_listener(config)
+        .expect("start runtime swap listener");
 
     let before = harness
         .run_request(H3RequestSpec::get("localhost", "/"))
@@ -524,12 +531,15 @@ fn upstream_ca_rotation_uses_activation_even_when_config_path_is_unchanged() {
 
     let mut harness = RuntimeSwapHarness::new();
     let material = MtlsRuntimeMaterial::localhost();
-    let backend_addr = harness.start_h2_backend_with_client_auth(
-        &material.server_cert_path,
-        &material.server_key_path,
-        &material.ca_cert_path,
-        move |_req| async move { Ok::<_, std::convert::Infallible>(static_full_response(b"ca-rotate")) },
-    );
+    let backend_addr =
+        harness.start_h2_backend_with_client_auth(
+            &material.server_cert_path,
+            &material.server_key_path,
+            &material.ca_cert_path,
+            move |_req| async move {
+                Ok::<_, std::convert::Infallible>(static_full_response(b"ca-rotate"))
+            },
+        );
     let upstream = single_backend_upstream_with_address(
         format!("https://{backend_addr}"),
         Some(UpstreamTls {
@@ -548,7 +558,9 @@ fn upstream_ca_rotation_uses_activation_even_when_config_path_is_unchanged() {
         }),
     );
     let config = harness.make_config(HashMap::from([("api".to_string(), upstream)]));
-    harness.start_listener(config).expect("start runtime swap listener");
+    harness
+        .start_listener(config)
+        .expect("start runtime swap listener");
     assert_eq!(harness.current_generation().expect("generation before"), 0);
 
     let rotated = MtlsRuntimeMaterial::localhost();

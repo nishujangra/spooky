@@ -73,8 +73,11 @@ const CONTROL_API_TOKEN: &str = "runtime-swap-token";
 impl RuntimeSwapHarness {
     pub fn new() -> Self {
         let config_dir = tempdir().expect("runtime swap tempdir");
-        std::fs::write(config_dir.path().join("control-api-token"), CONTROL_API_TOKEN)
-            .expect("write control api token file");
+        std::fs::write(
+            config_dir.path().join("control-api-token"),
+            CONTROL_API_TOKEN,
+        )
+        .expect("write control api token file");
         Self {
             backends: Vec::new(),
             listener_task: None,
@@ -489,7 +492,8 @@ impl RuntimeSwapHarness {
     }
 
     fn write_config_file(&self, config: &Config) -> Result<(), String> {
-        let rendered = serde_yaml::to_string(config).map_err(|err| format!("serialize config: {err}"))?;
+        let rendered =
+            serde_yaml::to_string(config).map_err(|err| format!("serialize config: {err}"))?;
         std::fs::write(&self.config_path, rendered)
             .map_err(|err| format!("write config file '{}': {err}", self.config_path.display()))
     }
