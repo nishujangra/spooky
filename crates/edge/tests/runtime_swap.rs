@@ -141,13 +141,6 @@ fn single_backend_upstream(backend_addr: std::net::SocketAddr) -> Upstream {
     single_backend_upstream_with_address(format!("http://{backend_addr}"), None)
 }
 
-fn single_backend_upstream_with_tls(
-    backend_addr: std::net::SocketAddr,
-    tls: Option<UpstreamTls>,
-) -> Upstream {
-    single_backend_upstream_with_address(format!("http://{backend_addr}"), tls)
-}
-
 fn single_backend_upstream_with_address(address: String, tls: Option<UpstreamTls>) -> Upstream {
     Upstream {
         load_balancing: LoadBalancing {
@@ -396,7 +389,7 @@ fn listener_cert_rotation_stays_scoped_to_reload_certs_and_does_not_activate_gen
         "{}:{}",
         startup_snapshot["runtime"]["config_path"]
             .as_str()
-            .and_then(|_| Some("127.0.0.1"))
+            .map(|_| "127.0.0.1")
             .unwrap_or("127.0.0.1"),
         harness.listen_addr().expect("listen addr").port()
     );
