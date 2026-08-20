@@ -21,21 +21,36 @@ impl RuntimeUpstream {
             forwarded_headers: RuntimeForwardedHeaderPolicy(upstream.forwarded_headers.clone()),
             protocol: base_policies.admission.protocol.clone(),
         };
+        let backends = upstream
+            .backends
+            .iter()
+            .map(|backend| RuntimeBackend::normalize(name, backend))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // HTTP-only upstreams never establish a TLS connection, so TLS-backed
+        // fields (CA bundle, client cert/key) are not resolved for them. This
+        // avoids failing runtime lowering on stale or placeholder TLS config
+        // that is simply irrelevant for a plaintext backend.
+        let uses_https_backends = backends
+            .iter()
+            .any(|backend| backend.endpoint.transport_kind == RuntimeBackendTransportKind::H2);
+        let backend_tls_policy = if uses_https_backends {
+            RuntimeBackendTlsPolicy::from_effective_tls(
+                &effective_tls,
+                &format!("upstream '{name}' tls"),
+            )?
+        } else {
+            RuntimeBackendTlsPolicy::empty()
+        };
+
         let runtime_upstream = Self {
             name: name.to_string(),
             load_balancing: load_balancing.clone(),
             route: route.clone(),
             policy,
             effective_tls: effective_tls.clone(),
-            backend_tls_policy: RuntimeBackendTlsPolicy::from_effective_tls(
-                &effective_tls,
-                &format!("upstream '{name}' tls"),
-            )?,
-            backends: upstream
-                .backends
-                .iter()
-                .map(|backend| RuntimeBackend::normalize(name, backend))
-                .collect::<Result<Vec<_>, _>>()?,
+            backend_tls_policy,
+            backends,
         };
 
         Ok(runtime_upstream)

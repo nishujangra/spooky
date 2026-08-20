@@ -144,6 +144,23 @@ pub struct RuntimeBackendTlsPolicy {
 }
 
 impl RuntimeBackendTlsPolicy {
+    /// A policy for upstreams that never establish a TLS connection (HTTP-only
+    /// backends), where TLS-backed config fields are irrelevant and must not
+    /// be resolved.
+    pub(crate) fn empty() -> Self {
+        Self {
+            verify_certificates: false,
+            strict_sni: false,
+            ca_file: None,
+            ca_file_fingerprint_sha256: None,
+            ca_dir: None,
+            ca_dir_fingerprint_sha256: None,
+            client_certificate: None,
+            client_certificate_not_after_unix_seconds: None,
+            client_key: None,
+        }
+    }
+
     pub(crate) fn from_effective_tls(
         effective_tls: &UpstreamTls,
         field_prefix: &str,
