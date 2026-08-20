@@ -14,8 +14,8 @@ use spooky_transport::{ConnectObservation, ConnectObserver, UpstreamTransportPoo
 use tokio::sync::Semaphore;
 
 use crate::{
-    constants::UDP_READ_TIMEOUT_MS,
     Metrics,
+    constants::UDP_READ_TIMEOUT_MS,
     quic_listener::{ListenerRuntimeSettings, TokenBucket, runtime_state::PreparedListenerStartup},
     resilience::{quota::QuotaRuntime, runtime::RuntimeResilience},
     routing::index::RouteIndex,
