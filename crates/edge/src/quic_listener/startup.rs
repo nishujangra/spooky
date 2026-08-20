@@ -187,7 +187,10 @@ impl QUICListener {
             .into_iter()
             .map(|listener_config| (Self::listener_label(&listener_config), listener_config))
             .collect::<HashMap<_, _>>();
-        let listener_tls_store = Arc::new(Self::build_listener_tls_reload_store(config)?);
+        let listener_tls_store = match carried.as_ref() {
+            Some(carried) => Arc::clone(&carried.listener_tls_store),
+            None => Arc::new(Self::build_listener_tls_reload_store(config)?),
+        };
 
         let mut backend_resolutions = Vec::new();
         let mut seen_backend_origins: HashMap<String, (String, String)> = HashMap::new();

@@ -66,6 +66,8 @@ impl ListenerTlsReloadStore {
             ))
         })?;
         state.generation = state.generation.saturating_add(1);
+        state.loaded_at_unix_ms = crate::watchdog::time::now_millis();
+        state.last_reload_status = "cert_reload_applied".to_string();
         state.inventory = inventory;
         state.bootstrap_server_config = bootstrap_server_config;
         Ok(state.generation)
@@ -97,6 +99,8 @@ impl ListenerTlsReloadStore {
                 ))
             })?;
             state.generation = state.generation.saturating_add(1);
+            state.loaded_at_unix_ms = update.loaded_at_unix_ms;
+            state.last_reload_status = update.last_reload_status.clone();
             state.inventory = update.inventory.clone();
             state.bootstrap_server_config = Arc::clone(&update.bootstrap_server_config);
             generations.insert(listener.clone(), state.generation);
