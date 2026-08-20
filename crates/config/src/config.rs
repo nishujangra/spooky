@@ -1663,11 +1663,14 @@ pub struct ControlApi {
 
     pub reload_certs_path: String,
 
-    // Admin credential: never emitted by Serialize (e.g. the /admin/runtime
-    // dump) and redacted in Debug; still accepted on deserialize.
+    // Admin credential: plaintext auth_token is never emitted by Serialize
+    // (e.g. the /admin/runtime dump) and redacted in Debug; still accepted on
+    // deserialize. auth_token_ref carries only a reference, not secret
+    // material, so it is safe to serialize (and must be, so it survives a
+    // config write-back/reload round trip).
     #[serde(skip_serializing)]
     pub auth_token: Option<String>,
-    #[serde(skip_serializing)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub auth_token_ref: Option<SecretRef>,
 
     pub tls: ControlApiTls,

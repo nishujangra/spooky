@@ -18,7 +18,7 @@ use hyper_util::rt::TokioIo;
 use rustls_pki_types::{CertificateDer, pem::PemObject};
 use serde_json::Value as JsonValue;
 use spooky_config::{
-    config::{Config, ControlApi, MetricsEndpoint, Observability, Upstream},
+    config::{Config, ControlApi, MetricsEndpoint, Observability, SecretRef, Upstream},
     runtime::RuntimeConfig,
     validator::validate,
 };
@@ -62,9 +62,19 @@ pub struct RuntimeSwapHarness {
     listen_addr: Option<SocketAddr>,
 }
 
+// `ControlApi::auth_token` is `#[serde(skip_serializing)]` so it never survives a
+// write-to-disk/reload round trip (the redaction rule that protects live snapshots
+// from leaking secrets also strips it from any re-serialized config file). The
+// harness reloads by writing `current_config` back out as YAML, so it must carry
+// the control-API token via a file-backed `auth_token_ref` instead of the plain
+// `auth_token` field to survive that round trip.
+const CONTROL_API_TOKEN: &str = "runtime-swap-token";
+
 impl RuntimeSwapHarness {
     pub fn new() -> Self {
         let config_dir = tempdir().expect("runtime swap tempdir");
+        std::fs::write(config_dir.path().join("control-api-token"), CONTROL_API_TOKEN)
+            .expect("write control api token file");
         Self {
             backends: Vec::new(),
             listener_task: None,
@@ -113,7 +123,12 @@ impl RuntimeSwapHarness {
                 restart_path: "/restart".to_string(),
                 reload_path: "/reload".to_string(),
                 reload_certs_path: "/reload-certs".to_string(),
-                auth_token: Some("runtime-swap-token".to_string()),
+                auth_token_ref: Some(SecretRef {
+                    reference: format!(
+                        "file://{}",
+                        self.config_dir.path().join("control-api-token").display()
+                    ),
+                }),
                 max_connections: 32,
                 connection_timeout_ms: 5_000,
                 ..ControlApi::default()
@@ -348,7 +363,7 @@ impl RuntimeSwapHarness {
     }
 
     pub fn trigger_runtime_reload_certs(&self) -> Result<JsonValue, String> {
-        self.trigger_runtime_reload_certs_expect(StatusCode::OK)
+        self.trigger_runtime_reload_certs_expect(StatusCode::ACCEPTED)
     }
 
     pub fn trigger_runtime_reload_certs_expect(
@@ -467,10 +482,10 @@ impl RuntimeSwapHarness {
     }
 
     fn control_api_token(&self) -> Result<String, String> {
-        self.current_config
-            .as_ref()
-            .and_then(|config| config.observability.control_api.auth_token.clone())
-            .ok_or_else(|| "missing control api auth token".to_string())
+        if self.current_config.is_none() {
+            return Err("missing control api auth token".to_string());
+        }
+        Ok(CONTROL_API_TOKEN.to_string())
     }
 
     fn write_config_file(&self, config: &Config) -> Result<(), String> {

@@ -27,6 +27,7 @@ use support::{
     net::local_listener_bind_available,
     request_path::{H3RequestSpec, run_request_to},
     runtime_swap::RuntimeSwapHarness,
+    static_full_response,
 };
 
 struct MtlsRuntimeMaterial {
