@@ -25,7 +25,7 @@ mod support;
 
 use support::{
     net::local_listener_bind_available,
-    request_path::{H3RequestSpec, run_request_to},
+    request_path::{H3RequestSpec, TestTlsMaterial, run_request_to},
     runtime_swap::RuntimeSwapHarness,
     static_full_response,
 };
@@ -405,10 +405,10 @@ fn listener_cert_rotation_stays_scoped_to_reload_certs_and_does_not_activate_gen
         .expect("startup history entries")
         .len();
 
-    let rotated = MtlsRuntimeMaterial::localhost();
+    let rotated = TestTlsMaterial::localhost();
     let (listener_cert_path, listener_key_path) = harness.listener_tls_paths();
-    std::fs::copy(&rotated.server_cert_path, listener_cert_path).expect("rotate listener cert");
-    std::fs::copy(&rotated.server_key_path, listener_key_path).expect("rotate listener key");
+    std::fs::copy(&rotated.cert_path, listener_cert_path).expect("rotate listener cert");
+    std::fs::copy(&rotated.key_path, listener_key_path).expect("rotate listener key");
 
     let reload = harness
         .trigger_runtime_reload_certs()

@@ -52,6 +52,7 @@ pub struct RuntimeSwapHarness {
     listener_task: Option<ListenerTaskGuard>,
     rt: tokio::runtime::Runtime,
     tls: TestTlsMaterial,
+    control_api_initial_cert_pem: String,
     config_dir: TempDir,
     config_path: PathBuf,
     listen_port: u16,
@@ -73,6 +74,9 @@ const CONTROL_API_TOKEN: &str = "runtime-swap-token";
 impl RuntimeSwapHarness {
     pub fn new() -> Self {
         let config_dir = tempdir().expect("runtime swap tempdir");
+        let tls = TestTlsMaterial::localhost();
+        let control_api_initial_cert_pem =
+            std::fs::read_to_string(&tls.cert_path).expect("read initial control api cert");
         std::fs::write(
             config_dir.path().join("control-api-token"),
             CONTROL_API_TOKEN,
@@ -82,7 +86,8 @@ impl RuntimeSwapHarness {
             backends: Vec::new(),
             listener_task: None,
             rt: tokio::runtime::Runtime::new().expect("runtime"),
-            tls: TestTlsMaterial::localhost(),
+            tls,
+            control_api_initial_cert_pem,
             config_path: config_dir.path().join("spooky-runtime-swap.yaml"),
             config_dir,
             listen_port: reserve_udp_port(),
@@ -565,8 +570,15 @@ impl RuntimeSwapHarness {
         let mut last_error = String::new();
 
         while Instant::now() < deadline {
-            match control_api_request_once(addr, &self.tls.cert_path, method.clone(), &path, &token)
-                .await
+            match control_api_request_once(
+                addr,
+                &self.tls.cert_path,
+                &self.control_api_initial_cert_pem,
+                method.clone(),
+                &path,
+                &token,
+            )
+            .await
             {
                 Ok((status, body)) if status == expected_status => return Ok(body),
                 Ok((status, body)) => {
@@ -602,19 +614,27 @@ fn reserve_udp_port() -> u16 {
         .port()
 }
 
-fn read_test_root_store(cert_path: &str) -> Result<RootCertStore, String> {
-    let mut roots = RootCertStore::empty();
-    let certs = CertificateDer::pem_file_iter(cert_path)
-        .map_err(|err| format!("open cert file: {err}"))?
+fn add_pem_certs_to_root_store(roots: &mut RootCertStore, pem: &str) -> Result<(), String> {
+    let certs = CertificateDer::pem_slice_iter(pem.as_bytes())
         .collect::<Result<Vec<_>, _>>()
         .map_err(|err| format!("parse certs: {err}"))?;
-
     for cert in certs {
         roots
             .add(cert)
             .map_err(|err| format!("add root cert: {err}"))?;
     }
 
+    Ok(())
+}
+
+fn read_test_root_store(cert_path: &str, initial_cert_pem: &str) -> Result<RootCertStore, String> {
+    let mut roots = RootCertStore::empty();
+    add_pem_certs_to_root_store(&mut roots, initial_cert_pem)?;
+    let current_pem =
+        std::fs::read_to_string(cert_path).map_err(|err| format!("open cert file: {err}"))?;
+    if current_pem != initial_cert_pem {
+        add_pem_certs_to_root_store(&mut roots, &current_pem)?;
+    }
     Ok(roots)
 }
 
@@ -656,11 +676,12 @@ async fn metrics_request_once(
 async fn control_api_request_once(
     addr: SocketAddr,
     cert_path: &str,
+    initial_cert_pem: &str,
     method: Method,
     path: &str,
     token: &str,
 ) -> Result<(StatusCode, JsonValue), String> {
-    let roots = read_test_root_store(cert_path)?;
+    let roots = read_test_root_store(cert_path, initial_cert_pem)?;
     let tls_config = ClientConfig::builder()
         .with_root_certificates(roots)
         .with_no_client_auth();
