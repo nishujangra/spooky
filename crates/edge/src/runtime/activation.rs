@@ -168,6 +168,12 @@ pub struct ReloadDiffEntry {
     pub change: ReloadChangeKind,
     pub disposition: ReloadDiffDisposition,
     pub summary: String,
+    /// True when this entry's change includes a secret- or certificate-backed
+    /// material change (e.g. an upstream client cert/key or CA fingerprint),
+    /// even if the referencing config path/ref string is unchanged. Lets
+    /// operators spot secret rotations without parsing `summary` text.
+    #[serde(default)]
+    pub secret_material_changed: bool,
 }
 
 /// Canonical preview diff for a staged reload candidate.
@@ -1571,7 +1577,8 @@ fn successful_activation_result(
         requested_at_ms: request.requested_at_ms,
         completed_at_ms: Some(completed_at_ms),
         summary: format!(
-            "activated runtime generation {generation} (log.level: {previous_log_level} -> {active_log_level})"
+            "activated runtime generation {generation} (log.level: {previous_log_level} -> {active_log_level}){}",
+            activation_summary_suffix(&diff)
         ),
         diff,
         rejected_changes: Vec::new(),
@@ -1584,6 +1591,14 @@ fn successful_activation_result(
         status: GenerationStatus::Active,
         rejected_changes: Vec::new(),
         history_entry,
+    }
+}
+
+fn activation_summary_suffix(diff: &ReloadDiff) -> &'static str {
+    if diff.entries.iter().any(|entry| entry.secret_material_changed) {
+        " [upstream_mtls_material_changed]"
+    } else {
+        ""
     }
 }
 
@@ -1804,6 +1819,10 @@ fn build_reload_diff(
         ),
     ];
 
+    let secret_fingerprints_before = summarize_backend_tls_fingerprints(current);
+    let secret_fingerprints_after = summarize_backend_tls_fingerprints(next);
+    let secret_material_changed_globally = secret_fingerprints_before != secret_fingerprints_after;
+
     let entries = specs
         .into_iter()
         .map(|(domain, current_summary, next_summary)| {
@@ -1816,6 +1835,9 @@ fn build_reload_diff(
                 ReloadDiffDisposition::Reloadable
             };
 
+            let secret_material_changed = matches!(domain, ReloadDiffDomain::BackendPolicies)
+                && secret_material_changed_globally;
+
             ReloadDiffEntry {
                 domain: domain.as_str().to_string(),
                 change,
@@ -1826,11 +1848,43 @@ fn build_reload_diff(
                     current_summary,
                     next_summary
                 ),
+                secret_material_changed,
             }
         })
         .collect();
 
     ReloadDiff { entries }
+}
+
+/// Fingerprints of secret-backed upstream TLS material only (CA bundle,
+/// client certificate, client key), independent of other backend-policy
+/// fields (DNS refresh, health checks, etc.) so a secret rotation can be
+/// detected even when the referencing config path/ref string is unchanged.
+fn summarize_backend_tls_fingerprints(bundle: &RuntimeBundle) -> String {
+    let mut upstreams = bundle
+        .runtime_config
+        .upstreams
+        .iter()
+        .map(|(name, upstream)| {
+            let policy = upstream.backend_tls_policy();
+            format!(
+                "{}:ca_fp={:?}:ca_dir_fp={:?}:client_cert_fp={:?}:client_key_fp={:?}",
+                name,
+                policy.ca_file_fingerprint_sha256,
+                policy.ca_dir_fingerprint_sha256,
+                policy
+                    .client_certificate
+                    .as_ref()
+                    .map(|metadata| metadata.fingerprint_sha256.as_str()),
+                policy
+                    .client_key
+                    .as_ref()
+                    .map(|metadata| metadata.fingerprint_sha256.as_str()),
+            )
+        })
+        .collect::<Vec<_>>();
+    upstreams.sort_unstable();
+    upstreams.join(" | ")
 }
 
 fn summarize_listeners(bundle: &RuntimeBundle) -> String {
@@ -2163,6 +2217,7 @@ mod tests {
                 change: ReloadChangeKind::Unchanged,
                 disposition: ReloadDiffDisposition::NoOp,
                 summary: "no effective change".to_string(),
+                secret_material_changed: false,
             }],
         };
         assert!(diff.is_noop());

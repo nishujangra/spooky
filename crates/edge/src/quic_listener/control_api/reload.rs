@@ -59,21 +59,35 @@ impl QUICListener {
         metrics: &Metrics,
     ) -> Response<Full<Bytes>> {
         let mut staged = Vec::with_capacity(listener_runtime_configs.len());
+        let mut failures = Vec::new();
         for (listener_label, listener_config) in listener_runtime_configs {
             let reloaded_state = match Self::build_listener_tls_reload_state(listener_config) {
-                Ok(state) => state,
+                Ok(mut state) => {
+                    state.last_reload_status = "cert_reload_applied".to_string();
+                    state
+                }
                 Err(err) => {
-                    return Self::json_response(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        json!({
-                            "reloaded": false,
-                            "listener": listener_label,
-                            "error": err.to_string(),
-                        }),
-                    );
+                    failures.push(json!({
+                        "listener": listener_label,
+                        "status": "failed",
+                        "reason": "listener_tls_invalid",
+                        "error": err.to_string(),
+                    }));
+                    continue;
                 }
             };
             staged.push((listener_label.clone(), reloaded_state));
+        }
+
+        if !failures.is_empty() {
+            return Self::json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({
+                    "reloaded": false,
+                    "reason": "cert_reload_failed",
+                    "listeners": failures,
+                }),
+            );
         }
 
         let generations = match listener_tls_store.replace_listeners(&staged) {
@@ -83,6 +97,7 @@ impl QUICListener {
                     StatusCode::INTERNAL_SERVER_ERROR,
                     json!({
                         "reloaded": false,
+                        "reason": "cert_reload_failed",
                         "error": err.to_string(),
                     }),
                 );
@@ -98,7 +113,14 @@ impl QUICListener {
             );
             reloaded.push(json!({
                 "listener": listener_label,
+                "status": reloaded_state.last_reload_status,
+                "loaded_at_unix_ms": reloaded_state.loaded_at_unix_ms,
                 "generation": generations.get(&listener_label).copied().unwrap_or(0),
+                "default_cert_not_after_unix_seconds": reloaded_state
+                    .inventory
+                    .default_identity
+                    .metadata
+                    .not_after_unix_seconds,
             }));
         }
 
@@ -106,6 +128,8 @@ impl QUICListener {
             StatusCode::ACCEPTED,
             json!({
                 "reloaded": true,
+                "reason": "cert_reload_applied",
+                "listener_count": reloaded.len(),
                 "listeners": reloaded,
             }),
         )
@@ -149,7 +173,11 @@ impl QUICListener {
             identity.as_ref(),
             request_context.as_ref(),
             AdminAuditEventType::CertReload,
-            AdminAuditAction::CertReloadResult,
+            if succeeded {
+                AdminAuditAction::CertReloadApplied
+            } else {
+                AdminAuditAction::CertReloadResult
+            },
             Self::control_api_audit_target_for_route(ControlApiRoute::ReloadCerts, None),
             AdminAuditGeneration {
                 active_generation,
@@ -592,7 +620,7 @@ impl QUICListener {
             request_context.as_ref(),
             event_type,
             result_action,
-            Self::control_api_audit_target_for_route(route, config_path),
+            Self::control_api_audit_target_for_route(route, config_path.clone()),
             AdminAuditGeneration {
                 active_generation: Some(activation.active_generation),
                 candidate_generation: Some(activation.history_entry.generation),
@@ -603,13 +631,25 @@ impl QUICListener {
             } else {
                 AdminAuditResult::Failed
             },
-            Some(
-                activation
-                    .primary_rejection_reason()
-                    .map(|reason| reason.slug().to_string())
-                    .unwrap_or_else(|| activation.outcome_reason().slug().to_string()),
-            ),
+            Some(control_api_activation_reason(&activation)),
         );
+        if let Some((action, result, reason)) = upstream_mtls_material_audit_event(&activation) {
+            Self::emit_control_api_audit_event(
+                &runtime_state.security,
+                identity.as_ref(),
+                request_context.as_ref(),
+                AdminAuditEventType::UpstreamMtlsMaterial,
+                action,
+                Self::control_api_audit_target_for_route(route, config_path),
+                AdminAuditGeneration {
+                    active_generation: Some(activation.active_generation),
+                    candidate_generation: Some(activation.history_entry.generation),
+                    target_generation: activation.activated_generation,
+                },
+                result,
+                Some(reason),
+            );
+        }
         if !activation.succeeded() {
             return Err(ControlApiActivationError::Activation(activation));
         }
@@ -1284,6 +1324,7 @@ fn activation_error(activation: &ActivationResult) -> &str {
 fn activation_error_payload(activation: &ActivationResult, error: &str) -> serde_json::Value {
     json!({
         "error": error,
+        "reason": control_api_activation_reason(activation),
         "rejection_reason": activation.primary_rejection_reason().map(RuntimeRejectionReason::slug),
         "active_generation": activation.active_generation,
         "candidate_generation": activation.history_entry.generation,
@@ -1297,11 +1338,92 @@ fn legacy_reload_error_payload(activation: &ActivationResult, error: &str) -> se
     json!({
         "reloaded": false,
         "error": error,
+        "reason": control_api_activation_reason(activation),
         "rejection_reason": activation.primary_rejection_reason().map(RuntimeRejectionReason::slug),
         "generation": activation.active_generation,
         "candidate_generation": activation.history_entry.generation,
         "status": activation.status,
     })
+}
+
+/// Secret/cert-specific classification of an activation outcome, shared by
+/// the operator-facing reason string and the dedicated audit event. Lets
+/// operators identify secret rotations and failures without parsing
+/// free-text diff summaries.
+enum UpstreamMtlsMaterialOutcome {
+    Changed,
+    ResolutionFailed,
+    Invalid,
+}
+
+impl UpstreamMtlsMaterialOutcome {
+    fn slug(&self) -> &'static str {
+        match self {
+            Self::Changed => "upstream_mtls_material_changed",
+            Self::ResolutionFailed => "secret_resolution_failed",
+            Self::Invalid => "upstream_mtls_material_invalid",
+        }
+    }
+
+    fn audit_action(&self) -> AdminAuditAction {
+        match self {
+            Self::Changed => AdminAuditAction::UpstreamMtlsMaterialChanged,
+            Self::ResolutionFailed => AdminAuditAction::SecretResolutionFailed,
+            Self::Invalid => AdminAuditAction::UpstreamMtlsMaterialInvalid,
+        }
+    }
+}
+
+fn classify_upstream_mtls_material_outcome(
+    activation: &ActivationResult,
+) -> Option<UpstreamMtlsMaterialOutcome> {
+    if activation.succeeded() {
+        return activation
+            .history_entry
+            .diff
+            .entries
+            .iter()
+            .any(|entry| entry.secret_material_changed)
+            .then_some(UpstreamMtlsMaterialOutcome::Changed);
+    }
+
+    let error = activation_error(activation);
+    if error.contains("secret_resolution_failed") || error.contains("secret resolution failed") {
+        return Some(UpstreamMtlsMaterialOutcome::ResolutionFailed);
+    }
+    if error.contains("tls_material_invalid")
+        || error.contains("client_certificate")
+        || error.contains("client_key")
+    {
+        return Some(UpstreamMtlsMaterialOutcome::Invalid);
+    }
+    None
+}
+
+/// Emits a dedicated, precisely-typed audit event when this activation
+/// touched secret-backed upstream TLS material (client cert/key, CA bundle),
+/// alongside the generic runtime-activation audit event.
+fn upstream_mtls_material_audit_event(
+    activation: &ActivationResult,
+) -> Option<(AdminAuditAction, AdminAuditResult, String)> {
+    let outcome = classify_upstream_mtls_material_outcome(activation)?;
+    let result = if activation.succeeded() {
+        AdminAuditResult::Success
+    } else {
+        AdminAuditResult::Failed
+    };
+    Some((outcome.audit_action(), result, outcome.slug().to_string()))
+}
+
+fn control_api_activation_reason(activation: &ActivationResult) -> String {
+    if let Some(outcome) = classify_upstream_mtls_material_outcome(activation) {
+        return outcome.slug().to_string();
+    }
+
+    activation
+        .primary_rejection_reason()
+        .map(|reason| reason.slug().to_string())
+        .unwrap_or_else(|| activation.outcome_reason().slug().to_string())
 }
 
 fn legacy_reload_result_status(activation: &ActivationResult) -> StatusCode {
