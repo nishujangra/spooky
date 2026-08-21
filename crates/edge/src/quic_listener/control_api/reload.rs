@@ -36,7 +36,7 @@ struct ControlApiRuntimeRollbackPayload {
 }
 
 enum ControlApiActivationError {
-    Response(Response<Full<Bytes>>),
+    Response(Box<Response<Full<Bytes>>>),
     Activation(Box<ActivationResult>),
 }
 
@@ -241,7 +241,7 @@ impl QUICListener {
                         AdminAuditResult::Failed,
                         Some("invalid_request_body".to_string()),
                     );
-                    return response;
+                    return *response;
                 }
             };
         let activation_request = Self::control_api_activation_request(
@@ -336,7 +336,7 @@ impl QUICListener {
                     AdminAuditResult::Failed,
                     Some("invalid_request_body".to_string()),
                 );
-                return response;
+                return *response;
             }
         };
         let activation_request = Self::control_api_activation_request(
@@ -415,7 +415,7 @@ impl QUICListener {
         .await
         {
             Ok(activation) => Self::json_response(StatusCode::ACCEPTED, activation),
-            Err(ControlApiActivationError::Response(response)) => response,
+            Err(ControlApiActivationError::Response(response)) => *response,
             Err(ControlApiActivationError::Activation(activation)) => Self::json_response(
                 activation_result_status(&activation),
                 activation_error_payload(&activation, activation_error(&activation)),
@@ -458,7 +458,7 @@ impl QUICListener {
                     }),
                 )
             }
-            Err(ControlApiActivationError::Response(response)) => response,
+            Err(ControlApiActivationError::Response(response)) => *response,
             Err(ControlApiActivationError::Activation(activation)) => Self::json_response(
                 legacy_reload_result_status(&activation),
                 legacy_reload_error_payload(&activation, activation_error(&activation)),
@@ -505,7 +505,7 @@ impl QUICListener {
                     }),
                 )
             }
-            Err(ControlApiActivationError::Response(response)) => response,
+            Err(ControlApiActivationError::Response(response)) => *response,
             Err(ControlApiActivationError::Activation(activation)) => Self::json_response(
                 legacy_reload_result_status(&activation),
                 legacy_reload_error_payload(&activation, activation_error(&activation)),
@@ -578,17 +578,19 @@ impl QUICListener {
     ) -> Result<ActivationResult, ControlApiActivationError> {
         let runtime_state = state.current_service_state();
         let Some(runtime_bundle_handle) = runtime_state.runtime_bundle_handle().cloned() else {
-            return Err(ControlApiActivationError::Response(
+            return Err(ControlApiActivationError::Response(Box::new(
                 Self::control_api_not_found_response(),
-            ));
+            )));
         };
         let Some(runtime) = runtime_state.generation.clone() else {
-            return Err(ControlApiActivationError::Response(Self::json_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({
-                    "reloaded": false,
-                    "error": "runtime generation unavailable",
-                }),
+            return Err(ControlApiActivationError::Response(Box::new(
+                Self::json_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    json!({
+                        "reloaded": false,
+                        "error": "runtime generation unavailable",
+                    }),
+                ),
             )));
         };
         let activation_request = Self::control_api_activation_request(
@@ -665,12 +667,14 @@ impl QUICListener {
             return Err(ControlApiActivationError::Activation(Box::new(activation)));
         }
         let Some(generation) = activation.activated_generation else {
-            return Err(ControlApiActivationError::Response(Self::json_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({
-                    "reloaded": false,
-                    "error": "activation succeeded without an activated generation",
-                }),
+            return Err(ControlApiActivationError::Response(Box::new(
+                Self::json_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    json!({
+                        "reloaded": false,
+                        "error": "activation succeeded without an activated generation",
+                    }),
+                ),
             )));
         };
         let next_log_level = runtime_bundle_handle
@@ -716,7 +720,7 @@ impl QUICListener {
                         AdminAuditResult::Failed,
                         Some("invalid_request_body".to_string()),
                     );
-                    return response;
+                    return *response;
                 }
             };
         let current_generation = runtime_bundle_handle.current_generation();
@@ -1099,56 +1103,58 @@ impl QUICListener {
 }
 
 impl QUICListener {
-    async fn control_api_json_body<T>(req: Request<Incoming>) -> Result<T, Response<Full<Bytes>>>
+    async fn control_api_json_body<T>(
+        req: Request<Incoming>,
+    ) -> Result<T, Box<Response<Full<Bytes>>>>
     where
         T: DeserializeOwned,
     {
         let body = match req.into_body().collect().await {
             Ok(collected) => collected.to_bytes(),
             Err(err) => {
-                return Err(Self::json_response(
+                return Err(Box::new(Self::json_response(
                     StatusCode::BAD_REQUEST,
                     json!({ "error": format!("invalid request body: {err}") }),
-                ));
+                )));
             }
         };
         if body.is_empty() {
-            return Err(Self::json_response(
+            return Err(Box::new(Self::json_response(
                 StatusCode::BAD_REQUEST,
                 json!({ "error": "request body is required" }),
-            ));
+            )));
         }
         serde_json::from_slice(&body).map_err(|err| {
-            Self::json_response(
+            Box::new(Self::json_response(
                 StatusCode::BAD_REQUEST,
                 json!({ "error": format!("invalid request body: {err}") }),
-            )
+            ))
         })
     }
 
     async fn control_api_json_body_or_default<T>(
         req: Request<Incoming>,
-    ) -> Result<T, Response<Full<Bytes>>>
+    ) -> Result<T, Box<Response<Full<Bytes>>>>
     where
         T: DeserializeOwned + Default,
     {
         let body = match req.into_body().collect().await {
             Ok(collected) => collected.to_bytes(),
             Err(err) => {
-                return Err(Self::json_response(
+                return Err(Box::new(Self::json_response(
                     StatusCode::BAD_REQUEST,
                     json!({ "error": format!("invalid request body: {err}") }),
-                ));
+                )));
             }
         };
         if body.is_empty() {
             return Ok(T::default());
         }
         serde_json::from_slice(&body).map_err(|err| {
-            Self::json_response(
+            Box::new(Self::json_response(
                 StatusCode::BAD_REQUEST,
                 json!({ "error": format!("invalid request body: {err}") }),
-            )
+            ))
         })
     }
 
