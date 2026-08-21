@@ -37,7 +37,7 @@ struct ControlApiRuntimeRollbackPayload {
 
 enum ControlApiActivationError {
     Response(Response<Full<Bytes>>),
-    Activation(ActivationResult),
+    Activation(Box<ActivationResult>),
 }
 
 impl QUICListener {
@@ -662,7 +662,7 @@ impl QUICListener {
             );
         }
         if !activation.succeeded() {
-            return Err(ControlApiActivationError::Activation(activation));
+            return Err(ControlApiActivationError::Activation(Box::new(activation)));
         }
         let Some(generation) = activation.activated_generation else {
             return Err(ControlApiActivationError::Response(Self::json_response(
