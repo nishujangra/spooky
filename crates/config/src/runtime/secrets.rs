@@ -501,12 +501,9 @@ pub fn resolve_config_secrets(config: &Config) -> Result<Config, RuntimeConfigEr
 fn filesystem_provider_from_config(
     provider: Option<&SecretProvider>,
 ) -> Option<FilesystemSecretProvider> {
-    match provider {
-        Some(SecretProvider::File { base_dir }) => Some(FilesystemSecretProvider::new(
-            base_dir.as_deref().map(PathBuf::from),
-        )),
-        None => None,
-    }
+    provider.map(|SecretProvider::File { base_dir }| {
+        FilesystemSecretProvider::new(base_dir.as_deref().map(PathBuf::from))
+    })
 }
 
 fn resolve_control_api_bearer_token(
