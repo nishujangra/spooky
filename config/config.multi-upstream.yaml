@@ -1,4 +1,4 @@
-# Spooky — multi-upstream production configuration
+# Impulse — multi-upstream production configuration
 # Models a three-pool edge: API service, web frontend, and a catch-all fallback.
 # Routing uses longest-prefix match: /api → api pool, / → web pool (default fallback).
 # This file is self-contained and ready to adapt; swap certs, IPs, and the auth token.
@@ -32,7 +32,7 @@ secrets:
       base_dir: "/etc/spooky/secrets"
 
 # ---------------------------------------------------------------------------
-# upstream_tls — how Spooky validates TLS on backend connections
+# upstream_tls — how Impulse validates TLS on backend connections
 # verify_certificates and strict_sni are both true by default (safe-by-default).
 # Override per-backend only in break-glass situations.
 # ---------------------------------------------------------------------------
@@ -306,11 +306,11 @@ resilience:
 
 # ---------------------------------------------------------------------------
 # security — privilege drop after socket bind
-# Spooky binds :443 as root, then drops to this user/group before serving traffic.
+# Impulse binds :443 as root, then drops to this user/group before serving traffic.
 # The user and group must exist on the host (created by the install package).
 # ---------------------------------------------------------------------------
 security:
   privileges:
     enabled: true
-    user: "spooky"    # matches the system user created by the spooky package
+    user: "spooky"    # matches the system user created for the Impulse service
     group: "spooky"
