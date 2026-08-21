@@ -3198,7 +3198,7 @@ fn jwt_string_claim_values(claims: &Value, claim_names: &[&str]) -> HashSet<Stri
 mod tests {
     use std::{collections::HashMap, sync::Arc, time::Duration};
 
-    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use base64::{Engine as _engine, engine::general_purpose::URL_SAFE_NO_PAD};
     use boring::{
         hash::MessageDigest,
         pkey::{PKey, Private},
