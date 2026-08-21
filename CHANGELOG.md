@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Compatibility
 
 - Purely additive for existing deployments. The new `observability` block in `/admin/runtime` and the `audit.rs` event fields are additive JSON fields; existing consumers that don't read them are unaffected.
-- The Debian package's default config and systemd unit changes apply only to fresh installs/packages built from this version — existing deployed configs and units are not modified in place. Operators upgrading the package should review the new `spooky.service` sandboxing and `ReadWritePaths` restriction before rolling out, particularly if `resilience.watchdog.restart_command` or any in-process config write depends on `/etc/spooky` being writable.
+- The Debian package's default config and systemd unit changes apply only to fresh installs/packages built from this version — existing deployed configs and units are not modified in place. Operators upgrading the package should review the new Impulse service sandboxing and `ReadWritePaths` restriction before rolling out, particularly if `resilience.watchdog.restart_command` or any in-process config write depends on `/etc/spooky` being writable.
 
 ## [0.5.0-beta] - 2026-08-10
 
@@ -316,7 +316,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.0-beta] - 2026-05-12
 
-Initial release of Spooky HTTP/3 edge proxy and load balancer.
+Initial release of Impulse HTTP/3 edge proxy and load balancer.
 
 ### Core Features
 

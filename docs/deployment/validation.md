@@ -1,6 +1,6 @@
 # Deployment Validation for Impulse
 
-This guide covers how to validate a Impulse configuration change or binary upgrade before it touches production traffic. Target audience: SREs and platform engineers preparing a deployment of the current beta release.
+This guide covers how to validate an Impulse configuration change or binary upgrade before it touches production traffic. Target audience: SREs and platform engineers preparing a deployment of the current beta release.
 
 The goal is to catch problems at each stage of deployment, not after the restart.
 

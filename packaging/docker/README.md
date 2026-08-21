@@ -1,9 +1,9 @@
 # Docker Packaging Bootstrap
 
-This directory contains the initial Docker packaging layout for Spooky.
+This directory contains the initial Docker packaging layout for Impulse.
 
 ## Files
-- `Dockerfile`: production-style multi-stage build (`spooky` binary + slim runtime image).
+- `Dockerfile`: production-style multi-stage build for Impulse (`spooky` binary + slim runtime image).
 - `Dockerfile.dev`: development build image for local iteration.
 - `config.docker.yaml`: container-friendly config (binds to `0.0.0.0`, exposes metrics/control API).
 - `docker-compose.yml`: local validation stack for the packaged image.

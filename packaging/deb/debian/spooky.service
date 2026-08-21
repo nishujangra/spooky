@@ -16,7 +16,7 @@ User=spooky
 Group=spooky
 ExecStart=/usr/bin/spooky --config /etc/spooky/config.yaml
 
-# Restart=always, not on-failure: spooky's own watchdog can decide to drain and
+# Restart=always, not on-failure: Impulse's own watchdog can decide to drain and
 # exit when it detects a wedged runtime, and that is a *clean* exit which
 # on-failure would refuse to restart — turning self-detected recovery into an
 # outage. Always-restart also covers long unattended runs where any exit at all
@@ -55,7 +55,7 @@ LockPersonality=yes
 MemoryDenyWriteExecute=no
 
 # Only the log directory needs to be writable. /etc/spooky stays read-only so a
-# compromised proxy cannot rewrite its own config (admin tokens, cert paths).
+# compromised Impulse process cannot rewrite its own config (admin tokens, cert paths).
 # Note: this means the control API's cert *reload* works (it re-reads the files)
 # but nothing in-process can modify config on disk.
 ReadWritePaths=/var/log/spooky
@@ -75,7 +75,7 @@ ReadWritePaths=/var/log/spooky
 #         enabled: true
 #         restart_command: []
 #
-# If you genuinely need the proxy to invoke systemctl itself, drop
+# If you genuinely need Impulse to invoke systemctl itself, drop
 # NoNewPrivileges and grant a narrow sudoers rule — but prefer the above.
 # ---------------------------------------------------------------------------
 
