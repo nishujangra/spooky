@@ -2,6 +2,7 @@ use std::{ffi::OsStr, fs, path::Path, time::Duration};
 
 use rustls_pki_types::{CertificateDer, pem::PemObject};
 use sha2::{Digest, Sha256};
+use x509_parser::parse_x509_certificate;
 
 use super::config_invalid;
 use crate::{
@@ -273,10 +274,13 @@ fn resolve_optional_secret_material(
     if let Some(material) = material {
         let pem_bytes = material.bytes().to_vec();
         let not_after_unix_seconds = if expect_certificate_pem {
-            material
+            let certificates = material
                 .parse_pem_certificates(field_name)
                 .map_err(|err| RuntimeConfigError::TlsMaterialInvalid(err.to_string()))?;
-            None
+            Some(first_certificate_not_after_unix_seconds(
+                &certificates,
+                field_name,
+            )?)
         } else {
             material
                 .parse_pem_private_key(field_name)
@@ -291,6 +295,23 @@ fn resolve_optional_secret_material(
     } else {
         Ok(None)
     }
+}
+
+fn first_certificate_not_after_unix_seconds(
+    certificates: &[CertificateDer<'static>],
+    field_name: &str,
+) -> Result<i64, RuntimeConfigError> {
+    let leaf = certificates.first().ok_or_else(|| {
+        RuntimeConfigError::TlsMaterialInvalid(format!(
+            "{field_name} does not contain any PEM certificates"
+        ))
+    })?;
+    let (_, certificate) = parse_x509_certificate(leaf.as_ref()).map_err(|err| {
+        RuntimeConfigError::TlsMaterialInvalid(format!(
+            "failed to parse X.509 metadata from {field_name}: {err}"
+        ))
+    })?;
+    Ok(certificate.validity().not_after.timestamp())
 }
 
 fn load_optional_ca_file(
@@ -550,6 +571,38 @@ mod tests {
                 client_certificate_pem: None,
                 client_key_pem: None,
             }
+        );
+    }
+
+    #[test]
+    fn runtime_backend_tls_policy_populates_upstream_client_certificate_expiry() {
+        let dir = tempdir().expect("tempdir");
+        let client_cert = write_test_cert(dir.path(), "client-cert.pem");
+        let client_key = dir.path().join("client-key.pem");
+        let cert = Certificate::from_params(CertificateParams::new(vec!["localhost".into()]))
+            .expect("certificate");
+        std::fs::write(&client_key, cert.serialize_private_key_pem()).expect("write key");
+        std::fs::write(&client_cert, cert.serialize_pem().expect("serialize cert"))
+            .expect("write cert");
+
+        let effective_tls = UpstreamTls {
+            verify_certificates: true,
+            strict_sni: true,
+            ca_file: None,
+            ca_dir: None,
+            client_certificate: Some(client_cert.to_string_lossy().to_string()),
+            client_certificate_ref: None,
+            client_key: Some(client_key.to_string_lossy().to_string()),
+            client_key_ref: None,
+        };
+
+        let policy =
+            RuntimeBackendTlsPolicy::from_effective_tls(&effective_tls, "upstream 'payments' tls")
+                .expect("backend tls policy");
+
+        assert!(
+            policy.client_certificate_not_after_unix_seconds.is_some(),
+            "expected upstream client certificate expiry to be populated"
         );
     }
 
