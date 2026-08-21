@@ -185,7 +185,7 @@ Priority: optional
 Homepage: https://github.com/Supernova-Labs-Org/spooky
 Depends: libc6, adduser
 Installed-Size: ${INSTALLED_SIZE}
-Description: Spooky QUIC/HTTP3 reverse proxy and load balancer
+Description: Impulse QUIC/HTTP3 reverse proxy and load balancer
  A high-performance HTTP/3 and QUIC reverse proxy with adaptive load balancing,
  circuit breaking, and observability built in.
 EOF
@@ -213,7 +213,7 @@ fi
 if ! getent passwd spooky > /dev/null 2>&1; then
   useradd --system --gid spooky --no-create-home \
           --home-dir /etc/spooky --shell /usr/sbin/nologin \
-          --comment "Spooky reverse proxy" spooky
+          --comment "Impulse reverse proxy" spooky
 fi
 
 # Ownership. Deliberately NOT recursive over /etc/spooky: operators place TLS
@@ -252,18 +252,18 @@ if has_systemd; then
     # A fresh install has no certs yet, so a start attempt is expected to fail.
     # Report it rather than hiding it behind `|| true`.
     if ! systemctl restart spooky.service; then
-      echo "spooky: service did not start." >&2
-      echo "spooky: this is expected on a fresh install until you provide" >&2
-      echo "spooky:   /etc/spooky/certs/fullchain.pem" >&2
-      echo "spooky:   /etc/spooky/certs/privkey.pem" >&2
-      echo "spooky: and edit /etc/spooky/config.yaml, then:" >&2
-      echo "spooky:   sudo systemctl restart spooky" >&2
-      echo "spooky: check 'journalctl -u spooky -n 50' for the reason." >&2
+      echo "Impulse: service did not start." >&2
+      echo "Impulse: this is expected on a fresh install until you provide" >&2
+      echo "Impulse:   /etc/spooky/certs/fullchain.pem" >&2
+      echo "Impulse:   /etc/spooky/certs/privkey.pem" >&2
+      echo "Impulse: and edit /etc/spooky/config.yaml, then:" >&2
+      echo "Impulse:   sudo systemctl restart spooky" >&2
+      echo "Impulse: check 'journalctl -u spooky -n 50' for the reason." >&2
     fi
   else
-    echo "spooky: enabled but not started (--no-start build)."
-    echo "spooky: provide certs in /etc/spooky/certs, edit /etc/spooky/config.yaml, then:"
-    echo "spooky:   sudo systemctl start spooky"
+    echo "Impulse: enabled but not started (--no-start build)."
+    echo "Impulse: provide certs in /etc/spooky/certs, edit /etc/spooky/config.yaml, then:"
+    echo "Impulse:   sudo systemctl start spooky"
   fi
 fi
 EOF
@@ -301,7 +301,7 @@ if [ "$1" = "purge" ]; then
   rmdir /etc/spooky       2>/dev/null || true
 
   if [ -d /etc/spooky ]; then
-    echo "spooky: kept /etc/spooky — it still holds files this package did not install." >&2
+    echo "Impulse: kept /etc/spooky — it still holds files this package did not install." >&2
   fi
 
   rm -f /var/log/spooky/spooky.log

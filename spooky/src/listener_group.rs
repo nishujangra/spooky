@@ -292,9 +292,9 @@ pub(crate) fn log_listener_startup(
     listener_groups: &[ListenerGroupRuntime],
 ) {
     let shard_count = runtime_config.performance.packet_shards_per_worker.max(1);
-    info!("Spooky startup phase=begin");
+    info!("Impulse startup phase=begin");
     info!(
-        "Spooky listener topology listeners={} packet_shards_per_worker={} reuseport={} pin_workers={}",
+        "Impulse listener topology listeners={} packet_shards_per_worker={} reuseport={} pin_workers={}",
         runtime_config.listeners.len(),
         shard_count,
         runtime_config.performance.reuseport,
@@ -315,7 +315,7 @@ pub(crate) fn log_listener_startup(
         );
     }
     info!(
-        "Spooky data-plane workers={} packet_shards_per_worker={} reuseport={} pin_workers={}",
+        "Impulse data-plane workers={} packet_shards_per_worker={} reuseport={} pin_workers={}",
         listener_groups
             .iter()
             .map(group_signature_worker_count)

@@ -1,5 +1,5 @@
 [Unit]
-Description=Spooky QUIC/HTTP3 Reverse Proxy
+Description=Impulse QUIC/HTTP3 Reverse Proxy
 Documentation=https://github.com/Supernova-Labs-Org/spooky
 After=network-online.target
 Wants=network-online.target

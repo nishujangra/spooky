@@ -24,7 +24,11 @@ use crate::{
 };
 
 #[derive(Parser)]
-#[command(version, about, long_about = None)]
+#[command(
+    version,
+    about = "Impulse QUIC/HTTP3 reverse proxy and load balancer",
+    long_about = None
+)]
 struct Cli {
     #[arg(short, long)]
     config: Option<String>,
@@ -259,7 +263,7 @@ async fn run(
         std::process::exit(1);
     }
     spooky_utils::telemetry::init::shutdown_tracing();
-    info!("Spooky shutdown complete");
+    info!("Impulse shutdown complete");
 }
 #[cfg(unix)]
 async fn wait_for_shutdown_signal() {

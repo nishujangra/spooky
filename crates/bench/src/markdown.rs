@@ -13,7 +13,7 @@ pub fn write_markdown(
     fail_on: FailOn,
 ) -> Result<(), String> {
     let mut lines = vec![
-        "# Spooky Benchmark Report".to_string(),
+        "# Impulse Benchmark Report".to_string(),
         "".to_string(),
         format!("- Report kind: `{}`", report.report_kind),
         format!("- Profile: `{}`", report.profile),

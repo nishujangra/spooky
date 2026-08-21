@@ -5,7 +5,7 @@ use clap::{Parser, ValueEnum};
 #[derive(Parser, Debug)]
 #[command(
     version,
-    about = "Spooky benchmark suite (micro + macro + regression gates)"
+    about = "Impulse benchmark suite (micro + macro + regression gates)"
 )]
 pub struct Args {
     #[arg(long, default_value = "bench/latest.json")]

@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 COMPOSE_FILE="${ROOT_DIR}/packaging/docker/docker-compose.yml"
 
-echo "Starting Spooky Docker packaging smoke test"
+echo "Starting Impulse Docker packaging smoke test"
 docker compose -f "${COMPOSE_FILE}" up -d --build
 
 cleanup() {

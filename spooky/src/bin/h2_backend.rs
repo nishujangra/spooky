@@ -8,7 +8,7 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 use tokio::net::TcpListener;
 
 #[derive(Parser)]
-#[command(version, about = "Minimal HTTP/2 backend for spooky")]
+#[command(version, about = "Minimal HTTP/2 backend for Impulse")]
 struct Cli {
     #[arg(long, default_value_t = 8081)]
     port: u16,
