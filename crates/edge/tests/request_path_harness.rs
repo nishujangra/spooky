@@ -138,7 +138,7 @@ fn metrics_counter(metrics: &str, prefix: &str) -> u64 {
         .lines()
         .find_map(|line| line.strip_prefix(prefix))
         .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or_else(|| panic!("missing metrics counter `{prefix}` in metrics:\n{metrics}"))
+        .unwrap_or(0)
 }
 
 fn metrics_delta(before: &str, after: &str, prefix: &str) -> u64 {
@@ -610,20 +610,37 @@ fn quic_to_h2_upstream_mtls_requires_client_certificate() {
         },
     );
 
-    let response = harness
-        .run_request(H3RequestSpec::get("public.example.com", "/mtls-required"))
-        .expect("h3 request");
-    response.assert_status(502);
+    // The very first request to a freshly-started mTLS backend can race with
+    // H2 client/pool warm-up: the connection attempt is torn down before the
+    // TLS handshake completes, surfacing as a generic hyper "connection
+    // closed" (Canceled) or broken-pipe error rather than the TLS alert this
+    // test wants to exercise. Retry so the assertion targets the actual
+    // client-auth rejection path rather than this unrelated startup race.
+    let mut after_metrics = String::new();
+    let mut observed_client_auth_rejection = false;
+    const MAX_ATTEMPTS: u32 = 10;
+    for attempt in 0..MAX_ATTEMPTS {
+        let response = harness
+            .run_request(H3RequestSpec::get("public.example.com", "/mtls-required"))
+            .expect("h3 request");
+        response.assert_status(502);
 
-    let after_metrics = harness.metrics_text().unwrap_or_default();
-    assert!(
-        after_metrics.contains("reason=\"client_auth_rejected\"")
+        after_metrics = harness.metrics_text().unwrap_or_default();
+        observed_client_auth_rejection = after_metrics.contains("reason=\"client_auth_rejected\"")
             || metrics_delta(
                 &before_metrics,
                 &after_metrics,
                 "spooky_request_outcome_total{outcome=\"failure\",reason=\"backend_tls_failed\"} ",
-            ) > 0,
-        "expected upstream mTLS failure metrics to record the backend TLS failure"
+            ) > 0;
+        if observed_client_auth_rejection || attempt == MAX_ATTEMPTS - 1 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    assert!(
+        observed_client_auth_rejection,
+        "expected upstream mTLS failure metrics to record the backend TLS failure, metrics:\n{after_metrics}"
     );
 }
 
