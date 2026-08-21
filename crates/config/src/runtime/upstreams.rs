@@ -118,14 +118,13 @@ pub(super) fn normalize_upstreams(
             });
         }
 
-        let runtime_upstream =
-            RuntimeUpstream::from_config(
-                config,
-                upstream_name.as_str(),
-                upstream,
-                base_policies,
-                &secret_resolver,
-            )?;
+        let runtime_upstream = RuntimeUpstream::from_config(
+            config,
+            upstream_name.as_str(),
+            upstream,
+            base_policies,
+            &secret_resolver,
+        )?;
         let mut upstream_uses_https_backends = false;
 
         for backend in &runtime_upstream.backends {

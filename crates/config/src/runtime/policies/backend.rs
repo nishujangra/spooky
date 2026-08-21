@@ -264,9 +264,11 @@ fn resolve_optional_secret_material(
             resolve_file_secret_path(path, field_name)
                 .map_err(|err| RuntimeConfigError::SecretResolutionFailed(err.to_string()))?,
         ),
-        (None, Some(secret_ref)) => Some(secret_resolver
-            .resolve(secret_ref, field_name)
-            .map_err(|err| RuntimeConfigError::SecretResolutionFailed(err.to_string()))?),
+        (None, Some(secret_ref)) => Some(
+            secret_resolver
+                .resolve(secret_ref, field_name)
+                .map_err(|err| RuntimeConfigError::SecretResolutionFailed(err.to_string()))?,
+        ),
         (Some(_), Some(_)) => {
             return Err(RuntimeConfigError::SecretResolutionFailed(format!(
                 "secret resolution failed for {}: conflicting_sources",
@@ -536,13 +538,12 @@ mod tests {
             client_key_ref: None,
         };
 
-        let policy =
-            RuntimeBackendTlsPolicy::from_effective_tls(
-                &effective_tls,
-                "upstream 'payments' tls",
-                &RuntimeSecretResolver::default(),
-            )
-            .expect("backend tls policy");
+        let policy = RuntimeBackendTlsPolicy::from_effective_tls(
+            &effective_tls,
+            "upstream 'payments' tls",
+            &RuntimeSecretResolver::default(),
+        )
+        .expect("backend tls policy");
 
         assert_eq!(
             policy,
@@ -605,13 +606,12 @@ mod tests {
             client_key_ref: None,
         };
 
-        let policy =
-            RuntimeBackendTlsPolicy::from_effective_tls(
-                &effective_tls,
-                "upstream 'payments' tls",
-                &RuntimeSecretResolver::default(),
-            )
-            .expect("backend tls policy");
+        let policy = RuntimeBackendTlsPolicy::from_effective_tls(
+            &effective_tls,
+            "upstream 'payments' tls",
+            &RuntimeSecretResolver::default(),
+        )
+        .expect("backend tls policy");
 
         assert!(
             policy.client_certificate_not_after_unix_seconds.is_some(),
