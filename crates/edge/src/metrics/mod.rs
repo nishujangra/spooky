@@ -2101,9 +2101,7 @@ mod tests {
         assert!(rendered.contains(
             "spooky_upstream_tls_failure_total{upstream=\"payments\",backend=\"10.0.0.5:443\",phase=\"data_plane\",reason=\"client_auth_rejected\"} 1"
         ));
-        assert!(rendered.contains(
-            "spooky_upstream_mtls_handshake_failure_total{upstream=\"payments\",backend=\"10.0.0.5:443\",reason=\"client_auth_rejected\"} 1"
-        ));
+        assert!(!rendered.contains("spooky_upstream_mtls_handshake_failure_total"));
         assert!(rendered.contains(
             "spooky_upstream_client_certificate_not_after_seconds{upstream=\"payments\"} 1800000000"
         ));
