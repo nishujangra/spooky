@@ -1,6 +1,6 @@
 # Docker Installation
 
-This page is the fastest way to run Spooky in containers and verify health, metrics, and first proxied traffic.
+This page is the fastest way to run Impulse in containers and verify health, metrics, and first proxied traffic.
 
 ## Prerequisites
 
@@ -10,7 +10,7 @@ This page is the fastest way to run Spooky in containers and verify health, metr
 ## Choose Your Docker Path
 
 - Want the fastest container evaluation path: use the provided Compose stack plus a small demo backend
-- Want to run only the Spooky container: use the single-container commands later in this page
+- Want to run only the Impulse container: use the single-container commands later in this page
 - Want full host and production guidance: use [Production Deployment](../deployment/production.md)
 
 ## Quick Start with Docker Compose
@@ -194,6 +194,6 @@ docker run -d ...   # same run command as before
 ## What to Read Next
 
 - [Quickstart](../tutorials/quickstart.md) - fastest local non-container first run
-- [Installation](installation.md) - install Spooky directly on a host
+- [Installation](installation.md) - install Impulse directly on a host
 - [Minimum Production](minimum-production.md) - minimum safe production posture
 - [Production Deployment](../deployment/production.md) - full deployment guidance

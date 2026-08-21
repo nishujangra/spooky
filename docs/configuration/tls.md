@@ -1,14 +1,14 @@
 # TLS Configuration
 
-This page explains how to configure downstream TLS certificates and upstream trust behavior in Spooky.
+This page explains how to configure downstream TLS certificates and upstream trust behavior in Impulse.
 
 ## Overview
 
-HTTP/3 uses QUIC as its transport protocol, which requires TLS 1.3 for encryption and authentication. Spooky requires valid TLS certificates to establish secure connections with clients.
+HTTP/3 uses QUIC as its transport protocol, which requires TLS 1.3 for encryption and authentication. Impulse requires valid TLS certificates to establish secure connections with clients.
 
 Use this page when you need to answer:
 
-- what certificate and key formats Spooky accepts
+- what certificate and key formats Impulse accepts
 - how to configure one or many TLS identities on a listener
 - how to set file paths and permissions safely
 - what TLS changes require reload versus restart
@@ -181,7 +181,7 @@ tls:
 
 Operational implication:
 
-- if you do not configure a valid certificate and key, Spooky will fail before serving traffic
+- if you do not configure a valid certificate and key, Impulse will fail before serving traffic
 
 ### Path Specifications
 
@@ -249,8 +249,8 @@ Fallback behavior details:
 
 - Both the native QUIC/HTTP/3 listener and the bootstrap TLS listener use the same selection order.
 - `server_name` matching is exact after hostname normalization. There is no wildcard SNI certificate lookup here; wildcard behavior must come from the certificate SANs themselves, not from the listener map.
-- If the client sends no SNI, Spooky always serves the default identity.
-- If the client sends an SNI hostname that is not present in `listen.tls.certificates`, Spooky serves the default identity rather than rejecting the handshake.
+- If the client sends no SNI, Impulse always serves the default identity.
+- If the client sends an SNI hostname that is not present in `listen.tls.certificates`, Impulse serves the default identity rather than rejecting the handshake.
 - Startup rejects any `listen.tls.certificates[].server_name` mapping whose configured certificate SANs do not cover that hostname.
 
 Common mistakes:
@@ -360,7 +360,7 @@ openssl verify -CAfile ca.crt server.crt
 
 ### Test Configuration
 
-Verify Spooky can load certificates:
+Verify Impulse can load certificates:
 
 ```bash
 # Test configuration validity
@@ -430,7 +430,7 @@ Reload behavior:
 
 ### Downstream TLS Metrics
 
-Spooky exposes downstream TLS observability through Prometheus:
+Impulse exposes downstream TLS observability through Prometheus:
 
 - `spooky_downstream_tls_handshake_failure_total{listener,reason}`
 - `spooky_downstream_tls_certificate_selection_total{listener,selection}`
@@ -450,8 +450,8 @@ Important label values:
 Certificate-selection labels:
 
 - `selection=exact_sni`: exact SNI match in `listen.tls.certificates`
-- `selection=fallback_unmatched_sni`: client sent SNI, but no configured mapping matched, so Spooky served the default identity
-- `selection=fallback_no_sni`: client sent no SNI and Spooky served the default identity while additional SNI identities existed
+- `selection=fallback_unmatched_sni`: client sent SNI, but no configured mapping matched, so Impulse served the default identity
+- `selection=fallback_no_sni`: client sent no SNI and Impulse served the default identity while additional SNI identities existed
 - `selection=default_only`: listener had only one effective identity, so that certificate was always served
 
 ### Monitoring Certificate Expiry
@@ -512,7 +512,7 @@ sudo chown spooky:spooky /etc/spooky/certs/server.{crt,key}
 sudo chmod 644 /etc/spooky/certs/server.crt
 sudo chmod 600 /etc/spooky/certs/server.key
 
-# Verify Spooky user can read files
+# Verify the spooky user can read files
 sudo -u spooky cat /etc/spooky/certs/server.crt > /dev/null
 ```
 

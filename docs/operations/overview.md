@@ -1,8 +1,8 @@
 # Operations Overview
 
-This section is the main entry point for deploying, rolling out, operating, and recovering Spooky in production.
+This section is the main entry point for deploying, rolling out, operating, and recovering Impulse in production.
 
-Use it to answer where Spooky fits well today, how to prepare hosts and capacity, how to roll out config and binary changes safely, and where to look during an incident.
+Use it to answer where Impulse fits well today, how to prepare hosts and capacity, how to roll out config and binary changes safely, and where to look during an incident.
 
 ## Start Here
 
@@ -34,7 +34,7 @@ Use this page for workflow and navigation. Use the pages below for authoritative
 
 ## Core Operating Model
 
-Spooky has three distinct change paths:
+Impulse has three distinct change paths:
 
 1. Runtime-managed config changes
    Use the Control API staged flow: `validate`, `preview`, then `activate`. This is the normal path for routes, upstreams, backends, timeouts, resilience policy, and other live-reloadable runtime state.

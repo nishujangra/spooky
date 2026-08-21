@@ -1,6 +1,6 @@
-# Deployment Validation for Spooky
+# Deployment Validation for Impulse
 
-This guide covers how to validate a Spooky configuration change or binary upgrade before it touches production traffic. Target audience: SREs and platform engineers preparing a deployment of the current beta release.
+This guide covers how to validate a Impulse configuration change or binary upgrade before it touches production traffic. Target audience: SREs and platform engineers preparing a deployment of the current beta release.
 
 The goal is to catch problems at each stage of deployment, not after the restart.
 
@@ -8,7 +8,7 @@ The goal is to catch problems at each stage of deployment, not after the restart
 
 ## Config Validation Before Restart
 
-Spooky validates its configuration at startup and exits with a non-zero code if the config is invalid. This gives you a free dry-run: start the process against the new config on a non-production host (or in a pre-deploy step on the same host with a different port), watch for the startup log line, then stop it.
+Impulse validates its configuration at startup and exits with a non-zero code if the config is invalid. This gives you a free dry-run: start the process against the new config on a non-production host (or in a pre-deploy step on the same host with a different port), watch for the startup log line, then stop it.
 
 ```bash
 spooky --config /etc/spooky/config-new.yaml
@@ -27,13 +27,13 @@ You are not doing a real deployment yet. This is purely a parse-and-load check.
 - YAML schema errors (unknown keys, wrong types, missing required fields)
 - Missing or unreadable certificate and key files
 - Syntactically invalid listener addresses (bad IP, out-of-range port)
-- Duplicate upstream pool names (Spooky rejects ambiguous configs)
+- Duplicate upstream pool names (Impulse rejects ambiguous configs)
 - Invalid field values (e.g., a timeout expressed as a negative integer, an unsupported TLS version string)
 
 **What startup validation does NOT catch:**
 
-- **Backend reachability.** Spooky probes backends after startup, not during config parsing. A config that lists unreachable backends will pass startup validation cleanly.
-- **Certificate expiry.** Spooky loads the certificate file and checks that it is parseable PEM; it does not validate `notAfter`. An expired cert will load without error.
+- **Backend reachability.** Impulse probes backends after startup, not during config parsing. A config that lists unreachable backends will pass startup validation cleanly.
+- **Certificate expiry.** Impulse loads the certificate file and checks that it is parseable PEM; it does not validate `notAfter`. An expired cert will load without error.
 - **Behavioral correctness.** A valid config can still produce wrong routing. Overlapping route prefixes, a backend pointed at the wrong port, or a timeout set to an unintended value all pass validation.
 
 Run this check in CI on every config change. It is fast (sub-second) and catches the majority of deployment-blocking errors before any process restarts.
@@ -42,7 +42,7 @@ Run this check in CI on every config change. It is fast (sub-second) and catches
 
 ## Verifying Backend Reachability
 
-After starting Spooky against the new config (in a staging environment, or as a canary instance before routing real traffic), verify that all upstream backends have been probed and are healthy before you shift traffic to the instance.
+After starting Impulse against the new config (in a staging environment, or as a canary instance before routing real traffic), verify that all upstream backends have been probed and are healthy before you shift traffic to the instance.
 
 ### 1. Poll /admin/runtime
 
@@ -93,11 +93,11 @@ A healthy response looks like this:
 
 Before routing traffic, every backend should show `"healthy": true` and `"consecutive_failures": 0`. If any backend shows `healthy: false`, do not route traffic to this instance until you understand why.
 
-A pool where `healthy_count` is less than `total_count` indicates partial degradation. Spooky will route to the remaining healthy backends, but the pool is operating below capacity. Determine whether that is acceptable before proceeding.
+A pool where `healthy_count` is less than `total_count` indicates partial degradation. Impulse will route to the remaining healthy backends, but the pool is operating below capacity. Determine whether that is acceptable before proceeding.
 
 ### 2. Watch health check logs at debug level
 
-During the first 30 seconds after startup, run Spooky at debug log level (or tail its logs if already running with structured output) and watch for health probe results. The log level is set in the config file via `log.level: debug` (there is no `SPOOKY_LOG`/`RUST_LOG` environment variable):
+During the first 30 seconds after startup, run Impulse at debug log level (or tail its logs if already running with structured output) and watch for health probe results. The log level is set in the config file via `log.level: debug` (there is no `SPOOKY_LOG`/`RUST_LOG` environment variable):
 
 ```bash
 # set `log.level: debug` in config-new.yaml, then:
@@ -108,20 +108,20 @@ You are looking for probe success messages for every backend. Any repeated probe
 
 ### 3. Manual backend health check
 
-If `/admin/runtime` shows a backend as unhealthy, verify reachability independently from the same host. This rules out Spooky misconfiguration versus a genuinely unreachable backend:
+If `/admin/runtime` shows a backend as unhealthy, verify reachability independently from the same host. This rules out Impulse misconfiguration versus a genuinely unreachable backend:
 
 ```bash
 # Replace with your backend's actual health check path
 curl -v http://10.0.1.10:8080/healthz
 ```
 
-If this also fails, the problem is backend availability or network, not the Spooky config. If this succeeds but `/admin/runtime` still shows the backend as unhealthy, the issue is in Spooky's probe configuration (wrong path, wrong timeout, TLS mismatch on the backend connection).
+If this also fails, the problem is backend availability or network, not the Impulse config. If this succeeds but `/admin/runtime` still shows the backend as unhealthy, the issue is in Impulse's probe configuration (wrong path, wrong timeout, TLS mismatch on the backend connection).
 
 ---
 
 ## Pre-Deploy Checklist for Config Changes
 
-Run through this checklist for every config change before restarting Spooky in production. Each item is phrased as what to verify and how to verify it.
+Run through this checklist for every config change before restarting Impulse in production. Each item is phrased as what to verify and how to verify it.
 
 **1. Run startup validation against the new config on a non-production host.**
 
@@ -132,7 +132,7 @@ echo "Exit code: $?"
 # Expected: 130 (Ctrl-C SIGINT), not 1 or 2
 ```
 
-If the process exits with code 1 or 2 before the listening line, the config is invalid. Read the error output carefully — Spooky emits the field path that caused the failure.
+If the process exits with code 1 or 2 before the listening line, the config is invalid. Read the error output carefully — Impulse emits the field path that caused the failure.
 
 **2. Diff the config change and confirm each difference is intentional.**
 
@@ -167,11 +167,11 @@ For each new or modified backend address:
 curl -f http://<new-backend-address>:<port>/<health-check-path>
 ```
 
-Do this from the host that will run Spooky, not from your workstation. Network path, DNS resolution, and firewall rules may differ.
+Do this from the host that will run Impulse, not from your workstation. Network path, DNS resolution, and firewall rules may differ.
 
 **5. If upstream pools changed: confirm route prefix overlaps are intentional.**
 
-Spooky uses longest-prefix matching: a request to `/api/v2/users` will match a route for `/api/v2/` before a route for `/api/`. This is usually correct, but misconfiguration is easy.
+Impulse uses longest-prefix matching: a request to `/api/v2/users` will match a route for `/api/v2/` before a route for `/api/`. This is usually correct, but misconfiguration is easy.
 
 List all route prefixes in the new config and sort them:
 
@@ -179,7 +179,7 @@ List all route prefixes in the new config and sort them:
 grep -E '^\s+prefix:' /etc/spooky/config-new.yaml | awk '{print $2}' | sort
 ```
 
-Look for cases where one prefix is a prefix of another and verify the routing intent is correct. If two prefixes are identical, Spooky will reject the config at startup. If a shorter prefix is unintentionally catching traffic meant for a longer one, the config is valid but behaviorally wrong — startup validation will not catch this.
+Look for cases where one prefix is a prefix of another and verify the routing intent is correct. If two prefixes are identical, Impulse will reject the config at startup. If a shorter prefix is unintentionally catching traffic meant for a longer one, the config is valid but behaviorally wrong — startup validation will not catch this.
 
 **6. Confirm the control API is bound to loopback in the new config.**
 
@@ -209,7 +209,7 @@ Expected output begins with `# HELP` lines. If this fails, correct the network p
 
 For high-risk config changes (new upstream pools, changed TLS configuration, significant routing changes), validate against a fraction of production traffic before full rollout.
 
-### 1. Run two Spooky instances on the same host
+### 1. Run two Impulse instances on the same host
 
 Run the new-config instance on a different port from the production instance. Both instances can share the same binary:
 
@@ -266,7 +266,7 @@ backend latency regression or a timeout misconfiguration in the new config.
 
 **Backend health (compare health-check success/failure between instances):**
 
-Spooky does not export a per-backend boolean health gauge. Use the health-check counters instead:
+Impulse does not export a per-backend boolean health gauge. Use the health-check counters instead:
 
 ```promql
 rate(spooky_health_checks_failure{instance="host:9901"}[5m])
@@ -286,7 +286,7 @@ If any metric diverges unfavorably, route all traffic back to the production ins
 
 ## What to Watch After Deploy
 
-After restarting Spooky with a new config or new binary, watch the following five signals for the first 30 minutes. Set up dashboard panels or alert inhibitions before the restart so you can observe cleanly.
+After restarting Impulse with a new config or new binary, watch the following five signals for the first 30 minutes. Set up dashboard panels or alert inhibitions before the restart so you can observe cleanly.
 
 **1. `spooky_requests_success` rate**
 
@@ -302,7 +302,7 @@ This should match the pre-deploy baseline within 1-2 minutes of restart (after Q
 rate(spooky_backend_errors[2m])
 ```
 
-Any sudden increase after restart indicates Spooky is reaching backends but backends are returning errors. This points to a routing misconfiguration (requests sent to wrong backend), a backend environment mismatch, or an application-level problem triggered by the new routing.
+Any sudden increase after restart indicates Impulse is reaching backends but backends are returning errors. This points to a routing misconfiguration (requests sent to wrong backend), a backend environment mismatch, or an application-level problem triggered by the new routing.
 
 **3. `spooky_backend_timeouts` rate**
 
@@ -334,13 +334,13 @@ If any of these signals deviates from baseline and you cannot identify an innoce
 
 ---
 
-## Upgrade Procedure (Spooky Version Upgrade)
+## Upgrade Procedure (Impulse Version Upgrade)
 
-Follow these steps when upgrading the Spooky binary. This procedure applies to all version upgrades, including patch releases.
+Follow these steps when upgrading the Impulse binary. This procedure applies to all version upgrades, including patch releases.
 
 **1. Download the new binary.**
 
-Download the release artifact for your platform from the Spooky release page and place it in a staging location:
+Download the release artifact for your platform from the Impulse release page and place it in a staging location:
 
 ```bash
 curl -Lo /usr/local/bin/spooky-new https://github.com/supernova-labs/spooky/releases/download/v<VERSION>/spooky-linux-x86_64

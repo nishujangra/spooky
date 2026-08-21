@@ -1,6 +1,6 @@
 # References
 
-Technical references and external resources for Spooky development.
+Technical references and external resources for Impulse development.
 
 ## Protocol Specifications
 

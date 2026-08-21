@@ -1,10 +1,10 @@
-# Spooky Basics
+# Impulse Basics
 
-This guide covers fundamental concepts and basic usage of Spooky, an HTTP/3 to HTTP/2 edge proxy.
+This guide covers fundamental concepts and basic usage of Impulse, an HTTP/3 to HTTP/2 edge proxy.
 
 ## Architecture Overview
 
-Spooky operates as a protocol translation layer between HTTP/3 clients and HTTP/2 backend services:
+Impulse operates as a protocol translation layer between HTTP/3 clients and HTTP/2 backend services:
 
 1. **QUIC Connection Termination**: Accepts incoming HTTP/3 requests over QUIC
 2. **Protocol Translation**: Converts HTTP/3 streams to HTTP/2 requests
@@ -13,7 +13,7 @@ Spooky operates as a protocol translation layer between HTTP/3 clients and HTTP/
 5. **Client Delivery**: Returns responses to the client over QUIC
 
 ```
-Client (HTTP/3/QUIC) → Spooky Edge → Backend (HTTP/2)
+Client (HTTP/3/QUIC) → Impulse Edge → Backend (HTTP/2)
                             ↓
                     Route Matching
                     Load Balancing
@@ -77,7 +77,7 @@ log:
 
 ## Upstream Pools and Routing
 
-Spooky supports multiple upstream pools with independent routing rules. Requests are matched using longest-prefix matching across all configured routes.
+Impulse supports multiple upstream pools with independent routing rules. Requests are matched using longest-prefix matching across all configured routes.
 
 ### Path-Based Routing
 
@@ -227,7 +227,7 @@ def health():
 
 ## Command Line Interface
 
-### Starting Spooky
+### Starting Impulse
 
 ```bash
 # Start with configuration file
@@ -412,13 +412,13 @@ log:
   level: debug
 EOF
 
-# Start Spooky
+# Start Impulse
 spooky --config dev-config.yaml
 ```
 
 ### Example Multi-Backend Setup
 
-> **Note:** Spooky is beta. The configuration below demonstrates structure and routing patterns; use the deployment guide hardening checklist before production rollout.
+> **Note:** Impulse is beta. The configuration below demonstrates structure and routing patterns; use the deployment guide hardening checklist before production rollout.
 
 ```bash
 # Obtain certificates (Let's Encrypt)
@@ -478,7 +478,7 @@ sudo systemctl enable spooky
 ### Connection Issues
 
 ```bash
-# Verify Spooky is listening on UDP
+# Verify Impulse is listening on UDP
 sudo netstat -uln | grep 9889
 # or
 sudo ss -uln | grep 9889
@@ -500,10 +500,10 @@ openssl s_client -connect localhost:9889 -showcerts
 # Test backend directly
 curl -v http://127.0.0.1:8080/health
 
-# Test through Spooky
+# Test through Impulse
 curl --http3-only -k -v https://localhost:9889/health
 
-# Check backend reachability from Spooky host
+# Check backend reachability from the Impulse host
 telnet 10.0.1.10 8080
 ```
 

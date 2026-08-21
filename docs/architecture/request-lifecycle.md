@@ -1,6 +1,6 @@
 # Request Lifecycle
 
-This document describes the canonical request path through Spooky. It explains the product flow that both ingress paths should follow after intake: shared admission, auth, routing, transport execution, response normalization, streaming guardrails, and outcome recording.
+This document describes the canonical request path through Impulse. It explains the product flow that both ingress paths should follow after intake: shared admission, auth, routing, transport execution, response normalization, streaming guardrails, and outcome recording.
 
 ## Purpose
 

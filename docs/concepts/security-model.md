@@ -4,14 +4,14 @@ This page describes the current trust boundaries and security assumptions in the
 
 ## Security Goals
 
-Spooky is designed to:
+Impulse is designed to:
 
 - terminate downstream TLS for HTTP/3 and bootstrap TLS traffic
 - validate and forward requests to configured upstreams with explicit trust settings
 - bound resource consumption under malformed, slow, or overloaded traffic
 - expose a small operator control surface with authentication
 
-Spooky is not yet designed to be:
+Impulse is not yet designed to be:
 
 - a full web application firewall
 - a complete authentication gateway
@@ -19,9 +19,9 @@ Spooky is not yet designed to be:
 
 ## Trust Boundaries
 
-### Downstream Client To Spooky
+### Downstream Client To Impulse
 
-Clients are untrusted. Spooky must:
+Clients are untrusted. Impulse must:
 
 - parse QUIC and HTTP/3 safely
 - validate headers and pseudo-headers strictly
@@ -30,7 +30,7 @@ Clients are untrusted. Spooky must:
 - reject unsupported upgrade-style semantics
 - avoid unbounded state growth from malformed packets or connection churn
 
-### Spooky To Upstream Backends
+### Impulse To Upstream Backends
 
 Upstreams are trusted only according to explicit configuration.
 
@@ -70,7 +70,7 @@ Recommended production posture:
 
 ## Downstream TLS Model
 
-Spooky supports:
+Impulse supports:
 
 - default/fallback certificate identity
 - SNI-specific certificates
@@ -138,7 +138,7 @@ Unsafe posture:
 
 ## Resource-Exhaustion Defense Model
 
-Spooky includes multiple defensive layers intended to limit blast radius from abusive or unhealthy traffic:
+Impulse includes multiple defensive layers intended to limit blast radius from abusive or unhealthy traffic:
 
 - new-connection token bucket
 - maximum active connection caps
@@ -153,7 +153,7 @@ These features are part of the project’s security posture because they reduce 
 
 ## Request Authentication And Authorization Model
 
-Spooky supports per-upstream request authentication, checked in this order:
+Impulse supports per-upstream request authentication, checked in this order:
 
 - **API key**: a configured header is compared against a static key list. Local, synchronous, no network call.
 - **JWT**: local signature and claim validation (issuer, audience, clock skew), plus optional scope/role checks against token claims. Supports `HS256` with a shared secret, and `RS256`/`ES256` against static PEM/JWK public keys or a remote JWKS endpoint. Always local and synchronous on the request path — JWKS keys are served from an in-memory cache refreshed in the background, never fetched during request validation.
@@ -179,9 +179,9 @@ Boundary rule:
 - admin-plane auth lives only under control-plane modules
 - credentials, failures, and audit events from one plane must not be confused with the other
 
-## What Spooky Does Not Currently Provide
+## What Impulse Does Not Currently Provide
 
-Spooky does not currently provide first-class:
+Impulse does not currently provide first-class:
 
 - OIDC login flows (interactive/browser SSO) or session-cookie handling
 - a generic RBAC/policy engine beyond scope/role checks on JWT claims

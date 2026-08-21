@@ -148,13 +148,13 @@ HTTP/3 maintains HTTP/2's pseudo-header syntax but uses QPACK encoding instead o
 | Server Push              | PUSH_PROMISE frame                             | PUSH_PROMISE frame (same semantics)       |
 | Flow Control             | Stream and connection level                    | Stream and connection level               |
 
-## HTTP/3 Implementation in Spooky
+## HTTP/3 Implementation in Impulse
 
-Spooky implements HTTP/3 termination at the edge, accepting HTTP/3 client connections and forwarding them to backends over HTTP/2 or HTTP/1.1 depending on the backend scheme. `https://` backends are reached over HTTP/2; `http://` backends are reached over HTTP/1.1. This is entirely a client-facing concern — backends only need to speak their own transport protocol.
+Impulse implements HTTP/3 termination at the edge, accepting HTTP/3 client connections and forwarding them to backends over HTTP/2 or HTTP/1.1 depending on the backend scheme. `https://` backends are reached over HTTP/2; `http://` backends are reached over HTTP/1.1. This is entirely a client-facing concern — backends only need to speak their own transport protocol.
 
 ### Protocol Conversion
 
-The Spooky bridge component handles bidirectional translation between HTTP/3 and the backend transport:
+The Impulse bridge component handles bidirectional translation between HTTP/3 and the backend transport:
 
 1. **Request path**: HTTP/3 HEADERS and DATA frames are parsed and decompressed via QPACK. For `https://` backends the request is re-encoded as HTTP/2 with HPACK compression. For `http://` backends the request is serialized as HTTP/1.1.
 
@@ -166,7 +166,7 @@ Each HTTP/3 client stream maps to a corresponding backend request. For HTTP/2 ba
 
 ### Connection Management
 
-Spooky maintains separate connection pools for client-facing HTTP/3 sessions and backend connections. QUIC connection state is managed by the edge component, while backend transport pooling (H2 or H1) is handled by the transport layer.
+Impulse maintains separate connection pools for client-facing HTTP/3 sessions and backend connections. QUIC connection state is managed by the edge component, while backend transport pooling (H2 or H1) is handled by the transport layer.
 
 ### Feature Support
 

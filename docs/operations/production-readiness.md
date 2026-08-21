@@ -1,17 +1,17 @@
 # Production Readiness
 
-This page is the canonical statement of what Spooky supports in production today, what requires extra rollout discipline, and what still remains outside the safe default operating envelope.
+This page is the canonical statement of what Impulse supports in production today, what requires extra rollout discipline, and what still remains outside the safe default operating envelope.
 
 ## Current Assessment
 
-Spooky is a **beta HTTP/3-first edge runtime**. It is suitable for **controlled production rollout** when operators use:
+Impulse is a **beta HTTP/3-first edge runtime**. It is suitable for **controlled production rollout** when operators use:
 
 - staged activation and explicit rollback
 - protected Control API access
 - observability and alerting before traffic expansion
 - canary or bounded-slice rollout patterns
 
-Spooky is not yet a general-purpose replacement for every reverse-proxy or API-gateway use case.
+Impulse is not yet a general-purpose replacement for every reverse-proxy or API-gateway use case.
 
 ## Strong Production Areas
 
@@ -68,7 +68,7 @@ The main product boundaries today are:
 
 ## Good Fit Today
 
-Spooky is a good fit when:
+Impulse is a good fit when:
 
 - you want HTTP/3 at the edge
 - your upstreams speak HTTP/2 or HTTP/1.1
@@ -78,7 +78,7 @@ Spooky is a good fit when:
 
 ## Weaker Fit Today
 
-Spooky is a weaker fit when you need:
+Impulse is a weaker fit when you need:
 
 - a rich dynamic control plane with per-object mutation APIs
 - broad multi-tenant platform policy orchestration

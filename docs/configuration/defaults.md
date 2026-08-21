@@ -1,11 +1,11 @@
 # Configuration Defaults
 
-This page is the central reference for configuration defaults in Spooky.
+This page is the central reference for configuration defaults in Impulse.
 
 Use it when you need to answer two questions quickly:
 
 - which fields may be omitted from the YAML
-- what value or behavior Spooky applies when they are omitted
+- what value or behavior Impulse applies when they are omitted
 
 This page reflects the defaults defined in `crates/config/src/default.rs` and the `Default`-backed config structs in `crates/config/src/config.rs`.
 
@@ -21,7 +21,7 @@ Use [Configuration Reference](reference.md) when you need exact field semantics 
 
 ## How Defaults Work
 
-Spooky applies defaults in three different ways:
+Impulse applies defaults in three different ways:
 
 - explicit helper-function defaults such as `get_default_port()` or `perf_default_worker_threads()`
 - struct-level `Default` implementations for nested sections such as `performance`, `observability`, and `resilience`
@@ -105,7 +105,7 @@ These defaults apply to the top-level `upstream_tls` block and to per-upstream `
 | `upstream.<name>.load_balancing.key` | `null` | No hash/sticky key source by default |
 | `upstream.<name>.host_policy.mode` | `pass_through` | Preserve downstream host by default |
 | `upstream.<name>.host_policy.host` | `null` | No rewrite target |
-| `upstream.<name>.forwarded_headers.mode` | `overwrite` | Spooky rewrites forwarded headers by default |
+| `upstream.<name>.forwarded_headers.mode` | `overwrite` | Impulse rewrites forwarded headers by default |
 | `upstream.<name>.tls` | `null` | Uses global `upstream_tls` unless an override block is set |
 
 ### Route Defaults

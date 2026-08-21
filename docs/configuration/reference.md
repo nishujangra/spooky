@@ -1,6 +1,6 @@
 # Configuration Reference
 
-This is the canonical configuration document for Spooky. It should answer these questions for every major configuration area:
+This is the canonical configuration document for Impulse. It should answer these questions for every major configuration area:
 
 - what the section is for
 - what fields exist
@@ -41,7 +41,7 @@ This page does not change the current product behavior:
 
 ## Raw Config vs Runtime Interpretation
 
-Spooky now has a clearer split between:
+Impulse now has a clearer split between:
 
 - raw configuration schema loaded from YAML
 - normalized runtime configuration consumed by the rest of the system
@@ -69,7 +69,7 @@ These types are the validated, normalized forms that `edge`, `transport`, and `l
 
 ### What normalization means in practice
 
-Normalization is where Spooky resolves and validates things such as:
+Normalization is where Impulse resolves and validates things such as:
 
 - listener selection precedence between `listen` and `listeners`
 - per-upstream override precedence over global defaults
@@ -103,13 +103,13 @@ Use this quick map before diving into field tables:
 
 ## Configuration File Format
 
-Spooky uses YAML configuration loaded with:
+Impulse uses YAML configuration loaded with:
 
 ```bash
 spooky --config /path/to/config.yaml
 ```
 
-If `--config` is omitted, Spooky attempts `/etc/spooky/config.yaml`.
+If `--config` is omitted, Impulse attempts `/etc/spooky/config.yaml`.
 
 ## Canonical Top-Level Shape
 
@@ -242,7 +242,7 @@ upstream:
 
 ## Runtime Normalization And Precedence
 
-Spooky normalizes configuration into a single runtime model before it serves traffic.
+Impulse normalizes configuration into a single runtime model before it serves traffic.
 
 Precedence and interpretation rules:
 
@@ -448,7 +448,7 @@ Runtime interpretation:
 
 ### listeners
 
-Optional multi-listener array. When set, overrides the top-level `listen` block. Each entry is an independent listener with its own address, port, and TLS identity. Spooky spawns a separate QUIC worker group and bootstrap TLS listener per entry.
+Optional multi-listener array. When set, overrides the top-level `listen` block. Each entry is an independent listener with its own address, port, and TLS identity. Impulse spawns a separate QUIC worker group and bootstrap TLS listener per entry.
 
 Runtime interpretation:
 
@@ -458,7 +458,7 @@ Runtime interpretation:
 
 ### Runtime Normalization And Precedence
 
-Spooky normalizes configuration into one canonical runtime model before any listener starts.
+Impulse normalizes configuration into one canonical runtime model before any listener starts.
 
 Precedence rules:
 
@@ -507,7 +507,7 @@ Runtime interpretation:
 
 ## Default Values
 
-Spooky has a large number of defaults spread across helper functions and `Default` implementations. The central inventory now lives on [Configuration Defaults](defaults.md).
+Impulse has a large number of defaults spread across helper functions and `Default` implementations. The central inventory now lives on [Configuration Defaults](defaults.md).
 
 Use that page when you need:
 
@@ -543,7 +543,7 @@ Configures the listening interface for incoming client connections. HTTP/3 requi
 
 Use this section when you need to decide:
 
-- where Spooky binds
+- where Impulse binds
 - which TLS identity it serves
 - whether one listener or multiple listeners are needed
 
@@ -560,7 +560,7 @@ Use this section when you need to decide:
 
 - `http3`: HTTP/3 over QUIC (recommended)
 
-Spooky also exposes a TLS bootstrap ingress for HTTP/1.1 and HTTP/2 clients. This compatibility path is primarily used for browser interoperability and advertising `Alt-Svc` so clients can upgrade to HTTP/3. Backend selection on the bootstrap path uses the same route-resolution, load-balancing strategy, and health-aware eligibility rules as the native QUIC ingress.
+Impulse also exposes a TLS bootstrap ingress for HTTP/1.1 and HTTP/2 clients. This compatibility path is primarily used for browser interoperability and advertising `Alt-Svc` so clients can upgrade to HTTP/3. Backend selection on the bootstrap path uses the same route-resolution, load-balancing strategy, and health-aware eligibility rules as the native QUIC ingress.
 
 ### TLS Configuration
 
@@ -581,9 +581,9 @@ Certificate selection order:
 
 Operational notes:
 
-- If SNI is missing or unmatched, Spooky serves the default identity rather than rejecting the handshake.
+- If SNI is missing or unmatched, Impulse serves the default identity rather than rejecting the handshake.
 - `listen.tls.certificates[].server_name` must be covered by the mapped certificate SANs or startup fails.
-- Spooky exports downstream certificate expiry gauges:
+- Impulse exports downstream certificate expiry gauges:
   - `spooky_downstream_tls_certificate_not_after_seconds`
   - `spooky_downstream_tls_certificate_days_remaining`
 - Certificate reload affects new QUIC and bootstrap TLS handshakes only. Existing connections continue with the TLS session they already negotiated.
@@ -1354,7 +1354,7 @@ Controls retry budgets, circuit breaking, hedging, adaptive admission, brownout 
 
 Use this section when you need to decide:
 
-- how Spooky protects itself and its backends under pressure
+- how Impulse protects itself and its backends under pressure
 - which retry and hedge behaviors are allowed
 - what request-shape rules are enforced before backend execution
 
@@ -1409,7 +1409,7 @@ Brownout is a load-shedding mode that activates when the proxy is near capacity.
 
 **How it works**
 
-1. After each request is routed, Spooky samples the current global in-flight percent (active requests ÷ global limit × 100).
+1. After each request is routed, Impulse samples the current global in-flight percent (active requests ÷ global limit × 100).
 2. If the sample reaches `trigger_inflight_percent`, brownout activates.
 3. Brownout stays active until the sample falls to or below `recover_inflight_percent`. The gap between the two thresholds is **hysteresis** — it prevents rapid oscillation when load is right at the boundary.
 4. While active, `spooky_brownout_active` gauge is `1` and `spooky_overload_shed_by_reason_total{reason="brownout"}` increments for every shed request.
@@ -1624,7 +1624,7 @@ Legacy `resilience.watchdog.restart_hook` is deprecated and rejected by validati
 
 ## Configuration Validation
 
-Spooky validates configuration at startup and reports errors before attempting to start the server.
+Impulse validates configuration at startup and reports errors before attempting to start the server.
 
 ### Common Validation Errors
 

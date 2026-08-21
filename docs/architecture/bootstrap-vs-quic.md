@@ -11,9 +11,9 @@ This document explains the two ingress paths in `spooky-edge` and the intended b
 
 ## Why Both Paths Exist
 
-Spooky is built around QUIC and HTTP/3 at the edge, but operators still need a compatibility path for environments that cannot enter over QUIC immediately.
+Impulse is built around QUIC and HTTP/3 at the edge, but operators still need a compatibility path for environments that cannot enter over QUIC immediately.
 
-The bootstrap path exists so Spooky can:
+The bootstrap path exists so Impulse can:
 
 - accept HTTP/1.1 or HTTP/2 traffic where needed
 - support compatibility migration scenarios

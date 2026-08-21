@@ -4,7 +4,7 @@ This document explains how `spooky-edge` is organized after the refactor work th
 
 ## Purpose
 
-`spooky-edge` is the data-plane crate for Spooky. It owns:
+`spooky-edge` is the data-plane crate for Impulse. It owns:
 
 - edge-facing runtime state
 - QUIC ingress and bootstrap compatibility ingress

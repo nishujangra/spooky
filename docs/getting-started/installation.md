@@ -1,6 +1,6 @@
 # Installation
 
-This page helps you install Spooky on a host and reach the point where you can run it safely.
+This page helps you install Impulse on a host and reach the point where you can run it safely.
 
 ## Start Here
 
@@ -24,7 +24,7 @@ This page helps you install Spooky on a host and reach the point where you can r
 
 **Permissions:**
 - Root is only required when binding privileged ports (`<1024`).
-- For typical deployments, run Spooky as an unprivileged user on a non-privileged port.
+- For typical deployments, run Impulse as an unprivileged user on a non-privileged port.
 
 ## Installation Methods
 
@@ -96,7 +96,7 @@ sudo install -m 755 target/release/spooky /usr/bin/spooky
 
 ## TLS Certificates
 
-Spooky requires TLS certificates to serve QUIC/HTTP3 traffic. The service runs as the `spooky` user, so certificates must be readable by that user.
+Impulse requires TLS certificates to serve QUIC/HTTP3 traffic. The service runs as the `spooky` user, so certificates must be readable by that user.
 
 ### Using Your Own Certificates
 
@@ -178,7 +178,7 @@ sudo mkdir -p /var/log/spooky
 sudo groupadd --system spooky
 sudo useradd --system --gid spooky --no-create-home \
      --home-dir /etc/spooky --shell /usr/sbin/nologin \
-     --comment "Spooky reverse proxy" spooky
+     --comment "Impulse reverse proxy" spooky
 
 # Set ownership
 sudo chown -R spooky:spooky /etc/spooky /var/log/spooky
@@ -244,7 +244,7 @@ See [Configuration Reference](../configuration/reference.md) for all options.
 
 Once the binary, certificates, and config are in place:
 
-1. start Spooky with your config
+1. start Impulse with your config
 2. verify the control API health endpoint
 3. send one proxied request
 4. move to the minimum-production checklist before serving real traffic
@@ -308,7 +308,7 @@ brew install cmake pkg-config rust
 
 ### Windows
 
-> **Note:** Windows is not a supported runtime platform. The Spooky binary uses Unix-specific APIs (signals, `getuid`) that are not available on Windows. The instructions below may allow a build to succeed, but running Spooky on Windows in production is not supported.
+> **Note:** Windows is not a supported runtime platform. The Impulse binary uses Unix-specific APIs (signals, `getuid`) that are not available on Windows. The instructions below may allow a build to succeed, but running Impulse on Windows in production is not supported.
 
 1. Install Rust from [rustup.rs](https://rustup.rs/)
 2. Install Visual Studio Build Tools with C++ support from [Microsoft](https://visualstudio.microsoft.com/visual-cpp-build-tools/)

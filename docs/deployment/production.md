@@ -1,12 +1,12 @@
 # Production Deployment
 
-> Spooky is beta software. Deploy it to production only with staged rollout, rollback readiness, and verified observability. Read [Production Readiness](../operations/production-readiness.md) first.
+> Impulse is beta software. Deploy it to production only with staged rollout, rollback readiness, and verified observability. Read [Production Readiness](../operations/production-readiness.md) first.
 
-This guide covers the recommended production host layout, service model, security posture, rollout sequence, and change-management workflow for Spooky.
+This guide covers the recommended production host layout, service model, security posture, rollout sequence, and change-management workflow for Impulse.
 
 ## Recommended Deployment Shape
 
-Use Spooky as:
+Use Impulse as:
 
 - an active-active edge pool
 - behind a UDP-capable load balancer or traffic manager
@@ -165,7 +165,7 @@ Use `systemd` as a supervised service layer and keep change management in your r
 
 ```ini
 [Unit]
-Description=Spooky edge runtime
+Description=Impulse edge runtime
 Documentation=https://github.com/Supernova-Labs-Org/spooky
 After=network-online.target
 Wants=network-online.target

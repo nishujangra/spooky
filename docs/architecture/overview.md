@@ -2,7 +2,7 @@
 
 ## Introduction
 
-Spooky is a Rust edge runtime for API traffic. It accepts HTTP/3 over QUIC as the primary downstream path, exposes a bootstrap HTTP/1.1 and HTTP/2 compatibility path for clients that are not using native HTTP/3, applies shared policy and routing decisions, and forwards requests to upstream backends over runtime-selected HTTP/1.1 or HTTP/2 transport.
+Impulse is a Rust edge runtime for API traffic. It accepts HTTP/3 over QUIC as the primary downstream path, exposes a bootstrap HTTP/1.1 and HTTP/2 compatibility path for clients that are not using native HTTP/3, applies shared policy and routing decisions, and forwards requests to upstream backends over runtime-selected HTTP/1.1 or HTTP/2 transport.
 
 ## Read This Section
 
@@ -19,7 +19,7 @@ Use this page as the architecture entry point, then go deeper where needed:
 ## Design Principles
 
 ### Performance
-Spooky is designed for high-performance operation with minimal overhead:
+Impulse is designed for high-performance operation with minimal overhead:
 - Zero-copy packet processing where possible
 - Lock-free data structures for hot paths
 - Asynchronous I/O throughout the stack
@@ -57,7 +57,7 @@ flowchart TB
     client_h3["HTTP/3 clients"]
     client_bootstrap["HTTP/1.1 and HTTP/2 clients"]
 
-    subgraph spooky["Spooky edge runtime"]
+    subgraph spooky["Impulse edge runtime"]
         ingress["Ingress
         HTTP/3 over QUIC
         bootstrap HTTP/1.1 and HTTP/2
@@ -129,7 +129,7 @@ This separation keeps operator tasks out of the hot path and makes runtime state
 
 ## Request Processing Pipeline
 
-Spooky has two ingress paths, but both are expected to converge on the same internal request flow as early as possible.
+Impulse has two ingress paths, but both are expected to converge on the same internal request flow as early as possible.
 
 ### Request Flow At A Glance
 
@@ -185,7 +185,7 @@ After admission and auth succeed:
 
 ### 5. Canonical Request Building
 
-Spooky converts ingress-specific request data into a canonical upstream request:
+Impulse converts ingress-specific request data into a canonical upstream request:
 
 - pseudo-header and regular-header handling
 - host and forwarded-header policy
@@ -226,13 +226,13 @@ Every terminal request path records a shared outcome vocabulary for:
 - retry and hedge results
 - backend request feedback and health observations
 
-This is how Spooky keeps observability and backend lifecycle state aligned across both ingress paths.
+This is how Impulse keeps observability and backend lifecycle state aligned across both ingress paths.
 
 ## Concurrency Model
 
 ### Async Runtime
 
-Spooky uses Tokio as its asynchronous runtime:
+Impulse uses Tokio as its asynchronous runtime:
 - Multi-threaded work-stealing scheduler
 - Event-driven I/O with epoll/kqueue
 - Timer wheel for timeout management

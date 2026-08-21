@@ -1,6 +1,6 @@
-# How to Configure Spooky as a Reverse Proxy
+# How to Configure Impulse as a Reverse Proxy
 
-This guide walks through building a working `config.yaml` for Spooky as a production reverse proxy, explaining every section and its trade-offs.
+This guide walks through building a working `config.yaml` for Impulse as a production reverse proxy, explaining every section and its trade-offs.
 
 Use [Configuration Reference](../configuration/reference.md) for the canonical field-by-field schema and [Configuration Examples](../configuration/examples.md) for complete deployment templates.
 
@@ -8,19 +8,19 @@ Use [Configuration Reference](../configuration/reference.md) for the canonical f
 
 ## Config File Location
 
-Spooky loads config from the path given to `--config`:
+Impulse loads config from the path given to `--config`:
 
 ```bash
 spooky --config /etc/spooky/config.yaml
 ```
 
-If `--config` is not provided, it falls back to `/etc/spooky/config.yaml`. Spooky exits at startup if the file is missing, unreadable, or fails validation.
+If `--config` is not provided, it falls back to `/etc/spooky/config.yaml`. Impulse exits at startup if the file is missing, unreadable, or fails validation.
 
 ---
 
 ## Minimal Working Config
 
-The absolute minimum to get Spooky running as a reverse proxy:
+The absolute minimum to get Impulse running as a reverse proxy:
 
 ```yaml
 version: 1
@@ -57,7 +57,7 @@ version: 1
 
 ### listen
 
-Defines where Spooky accepts client connections.
+Defines where Impulse accepts client connections.
 
 ```yaml
 listen:
@@ -69,7 +69,7 @@ listen:
     key:  /etc/spooky/certs/privkey.pem
 ```
 
-Spooky also automatically starts a **bootstrap TLS listener** on the same address/port for HTTP/1.1 and HTTP/2 clients. This is how browsers connect before they learn about HTTP/3 via the `Alt-Svc` header. You do not configure it separately — it shares the same cert/key.
+Impulse also automatically starts a **bootstrap TLS listener** on the same address/port for HTTP/1.1 and HTTP/2 clients. This is how browsers connect before they learn about HTTP/3 via the `Alt-Svc` header. You do not configure it separately — it shares the same cert/key.
 
 Protocol boundary:
 - native ingress is HTTP/3 only
@@ -127,7 +127,7 @@ When `listeners` is set, the top-level `listen` block is ignored. Each listener 
 
 ### upstream_tls
 
-Controls how Spooky verifies backends' TLS certificates. Defaults are safe — keep them unless your backends use a private CA.
+Controls how Impulse verifies backends' TLS certificates. Defaults are safe — keep them unless your backends use a private CA.
 
 ```yaml
 upstream_tls:
@@ -420,7 +420,7 @@ curl -X POST \
 
 ### security
 
-When Spooky starts as root (for port 443), it drops privileges after binding:
+When Impulse starts as root (for port 443), it drops privileges after binding:
 
 ```yaml
 security:
@@ -440,9 +440,9 @@ sudo chown -R spooky:spooky /etc/spooky /var/log/spooky
 
 ## Validating Your Config
 
-Spooky runs full validation on startup and exits with a clear error message. There is no standalone `--validate` flag.
+Impulse runs full validation on startup and exits with a clear error message. There is no standalone `--validate` flag.
 
-To validate a config safely, start Spooky with the candidate file in a controlled environment and confirm it reaches the listening state without exiting. Stop it after you confirm startup succeeded:
+To validate a config safely, start Impulse with the candidate file in a controlled environment and confirm it reaches the listening state without exiting. Stop it after you confirm startup succeeded:
 
 ```bash
 spooky --config /etc/spooky/config.yaml

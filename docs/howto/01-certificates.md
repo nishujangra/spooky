@@ -1,6 +1,6 @@
 # How to Set Up TLS Certificates
 
-Spooky requires TLS certificates for both the QUIC/HTTP3 listener and the HTTP/1.1+HTTP/2 bootstrap TLS listener.
+Impulse requires TLS certificates for both the QUIC/HTTP3 listener and the HTTP/1.1+HTTP/2 bootstrap TLS listener.
 
 - **Certificate format:** PEM X.509 (`-----BEGIN CERTIFICATE-----`)
 - **Key format:** PEM private key — both PKCS#8 (`-----BEGIN PRIVATE KEY-----`) and PKCS#1 (`-----BEGIN RSA PRIVATE KEY-----`) are accepted
@@ -24,7 +24,7 @@ sudo certbot certonly --standalone \
   --non-interactive
 ```
 
-Let's Encrypt issues PKCS#1 keys — convert to PKCS#8 which Spooky requires:
+Let's Encrypt issues PKCS#1 keys — convert to PKCS#8 which Impulse requires:
 
 ```bash
 sudo mkdir -p /etc/spooky/certs

@@ -1,6 +1,6 @@
 # Quickstart
 
-This guide gets Spooky from zero to first successful traffic with the fewest moving parts possible.
+This guide gets Impulse from zero to first successful traffic with the fewest moving parts possible.
 
 Total time: about 5 minutes.
 
@@ -21,7 +21,7 @@ This quickstart uses:
 
 - a self-signed certificate for local TLS
 - a small local HTTP backend on `127.0.0.1:8080`
-- one catch-all upstream in Spooky
+- one catch-all upstream in Impulse
 - one HTTP/3 request to confirm first traffic
 
 ## Step 1: Build
@@ -51,7 +51,7 @@ Production: see [TLS Setup](../configuration/tls.md).
 
 ## Step 3: Start a Test Backend
 
-Spooky supports:
+Impulse supports:
 
 - HTTP/2 upstream transport for `https://` backends
 - HTTP/1.1 upstream transport for `http://` backends
@@ -97,7 +97,7 @@ log:
   level: info                     # debug | info | warn | error
 ```
 
-## Step 5: Start Spooky
+## Step 5: Start Impulse
 
 ```bash
 ./target/release/spooky --config config.yaml
@@ -143,7 +143,7 @@ Expected response:
 
 ### 6c. Verify the Alt-Svc upgrade path (mimics browser behavior)
 
-Browsers don't start with HTTP/3 — they discover it via the `Alt-Svc` response header on a regular HTTPS request, then switch on the next connection. Test that Spooky sends this header correctly:
+Browsers don't start with HTTP/3 — they discover it via the `Alt-Svc` response header on a regular HTTPS request, then switch on the next connection. Test that Impulse sends this header correctly:
 
 ```bash
 curl -k -I https://localhost:9889/
@@ -157,7 +157,7 @@ alt-svc: h3=":9889"; ma=86400
 
 `h3=":9889"` tells the client that HTTP/3 is available on port 9889. `ma=86400` is the max-age in seconds (24 hours) — how long the client should remember and prefer HTTP/3 for this origin.
 
-If you see this header, Spooky is correctly advertising HTTP/3 to clients that don't yet support it or haven't upgraded yet.
+If you see this header, Impulse is correctly advertising HTTP/3 to clients that don't yet support it or haven't upgraded yet.
 
 ## Common Issues
 
@@ -165,14 +165,14 @@ If you see this header, Spooky is correctly advertising HTTP/3 to clients that d
 
 **`Failed to connect to backend`** — the local backend is not running, or is on a different port. Confirm it is up with `curl http://127.0.0.1:8080/`.
 
-**`Failed to load TLS certificate`** — the paths in `config.yaml` don't match where you generated the files. Both `certs/cert.pem` and `certs/key.pem` must exist relative to the working directory you launch Spooky from.
+**`Failed to load TLS certificate`** — the paths in `config.yaml` don't match where you generated the files. Both `certs/cert.pem` and `certs/key.pem` must exist relative to the working directory you launch Impulse from.
 
 **curl falls back to HTTP/2 silently** — you're using the system curl, which lacks HTTP/3 support. Use `brew install curl` and invoke it with the full path, or check `curl --version` for `HTTP/3` in the features list.
 
 ## Next Steps
 
 - [Docker](../getting-started/docker.md) — fastest container-based first run
-- [Installation](../getting-started/installation.md) — install Spooky on a host
+- [Installation](../getting-started/installation.md) — install Impulse on a host
 - [Configuration Reference](../configuration/reference.md) — exact config keys, defaults, and semantics
 - [Minimum Production](../getting-started/minimum-production.md) — minimum safe production posture
 - [Production Deployment](../deployment/production.md) — full deployment and hardening guide

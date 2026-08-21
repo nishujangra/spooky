@@ -1,6 +1,6 @@
 # Deployment Patterns
 
-This page describes the deployment shapes that fit Spooky best today and the rollout patterns that keep operations safe.
+This page describes the deployment shapes that fit Impulse best today and the rollout patterns that keep operations safe.
 
 ## Best-Fit Product Patterns
 
@@ -77,12 +77,12 @@ Weaker fit today because:
 
 Weaker fit today because:
 
-- Spooky is strongest on HTTP/3 edge ingress and H2 or H1 upstream execution
+- Impulse is strongest on HTTP/3 edge ingress and H2 or H1 upstream execution
 - very broad legacy protocol breadth is not the main product strength
 
 ### Full API Gateway Replacement
 
-Partial fit today because Spooky already ships:
+Partial fit today because Impulse already ships:
 
 - per-upstream auth
 - scoped rate limiting

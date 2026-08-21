@@ -1,6 +1,6 @@
 # Troubleshooting and Operator Diagnosis
 
-Use this page when Spooky is running but something is wrong in startup, traffic handling, backend behavior, TLS, the control plane, or observability.
+Use this page when Impulse is running but something is wrong in startup, traffic handling, backend behavior, TLS, the control plane, or observability.
 
 This is an operator guide, not a source-code debugging guide. Each section starts from a production symptom and gives the fastest path to confirm the cause and fix it.
 
@@ -25,7 +25,7 @@ Canonical references for the checks above:
 | Symptom | First checks |
 | --- | --- |
 | process starts but never becomes ready | `/health`, `/ready`, startup logs, `/admin/runtime` |
-| requests reach Spooky but do not reach the expected upstream | route config, `/admin/runtime`, request logs, upstream/backend request metrics |
+| requests reach Impulse but do not reach the expected upstream | route config, `/admin/runtime`, request logs, upstream/backend request metrics |
 | clients receive `429` or other contract-style denials | quota metrics, scoped rate-limit metrics, policy config in `/admin/runtime` |
 | clients receive `503` during pressure | overload metrics, brownout state, backend timeout pressure, watchdog state |
 | backend failures or timeouts are rising | backend metrics, active health results, retry metrics, backend inventory in `/admin/runtime` |
@@ -66,7 +66,7 @@ Canonical references for the checks above:
 
 1. correct the invalid config field, missing file path, or bind conflict
 2. validate the candidate config before activating it
-3. confirm certificate and key files are readable by the Spooky process
+3. confirm certificate and key files are readable by the Impulse process
 4. activate the corrected generation or roll back to the last healthy generation
 5. confirm `/ready` becomes healthy before restoring traffic
 
@@ -77,7 +77,7 @@ Canonical references for the checks above:
 - logs: startup logs, bind failures, TLS load failures, runtime activation failures
 - audit: validate, preview, activate, rollback attempts and outcomes
 
-## Requests Reach Spooky but Not the Expected Upstream
+## Requests Reach Impulse but Not the Expected Upstream
 
 ### Symptom
 
@@ -282,7 +282,7 @@ Canonical references for the checks above:
    - `spooky_health_checks_failure`
    - `spooky_health_failures_total`
 3. confirm the configured backend health endpoint and timeout match the real backend behavior
-4. test the backend health endpoint directly from the same network where Spooky runs
+4. test the backend health endpoint directly from the same network where Impulse runs
 5. inspect logs for health transitions and repeated passive-failure reasons
 
 ### Fix Steps
@@ -407,7 +407,7 @@ Canonical references for the checks above:
 
 ### Verification Steps
 
-1. open the Prometheus target page and confirm the Spooky target is up
+1. open the Prometheus target page and confirm the Impulse target is up
 2. curl the metrics endpoint directly and confirm the configured path returns Prometheus text
 3. inspect whether the expected families exist:
    - request and latency metrics

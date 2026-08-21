@@ -1,6 +1,6 @@
-# How to Run Spooky
+# How to Run Impulse
 
-This guide covers running Spooky directly, as a systemd service, and in Docker — including startup validation, graceful shutdown, and health checking.
+This guide covers running Impulse directly, as a systemd service, and in Docker — including startup validation, graceful shutdown, and health checking.
 
 For the fastest first successful request, use [Quickstart](../tutorials/quickstart.md) or [Docker Installation](../getting-started/docker.md) first. This page is the broader run-mode reference once you already have a working config.
 
@@ -8,7 +8,7 @@ For the fastest first successful request, use [Quickstart](../tutorials/quicksta
 
 ## Prerequisites
 
-Before starting Spooky you need:
+Before starting Impulse you need:
 
 1. A valid config file (see [02-configuration.md](02-configuration.md))
 2. TLS certificates (see [01-certificates.md](01-certificates.md))
@@ -44,11 +44,11 @@ spooky --config /etc/spooky/config.yaml
 
 ### Validate by startup on a safe host or staging instance
 
-Spooky validates its config during startup. There is no standalone `--validate` flag.
+Impulse validates its config during startup. There is no standalone `--validate` flag.
 
 Use one of these approaches:
 
-- start Spooky against the candidate config on a non-production host and stop it after successful startup
+- start Impulse against the candidate config on a non-production host and stop it after successful startup
 - use the Control API staged flow: `POST /admin/runtime/validate`, `/preview`, then `/activate`
 
 ### Foreground with debug logging (development)
@@ -77,11 +77,11 @@ spooky --config /etc/spooky/config.yaml
 
 ### Binding port 443 as root with privilege drop
 
-If Spooky starts as root and `security.privileges.enabled=true`, it drops to the configured user/group after binding the socket:
+If Impulse starts as root and `security.privileges.enabled=true`, it drops to the configured user/group after binding the socket:
 
 ```bash
 sudo spooky --config /etc/spooky/config.yaml
-# Spooky binds port 443 as root, then drops to user 'spooky'
+# Impulse binds port 443 as root, then drops to user 'spooky'
 ```
 
 ---
@@ -122,7 +122,7 @@ Create `/etc/systemd/system/spooky.service`:
 
 ```ini
 [Unit]
-Description=Spooky HTTP/3 Reverse Proxy
+Description=Impulse HTTP/3 Reverse Proxy
 Documentation=https://github.com/Supernova-Labs-Org/spooky
 After=network-online.target
 Wants=network-online.target
@@ -152,7 +152,7 @@ ReadOnlyPaths=/etc/spooky
 WantedBy=multi-user.target
 ```
 
-> If you run Spooky as root to bind port 443 and rely on privilege drop, change `User=` and `Group=` to `root` and let `security.privileges` handle the drop. Otherwise use `AmbientCapabilities=CAP_NET_BIND_SERVICE` with the `spooky` user.
+> If you run Impulse as root to bind port 443 and rely on privilege drop, change `User=` and `Group=` to `root` and let `security.privileges` handle the drop. Otherwise use `AmbientCapabilities=CAP_NET_BIND_SERVICE` with the `spooky` user.
 
 ### Enable and start
 
@@ -228,7 +228,7 @@ docker compose logs -f spooky
 
 ## Startup Sequence
 
-When Spooky starts, it follows this order:
+When Impulse starts, it follows this order:
 
 1. Reads and parses the config file
 2. Initializes logging and tracing
@@ -252,7 +252,7 @@ If `observability.control_api.enabled=true`:
 # Liveness — is the process alive?
 curl -k --http1.1 https://127.0.0.1:9902/health
 
-# Readiness — is Spooky ready to serve traffic?
+# Readiness — is Impulse ready to serve traffic?
 curl -k --http1.1 https://127.0.0.1:9902/ready
 
 # Runtime info (requires auth token)
@@ -263,7 +263,7 @@ curl -k --http1.1 -H "Authorization: Bearer <token>" https://127.0.0.1:9902/admi
 
 ## Graceful Shutdown
 
-Spooky handles `SIGTERM` and `SIGINT` (Ctrl+C):
+Impulse handles `SIGTERM` and `SIGINT` (Ctrl+C):
 
 1. Stops accepting new QUIC connections
 2. Waits for in-flight requests to complete (up to `performance.shutdown_drain_timeout_ms`)
@@ -278,7 +278,7 @@ performance:
 
 ---
 
-## Verifying Spooky is Running
+## Verifying Impulse is Running
 
 ### Test HTTP/3 (QUIC)
 

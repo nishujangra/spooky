@@ -1,6 +1,6 @@
 # Observability Operator Bundle
 
-This page documents the shipped operator observability bundle for Spooky.
+This page documents the shipped operator observability bundle for Impulse.
 
 It is the packaging guide for the artifacts under:
 
@@ -633,4 +633,4 @@ contract.
 - [Control Plane](control-plane.md)
 - [Distributed Quota](distributed-quota.md)
 - [Runbook](runbook.md)
-- [Spooky SLO Package](../../deploy/observability/slo/README.md)
+- [Impulse SLO Package](../../deploy/observability/slo/README.md)

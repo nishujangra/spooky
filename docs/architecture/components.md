@@ -1,10 +1,10 @@
 # Component Architecture
 
-This document provides a detailed breakdown of Spooky's modular component architecture, including responsibilities, APIs, and implementation details for each crate.
+This document provides a detailed breakdown of Impulse's modular component architecture, including responsibilities, APIs, and implementation details for each crate.
 
 ## Component Overview
 
-Spooky is organized as a Rust workspace with the following crates:
+Impulse is organized as a Rust workspace with the following crates:
 
 | Crate | Path | Responsibility |
 |-------|------|----------------|

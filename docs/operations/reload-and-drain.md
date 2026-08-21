@@ -4,7 +4,7 @@ This document explains which changes activate live, which changes require a rest
 
 ## Core Rule
 
-Spooky does not patch runtime state in place. It prepares a complete next runtime generation and swaps it atomically when the change is compatible.
+Impulse does not patch runtime state in place. It prepares a complete next runtime generation and swaps it atomically when the change is compatible.
 
 That means:
 

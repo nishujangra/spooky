@@ -114,7 +114,7 @@ Compatibility note:
 - `observability.control_api.auth_token` remains supported as the legacy single-token admin credential
 - the legacy token is mapped internally to a static admin identity so existing operators keep current restart/reload privileges during migration
 - new deployments should prefer `observability.control_api.auth.bearer_tokens[]` with explicit roles
-- compatibility boundary: a new Spooky binary accepts legacy `auth_token` configs, but an older binary will reject configs that use the newer nested control-plane fields because `ControlApi` uses strict `deny_unknown_fields`
+- compatibility boundary: a new Impulse binary accepts legacy `auth_token` configs, but an older binary will reject configs that use the newer nested control-plane fields because `ControlApi` uses strict `deny_unknown_fields`
 
 Role model:
 

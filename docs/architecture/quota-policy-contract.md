@@ -1,7 +1,7 @@
 # Distributed Quota And Advanced Rate-Limit Policy Contract
 
 This document defines the contract for first-class distributed quota and
-advanced rate-limit policy in Spooky.
+advanced rate-limit policy in Impulse.
 
 The runtime now ships:
 
@@ -253,7 +253,7 @@ updating this contract first.
 
 ## Consistency Expectations For Distributed Counters
 
-Spooky's distributed quota layer is intended to provide strong-enough
+Impulse's distributed quota layer is intended to provide strong-enough
 per-selector contract enforcement, not globally serialized traffic accounting
 across every deployment topology.
 

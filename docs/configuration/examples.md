@@ -389,7 +389,7 @@ starts at all.
 
 ## Example 9: Runtime Activation And Reload Posture
 
-Spooky supports generation-based validation, preview, activation, rollback, and certificate-only reload. When planning operations:
+Impulse supports generation-based validation, preview, activation, rollback, and certificate-only reload. When planning operations:
 
 - use `POST /admin/runtime/validate` to check a candidate configuration
 - use `POST /admin/runtime/preview` to see the staged diff without touching the running runtime

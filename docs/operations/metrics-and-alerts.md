@@ -1,6 +1,6 @@
 # Metrics and Alerts
 
-This document explains which Spooky metrics matter most in production and how operators should use them for alerting and dashboards.
+This document explains which Impulse metrics matter most in production and how operators should use them for alerting and dashboards.
 
 ## Read This With
 
@@ -10,7 +10,7 @@ This document explains which Spooky metrics matter most in production and how op
 
 ## Purpose
 
-Spooky exposes many counters, gauges, and labeled request families. Operators should focus on the metrics that answer:
+Impulse exposes many counters, gauges, and labeled request families. Operators should focus on the metrics that answer:
 
 - is traffic succeeding
 - is latency rising

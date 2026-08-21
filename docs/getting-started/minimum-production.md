@@ -1,6 +1,6 @@
 # Minimum Production Checklist
 
-This page answers one question: **what is the minimum you must do to run Spooky responsibly in production?**
+This page answers one question: **what is the minimum you must do to run Impulse responsibly in production?**
 
 It is not a full hardening guide — that is [Production Deployment](../deployment/production.md). This page is a focused checklist for operators who have already completed the [quickstart](../tutorials/quickstart.md) or [installation](installation.md) path and are preparing to serve real traffic for the first time.
 
@@ -34,7 +34,7 @@ upstream:
         address: "10.0.10.10:8080"
         weight: 100
         health_check:
-          path: "/health"            # Must return 2xx; Spooky removes the backend after 3 consecutive failures
+          path: "/health"            # Must return 2xx; Impulse removes the backend after 3 consecutive failures
           interval: 5000             # ms — balance detection speed against backend poll load
           timeout_ms: 2000
           failure_threshold: 3
@@ -105,7 +105,7 @@ observability:
 | Recommended `nofile` | 1 048 576 | Headroom for high connection counts without emergency restarts |
 | Memory | 256 MB | Minimum; 1 GB recommended at moderate load |
 
-**UDP receive buffer — required tuning.** QUIC delivers all traffic over UDP. The kernel's default UDP receive buffer (typically 212 KB) causes packet drops under any real load. Set it before starting Spooky:
+**UDP receive buffer — required tuning.** QUIC delivers all traffic over UDP. The kernel's default UDP receive buffer (typically 212 KB) causes packet drops under any real load. Set it before starting Impulse:
 
 ```bash
 # /etc/sysctl.d/99-spooky.conf
@@ -113,7 +113,7 @@ net.core.rmem_max = 67108864    # 64 MiB — maximum socket receive buffer size
 net.core.rmem_default = 16777216  # 16 MiB — default for new sockets
 ```
 
-Apply immediately with `sudo sysctl -p /etc/sysctl.d/99-spooky.conf`. Without this, the kernel silently drops UDP packets when bursts arrive faster than Spooky reads them, producing unexplained connection timeouts.
+Apply immediately with `sudo sysctl -p /etc/sysctl.d/99-spooky.conf`. Without this, the kernel silently drops UDP packets when bursts arrive faster than Impulse reads them, producing unexplained connection timeouts.
 
 Set ulimits for the service account:
 
@@ -138,11 +138,11 @@ Work through this list top-to-bottom before pointing DNS or a load balancer at t
    _Verify:_ `ls -l /etc/spooky/certs/` — expect `-rw-r----- root spooky fullchain.pem` and `-rw-r----- root spooky privkey.pem`.
 
 3. **Config passes startup validation.**
-   Spooky validates its config before accepting connections. A config error will cause the service to exit immediately, but you want to confirm this before systemd is involved.
+   Impulse validates its config before accepting connections. A config error will cause the service to exit immediately, but you want to confirm this before systemd is involved.
    _Verify:_ `sudo -u spooky /usr/local/bin/spooky --config /etc/spooky/config.yaml` — the process should start and begin logging without printing a fatal error. Stop it with Ctrl-C once you see the listening message.
 
 4. **At least one health check endpoint is verified to return 2xx.**
-   Spooky removes backends that fail health checks; if every backend in a pool is unhealthy at startup, all requests to that pool return 503 immediately.
+   Impulse removes backends that fail health checks; if every backend in a pool is unhealthy at startup, all requests to that pool return 503 immediately.
    _Verify:_ `curl -sf http://<backend-ip>:<port>/health` for each backend listed in the config — expect HTTP 200.
 
 5. **Control API is bound to loopback only (`127.0.0.1`) unless you have a strong administrative network boundary.**
@@ -154,7 +154,7 @@ Work through this list top-to-bottom before pointing DNS or a load balancer at t
    _Verify:_ From your Prometheus host (or monitoring agent): `curl -sf http://<spooky-host>:9090/metrics | head -5` — expect Prometheus text format output.
 
 7. **Rollback plan documented: previous binary and config saved, procedure tested.**
-   Spooky supports generation-based validation, preview, activation, and rollback for runtime-managed changes, but you still need a tested rollback path for binary upgrades and restart-required settings.
+   Impulse supports generation-based validation, preview, activation, and rollback for runtime-managed changes, but you still need a tested rollback path for binary upgrades and restart-required settings.
    _Verify:_ Confirm your previous binary and config are retained, and that the rollback steps in your runbook have been executed at least once in a non-production environment.
 
 ---
@@ -166,7 +166,7 @@ Install the following systemd unit, then use the three commands below to confirm
 ```ini
 # /etc/systemd/system/spooky.service
 [Unit]
-Description=Spooky HTTP/3 Edge Proxy
+Description=Impulse HTTP/3 Edge Proxy
 Documentation=https://github.com/Supernova-Labs-Org/spooky
 After=network-online.target
 Wants=network-online.target
@@ -216,7 +216,7 @@ sudo systemctl status spooky.service
 # 2. Confirm no fatal errors in the first few seconds of startup
 sudo journalctl -u spooky.service -n 50 --no-pager
 
-# 3. Confirm Spooky is reachable and at least one backend is healthy
+# 3. Confirm Impulse is reachable and at least one backend is healthy
 curl -skf --http1.1 https://127.0.0.1:9902/health
 ```
 
@@ -226,7 +226,7 @@ The control API `/health` endpoint returns HTTP 200 when the process is up. It d
 
 ## First Scaling Steps
 
-**When to add backends.** CPU saturation is rarely the first bottleneck in a QUIC proxy. Watch `spooky_overload_shed_by_reason_total{reason="backend_inflight"}` in your metrics — sustained shedding on that label means backends are saturated before Spooky is. Add backends to the pool when that counter climbs, not when Spooky's CPU rises.
+**When to add backends.** CPU saturation is rarely the first bottleneck in a QUIC proxy. Watch `spooky_overload_shed_by_reason_total{reason="backend_inflight"}` in your metrics — sustained shedding on that label means backends are saturated before Impulse is. Add backends to the pool when that counter climbs, not when Impulse's CPU rises.
 
 **How to add a backend today.** Dynamic backend registration is not a per-object Control API feature. To add a backend, update `/etc/spooky/config.yaml`, then use the staged runtime flow when the change is runtime-managed:
 

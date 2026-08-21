@@ -1,10 +1,10 @@
 # Observability Contract
 
-This document defines the stable observability contract for Spooky after the refactor work that centralized reason vocabularies, outcome recording, backend lifecycle snapshots, control-plane runtime views, and admin audit events.
+This document defines the stable observability contract for Impulse after the refactor work that centralized reason vocabularies, outcome recording, backend lifecycle snapshots, control-plane runtime views, and admin audit events.
 
 ## Purpose
 
-Spooky has five operator-facing observability surfaces:
+Impulse has five operator-facing observability surfaces:
 
 - Prometheus metrics
 - structured operational logs

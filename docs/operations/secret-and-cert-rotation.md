@@ -103,7 +103,7 @@ install -m 0640 payments-client.crt.new /etc/spooky/secrets/upstream/payments-cl
 
 ## Rollback Expectations
 
-Runtime rollback (`POST /admin/runtime/rollback`) restores a previously retained **runtime generation view** — the resolved policy state Spooky held for that generation. It does not, and cannot, restore external secret files.
+Runtime rollback (`POST /admin/runtime/rollback`) restores a previously retained **runtime generation view** — the resolved policy state Impulse held for that generation. It does not, and cannot, restore external secret files.
 
 Concretely:
 

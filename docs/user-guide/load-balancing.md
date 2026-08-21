@@ -1,6 +1,6 @@
 # Load Balancing
 
-Comprehensive guide to load balancing algorithms, health checking, and backend management in Spooky.
+Comprehensive guide to load balancing algorithms, health checking, and backend management in Impulse.
 
 ---
 
@@ -23,7 +23,7 @@ If you are migrating from NGINX `least_conn`, use `least-connections`. If you ar
 
 ## Load Balancing Algorithms
 
-Spooky implements six load balancing algorithms, each optimized for different use cases. Each upstream pool configures its own algorithm independently via `load_balancing.type`.
+Impulse implements six load balancing algorithms, each optimized for different use cases. Each upstream pool configures its own algorithm independently via `load_balancing.type`.
 
 ### Round Robin
 
@@ -340,7 +340,7 @@ backends:
 
 ## Health Checking
 
-Spooky performs active health checks on all backends. Unhealthy backends are automatically removed from rotation.
+Impulse performs active health checks on all backends. Unhealthy backends are automatically removed from rotation.
 
 ### Health Check Mechanism
 
@@ -428,7 +428,7 @@ State transitions:
 
 ## Multiple Upstream Pools
 
-Spooky supports multiple upstream pools with independent routing and load balancing configuration. Each pool specifies its own algorithm.
+Impulse supports multiple upstream pools with independent routing and load balancing configuration. Each pool specifies its own algorithm.
 
 ### Configuration Example
 
@@ -709,7 +709,7 @@ done
 - Fix backend health endpoints
 - Adjust health check parameters (increase timeout, threshold)
 - Verify backends are actually running and accessible
-- Check firewall rules between Spooky and backends
+- Check firewall rules between Impulse and backends
 
 ## Best Practices
 
