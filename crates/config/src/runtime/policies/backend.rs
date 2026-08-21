@@ -141,6 +141,9 @@ pub struct RuntimeBackendTlsPolicy {
     pub client_certificate: Option<RuntimeResolvedSecretMetadata>,
     pub client_certificate_not_after_unix_seconds: Option<i64>,
     pub client_key: Option<RuntimeResolvedSecretMetadata>,
+    ca_pem_blobs: Vec<Vec<u8>>,
+    client_certificate_pem: Option<Vec<u8>>,
+    client_key_pem: Option<Vec<u8>>,
 }
 
 impl RuntimeBackendTlsPolicy {
@@ -158,6 +161,9 @@ impl RuntimeBackendTlsPolicy {
             client_certificate: None,
             client_certificate_not_after_unix_seconds: None,
             client_key: None,
+            ca_pem_blobs: Vec::new(),
+            client_certificate_pem: None,
+            client_key_pem: None,
         }
     }
 
@@ -177,14 +183,19 @@ impl RuntimeBackendTlsPolicy {
             &format!("{field_prefix}.client_key"),
             false,
         )?;
-        let ca_file_fingerprint_sha256 = fingerprint_optional_ca_file(
+        let (ca_file_fingerprint_sha256, ca_file_pem) = load_optional_ca_file(
             effective_tls.ca_file.as_deref(),
             &format!("{field_prefix}.ca_file"),
         )?;
-        let ca_dir_fingerprint_sha256 = fingerprint_optional_ca_dir(
+        let (ca_dir_fingerprint_sha256, ca_dir_pem_blobs) = load_optional_ca_dir(
             effective_tls.ca_dir.as_deref(),
             &format!("{field_prefix}.ca_dir"),
         )?;
+        let mut ca_pem_blobs = Vec::new();
+        if let Some(ca_file_pem) = ca_file_pem {
+            ca_pem_blobs.push(ca_file_pem);
+        }
+        ca_pem_blobs.extend(ca_dir_pem_blobs);
 
         Ok(Self {
             verify_certificates: effective_tls.verify_certificates,
@@ -202,13 +213,33 @@ impl RuntimeBackendTlsPolicy {
             client_key: client_key
                 .as_ref()
                 .map(|material| material.metadata.clone()),
+            ca_pem_blobs,
+            client_certificate_pem: client_certificate
+                .as_ref()
+                .map(|material| material.pem_bytes.clone()),
+            client_key_pem: client_key
+                .as_ref()
+                .map(|material| material.pem_bytes.clone()),
         })
+    }
+
+    pub fn ca_pem_blobs(&self) -> &[Vec<u8>] {
+        &self.ca_pem_blobs
+    }
+
+    pub fn client_certificate_pem(&self) -> Option<&[u8]> {
+        self.client_certificate_pem.as_deref()
+    }
+
+    pub fn client_key_pem(&self) -> Option<&[u8]> {
+        self.client_key_pem.as_deref()
     }
 }
 
 struct RuntimeSecretMaterial {
     metadata: RuntimeResolvedSecretMetadata,
     not_after_unix_seconds: Option<i64>,
+    pem_bytes: Vec<u8>,
 }
 
 fn resolve_optional_secret_material(
@@ -240,6 +271,7 @@ fn resolve_optional_secret_material(
     };
 
     if let Some(material) = material {
+        let pem_bytes = material.bytes().to_vec();
         let not_after_unix_seconds = if expect_certificate_pem {
             material
                 .parse_pem_certificates(field_name)
@@ -254,33 +286,37 @@ fn resolve_optional_secret_material(
         Ok(Some(RuntimeSecretMaterial {
             metadata: material.metadata().clone(),
             not_after_unix_seconds,
+            pem_bytes,
         }))
     } else {
         Ok(None)
     }
 }
 
-fn fingerprint_optional_ca_file(
+fn load_optional_ca_file(
     ca_file: Option<&str>,
     field_name: &str,
-) -> Result<Option<String>, RuntimeConfigError> {
+) -> Result<(Option<String>, Option<Vec<u8>>), RuntimeConfigError> {
     let Some(ca_file) = ca_file.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(None);
+        return Ok((None, None));
     };
     let secret = resolve_file_secret_path(ca_file, field_name)
         .map_err(|err| RuntimeConfigError::SecretResolutionFailed(err.to_string()))?;
     secret
         .parse_pem_certificates(field_name)
         .map_err(|err| RuntimeConfigError::TlsMaterialInvalid(err.to_string()))?;
-    Ok(Some(secret.metadata().fingerprint_sha256.clone()))
+    Ok((
+        Some(secret.metadata().fingerprint_sha256.clone()),
+        Some(secret.bytes().to_vec()),
+    ))
 }
 
-fn fingerprint_optional_ca_dir(
+fn load_optional_ca_dir(
     ca_dir: Option<&str>,
     field_name: &str,
-) -> Result<Option<String>, RuntimeConfigError> {
+) -> Result<(Option<String>, Vec<Vec<u8>>), RuntimeConfigError> {
     let Some(ca_dir) = ca_dir.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(None);
+        return Ok((None, Vec::new()));
     };
     let dir = Path::new(ca_dir);
     let entries = fs::read_dir(dir).map_err(|err| {
@@ -304,6 +340,7 @@ fn fingerprint_optional_ca_dir(
 
     let mut hasher = Sha256::new();
     let mut loaded = 0usize;
+    let mut pem_blobs = Vec::new();
     for path in pem_files {
         let bytes = fs::read(&path).map_err(|err| {
             RuntimeConfigError::TlsMaterialInvalid(format!(
@@ -330,6 +367,7 @@ fn fingerprint_optional_ca_dir(
         hasher.update([0u8]);
         hasher.update(&bytes);
         hasher.update([0u8]);
+        pem_blobs.push(bytes);
     }
 
     if loaded == 0 {
@@ -338,7 +376,7 @@ fn fingerprint_optional_ca_dir(
         )));
     }
 
-    Ok(Some(hex::encode(hasher.finalize())))
+    Ok((Some(hex::encode(hasher.finalize())), pem_blobs))
 }
 
 fn is_pem_like_path(path: &Path) -> bool {
@@ -505,6 +543,12 @@ mod tests {
                 client_certificate: None,
                 client_certificate_not_after_unix_seconds: None,
                 client_key: None,
+                ca_pem_blobs: vec![
+                    std::fs::read(&ca_file).expect("read ca file"),
+                    std::fs::read(&ca_dir_entry).expect("read ca dir entry"),
+                ],
+                client_certificate_pem: None,
+                client_key_pem: None,
             }
         );
     }

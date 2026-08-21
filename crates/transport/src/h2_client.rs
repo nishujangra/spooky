@@ -1,11 +1,9 @@
 use std::{
     collections::HashMap,
     convert::Infallible,
-    ffi::OsStr,
     future::Future,
     io,
     net::SocketAddr,
-    path::Path,
     pin::Pin,
     sync::{Arc, RwLock},
     task::{Context, Poll},
@@ -32,32 +30,19 @@ use rustls::{
     pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime},
 };
 use rustls_pki_types::pem::PemObject;
-use spooky_config::{
-    config::{SecretRef, UpstreamTls},
-    runtime::{
-        RuntimeBackendTlsPolicy, RuntimeResolvedSecret, RuntimeSecretResolutionErrorKind,
-        RuntimeSecretResolver, RuntimeUpstream, resolve_file_secret_path,
-    },
-};
+use spooky_config::runtime::{RuntimeBackendTlsPolicy, RuntimeUpstream};
 use tower_service::Service;
 
 /// TLS client policy applied to HTTP/2 backend connections.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TlsClientMaterialSource {
-    LegacyFile(String),
-    SecretRef(SecretRef),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TlsClientConfig {
     pub verify_certificates: bool,
     pub strict_sni: bool,
-    pub ca_file: Option<String>,
     pub ca_file_fingerprint_sha256: Option<String>,
-    pub ca_dir: Option<String>,
     pub ca_dir_fingerprint_sha256: Option<String>,
-    pub client_certificate: Option<TlsClientMaterialSource>,
-    pub client_key: Option<TlsClientMaterialSource>,
+    pub ca_pem_blobs: Vec<Vec<u8>>,
+    pub client_certificate_pem: Option<Vec<u8>>,
+    pub client_key_pem: Option<Vec<u8>>,
     pub client_certificate_fingerprint_sha256: Option<String>,
     pub client_key_fingerprint_sha256: Option<String>,
 }
@@ -67,12 +52,11 @@ impl Default for TlsClientConfig {
         Self {
             verify_certificates: true,
             strict_sni: true,
-            ca_file: None,
             ca_file_fingerprint_sha256: None,
-            ca_dir: None,
             ca_dir_fingerprint_sha256: None,
-            client_certificate: None,
-            client_key: None,
+            ca_pem_blobs: Vec::new(),
+            client_certificate_pem: None,
+            client_key_pem: None,
             client_certificate_fingerprint_sha256: None,
             client_key_fingerprint_sha256: None,
         }
@@ -84,12 +68,11 @@ impl From<&RuntimeBackendTlsPolicy> for TlsClientConfig {
         Self {
             verify_certificates: value.verify_certificates,
             strict_sni: value.strict_sni,
-            ca_file: value.ca_file.clone(),
             ca_file_fingerprint_sha256: value.ca_file_fingerprint_sha256.clone(),
-            ca_dir: value.ca_dir.clone(),
             ca_dir_fingerprint_sha256: value.ca_dir_fingerprint_sha256.clone(),
-            client_certificate: None,
-            client_key: None,
+            ca_pem_blobs: value.ca_pem_blobs().to_vec(),
+            client_certificate_pem: value.client_certificate_pem().map(|pem| pem.to_vec()),
+            client_key_pem: value.client_key_pem().map(|pem| pem.to_vec()),
             client_certificate_fingerprint_sha256: value
                 .client_certificate
                 .as_ref()
@@ -104,45 +87,7 @@ impl From<&RuntimeBackendTlsPolicy> for TlsClientConfig {
 
 impl TlsClientConfig {
     pub fn from_runtime_upstream(upstream: &RuntimeUpstream) -> Self {
-        let effective_tls: &UpstreamTls = &upstream.effective_tls;
-        let policy = upstream.backend_tls_policy();
-
-        Self {
-            verify_certificates: policy.verify_certificates,
-            strict_sni: policy.strict_sni,
-            ca_file: policy.ca_file.clone(),
-            ca_file_fingerprint_sha256: policy.ca_file_fingerprint_sha256.clone(),
-            ca_dir: policy.ca_dir.clone(),
-            ca_dir_fingerprint_sha256: policy.ca_dir_fingerprint_sha256.clone(),
-            client_certificate: effective_tls
-                .client_certificate
-                .clone()
-                .map(TlsClientMaterialSource::LegacyFile)
-                .or_else(|| {
-                    effective_tls
-                        .client_certificate_ref
-                        .clone()
-                        .map(TlsClientMaterialSource::SecretRef)
-                }),
-            client_key: effective_tls
-                .client_key
-                .clone()
-                .map(TlsClientMaterialSource::LegacyFile)
-                .or_else(|| {
-                    effective_tls
-                        .client_key_ref
-                        .clone()
-                        .map(TlsClientMaterialSource::SecretRef)
-                }),
-            client_certificate_fingerprint_sha256: policy
-                .client_certificate
-                .as_ref()
-                .map(|metadata| metadata.fingerprint_sha256.clone()),
-            client_key_fingerprint_sha256: policy
-                .client_key
-                .as_ref()
-                .map(|metadata| metadata.fingerprint_sha256.clone()),
-        }
+        Self::from(upstream.backend_tls_policy())
     }
 }
 
@@ -467,26 +412,11 @@ fn build_tls_config(tls: &TlsClientConfig) -> Result<ClientConfig, String> {
     let mut roots = RootCertStore::empty();
     roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
 
-    if let Some(ca_file) = tls.ca_file.as_ref() {
-        let path = Path::new(ca_file);
-        for cert in read_pem_certificates(path)? {
+    for pem_blob in &tls.ca_pem_blobs {
+        for cert in read_pem_certificates_from_bytes(pem_blob)? {
             roots.add(cert).map_err(|err| {
-                format!(
-                    "failed to add certificate from upstream_tls.ca_file '{}': {}",
-                    path.display(),
-                    err
-                )
+                format!("failed to add certificate from upstream TLS CA material: {err}")
             })?;
-        }
-    }
-
-    if let Some(ca_dir) = tls.ca_dir.as_ref() {
-        let loaded = load_ca_directory(&mut roots, Path::new(ca_dir))?;
-        if loaded == 0 {
-            return Err(format!(
-                "upstream_tls.ca_dir '{}' did not contain any readable PEM certificates",
-                ca_dir
-            ));
         }
     }
 
@@ -520,7 +450,7 @@ fn load_client_identity(
     )>,
     String,
 > {
-    match (&tls.client_certificate, &tls.client_key) {
+    match (&tls.client_certificate_pem, &tls.client_key_pem) {
         (None, None) => Ok(None),
         (None, Some(_)) => Err(
             "client_certificate_missing: upstream TLS client certificate source is not configured"
@@ -530,124 +460,26 @@ fn load_client_identity(
             "client_key_missing: upstream TLS client private key source is not configured"
                 .to_string(),
         ),
-        (Some(cert_source), Some(key_source)) => {
-            let cert = resolve_client_material(cert_source, "upstream_tls.client_certificate")
-                .map_err(|err| classify_client_material_error(err, true))?;
-            let key = resolve_client_material(key_source, "upstream_tls.client_key")
-                .map_err(|err| classify_client_material_error(err, false))?;
-
-            let certs = cert
-                .parse_pem_certificates("upstream_tls.client_certificate")
+        (Some(cert_pem), Some(key_pem)) => {
+            let certs = read_pem_certificates_from_bytes(cert_pem)
                 .map_err(|err| format!("client_identity_invalid: {err}"))?;
-            let key = key
-                .parse_pem_private_key("upstream_tls.client_key")
-                .map_err(|err| format!("client_identity_invalid: {err}"))?;
+            let key = PrivateKeyDer::from_pem_slice(key_pem).map_err(|err| {
+                format!(
+                    "client_identity_invalid: failed to parse upstream TLS client private key PEM: {err}"
+                )
+            })?;
             Ok(Some((certs, key)))
         }
     }
 }
-
-fn resolve_client_material(
-    source: &TlsClientMaterialSource,
-    field_name: &str,
-) -> Result<RuntimeResolvedSecret, spooky_config::runtime::RuntimeSecretResolutionError> {
-    match source {
-        TlsClientMaterialSource::LegacyFile(path) => resolve_file_secret_path(path, field_name),
-        TlsClientMaterialSource::SecretRef(secret_ref) => {
-            RuntimeSecretResolver::default().resolve(secret_ref, field_name)
-        }
-    }
-}
-
-fn classify_client_material_error(
-    err: spooky_config::runtime::RuntimeSecretResolutionError,
-    certificate: bool,
-) -> String {
-    let prefix = match (certificate, err.kind()) {
-        (
-            true,
-            RuntimeSecretResolutionErrorKind::FileNotFound
-            | RuntimeSecretResolutionErrorKind::MissingSource,
-        ) => "client_certificate_missing",
-        (
-            false,
-            RuntimeSecretResolutionErrorKind::FileNotFound
-            | RuntimeSecretResolutionErrorKind::MissingSource,
-        ) => "client_key_missing",
-        _ => "client_identity_invalid",
-    };
-    format!("{prefix}: {err}")
-}
-
-fn read_pem_certificates(path: &Path) -> Result<Vec<CertificateDer<'static>>, String> {
-    let certs = CertificateDer::pem_file_iter(path)
-        .map_err(|err| {
-            format!(
-                "failed to open certificate file '{}': {}",
-                path.display(),
-                err
-            )
-        })?
+fn read_pem_certificates_from_bytes(bytes: &[u8]) -> Result<Vec<CertificateDer<'static>>, String> {
+    let certs = CertificateDer::pem_slice_iter(bytes)
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| {
-            format!(
-                "failed to parse PEM certificates from '{}': {}",
-                path.display(),
-                err
-            )
-        })?;
+        .map_err(|err| err.to_string())?;
     if certs.is_empty() {
-        return Err(format!(
-            "certificate file '{}' does not contain any PEM certificates",
-            path.display()
-        ));
+        return Err("certificate material does not contain any PEM certificates".to_string());
     }
     Ok(certs)
-}
-
-fn load_ca_directory(roots: &mut RootCertStore, dir: &Path) -> Result<usize, String> {
-    let entries = std::fs::read_dir(dir).map_err(|err| {
-        format!(
-            "failed to read upstream_tls.ca_dir '{}': {}",
-            dir.display(),
-            err
-        )
-    })?;
-
-    let mut loaded = 0usize;
-    for entry in entries {
-        let entry = entry.map_err(|err| {
-            format!(
-                "failed to read entry in upstream_tls.ca_dir '{}': {}",
-                dir.display(),
-                err
-            )
-        })?;
-        let path = entry.path();
-        if !path.is_file() || !is_pem_like_path(&path) {
-            continue;
-        }
-
-        for cert in read_pem_certificates(&path)? {
-            roots.add(cert).map_err(|err| {
-                format!(
-                    "failed to add certificate from '{}': {}",
-                    path.display(),
-                    err
-                )
-            })?;
-            loaded = loaded.saturating_add(1);
-        }
-    }
-
-    Ok(loaded)
-}
-
-fn is_pem_like_path(path: &Path) -> bool {
-    matches!(
-        path.extension().and_then(OsStr::to_str),
-        Some("pem" | "crt" | "cer" | "PEM" | "CRT" | "CER")
-    )
 }
 
 #[derive(Debug)]
@@ -737,12 +569,11 @@ mod tests {
             TlsClientConfig {
                 verify_certificates: true,
                 strict_sni: true,
-                ca_file: Some(path.to_string_lossy().to_string()),
                 ca_file_fingerprint_sha256: None,
-                ca_dir: None,
                 ca_dir_fingerprint_sha256: None,
-                client_certificate: None,
-                client_key: None,
+                ca_pem_blobs: vec![std::fs::read(&path).expect("read temp file")],
+                client_certificate_pem: None,
+                client_key_pem: None,
                 client_certificate_fingerprint_sha256: None,
                 client_key_fingerprint_sha256: None,
             },
@@ -762,12 +593,11 @@ mod tests {
             TlsClientConfig {
                 verify_certificates: false,
                 strict_sni: true,
-                ca_file: None,
                 ca_file_fingerprint_sha256: None,
-                ca_dir: None,
                 ca_dir_fingerprint_sha256: None,
-                client_certificate: None,
-                client_key: None,
+                ca_pem_blobs: Vec::new(),
+                client_certificate_pem: None,
+                client_key_pem: None,
                 client_certificate_fingerprint_sha256: None,
                 client_key_fingerprint_sha256: None,
             },

@@ -17,11 +17,9 @@ use rcgen::{
     ExtendedKeyUsagePurpose, IsCa, KeyUsagePurpose, SanType,
 };
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
-use spooky_config::{config::SecretRef, runtime::RuntimeBackendTransportKind};
+use spooky_config::runtime::RuntimeBackendTransportKind;
 use spooky_errors::{ProxyError, UpstreamTlsReason, classify_upstream_proxy_error};
-use spooky_transport::{
-    SharedDnsResolver, TlsClientConfig, TlsClientMaterialSource, UpstreamTransportPool,
-};
+use spooky_transport::{SharedDnsResolver, TlsClientConfig, UpstreamTransportPool};
 use tempfile::{TempDir, tempdir};
 use tokio::net::TcpListener;
 use tokio_rustls::{
@@ -192,20 +190,13 @@ fn backend_tls(ca_cert_path: &Path, client_identity: Option<&PemIdentity>) -> Tl
     TlsClientConfig {
         verify_certificates: true,
         strict_sni: true,
-        ca_file: Some(ca_cert_path.to_string_lossy().to_string()),
         ca_file_fingerprint_sha256: None,
-        ca_dir: None,
         ca_dir_fingerprint_sha256: None,
-        client_certificate: client_identity.map(|identity| {
-            TlsClientMaterialSource::SecretRef(SecretRef {
-                reference: format!("file://{}", identity.cert_path.display()),
-            })
-        }),
-        client_key: client_identity.map(|identity| {
-            TlsClientMaterialSource::SecretRef(SecretRef {
-                reference: format!("file://{}", identity.key_path.display()),
-            })
-        }),
+        ca_pem_blobs: vec![std::fs::read(ca_cert_path).expect("read ca pem")],
+        client_certificate_pem: client_identity
+            .map(|identity| std::fs::read(&identity.cert_path).expect("read client cert pem")),
+        client_key_pem: client_identity
+            .map(|identity| std::fs::read(&identity.key_path).expect("read client key pem")),
         client_certificate_fingerprint_sha256: None,
         client_key_fingerprint_sha256: None,
     }
