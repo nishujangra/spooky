@@ -8,7 +8,10 @@ use super::config_invalid;
 use crate::{
     backend_endpoint::{BackendEndpoint, BackendScheme},
     config::{HealthCheck, Performance, UpstreamTls},
-    runtime::{RuntimeConfigError, RuntimeResolvedSecretMetadata, resolve_file_secret_path},
+    runtime::{
+        RuntimeConfigError, RuntimeResolvedSecretMetadata, RuntimeSecretResolver,
+        resolve_file_secret_path,
+    },
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -171,18 +174,21 @@ impl RuntimeBackendTlsPolicy {
     pub(crate) fn from_effective_tls(
         effective_tls: &UpstreamTls,
         field_prefix: &str,
+        secret_resolver: &RuntimeSecretResolver,
     ) -> Result<Self, RuntimeConfigError> {
         let client_certificate = resolve_optional_secret_material(
             effective_tls.client_certificate.as_deref(),
             effective_tls.client_certificate_ref.as_ref(),
             &format!("{field_prefix}.client_certificate"),
             true,
+            secret_resolver,
         )?;
         let client_key = resolve_optional_secret_material(
             effective_tls.client_key.as_deref(),
             effective_tls.client_key_ref.as_ref(),
             &format!("{field_prefix}.client_key"),
             false,
+            secret_resolver,
         )?;
         let (ca_file_fingerprint_sha256, ca_file_pem) = load_optional_ca_file(
             effective_tls.ca_file.as_deref(),
@@ -248,6 +254,7 @@ fn resolve_optional_secret_material(
     secret_ref: Option<&crate::config::SecretRef>,
     field_name: &str,
     expect_certificate_pem: bool,
+    secret_resolver: &RuntimeSecretResolver,
 ) -> Result<Option<RuntimeSecretMaterial>, RuntimeConfigError> {
     let material = match (
         legacy_path.map(str::trim).filter(|value| !value.is_empty()),
@@ -257,11 +264,9 @@ fn resolve_optional_secret_material(
             resolve_file_secret_path(path, field_name)
                 .map_err(|err| RuntimeConfigError::SecretResolutionFailed(err.to_string()))?,
         ),
-        (None, Some(secret_ref)) => Some(
-            crate::runtime::RuntimeSecretResolver::default()
-                .resolve(secret_ref, field_name)
-                .map_err(|err| RuntimeConfigError::SecretResolutionFailed(err.to_string()))?,
-        ),
+        (None, Some(secret_ref)) => Some(secret_resolver
+            .resolve(secret_ref, field_name)
+            .map_err(|err| RuntimeConfigError::SecretResolutionFailed(err.to_string()))?),
         (Some(_), Some(_)) => {
             return Err(RuntimeConfigError::SecretResolutionFailed(format!(
                 "secret resolution failed for {}: conflicting_sources",
@@ -532,8 +537,12 @@ mod tests {
         };
 
         let policy =
-            RuntimeBackendTlsPolicy::from_effective_tls(&effective_tls, "upstream 'payments' tls")
-                .expect("backend tls policy");
+            RuntimeBackendTlsPolicy::from_effective_tls(
+                &effective_tls,
+                "upstream 'payments' tls",
+                &RuntimeSecretResolver::default(),
+            )
+            .expect("backend tls policy");
 
         assert_eq!(
             policy,
@@ -597,8 +606,12 @@ mod tests {
         };
 
         let policy =
-            RuntimeBackendTlsPolicy::from_effective_tls(&effective_tls, "upstream 'payments' tls")
-                .expect("backend tls policy");
+            RuntimeBackendTlsPolicy::from_effective_tls(
+                &effective_tls,
+                "upstream 'payments' tls",
+                &RuntimeSecretResolver::default(),
+            )
+            .expect("backend tls policy");
 
         assert!(
             policy.client_certificate_not_after_unix_seconds.is_some(),

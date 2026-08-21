@@ -1,5 +1,6 @@
 use std::{
     fmt, fs,
+    path::{Path, PathBuf},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -7,7 +8,9 @@ use std::{
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use sha2::{Digest, Sha256};
 
-use crate::config::{Config, ControlApiBearerToken, ExternalAuth, SecretRef};
+use crate::config::{
+    Config, ControlApiBearerToken, ExternalAuth, SecretProvider, SecretRef, Secrets,
+};
 
 use super::RuntimeConfigError;
 
@@ -259,8 +262,27 @@ impl RuntimeSecretProvider for LiteralSecretProvider {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct FilesystemSecretProvider;
+#[derive(Debug, Clone, Default)]
+pub struct FilesystemSecretProvider {
+    base_dir: Option<PathBuf>,
+}
+
+impl FilesystemSecretProvider {
+    pub fn new(base_dir: Option<PathBuf>) -> Self {
+        Self { base_dir }
+    }
+
+    fn resolve_path(&self, raw_path: &str) -> PathBuf {
+        let candidate = Path::new(raw_path);
+        if candidate.is_absolute() {
+            candidate.to_path_buf()
+        } else if let Some(base_dir) = &self.base_dir {
+            base_dir.join(candidate)
+        } else {
+            candidate.to_path_buf()
+        }
+    }
+}
 
 impl RuntimeSecretProvider for FilesystemSecretProvider {
     fn source_kind(&self) -> RuntimeSecretSourceKind {
@@ -283,7 +305,22 @@ impl RuntimeSecretProvider for FilesystemSecretProvider {
                 RuntimeSecretResolutionErrorKind::MalformedReference,
             ));
         };
-        resolve_file_bytes(path, field_name)
+        if path.is_empty() {
+            return Err(RuntimeSecretResolutionError::new(
+                field_name,
+                Some(self.source_kind()),
+                RuntimeSecretResolutionErrorKind::MalformedReference,
+            ));
+        }
+        let resolved_path = self.resolve_path(path);
+        let Some(resolved_path) = resolved_path.to_str() else {
+            return Err(RuntimeSecretResolutionError::new(
+                field_name,
+                Some(self.source_kind()),
+                RuntimeSecretResolutionErrorKind::MalformedReference,
+            ));
+        };
+        resolve_file_bytes(resolved_path, field_name)
     }
 }
 
@@ -297,13 +334,30 @@ impl Default for RuntimeSecretResolver {
         Self {
             providers: vec![
                 Arc::new(LiteralSecretProvider),
-                Arc::new(FilesystemSecretProvider),
+                Arc::new(FilesystemSecretProvider::default()),
             ],
         }
     }
 }
 
 impl RuntimeSecretResolver {
+    pub fn from_secrets_config(secrets: &Secrets) -> Self {
+        let file_provider = if let Some(default_provider) = secrets.default_provider.as_deref() {
+            filesystem_provider_from_config(secrets.providers.get(default_provider))
+        } else if secrets.providers.len() == 1 {
+            filesystem_provider_from_config(secrets.providers.values().next())
+        } else {
+            None
+        };
+
+        Self {
+            providers: vec![
+                Arc::new(LiteralSecretProvider),
+                Arc::new(file_provider.unwrap_or_default()),
+            ],
+        }
+    }
+
     pub fn resolve(
         &self,
         secret_ref: &SecretRef,
@@ -357,7 +411,7 @@ impl RuntimeSecretResolver {
 }
 
 pub fn resolve_config_secrets(config: &Config) -> Result<Config, RuntimeConfigError> {
-    let resolver = RuntimeSecretResolver::default();
+    let resolver = RuntimeSecretResolver::from_secrets_config(&config.secrets);
     let mut resolved = config.clone();
 
     for (upstream_name, upstream) in &mut resolved.upstream {
@@ -442,6 +496,17 @@ pub fn resolve_config_secrets(config: &Config) -> Result<Config, RuntimeConfigEr
     }
 
     Ok(resolved)
+}
+
+fn filesystem_provider_from_config(
+    provider: Option<&SecretProvider>,
+) -> Option<FilesystemSecretProvider> {
+    match provider {
+        Some(SecretProvider::File { base_dir }) => Some(FilesystemSecretProvider::new(
+            base_dir.as_deref().map(PathBuf::from),
+        )),
+        None => None,
+    }
 }
 
 fn resolve_control_api_bearer_token(
@@ -561,6 +626,36 @@ mod tests {
             RuntimeSecretSourceKind::Literal
         );
         assert_eq!(secret.metadata().byte_len, 12);
+    }
+
+    #[test]
+    fn file_provider_uses_default_provider_base_dir_for_relative_refs() {
+        let dir = tempdir().expect("tempdir");
+        let secrets_dir = dir.path().join("secrets");
+        fs::create_dir_all(&secrets_dir).expect("create secrets dir");
+        fs::write(secrets_dir.join("jwt.secret"), b"base-dir-secret").expect("write secret");
+
+        let resolver = RuntimeSecretResolver::from_secrets_config(&Secrets {
+            default_provider: Some("local".to_string()),
+            providers: std::iter::once((
+                "local".to_string(),
+                SecretProvider::File {
+                    base_dir: Some(secrets_dir.to_string_lossy().to_string()),
+                },
+            ))
+            .collect(),
+        });
+
+        let secret = resolver
+            .resolve(
+                &SecretRef {
+                    reference: "file://jwt.secret".to_string(),
+                },
+                "auth.jwt.secret_ref",
+            )
+            .expect("file secret");
+
+        assert_eq!(secret.bytes(), b"base-dir-secret");
     }
 
     #[test]

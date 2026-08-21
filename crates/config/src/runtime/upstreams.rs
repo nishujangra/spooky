@@ -8,6 +8,7 @@ impl RuntimeUpstream {
         name: &str,
         upstream: &Upstream,
         base_policies: &RuntimePolicySet,
+        secret_resolver: &RuntimeSecretResolver,
     ) -> Result<Self, RuntimeConfigError> {
         let effective_tls = upstream
             .tls
@@ -38,6 +39,7 @@ impl RuntimeUpstream {
             RuntimeBackendTlsPolicy::from_effective_tls(
                 &effective_tls,
                 &format!("upstream '{name}' tls"),
+                secret_resolver,
             )?
         } else {
             RuntimeBackendTlsPolicy::empty()
@@ -92,6 +94,7 @@ pub(super) fn normalize_upstreams(
     }
 
     validate_protocol_policy(&config.resilience.protocol)?;
+    let secret_resolver = RuntimeSecretResolver::from_secrets_config(&config.secrets);
 
     let mut seen_route_matchers: HashMap<RouteMatcherKey, String> = HashMap::new();
     let mut seen_backend_origins: HashMap<String, (String, String)> = HashMap::new();
@@ -116,7 +119,13 @@ pub(super) fn normalize_upstreams(
         }
 
         let runtime_upstream =
-            RuntimeUpstream::from_config(config, upstream_name.as_str(), upstream, base_policies)?;
+            RuntimeUpstream::from_config(
+                config,
+                upstream_name.as_str(),
+                upstream,
+                base_policies,
+                &secret_resolver,
+            )?;
         let mut upstream_uses_https_backends = false;
 
         for backend in &runtime_upstream.backends {

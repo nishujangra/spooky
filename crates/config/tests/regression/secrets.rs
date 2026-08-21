@@ -2,7 +2,9 @@
 
 use rcgen::{Certificate, CertificateParams, SanType};
 use spooky_config::{
-    config::{ExternalAuth, ExternalAuthFailureMode, JwtAuth, SecretRef, UpstreamTls},
+    config::{
+        ExternalAuth, ExternalAuthFailureMode, JwtAuth, SecretProvider, SecretRef, UpstreamTls,
+    },
     runtime::RuntimeExternalAuth,
     validator::validate,
 };
@@ -299,4 +301,41 @@ fn runtime_config_rejects_malformed_upstream_mtls_pem_during_normalization() {
         "tls_material_invalid",
         "file secret resolution failed for upstream 'api' tls.client_certificate: malformed_pem_certificate",
     );
+}
+
+#[test]
+fn runtime_config_resolves_relative_file_refs_from_default_provider_base_dir() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+    let secrets_dir = dir.path().join("secrets");
+    std::fs::create_dir_all(&secrets_dir).expect("create secrets dir");
+    write_secret_file(&secrets_dir, "jwt.secret", b"relative-base-dir-secret");
+
+    let mut config = sample_config();
+    config.listen.tls.cert = cert.to_string_lossy().to_string();
+    config.listen.tls.key = key.to_string_lossy().to_string();
+    config.secrets.default_provider = Some("local_files".to_string());
+    config.secrets.providers.insert(
+        "local_files".to_string(),
+        SecretProvider::File {
+            base_dir: Some(secrets_dir.to_string_lossy().to_string()),
+        },
+    );
+    api_upstream_mut(&mut config).auth.jwt = Some(JwtAuth {
+        secret: String::new(),
+        secret_ref: Some(SecretRef {
+            reference: "file://jwt.secret".to_string(),
+        }),
+        ..JwtAuth::default()
+    });
+
+    let runtime = runtime_config(&config);
+    let jwt = api_runtime_upstream(&runtime)
+        .policy
+        .upstream_auth
+        .jwt
+        .as_ref()
+        .expect("jwt policy");
+
+    assert_eq!(jwt.secret, "relative-base-dir-secret");
 }
