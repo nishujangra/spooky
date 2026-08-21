@@ -431,10 +431,11 @@ impl RuntimeBackendDnsPolicy {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::runtime::RuntimeBackendTransportKind;
     use rcgen::{Certificate, CertificateParams, SanType};
     use tempfile::tempdir;
+
+    use super::*;
+    use crate::runtime::RuntimeBackendTransportKind;
 
     fn assert_config_invalid(err: RuntimeConfigError, expected: impl AsRef<str>) {
         let expected = expected.as_ref();

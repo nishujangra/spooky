@@ -8,11 +8,10 @@ use std::{
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use sha2::{Digest, Sha256};
 
+use super::RuntimeConfigError;
 use crate::config::{
     Config, ControlApiBearerToken, ExternalAuth, SecretProvider, SecretRef, Secrets,
 };
-
-use super::RuntimeConfigError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeSecretSourceKind {

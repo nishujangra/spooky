@@ -3,8 +3,7 @@ use std::collections::HashMap;
 use bytes::Bytes;
 use http_body_util::Full;
 use serde::Serialize;
-use spooky_config::config::SecretProvider;
-use spooky_config::runtime::RuntimeJwtAuth;
+use spooky_config::{config::SecretProvider, runtime::RuntimeJwtAuth};
 use spooky_lb::health::HealthFailureReason;
 
 use super::{state::ControlApiState, *};
