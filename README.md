@@ -93,8 +93,8 @@ Then test the edge with an HTTP/3 request:
 
 ```bash
 curl --http3-only -k \
-  --resolve proxy.spooky.local:9889:127.0.0.1 \
-  https://proxy.spooky.local:9889/api/health
+  --resolve proxy.impulse.local:9889:127.0.0.1 \
+  https://proxy.impulse.local:9889/api/health
 ```
 
 ## Configuration
