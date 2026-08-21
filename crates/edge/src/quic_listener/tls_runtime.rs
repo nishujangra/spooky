@@ -738,11 +738,11 @@ impl QUICListener {
         let loaded_tls = Self::load_listener_tls_material(config)?;
 
         let builder = match client_auth.mode {
-            spooky_config::config::ControlApiClientAuthMode::Disabled => {
+            impulse_config::config::ControlApiClientAuthMode::Disabled => {
                 RustlsServerConfig::builder().with_no_client_auth()
             }
-            spooky_config::config::ControlApiClientAuthMode::Optional
-            | spooky_config::config::ControlApiClientAuthMode::Required => {
+            impulse_config::config::ControlApiClientAuthMode::Optional
+            | impulse_config::config::ControlApiClientAuthMode::Required => {
                 let roots =
                     Self::load_control_api_client_auth_roots(client_auth)?.ok_or_else(|| {
                         ProxyError::Tls(
@@ -753,7 +753,7 @@ impl QUICListener {
                 let verifier_builder = WebPkiClientVerifier::builder(roots);
                 let verifier = if matches!(
                     client_auth.mode,
-                    spooky_config::config::ControlApiClientAuthMode::Required
+                    impulse_config::config::ControlApiClientAuthMode::Required
                 ) {
                     verifier_builder.build()
                 } else {

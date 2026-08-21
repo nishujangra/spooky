@@ -5,8 +5,8 @@ listen:
     address: "0.0.0.0"
     port: 443
     tls:
-        cert: "/etc/spooky/certs/fullchain.pem"
-        key: "/etc/spooky/certs/privkey.pem"
+        cert: "/etc/impulse/certs/fullchain.pem"
+        key: "/etc/impulse/certs/privkey.pem"
         client_auth:
             enabled: false
             require_client_cert: false
@@ -72,7 +72,7 @@ log:
     format: json
     file:
         enabled: true
-        path: /var/log/spooky/spooky.log
+        path: /var/log/impulse/impulse.log
 
 performance:
     worker_threads: 4
@@ -134,7 +134,7 @@ observability:
         connection_timeout_ms: 30000
     tracing:
         enabled: false
-        service_name: "spooky"
+        service_name: "impulse"
         otlp_endpoint: null
         sample_ratio: 0.1
 
@@ -194,5 +194,5 @@ resilience:
 security:
     privileges:
         enabled: true
-        user: "spooky"
-        group: "spooky"
+        user: "impulse"
+        group: "impulse"

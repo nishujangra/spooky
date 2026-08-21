@@ -1,6 +1,6 @@
-Spooky is a modern edge runtime for high-trust APIs. This documentation set is organized so readers can quickly answer five questions:
+Impulse is a modern edge runtime for high-trust APIs. This documentation set is organized so readers can quickly answer five questions:
 
-- what Spooky is
+- what Impulse is
 - where to start
 - where to deploy and operate it
 - where to troubleshoot issues
@@ -13,7 +13,7 @@ Spooky is a modern edge runtime for high-trust APIs. This documentation set is o
 | Goal | Go to |
 | --- | --- |
 | Understand the product | [README](../README.md) and [Getting Started Overview](getting-started/overview.md) |
-| Install and run Spooky | [Getting Started](getting-started/overview.md) |
+| Install and run Impulse | [Getting Started](getting-started/overview.md) |
 | Prepare for deployment | [Operations Overview](operations/overview.md) and [Production Deployment](deployment/production.md) |
 | Troubleshoot issues | [Common Issues](troubleshooting/common-issues.md) and [Runbook](operations/runbook.md) |
 | Find exact supported behavior | [Reference Overview](reference/overview.md) |
@@ -77,7 +77,7 @@ Spooky is a modern edge runtime for high-trust APIs. This documentation set is o
 
 | Document | What you'll find |
 |---|---|
-| [Contributing Guide](https://github.com/Supernova-Labs-Org/spooky/blob/master/CONTRIBUTING.md) | Dev setup, build commands, test matrix, PR conventions |
+| [Contributing Guide](https://github.com/Supernova-Labs-Org/impulse/blob/master/CONTRIBUTING.md) | Dev setup, build commands, test matrix, PR conventions |
 | [Development Overview](development/overview.md) | Contributor-oriented guide to working in the repo |
 | [Testing Strategy](development/testing-strategy.md) | Contract, regression, and parity test expectations |
 | [Benchmarking](development/benchmarking.md) | Benchmark crate, micro/macro suites, and regression-gate workflow |

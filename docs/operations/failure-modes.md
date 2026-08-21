@@ -43,7 +43,7 @@ Interpretation:
 
 ## 503: Do Not Assume One Cause
 
-In Spooky, `503` can mean:
+In Impulse, `503` can mean:
 
 - overload shedding
 - queue-cap or buffer-cap protection
@@ -82,7 +82,7 @@ These are visible through observability and lifecycle signals rather than always
 
 ## Stream Reset Versus HTTP Error
 
-Spooky deliberately distinguishes between:
+Impulse deliberately distinguishes between:
 
 - returning an HTTP response such as `408`, `413`, `429`, or `503`
 - resetting or terminating a stream when protocol or teardown semantics require it

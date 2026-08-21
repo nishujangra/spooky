@@ -1,4 +1,4 @@
-use spooky_config::runtime::RuntimeUpstreamPolicy;
+use impulse_config::runtime::RuntimeUpstreamPolicy;
 
 use super::{lb_key::ResolvedLbKey, *};
 use crate::runtime::connection::outcome::{RouteOutcomeTarget, observe_proxy_error_outcome};
@@ -484,7 +484,7 @@ mod tests {
         sync::{Arc, RwLock},
     };
 
-    use spooky_config::{
+    use impulse_config::{
         config::{
             Backend, Config, ForwardedHeaderPolicy, Listen, LoadBalancing, RouteAuth, RouteMatch,
             Tls, Upstream, UpstreamHostPolicy,

@@ -4,8 +4,8 @@ use std::{
     time::Duration,
 };
 
-use spooky_config::runtime::ListenerRuntimeConfig;
-use spooky_errors::ProxyError;
+use impulse_config::runtime::ListenerRuntimeConfig;
+use impulse_errors::ProxyError;
 use tokio::{net::TcpListener, runtime::Handle};
 
 use super::state::{BootstrapStartupState, build_bootstrap_startup_state};

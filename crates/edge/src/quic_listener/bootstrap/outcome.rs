@@ -1,7 +1,7 @@
 use std::time::Instant;
 
 use http::StatusCode;
-use spooky_errors::{ProxyError, classify_upstream_proxy_error};
+use impulse_errors::{ProxyError, classify_upstream_proxy_error};
 
 use super::request::BootstrapPreparedRoute;
 use crate::{
@@ -174,7 +174,7 @@ pub(in crate::quic_listener) fn observe_bootstrap_response_prebuffer_overflow(
         Some(bootstrap_backend_target_for_prepared(prepared_route)),
         request_start.elapsed(),
         Some(StatusCode::SERVICE_UNAVAILABLE),
-        &ProxyError::Pool(spooky_errors::PoolError::BackendOverloaded(
+        &ProxyError::Pool(impulse_errors::PoolError::BackendOverloaded(
             "response prebuffer cap".into(),
         )),
         Some(OverloadShedReason::ResponsePrebufferCap),

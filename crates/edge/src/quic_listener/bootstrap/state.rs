@@ -4,12 +4,12 @@ use std::{
     time::Duration,
 };
 
-use spooky_config::{
+use impulse_config::{
     backend_endpoint::BackendEndpoint,
     runtime::{ListenerRuntimeConfig, RuntimeUpstreamPolicy},
 };
-use spooky_lb::upstream_pool::UpstreamPool;
-use spooky_transport::UpstreamTransportPool;
+use impulse_lb::upstream_pool::UpstreamPool;
+use impulse_transport::UpstreamTransportPool;
 
 use crate::{
     Metrics,

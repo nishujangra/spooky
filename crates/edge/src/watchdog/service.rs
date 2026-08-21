@@ -13,7 +13,7 @@ pub(crate) fn watchdog_restart_env(
         env_vars.push((OsString::from("PATH"), path_value));
     }
     env_vars.push((
-        OsString::from("SPOOKY_WATCHDOG_REASON"),
+        OsString::from("IMPULSE_WATCHDOG_REASON"),
         OsString::from(restart_reason),
     ));
     env_vars
@@ -193,7 +193,7 @@ mod tests {
         time::Duration,
     };
 
-    use spooky_config::config::Resilience as ResilienceConfig;
+    use impulse_config::config::Resilience as ResilienceConfig;
 
     use super::*;
     use crate::{

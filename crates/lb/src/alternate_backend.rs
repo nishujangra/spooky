@@ -82,7 +82,7 @@ pub fn choose_alternate_backend(
 
 #[cfg(test)]
 mod tests {
-    use spooky_config::runtime::RuntimeAlternateBackendPolicy;
+    use impulse_config::runtime::RuntimeAlternateBackendPolicy;
 
     use super::*;
     use crate::test_support::runtime_upstream_from_addresses;

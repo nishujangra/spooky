@@ -1,6 +1,6 @@
 # Benchmarking
 
-Spooky includes a dedicated benchmark crate and helper scripts for repeatable performance work.
+Impulse includes a dedicated benchmark crate and helper scripts for repeatable performance work.
 
 ## Components
 

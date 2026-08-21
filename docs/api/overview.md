@@ -1,6 +1,6 @@
 # API Overview
 
-This page is the short map for Spooky's operator-facing programmatic surfaces.
+This page is the short map for Impulse's operator-facing programmatic surfaces.
 
 Use the linked reference pages for canonical endpoint behavior, status codes, metrics, and configuration semantics.
 
@@ -9,7 +9,7 @@ Use the linked reference pages for canonical endpoint behavior, status codes, me
 Basic usage:
 
 ```bash
-spooky --config /etc/spooky/config.yaml
+impulse --config /etc/impulse/config.yaml
 ```
 
 Core options:

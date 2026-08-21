@@ -5,8 +5,8 @@ listen:
   address: "0.0.0.0"
   port: 9889
   tls:
-    cert: /etc/spooky/certs/proxy-cert.pem
-    key: /etc/spooky/certs/proxy-key-pkcs8.pem
+    cert: /etc/impulse/certs/proxy-cert.pem
+    key: /etc/impulse/certs/proxy-key-pkcs8.pem
     client_auth:
       enabled: false
       require_client_cert: false
@@ -58,7 +58,7 @@ observability:
     connection_timeout_ms: 30000
   tracing:
     enabled: false
-    service_name: "spooky"
+    service_name: "impulse"
     otlp_endpoint: null
     sample_ratio: 1.0
 
@@ -118,4 +118,4 @@ log:
   format: plain
   file:
     enabled: false
-    path: /var/log/spooky/spooky.log
+    path: /var/log/impulse/impulse.log

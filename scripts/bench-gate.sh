@@ -30,7 +30,7 @@ run_suite_with_retries() {
   local max_attempts=$((BENCH_GATE_RETRIES + 1))
 
   while [[ "$attempt" -lt "$max_attempts" ]]; do
-    if cargo run -q -p spooky-bench --release -- \
+    if cargo run -q -p impulse-bench --release -- \
       --suite "$suite" \
       --output "$out_json" \
       --markdown-out "$out_md" \

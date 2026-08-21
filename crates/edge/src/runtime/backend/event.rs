@@ -4,7 +4,7 @@ use std::{
 };
 
 use http::StatusCode;
-use spooky_lb::health::HealthFailureReason;
+use impulse_lb::health::HealthFailureReason;
 
 use super::{
     state::{

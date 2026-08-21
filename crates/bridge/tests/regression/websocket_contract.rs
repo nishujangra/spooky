@@ -1,8 +1,8 @@
 //! Websocket and upgrade request-shaping contracts for canonical bridge builders.
 
 use http::{HeaderMap, HeaderValue, header::HOST};
+use impulse_config::config::{ForwardedHeaderPolicy, UpstreamHostPolicy};
 use quiche::h3::Header;
-use spooky_config::config::{ForwardedHeaderPolicy, UpstreamHostPolicy};
 
 use crate::common::{
     RequestInputMeta, bridge_headers, build_h1_request_for_backend, build_h2_request_with_policy,

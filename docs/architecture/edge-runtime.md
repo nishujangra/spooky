@@ -1,10 +1,10 @@
 # Edge Runtime Ownership
 
-This document explains how `spooky-edge` is organized after the refactor work that split runtime ownership, listener orchestration, backend lifecycle management, and control-plane services into clearer boundaries.
+This document explains how `impulse-edge` is organized after the refactor work that split runtime ownership, listener orchestration, backend lifecycle management, and control-plane services into clearer boundaries.
 
 ## Purpose
 
-`spooky-edge` is the data-plane crate for Spooky. It owns:
+`impulse-edge` is the data-plane crate for Impulse. It owns:
 
 - edge-facing runtime state
 - QUIC ingress and bootstrap compatibility ingress
@@ -12,7 +12,7 @@ This document explains how `spooky-edge` is organized after the refactor work th
 - backend lifecycle coordination and health feedback
 - operator-facing services such as metrics, control API wiring, and watchdog coordination
 
-The important distinction is that `spooky-edge` no longer exposes its internal runtime mechanics directly. The crate root presents a narrow public surface, and most operational machinery lives behind internal subsystem modules.
+The important distinction is that `impulse-edge` no longer exposes its internal runtime mechanics directly. The crate root presents a narrow public surface, and most operational machinery lives behind internal subsystem modules.
 
 ## Public Façade vs Internal Subsystems
 

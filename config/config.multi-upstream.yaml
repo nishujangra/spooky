@@ -1,4 +1,4 @@
-# Spooky — multi-upstream production configuration
+# Impulse — multi-upstream production configuration
 # Models a three-pool edge: API service, web frontend, and a catch-all fallback.
 # Routing uses longest-prefix match: /api → api pool, / → web pool (default fallback).
 # This file is self-contained and ready to adapt; swap certs, IPs, and the auth token.
@@ -13,8 +13,8 @@ listen:
   address: "0.0.0.0"        # bind all interfaces; restrict to a VIP in single-NIC setups
   port: 443
   tls:
-    cert: /etc/spooky/certs/fullchain.pem   # PEM chain (leaf + intermediates)
-    key:  /etc/spooky/certs/privkey.pem     # PKCS#8 private key (pkcs8 DER or PEM)
+    cert: /etc/impulse/certs/fullchain.pem   # PEM chain (leaf + intermediates)
+    key:  /etc/impulse/certs/privkey.pem     # PKCS#8 private key (pkcs8 DER or PEM)
     client_auth:
       enabled: false             # default — set true to enable mTLS for client certs
       require_client_cert: false # when enabled=true, connections without a cert are closed
@@ -29,10 +29,10 @@ secrets:
   providers:
     local_filesystem:
       kind: file
-      base_dir: "/etc/spooky/secrets"
+      base_dir: "/etc/impulse/secrets"
 
 # ---------------------------------------------------------------------------
-# upstream_tls — how Spooky validates TLS on backend connections
+# upstream_tls — how Impulse validates TLS on backend connections
 # verify_certificates and strict_sni are both true by default (safe-by-default).
 # Override per-backend only in break-glass situations.
 # ---------------------------------------------------------------------------
@@ -66,9 +66,9 @@ upstream:
     #   verify_certificates: true
     #   strict_sni: true
     #   client_certificate_ref:
-    #     ref: "file:///etc/spooky/secrets/upstream/api-client.crt"
+    #     ref: "file:///etc/impulse/secrets/upstream/api-client.crt"
     #   client_key_ref:
-    #     ref: "file:///etc/spooky/secrets/upstream/api-client.key"
+    #     ref: "file:///etc/impulse/secrets/upstream/api-client.key"
 
     backends:
       - id: "api-1"
@@ -155,7 +155,7 @@ log:
   format: json         # json | plain — json integrates with Datadog/Loki/CloudWatch
   file:
     enabled: true
-    path: /var/log/spooky/spooky.log   # ensure the directory exists and is writable
+    path: /var/log/impulse/impulse.log   # ensure the directory exists and is writable
 
 # ---------------------------------------------------------------------------
 # performance — concurrency limits, timeouts, QUIC tuning
@@ -232,7 +232,7 @@ observability:
 
   tracing:
     enabled: false          # default; enable and set otlp_endpoint when OTLP collector is present
-    service_name: "spooky"
+    service_name: "impulse"
     otlp_endpoint: null     # e.g. "http://otel-collector.infra.svc:4317"
     sample_ratio: 0.1       # 10% sampling in prod; raise to 1.0 only for debugging
 
@@ -306,11 +306,11 @@ resilience:
 
 # ---------------------------------------------------------------------------
 # security — privilege drop after socket bind
-# Spooky binds :443 as root, then drops to this user/group before serving traffic.
+# Impulse binds :443 as root, then drops to this user/group before serving traffic.
 # The user and group must exist on the host (created by the install package).
 # ---------------------------------------------------------------------------
 security:
   privileges:
     enabled: true
-    user: "spooky"    # matches the system user created by the spooky package
-    group: "spooky"
+    user: "impulse"    # matches the system user created for the Impulse service
+    group: "impulse"

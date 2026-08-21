@@ -1,4 +1,4 @@
-.PHONY: run build build-spooky clean test test-edge test-transport certs certs-selfsigned certs-ca certs-clean certs-verify certs-dir bench-micro bench-macro bench-gate bench-promote-baseline load-scenarios
+.PHONY: run build build-impulse clean test test-edge test-transport certs certs-selfsigned certs-ca certs-clean certs-verify certs-dir bench-micro bench-macro bench-gate bench-promote-baseline load-scenarios
 
 CERTS_DIR := certs
 SAN_CONF := $(CERTS_DIR)/san.conf
@@ -6,22 +6,22 @@ CA_CONF := $(CERTS_DIR)/ca.conf
 
 run:
 	make build
-	./target/release/spooky --config config/config.yaml
+	./target/release/impulse --config config/config.yaml
 
 build:
 	cargo build --release
 
-build-spooky:
-	cargo build -p spooky --bin spooky --release
+build-impulse:
+	cargo build -p impulse --bin impulse --release
 
 test:
 	cargo test --workspace
 
 test-edge:
-	cargo test -p spooky-edge
+	cargo test -p impulse-edge
 
 test-transport:
-	cargo test -p spooky-transport
+	cargo test -p impulse-transport
 
 # Certificate generation targets
 certs-dir:
@@ -40,9 +40,9 @@ $(SAN_CONF): | certs-dir
 		echo "C = US" >> "$(SAN_CONF)"; \
 		echo "ST = California" >> "$(SAN_CONF)"; \
 		echo "L = San Francisco" >> "$(SAN_CONF)"; \
-		echo "O = Spooky Proxy" >> "$(SAN_CONF)"; \
+		echo "O = Impulse Proxy" >> "$(SAN_CONF)"; \
 		echo "OU = Development" >> "$(SAN_CONF)"; \
-		echo "CN = proxy.spooky.local" >> "$(SAN_CONF)"; \
+		echo "CN = proxy.impulse.local" >> "$(SAN_CONF)"; \
 		echo "" >> "$(SAN_CONF)"; \
 		echo "[v3_req]" >> "$(SAN_CONF)"; \
 		echo "basicConstraints = critical, CA:FALSE" >> "$(SAN_CONF)"; \
@@ -60,7 +60,7 @@ $(SAN_CONF): | certs-dir
 		echo "" >> "$(SAN_CONF)"; \
 		echo "[alt_names]" >> "$(SAN_CONF)"; \
 		echo "DNS.1 = localhost" >> "$(SAN_CONF)"; \
-		echo "DNS.2 = proxy.spooky.local" >> "$(SAN_CONF)"; \
+		echo "DNS.2 = proxy.impulse.local" >> "$(SAN_CONF)"; \
 		echo "IP.1 = 127.0.0.1" >> "$(SAN_CONF)"; \
 		echo "IP.2 = ::1" >> "$(SAN_CONF)"; \
 		echo "✅ Created default $(SAN_CONF)"; \
@@ -78,9 +78,9 @@ $(CA_CONF): | certs-dir
 		echo "C = US" >> "$(CA_CONF)"; \
 		echo "ST = California" >> "$(CA_CONF)"; \
 		echo "L = San Francisco" >> "$(CA_CONF)"; \
-		echo "O = Spooky Proxy CA" >> "$(CA_CONF)"; \
+		echo "O = Impulse Proxy CA" >> "$(CA_CONF)"; \
 		echo "OU = Certificate Authority" >> "$(CA_CONF)"; \
-		echo "CN = Spooky Proxy Root CA" >> "$(CA_CONF)"; \
+		echo "CN = Impulse Proxy Root CA" >> "$(CA_CONF)"; \
 		echo "" >> "$(CA_CONF)"; \
 		echo "[v3_ca]" >> "$(CA_CONF)"; \
 		echo "basicConstraints = critical, CA:TRUE" >> "$(CA_CONF)"; \
@@ -169,7 +169,7 @@ certs-clean:
 	rm -f certs/*
 
 clean:
-	rm -f target/release/spooky
+	rm -f target/release/impulse
 
 docs-serve:
 	mkdocs serve

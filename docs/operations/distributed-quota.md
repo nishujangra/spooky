@@ -1,6 +1,6 @@
 # Distributed Quota Policy And Operations
 
-This page documents how to configure, roll out, and operate Spooky's
+This page documents how to configure, roll out, and operate Impulse's
 distributed quota layer.
 
 Use this together with:
@@ -21,7 +21,7 @@ Distributed quota is the abuse-control and contract-enforcement layer.
 Use it when you need:
 
 - route-, tenant-, token-, or client-scoped request contracts
-- the same counters shared across multiple Spooky instances
+- the same counters shared across multiple Impulse instances
 - explicit burst and sustained policy windows
 - stable operator-visible outcomes for exhaustion, backend degradation, and
   fail-open or fail-closed behavior
@@ -77,7 +77,7 @@ resilience:
     backend:
       kind: redis
       url: "redis://redis-quota.service.consul:6379/0"
-      key_prefix: "spooky:quota:prod"
+      key_prefix: "impulse:quota:prod"
       connect_timeout_ms: 250
       command_timeout_ms: 100
       max_inflight: 1024
@@ -110,12 +110,12 @@ resilience:
     backend:
       kind: redis
       url: "redis://redis-quota.service.consul:6379/0"
-      key_prefix: "spooky:quota:prod"
+      key_prefix: "impulse:quota:prod"
       connect_timeout_ms: 250
       command_timeout_ms: 100
       max_inflight: 1024
     local_fallback:
-      key_prefix: "spooky:quota:fallback:prod"
+      key_prefix: "impulse:quota:fallback:prod"
       max_entries: 50000
     policies:
       - name: "tenant-token-client-contract"
@@ -149,7 +149,7 @@ resilience:
     backend:
       kind: redis
       url: "redis://redis-quota.service.consul:6379/0"
-      key_prefix: "spooky:quota:shadow"
+      key_prefix: "impulse:quota:shadow"
       connect_timeout_ms: 250
       command_timeout_ms: 100
       max_inflight: 512
@@ -167,13 +167,13 @@ resilience:
 
 ## Redis Backend Setup
 
-Redis is the first-class distributed backend. Spooky evaluates burst and
+Redis is the first-class distributed backend. Impulse evaluates burst and
 sustained windows in one atomic Redis script invocation.
 
 ### Recommended baseline
 
 - use a dedicated Redis deployment or logical database for quota traffic
-- keep Redis close to the Spooky fleet in network terms
+- keep Redis close to the Impulse fleet in network terms
 - use a distinct `key_prefix` per environment
 - size `max_inflight` to protect Redis from unbounded concurrent evaluation
 - keep `connect_timeout_ms` and `command_timeout_ms` tight so degraded modes are
@@ -181,7 +181,7 @@ sustained windows in one atomic Redis script invocation.
 
 ### Operational expectations
 
-- Spooky stores one key per policy-selector-window bucket
+- Impulse stores one key per policy-selector-window bucket
 - Redis key TTL tracks the window boundary plus a small grace interval
 - the protocol version is explicit so script/result changes can be rolled out
   intentionally
@@ -198,12 +198,12 @@ resilience:
     backend:
       kind: redis
       url: "redis://10.20.30.40:6379/0"
-      key_prefix: "spooky:quota:prod:cluster-a"
+      key_prefix: "impulse:quota:prod:cluster-a"
       connect_timeout_ms: 200
       command_timeout_ms: 75
       max_inflight: 2048
     local_fallback:
-      key_prefix: "spooky:quota:fallback:prod:cluster-a"
+      key_prefix: "impulse:quota:fallback:prod:cluster-a"
       max_entries: 100000
     policies:
       - name: "default-api-contract"
@@ -284,7 +284,7 @@ counter divergence is acceptable.
 
 ## Migration From Scoped Rate Limiting
 
-Spooky's older `resilience.scoped_rate_limits` layer remains useful for
+Impulse's older `resilience.scoped_rate_limits` layer remains useful for
 single-instance or purely local throttling, but distributed quota is the
 preferred path for shared contract enforcement.
 
@@ -300,7 +300,7 @@ Keep scoped rate limiting when:
 
 Migrate to distributed quota when:
 
-- you need one quota shared across multiple Spooky instances
+- you need one quota shared across multiple Impulse instances
 - you need burst and sustained windows together
 - you need consistent operator-visible backend health and deny semantics
 - the limit is part of a customer or abuse-control contract rather than local
@@ -371,8 +371,8 @@ Interpret them as:
 
 Primary quota metric families:
 
-- `spooky_quota_policy_outcomes_total{policy,decision,reason,selector_dimensions,backend_mode}`
-- `spooky_quota_backend_health_total{backend_mode,reason}`
+- `impulse_quota_policy_outcomes_total{policy,decision,reason,selector_dimensions,backend_mode}`
+- `impulse_quota_backend_health_total{backend_mode,reason}`
 
 Read them this way:
 

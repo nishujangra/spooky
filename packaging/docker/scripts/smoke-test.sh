@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 COMPOSE_FILE="${ROOT_DIR}/packaging/docker/docker-compose.yml"
 
-echo "Starting Spooky Docker packaging smoke test"
+echo "Starting Impulse Docker packaging smoke test"
 docker compose -f "${COMPOSE_FILE}" up -d --build
 
 cleanup() {
@@ -27,5 +27,5 @@ echo "Control API health endpoint is reachable"
 curl -sf "http://127.0.0.1:9901/metrics" | head -n 20
 echo "Metrics endpoint is reachable"
 
-docker compose -f "${COMPOSE_FILE}" logs --tail=120 spooky
+docker compose -f "${COMPOSE_FILE}" logs --tail=120 impulse
 echo "Smoke test passed"

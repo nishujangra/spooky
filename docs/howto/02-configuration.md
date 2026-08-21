@@ -1,6 +1,6 @@
-# How to Configure Spooky as a Reverse Proxy
+# How to Configure Impulse as a Reverse Proxy
 
-This guide walks through building a working `config.yaml` for Spooky as a production reverse proxy, explaining every section and its trade-offs.
+This guide walks through building a working `config.yaml` for Impulse as a production reverse proxy, explaining every section and its trade-offs.
 
 Use [Configuration Reference](../configuration/reference.md) for the canonical field-by-field schema and [Configuration Examples](../configuration/examples.md) for complete deployment templates.
 
@@ -8,27 +8,27 @@ Use [Configuration Reference](../configuration/reference.md) for the canonical f
 
 ## Config File Location
 
-Spooky loads config from the path given to `--config`:
+Impulse loads config from the path given to `--config`:
 
 ```bash
-spooky --config /etc/spooky/config.yaml
+impulse --config /etc/impulse/config.yaml
 ```
 
-If `--config` is not provided, it falls back to `/etc/spooky/config.yaml`. Spooky exits at startup if the file is missing, unreadable, or fails validation.
+If `--config` is not provided, it falls back to `/etc/impulse/config.yaml`. Impulse exits at startup if the file is missing, unreadable, or fails validation.
 
 ---
 
 ## Minimal Working Config
 
-The absolute minimum to get Spooky running as a reverse proxy:
+The absolute minimum to get Impulse running as a reverse proxy:
 
 ```yaml
 version: 1
 
 listen:
   tls:
-    cert: /etc/spooky/certs/fullchain.pem
-    key:  /etc/spooky/certs/privkey.pem
+    cert: /etc/impulse/certs/fullchain.pem
+    key:  /etc/impulse/certs/privkey.pem
 
 upstream:
   default:
@@ -57,7 +57,7 @@ version: 1
 
 ### listen
 
-Defines where Spooky accepts client connections.
+Defines where Impulse accepts client connections.
 
 ```yaml
 listen:
@@ -65,11 +65,11 @@ listen:
   address: "0.0.0.0"  # bind all interfaces; use "127.0.0.1" for localhost-only
   port: 443            # use 9889 for unprivileged; 443 requires root or CAP_NET_BIND_SERVICE
   tls:
-    cert: /etc/spooky/certs/fullchain.pem
-    key:  /etc/spooky/certs/privkey.pem
+    cert: /etc/impulse/certs/fullchain.pem
+    key:  /etc/impulse/certs/privkey.pem
 ```
 
-Spooky also automatically starts a **bootstrap TLS listener** on the same address/port for HTTP/1.1 and HTTP/2 clients. This is how browsers connect before they learn about HTTP/3 via the `Alt-Svc` header. You do not configure it separately — it shares the same cert/key.
+Impulse also automatically starts a **bootstrap TLS listener** on the same address/port for HTTP/1.1 and HTTP/2 clients. This is how browsers connect before they learn about HTTP/3 via the `Alt-Svc` header. You do not configure it separately — it shares the same cert/key.
 
 Protocol boundary:
 - native ingress is HTTP/3 only
@@ -80,23 +80,23 @@ Protocol boundary:
 **Binding port 443:**
 ```bash
 # Option A: run as root (drops privileges after binding — see security section)
-sudo spooky --config /etc/spooky/config.yaml
+sudo impulse --config /etc/impulse/config.yaml
 
 # Option B: grant CAP_NET_BIND_SERVICE
-sudo setcap cap_net_bind_service=+ep /usr/bin/spooky
-spooky --config /etc/spooky/config.yaml
+sudo setcap cap_net_bind_service=+ep /usr/bin/impulse
+impulse --config /etc/impulse/config.yaml
 ```
 
 **mTLS (client certificates):**
 ```yaml
 listen:
   tls:
-    cert: /etc/spooky/certs/fullchain.pem
-    key:  /etc/spooky/certs/privkey.pem
+    cert: /etc/impulse/certs/fullchain.pem
+    key:  /etc/impulse/certs/privkey.pem
     client_auth:
       enabled: true
       require_client_cert: true   # reject connections without a client cert
-      ca_file: /etc/spooky/certs/client-ca.pem
+      ca_file: /etc/impulse/certs/client-ca.pem
 ```
 
 ---
@@ -111,14 +111,14 @@ listeners:
     address: "0.0.0.0"
     port: 443
     tls:
-      cert: /etc/spooky/certs/public-fullchain.pem
-      key:  /etc/spooky/certs/public-privkey.pem
+      cert: /etc/impulse/certs/public-fullchain.pem
+      key:  /etc/impulse/certs/public-privkey.pem
   - protocol: http3
     address: "10.0.0.1"
     port: 8443
     tls:
-      cert: /etc/spooky/certs/internal-fullchain.pem
-      key:  /etc/spooky/certs/internal-privkey.pem
+      cert: /etc/impulse/certs/internal-fullchain.pem
+      key:  /etc/impulse/certs/internal-privkey.pem
 ```
 
 When `listeners` is set, the top-level `listen` block is ignored. Each listener gets its own worker group and bootstrap TLS listener. All listeners share the same upstream routing table.
@@ -127,7 +127,7 @@ When `listeners` is set, the top-level `listen` block is ignored. Each listener 
 
 ### upstream_tls
 
-Controls how Spooky verifies backends' TLS certificates. Defaults are safe — keep them unless your backends use a private CA.
+Controls how Impulse verifies backends' TLS certificates. Defaults are safe — keep them unless your backends use a private CA.
 
 ```yaml
 upstream_tls:
@@ -148,7 +148,7 @@ To trust a private CA:
 upstream_tls:
   verify_certificates: true
   strict_sni: true
-  ca_file: /etc/spooky/certs/internal-ca.pem
+  ca_file: /etc/impulse/certs/internal-ca.pem
 ```
 
 For cleartext HTTP backends, use `http://` in the backend address instead of disabling verification:
@@ -331,7 +331,7 @@ api_pool:
   tls:
     verify_certificates: true
     strict_sni: true
-    ca_file: /etc/spooky/certs/api-internal-ca.pem
+    ca_file: /etc/impulse/certs/api-internal-ca.pem
 ```
 
 ---
@@ -344,7 +344,7 @@ log:
   format: json       # json (structured, for log collectors) | plain (human-readable)
   file:
     enabled: false   # set true to write to a file instead of stderr
-    path: /var/log/spooky/spooky.log
+    path: /var/log/impulse/impulse.log
 ```
 
 Use `json` format in production (parseable by Loki, Elasticsearch, Datadog). Use `plain` during development.
@@ -420,32 +420,32 @@ curl -X POST \
 
 ### security
 
-When Spooky starts as root (for port 443), it drops privileges after binding:
+When Impulse starts as root (for port 443), it drops privileges after binding:
 
 ```yaml
 security:
   privileges:
     enabled: true
-    user: "spooky"    # drop to this user after binding
-    group: "spooky"   # drop to this group after binding
+    user: "impulse"    # drop to this user after binding
+    group: "impulse"   # drop to this group after binding
 ```
 
 Create the system user:
 ```bash
-sudo useradd --system --no-create-home --shell /usr/sbin/nologin spooky
-sudo chown -R spooky:spooky /etc/spooky /var/log/spooky
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin impulse
+sudo chown -R impulse:impulse /etc/impulse /var/log/impulse
 ```
 
 ---
 
 ## Validating Your Config
 
-Spooky runs full validation on startup and exits with a clear error message. There is no standalone `--validate` flag.
+Impulse runs full validation on startup and exits with a clear error message. There is no standalone `--validate` flag.
 
-To validate a config safely, start Spooky with the candidate file in a controlled environment and confirm it reaches the listening state without exiting. Stop it after you confirm startup succeeded:
+To validate a config safely, start Impulse with the candidate file in a controlled environment and confirm it reaches the listening state without exiting. Stop it after you confirm startup succeeded:
 
 ```bash
-spooky --config /etc/spooky/config.yaml
+impulse --config /etc/impulse/config.yaml
 ```
 
 Common validation errors and fixes:

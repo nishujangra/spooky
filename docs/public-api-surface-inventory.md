@@ -29,7 +29,7 @@ Classification keys:
 
 This document classifies current visibility. It is a contributor aid for deciding whether code belongs on a public crate surface, an internal collaboration seam, or nowhere visible at all.
 
-## `spooky-edge`
+## `impulse-edge`
 
 ### Crate façade
 - `crates/edge/src/lib.rs`
@@ -100,7 +100,7 @@ This document classifies current visibility. It is a contributor aid for decidin
 - edge root exports now provide the only deliberate import path for hash helpers, runtime defaults, and observability vocabulary.
 - `#![warn(unreachable_pub)]` is enabled at the crate root, so items that are `pub` but unreachable from the façade are reported rather than accumulating silently.
 
-## `spooky-config`
+## `impulse-config`
 
 ### Crate façade
 - `crates/config/src/lib.rs`
@@ -147,7 +147,7 @@ This document classifies current visibility. It is a contributor aid for decidin
 - the only notable visibility shim in scope is `RuntimeConfig::upstreams_as_config`.
 - no obvious stale public root modules were found in the config crate façade.
 
-## `spooky-bridge`
+## `impulse-bridge`
 
 ### Crate façade
 - `crates/bridge/src/lib.rs`
@@ -168,10 +168,10 @@ This document classifies current visibility. It is a contributor aid for decidin
 ### Bridge boundary notes
 
 - the bridge crate façade is already narrow and aligned with intended ownership.
-- `BridgeError` no longer escapes through the bridge root; callers use the owning `spooky-errors` path.
+- `BridgeError` no longer escapes through the bridge root; callers use the owning `impulse-errors` path.
 - no stale leftover module exposure remains at the crate root.
 
-## `spooky-lb`
+## `impulse-lb`
 
 ### Crate façade
 - `crates/lb/src/lib.rs`
@@ -196,7 +196,7 @@ This document classifies current visibility. It is a contributor aid for decidin
 - `HealthTransition` remains public as the only deliberate cross-crate lifecycle type from the prior backend substrate.
 - implementation-level `lb` tests now live inside the crate instead of forcing public compatibility modules.
 
-## `spooky-transport`
+## `impulse-transport`
 
 ### Crate façade
 - `crates/transport/src/lib.rs`

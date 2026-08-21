@@ -413,11 +413,12 @@ fn quic_tls_metrics_capture_selection_and_failures() {
         ))
         .expect("metrics endpoint should become reachable");
     assert!(
-        metrics.contains("spooky_downstream_tls_certificate_selection_total{listener=\"127.0.0.1:")
+        metrics
+            .contains("impulse_downstream_tls_certificate_selection_total{listener=\"127.0.0.1:")
     );
     assert!(metrics.contains("selection=\"exact_sni\""));
     assert!(metrics.contains("selection=\"fallback_unmatched_sni\""));
-    assert!(metrics.contains("spooky_downstream_tls_alpn_total"));
+    assert!(metrics.contains("impulse_downstream_tls_alpn_total"));
     assert!(metrics.contains("protocol=\"h3\""));
 }
 
@@ -481,7 +482,7 @@ fn bootstrap_tls_metrics_capture_missing_client_certificate_failures() {
             Duration::from_secs(20),
         ))
         .expect("metrics endpoint should become reachable");
-    assert!(metrics.contains("spooky_downstream_tls_handshake_failure_total"));
+    assert!(metrics.contains("impulse_downstream_tls_handshake_failure_total"));
     assert!(metrics.contains("reason=\"missing_client_cert\""));
 }
 
@@ -507,7 +508,7 @@ fn http3_head_suppresses_response_body() {
             quiche::h3::Header::new(b":scheme", b"https"),
             quiche::h3::Header::new(b":authority", b"localhost"),
             quiche::h3::Header::new(b":path", b"/stream"),
-            quiche::h3::Header::new(b"user-agent", b"spooky-regression-test"),
+            quiche::h3::Header::new(b"user-agent", b"impulse-regression-test"),
         ],
         true,
         Duration::from_secs(REQUEST_TIMEOUT_SECS),

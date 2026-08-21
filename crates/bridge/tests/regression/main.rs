@@ -1,4 +1,4 @@
-//! Regression suite for the `spooky_bridge` request and protocol-shaping contracts.
+//! Regression suite for the `impulse_bridge` request and protocol-shaping contracts.
 //!
 //! Public-API integration tests for `build_h2_request_for_target` (h3→h2) and
 //! `build_h1_request` (h3→h1): scheme selection, host/forwarded-header policy,

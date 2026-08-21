@@ -1,6 +1,6 @@
 # Metrics and Alerts
 
-This document explains which Spooky metrics matter most in production and how operators should use them for alerting and dashboards.
+This document explains which Impulse metrics matter most in production and how operators should use them for alerting and dashboards.
 
 ## Read This With
 
@@ -10,7 +10,7 @@ This document explains which Spooky metrics matter most in production and how op
 
 ## Purpose
 
-Spooky exposes many counters, gauges, and labeled request families. Operators should focus on the metrics that answer:
+Impulse exposes many counters, gauges, and labeled request families. Operators should focus on the metrics that answer:
 
 - is traffic succeeding
 - is latency rising
@@ -35,11 +35,11 @@ These answer whether traffic is succeeding or failing.
 
 Key families:
 
-- `spooky_requests_total`
-- `spooky_requests_success`
-- `spooky_requests_failure`
-- `spooky_upstream_requests_total{upstream,status_class,outcome}`
-- `spooky_backend_requests_total{upstream,backend,status_class,outcome}`
+- `impulse_requests_total`
+- `impulse_requests_success`
+- `impulse_requests_failure`
+- `impulse_upstream_requests_total{upstream,status_class,outcome}`
+- `impulse_backend_requests_total{upstream,backend,status_class,outcome}`
 
 Use these to answer:
 
@@ -53,12 +53,12 @@ These answer how long requests are taking.
 
 Key families:
 
-- `spooky_upstream_request_latency_ms_bucket`
-- `spooky_upstream_request_latency_ms_sum`
-- `spooky_upstream_request_latency_ms_count`
-- `spooky_route_latency_ms_p50`
-- `spooky_route_latency_ms_p95`
-- `spooky_route_latency_ms_p99`
+- `impulse_upstream_request_latency_ms_bucket`
+- `impulse_upstream_request_latency_ms_sum`
+- `impulse_upstream_request_latency_ms_count`
+- `impulse_route_latency_ms_p50`
+- `impulse_route_latency_ms_p95`
+- `impulse_route_latency_ms_p99`
 
 Prefer the histogram family for service-level alerting and the route percentile gauges for quick route-level dashboards.
 
@@ -68,13 +68,13 @@ These answer whether the system is refusing work before dispatch.
 
 Key families:
 
-- `spooky_policy_denied`
-- `spooky_request_rate_limited`
-- `spooky_overload_shed`
-- `spooky_overload_shed_by_reason_total{reason=...}`
-- `spooky_inflight_wait_admit_total{scope=...}`
-- `spooky_brownout_active`
-- `spooky_circuit_breaker_rejected_total`
+- `impulse_policy_denied`
+- `impulse_request_rate_limited`
+- `impulse_overload_shed`
+- `impulse_overload_shed_by_reason_total{reason=...}`
+- `impulse_inflight_wait_admit_total{scope=...}`
+- `impulse_brownout_active`
+- `impulse_circuit_breaker_rejected_total`
 
 These are especially important during load tests, incident response, and capacity tuning.
 
@@ -84,16 +84,16 @@ These answer whether upstream capacity is healthy.
 
 Key families:
 
-- `spooky_health_checks_total`
-- `spooky_health_checks_success`
-- `spooky_health_checks_failure`
-- `spooky_backend_timeouts`
-- `spooky_backend_errors`
-- `spooky_health_failures_total{reason=...}`
-- `spooky_backend_dns_refresh_success_total`
-- `spooky_backend_dns_refresh_failure_total`
-- `spooky_backend_dns_address_set_changes_total`
-- `spooky_backend_client_rotations_total`
+- `impulse_health_checks_total`
+- `impulse_health_checks_success`
+- `impulse_health_checks_failure`
+- `impulse_backend_timeouts`
+- `impulse_backend_errors`
+- `impulse_health_failures_total{reason=...}`
+- `impulse_backend_dns_refresh_success_total`
+- `impulse_backend_dns_refresh_failure_total`
+- `impulse_backend_dns_address_set_changes_total`
+- `impulse_backend_client_rotations_total`
 
 These should be interpreted together with backend lifecycle snapshots from the control API.
 
@@ -103,10 +103,10 @@ These answer whether request or response streaming pressure is building.
 
 Key families:
 
-- `spooky_request_buffered_bytes`
-- `spooky_request_buffered_high_watermark_bytes`
-- `spooky_request_buffer_limit_rejects`
-- `spooky_response_prebuffer_limit_rejects`
+- `impulse_request_buffered_bytes`
+- `impulse_request_buffered_high_watermark_bytes`
+- `impulse_request_buffer_limit_rejects`
+- `impulse_response_prebuffer_limit_rejects`
 
 These are important leading indicators of backpressure or response-shaping issues before outright traffic failure.
 
@@ -116,13 +116,13 @@ These answer whether resiliency behavior is activating.
 
 Key families:
 
-- `spooky_retries_total`
-- `spooky_retry_denied_total{reason=...}`
-- `spooky_retry_attempts_total{reason=...}`
-- `spooky_hedge_triggered_total`
-- `spooky_hedge_won_total`
-- `spooky_hedge_wasted_total`
-- `spooky_hedge_primary_won_after_trigger_total`
+- `impulse_retries_total`
+- `impulse_retry_denied_total{reason=...}`
+- `impulse_retry_attempts_total{reason=...}`
+- `impulse_hedge_triggered_total`
+- `impulse_hedge_won_total`
+- `impulse_hedge_wasted_total`
+- `impulse_hedge_primary_won_after_trigger_total`
 
 Rising retries or hedges may be correct behavior, but sustained increases usually indicate backend degradation or timeout pressure.
 
@@ -132,16 +132,16 @@ These answer whether the edge ingress path itself is healthy.
 
 Key families:
 
-- `spooky_active_connections`
-- `spooky_connection_cap_rejects`
-- `spooky_ingress_packets_total`
-- `spooky_ingress_queue_drops`
-- `spooky_ingress_queue_drop_bytes`
-- `spooky_ingress_queue_bytes`
-- `spooky_ingress_bad_header_total`
-- `spooky_ingress_rate_limited_total`
-- `spooky_ingress_unroutable_total`
-- `spooky_ingress_draining_drops_total`
+- `impulse_active_connections`
+- `impulse_connection_cap_rejects`
+- `impulse_ingress_packets_total`
+- `impulse_ingress_queue_drops`
+- `impulse_ingress_queue_drop_bytes`
+- `impulse_ingress_queue_bytes`
+- `impulse_ingress_bad_header_total`
+- `impulse_ingress_rate_limited_total`
+- `impulse_ingress_unroutable_total`
+- `impulse_ingress_draining_drops_total`
 
 These are key signals for edge saturation, malformed traffic, and drain behavior.
 
@@ -151,11 +151,11 @@ These answer whether TLS negotiation is healthy on both downstream and upstream 
 
 Key families:
 
-- `spooky_downstream_tls_handshake_success_total`
-- `spooky_downstream_tls_handshake_failure_total{listener,reason}`
-- `spooky_downstream_tls_certificate_selection_total{listener,selection}`
-- `spooky_downstream_tls_alpn_total{listener,protocol}`
-- `spooky_upstream_tls_failure_total{backend,phase,reason}`
+- `impulse_downstream_tls_handshake_success_total`
+- `impulse_downstream_tls_handshake_failure_total{listener,reason}`
+- `impulse_downstream_tls_certificate_selection_total{listener,selection}`
+- `impulse_downstream_tls_alpn_total{listener,protocol}`
+- `impulse_upstream_tls_failure_total{backend,phase,reason}`
 
 These are critical for certificate rollouts and protocol transition debugging.
 
@@ -165,11 +165,11 @@ These answer whether the administrative surfaces and watchdog are stable.
 
 Key families:
 
-- `spooky_control_api_connection_limit_drops`
-- `spooky_watchdog_restart_requests`
-- `spooky_watchdog_restart_hooks`
-- `spooky_watchdog_degraded_windows`
-- `spooky_runtime_panics`
+- `impulse_control_api_connection_limit_drops`
+- `impulse_watchdog_restart_requests`
+- `impulse_watchdog_restart_hooks`
+- `impulse_watchdog_degraded_windows`
+- `impulse_runtime_panics`
 
 These are not request SLO metrics, but they are important for platform reliability.
 

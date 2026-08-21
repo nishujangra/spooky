@@ -4,13 +4,13 @@ This roadmap is intentionally practical. It is organized around what most increa
 
 ## Current Position
 
-Spooky is strongest today as:
+Impulse is strongest today as:
 
 - an HTTP/3-first edge proxy
 - a deterministic H3-to-H2 routing and balancing layer
 - a proxy with strong resource-bound, teardown, and overload behavior
 
-Spooky is not yet strongest today as:
+Impulse is not yet strongest today as:
 
 - a dynamic control-plane-driven fleet proxy
 - a broad protocol-compatibility proxy
@@ -71,7 +71,7 @@ Increase trust in the critical-path parser and protocol handling with:
 
 ## Medium-Term Priorities
 
-These areas make Spooky far more competitive as a general production reverse proxy.
+These areas make Impulse far more competitive as a general production reverse proxy.
 
 ### 5. Broader Upstream Compatibility
 
@@ -104,7 +104,7 @@ with background refresh and rollover overlap, and external auth via HTTP subrequ
 
 ## Longer-Term Competitive Priorities
 
-These areas are what move Spooky from “strong specialized edge proxy” toward “top-tier proxy platform.”
+These areas are what move Impulse from “strong specialized edge proxy” toward “top-tier proxy platform.”
 
 ### 9. Discovery And Platform Integration
 

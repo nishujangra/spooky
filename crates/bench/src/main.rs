@@ -1,5 +1,5 @@
 use clap::Parser;
-use spooky_bench::{
+use impulse_bench::{
     benchmark::{macro_bench::run_macro_suite, micro_bench::run_micro_suite},
     cli::{Args, BenchSuite, FailOn},
     io::{load_release_index, load_report, merge_reports, resolve_baseline_paths, write_report},
@@ -43,7 +43,7 @@ fn main() -> Result<(), String> {
     });
 
     let report = BenchReport {
-        suite: "spooky-performance-regression".to_string(),
+        suite: "impulse-performance-regression".to_string(),
         report_kind: suite_label(args.suite).to_string(),
         profile: args.profile.clone(),
         generated_unix_secs: unix_now(),

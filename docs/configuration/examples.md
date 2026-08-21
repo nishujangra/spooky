@@ -67,8 +67,8 @@ listen:
   address: "0.0.0.0"
   port: 443
   tls:
-    cert: /etc/spooky/certs/fullchain.pem
-    key: /etc/spooky/certs/privkey.pem
+    cert: /etc/impulse/certs/fullchain.pem
+    key: /etc/impulse/certs/privkey.pem
 
 upstream_tls:
   verify_certificates: true
@@ -95,8 +95,8 @@ upstream:
 security:
   privileges:
     enabled: true
-    user: "spooky"
-    group: "spooky"
+    user: "impulse"
+    group: "impulse"
 
 observability:
   metrics:
@@ -126,8 +126,8 @@ listen:
   address: "0.0.0.0"
   port: 443
   tls:
-    cert: /etc/spooky/certs/fullchain.pem
-    key: /etc/spooky/certs/privkey.pem
+    cert: /etc/impulse/certs/fullchain.pem
+    key: /etc/impulse/certs/privkey.pem
 
 upstream_tls:
   verify_certificates: true
@@ -182,22 +182,22 @@ listen:
   address: "0.0.0.0"
   port: 443
   tls:
-    cert: /etc/spooky/certs/public-fullchain.pem
-    key: /etc/spooky/certs/public-privkey.pem
+    cert: /etc/impulse/certs/public-fullchain.pem
+    key: /etc/impulse/certs/public-privkey.pem
 
 listeners:
   - protocol: http3
     address: "0.0.0.0"
     port: 443
     tls:
-      cert: /etc/spooky/certs/public-fullchain.pem
-      key: /etc/spooky/certs/public-privkey.pem
+      cert: /etc/impulse/certs/public-fullchain.pem
+      key: /etc/impulse/certs/public-privkey.pem
   - protocol: http3
     address: "10.0.0.10"
     port: 8443
     tls:
-      cert: /etc/spooky/certs/internal-fullchain.pem
-      key: /etc/spooky/certs/internal-privkey.pem
+      cert: /etc/impulse/certs/internal-fullchain.pem
+      key: /etc/impulse/certs/internal-privkey.pem
 
 upstream:
   default:
@@ -224,12 +224,12 @@ listen:
   address: "0.0.0.0"
   port: 443
   tls:
-    cert: /etc/spooky/certs/fullchain.pem
-    key: /etc/spooky/certs/privkey.pem
+    cert: /etc/impulse/certs/fullchain.pem
+    key: /etc/impulse/certs/privkey.pem
     client_auth:
       enabled: true
       require_client_cert: true
-      ca_file: /etc/spooky/certs/client-ca.pem
+      ca_file: /etc/impulse/certs/client-ca.pem
 
 upstream:
   default:
@@ -252,13 +252,13 @@ listen:
   address: "0.0.0.0"
   port: 443
   tls:
-    cert: /etc/spooky/certs/fullchain.pem
-    key: /etc/spooky/certs/privkey.pem
+    cert: /etc/impulse/certs/fullchain.pem
+    key: /etc/impulse/certs/privkey.pem
 
 upstream_tls:
   verify_certificates: true
   strict_sni: true
-  ca_file: /etc/spooky/certs/private-root-ca.pem
+  ca_file: /etc/impulse/certs/private-root-ca.pem
 
 upstream:
   default:
@@ -287,8 +287,8 @@ listen:
   address: "0.0.0.0"
   port: 443
   tls:
-    cert: /etc/spooky/certs/fullchain.pem
-    key: /etc/spooky/certs/privkey.pem
+    cert: /etc/impulse/certs/fullchain.pem
+    key: /etc/impulse/certs/privkey.pem
 
 upstream:
   api_pool:
@@ -339,8 +339,8 @@ listen:
   address: "0.0.0.0"
   port: 443
   tls:
-    cert: /etc/spooky/certs/fullchain.pem
-    key: /etc/spooky/certs/privkey.pem
+    cert: /etc/impulse/certs/fullchain.pem
+    key: /etc/impulse/certs/privkey.pem
 
 upstream:
   api_pool:
@@ -389,7 +389,7 @@ starts at all.
 
 ## Example 9: Runtime Activation And Reload Posture
 
-Spooky supports generation-based validation, preview, activation, rollback, and certificate-only reload. When planning operations:
+Impulse supports generation-based validation, preview, activation, rollback, and certificate-only reload. When planning operations:
 
 - use `POST /admin/runtime/validate` to check a candidate configuration
 - use `POST /admin/runtime/preview` to see the staged diff without touching the running runtime

@@ -1,17 +1,17 @@
 use http::StatusCode;
-use spooky_config::{
+use impulse_config::{
     config::{Backend, Config, HealthCheck, Listen, RouteMatch, Tls, Upstream},
     runtime::RuntimeConfig,
 };
-use spooky_edge::runtime::health::{HealthClassification, outcome_from_status};
-use spooky_lb::{HealthTransition, upstream_pool::UpstreamPool};
+use impulse_edge::runtime::health::{HealthClassification, outcome_from_status};
+use impulse_lb::{HealthTransition, upstream_pool::UpstreamPool};
 
 fn create_test_upstream_pool() -> UpstreamPool {
     let mut upstreams = std::collections::HashMap::new();
     upstreams.insert(
         "api".to_string(),
         Upstream {
-            load_balancing: spooky_config::config::LoadBalancing {
+            load_balancing: impulse_config::config::LoadBalancing {
                 lb_type: "round-robin".to_string(),
                 key: None,
             },

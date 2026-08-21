@@ -23,6 +23,24 @@ use http::{Request, Response, StatusCode};
 use http_body_util::{BodyExt, combinators::BoxBody};
 use hyper::{body::Incoming, client::conn::http1 as client_http1, upgrade};
 use hyper_util::rt::TokioIo;
+#[cfg(test)]
+use impulse_bridge::response::should_strip_response_header;
+use impulse_bridge::response::{
+    ResponseBodyMode, ResponseBodyPolicy, ResponseNormalizationInput,
+    ResponseNormalizationProtocol, ResponseProtocolConstraints, normalize_response_trailers,
+    normalize_upstream_response,
+};
+use impulse_config::{
+    backend_endpoint::{BackendEndpoint, BackendScheme},
+    config::ClientAuth,
+    runtime::{
+        ListenerRuntimeConfig, RuntimeConfig, RuntimeListenerTls, RuntimeTlsIdentity,
+        RuntimeUpstreamPolicy,
+    },
+};
+use impulse_errors::{PoolError, ProxyError};
+use impulse_lb::{health::HealthFailureReason, upstream_pool::UpstreamPool};
+use impulse_transport::{SharedDnsResolver, UpstreamTransportPool};
 use log::{debug, error, info, warn};
 use quiche::{Config, h3::NameValue};
 use rand::RngCore;
@@ -34,24 +52,6 @@ use rustls::{
 };
 use rustls_pki_types::pem::PemObject;
 use serde_json::json;
-#[cfg(test)]
-use spooky_bridge::response::should_strip_response_header;
-use spooky_bridge::response::{
-    ResponseBodyMode, ResponseBodyPolicy, ResponseNormalizationInput,
-    ResponseNormalizationProtocol, ResponseProtocolConstraints, normalize_response_trailers,
-    normalize_upstream_response,
-};
-use spooky_config::{
-    backend_endpoint::{BackendEndpoint, BackendScheme},
-    config::ClientAuth,
-    runtime::{
-        ListenerRuntimeConfig, RuntimeConfig, RuntimeListenerTls, RuntimeTlsIdentity,
-        RuntimeUpstreamPolicy,
-    },
-};
-use spooky_errors::{PoolError, ProxyError};
-use spooky_lb::{health::HealthFailureReason, upstream_pool::UpstreamPool};
-use spooky_transport::{SharedDnsResolver, UpstreamTransportPool};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     sync::{Semaphore, mpsc, mpsc::error::TrySendError, oneshot},

@@ -1,5 +1,5 @@
 use http_body_util::Full;
-use spooky_errors::classify_upstream_proxy_error;
+use impulse_errors::classify_upstream_proxy_error;
 
 use super::*;
 use crate::runtime::{
@@ -19,7 +19,7 @@ impl QUICListener {
         transport_pool: Arc<UpstreamTransportPool>,
         backend_endpoints: Arc<HashMap<String, BackendEndpoint>>,
         backend_health_checks: Arc<
-            HashMap<String, spooky_config::runtime::RuntimeBackendHealthCheck>,
+            HashMap<String, impulse_config::runtime::RuntimeBackendHealthCheck>,
         >,
         backend_lifecycle: Arc<BackendLifecycleCoordinator>,
         metrics: Arc<Metrics>,
@@ -255,8 +255,8 @@ impl QUICListener {
 mod tests {
     use std::sync::atomic::Ordering;
 
-    use spooky_errors::{PoolError, ProxyError};
-    use spooky_lb::health::HealthFailureReason;
+    use impulse_errors::{PoolError, ProxyError};
+    use impulse_lb::health::HealthFailureReason;
 
     use super::*;
 

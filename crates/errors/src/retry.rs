@@ -1,4 +1,4 @@
-use spooky_lb::alternate_backend::AlternateBackendFailureReason;
+use impulse_lb::alternate_backend::AlternateBackendFailureReason;
 
 use crate::{PoolError, ProxyError};
 

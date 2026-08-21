@@ -1,10 +1,10 @@
 # How to Set Up TLS Certificates
 
-Spooky requires TLS certificates for both the QUIC/HTTP3 listener and the HTTP/1.1+HTTP/2 bootstrap TLS listener.
+Impulse requires TLS certificates for both the QUIC/HTTP3 listener and the HTTP/1.1+HTTP/2 bootstrap TLS listener.
 
 - **Certificate format:** PEM X.509 (`-----BEGIN CERTIFICATE-----`)
 - **Key format:** PEM private key — both PKCS#8 (`-----BEGIN PRIVATE KEY-----`) and PKCS#1 (`-----BEGIN RSA PRIVATE KEY-----`) are accepted
-- Both are validated at startup — spooky exits if either is missing or malformed
+- Both are validated at startup — impulse exits if either is missing or malformed
 
 ---
 
@@ -24,25 +24,25 @@ sudo certbot certonly --standalone \
   --non-interactive
 ```
 
-Let's Encrypt issues PKCS#1 keys — convert to PKCS#8 which Spooky requires:
+Let's Encrypt issues PKCS#1 keys — convert to PKCS#8 which Impulse requires:
 
 ```bash
-sudo mkdir -p /etc/spooky/certs
+sudo mkdir -p /etc/impulse/certs
 
 sudo openssl pkcs8 -topk8 -nocrypt \
   -in /etc/letsencrypt/live/example.com/privkey.pem \
-  -out /etc/spooky/certs/privkey.pem
+  -out /etc/impulse/certs/privkey.pem
 
 sudo cp /etc/letsencrypt/live/example.com/fullchain.pem \
-    /etc/spooky/certs/fullchain.pem
+    /etc/impulse/certs/fullchain.pem
 
-sudo chown $USER:$USER /etc/spooky/certs/*
-sudo chmod 640 /etc/spooky/certs/*
+sudo chown $USER:$USER /etc/impulse/certs/*
+sudo chmod 640 /etc/impulse/certs/*
 ```
 
 ### Auto-renewal deploy hook
 
-Create `/etc/letsencrypt/renewal-hooks/deploy/spooky-reload.sh`:
+Create `/etc/letsencrypt/renewal-hooks/deploy/impulse-reload.sh`:
 
 ```bash
 #!/bin/bash
@@ -50,7 +50,7 @@ set -e
 
 DOMAIN="example.com"
 SRC="/etc/letsencrypt/live/${DOMAIN}"
-DST="/etc/spooky/certs"
+DST="/etc/impulse/certs"
 
 cp "${SRC}/fullchain.pem" "${DST}/fullchain.pem"
 
@@ -59,11 +59,11 @@ openssl pkcs8 -topk8 -nocrypt \
   -out "${DST}/privkey.pem"
 
 chown $SUDO_USER:$SUDO_USER "${DST}"/*.pem
-systemctl restart spooky
+systemctl restart impulse
 ```
 
 ```bash
-sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/spooky-reload.sh
+sudo chmod +x /etc/letsencrypt/renewal-hooks/deploy/impulse-reload.sh
 sudo certbot renew --dry-run   # test renewal
 ```
 
@@ -84,13 +84,13 @@ export CF_Token="your-cloudflare-api-token"
   -d example.com \
   --server letsencrypt
 
-# Install to spooky cert dir with PKCS#8 key conversion
-sudo mkdir -p /etc/spooky/certs
+# Install to impulse cert dir with PKCS#8 key conversion
+sudo mkdir -p /etc/impulse/certs
 
 ~/.acme.sh/acme.sh --install-cert -d example.com \
-  --cert-file      /etc/spooky/certs/fullchain.pem \
+  --cert-file      /etc/impulse/certs/fullchain.pem \
   --key-file       /tmp/privkey-pkcs1.pem \
-  --reloadcmd      "openssl pkcs8 -topk8 -nocrypt -in /tmp/privkey-pkcs1.pem -out /etc/spooky/certs/privkey.pem && systemctl restart spooky"
+  --reloadcmd      "openssl pkcs8 -topk8 -nocrypt -in /tmp/privkey-pkcs1.pem -out /etc/impulse/certs/privkey.pem && systemctl restart impulse"
 ```
 
 ---
@@ -102,15 +102,15 @@ Serve multiple domains from one listener with per-domain cert selection:
 ```yaml
 listen:
   tls:
-    cert: /etc/spooky/certs/default-fullchain.pem   # fallback when SNI unmatched
-    key:  /etc/spooky/certs/default-privkey.pem
+    cert: /etc/impulse/certs/default-fullchain.pem   # fallback when SNI unmatched
+    key:  /etc/impulse/certs/default-privkey.pem
     certificates:
       - server_name: "example.com"
-        cert: /etc/spooky/certs/spooky-fullchain.pem
-        key:  /etc/spooky/certs/spooky-privkey.pem
+        cert: /etc/impulse/certs/impulse-fullchain.pem
+        key:  /etc/impulse/certs/impulse-privkey.pem
       - server_name: "api.example.com"
-        cert: /etc/spooky/certs/api-fullchain.pem
-        key:  /etc/spooky/certs/api-privkey.pem
+        cert: /etc/impulse/certs/api-fullchain.pem
+        key:  /etc/impulse/certs/api-privkey.pem
 ```
 
 Certificate selection order:
@@ -124,21 +124,21 @@ Certificate selection order:
 
 ```bash
 # Check issuer, subject, expiry
-openssl x509 -in /etc/spooky/certs/fullchain.pem -noout -issuer -subject -dates
+openssl x509 -in /etc/impulse/certs/fullchain.pem -noout -issuer -subject -dates
 
 # Verify cert and key match (both lines must print same hash)
-openssl x509 -noout -modulus -in /etc/spooky/certs/fullchain.pem | openssl md5
-openssl pkey -noout -modulus -in /etc/spooky/certs/privkey.pem   | openssl md5
+openssl x509 -noout -modulus -in /etc/impulse/certs/fullchain.pem | openssl md5
+openssl pkey -noout -modulus -in /etc/impulse/certs/privkey.pem   | openssl md5
 
 # Check key format — both PKCS#8 and PKCS#1 PEM keys are accepted
-head -1 /etc/spooky/certs/privkey.pem
+head -1 /etc/impulse/certs/privkey.pem
 # PKCS#8:  -----BEGIN PRIVATE KEY-----      (accepted)
 # PKCS#1:  -----BEGIN RSA PRIVATE KEY-----  (also accepted)
 ```
 
 Both key encodings load fine. If you nonetheless want to normalize a PKCS#1 key to PKCS#8:
 ```bash
-openssl pkcs8 -topk8 -nocrypt -in old-privkey.pem -out /etc/spooky/certs/privkey.pem
+openssl pkcs8 -topk8 -nocrypt -in old-privkey.pem -out /etc/impulse/certs/privkey.pem
 ```
 
 ---
@@ -147,7 +147,7 @@ openssl pkcs8 -topk8 -nocrypt -in old-privkey.pem -out /etc/spooky/certs/privkey
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| `Cannot open listen.tls.cert` | Wrong path or permissions | `chown ubuntu:ubuntu /etc/spooky/certs/*` |
+| `Cannot open listen.tls.cert` | Wrong path or permissions | `chown ubuntu:ubuntu /etc/impulse/certs/*` |
 | `Cannot parse PEM private key` | Key file is malformed or not a PEM private key | Ensure the file is a valid PEM key (PKCS#8 or PKCS#1 both work) |
 | `NET::ERR_CERT_AUTHORITY_INVALID` | Self-signed cert | Use Let's Encrypt cert (Options 1–3 above) |
 | `NET::ERR_CERT_COMMON_NAME_INVALID` | Cert domain doesn't match | Issue cert for the exact domain being served |

@@ -36,7 +36,7 @@ impl Default for LeastConnections {
 
 #[cfg(test)]
 mod tests {
-    use spooky_config::config::{Backend, HealthCheck};
+    use impulse_config::config::{Backend, HealthCheck};
 
     use super::LeastConnections;
     use crate::{backend::BackendState, backend_pool::BackendPool};

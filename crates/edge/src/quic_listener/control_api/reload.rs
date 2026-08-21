@@ -44,12 +44,12 @@ impl QUICListener {
     pub(super) fn apply_live_log_level_reload(
         current_level: &str,
         next_level: &str,
-    ) -> Result<bool, spooky_utils::logger::LogLevelError> {
+    ) -> Result<bool, impulse_utils::logger::LogLevelError> {
         if current_level == next_level {
             return Ok(false);
         }
 
-        spooky_utils::logger::set_log_level(next_level)?;
+        impulse_utils::logger::set_log_level(next_level)?;
         Ok(true)
     }
 
@@ -1365,7 +1365,7 @@ fn legacy_reload_error_payload(activation: &ActivationResult, error: &str) -> se
 }
 
 fn record_control_api_secret_metrics(
-    runtime_config: &spooky_config::runtime::RuntimeConfig,
+    runtime_config: &impulse_config::runtime::RuntimeConfig,
     metrics: &Metrics,
     activation: &ActivationResult,
 ) {

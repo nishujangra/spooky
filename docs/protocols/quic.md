@@ -268,16 +268,16 @@ Packet numbers are encrypted to prevent middleboxes from tracking flows and infe
 
 1-RTT data is protected by TLS's anti-replay mechanisms. 0-RTT data is inherently replayable and must be used only for idempotent operations. Servers can optionally reject 0-RTT to enforce strict replay protection.
 
-## QUIC Implementation in Spooky
+## QUIC Implementation in Impulse
 
-Spooky uses the `quiche` QUIC library for connection management and HTTP/3 framing. The implementation handles:
+Impulse uses the `quiche` QUIC library for connection management and HTTP/3 framing. The implementation handles:
 
 ### Connection Management
 
-- **Endpoint creation**: Spooky binds to the configured UDP port and initializes the QUIC endpoint with TLS configuration
+- **Endpoint creation**: Impulse binds to the configured UDP port and initializes the QUIC endpoint with TLS configuration
 - **Connection acceptance**: Incoming QUIC connections are validated against TLS certificate requirements
 - **Idle timeout**: Connections are closed after the configured idle period to reclaim resources
-- **Graceful shutdown**: Spooky sends CONNECTION_CLOSE frames during shutdown to inform clients
+- **Graceful shutdown**: Impulse sends CONNECTION_CLOSE frames during shutdown to inform clients
 
 ### TLS Integration
 
@@ -312,11 +312,11 @@ HTTP/3 streams are mapped to QUIC streams:
 - **Control stream**: Unidirectional stream for HTTP/3 settings and control frames
 - **QPACK streams**: Separate unidirectional streams for QPACK encoder/decoder communication
 
-Spooky's edge component accepts incoming streams and passes them to the bridge for HTTP/3 processing.
+Impulse's edge component accepts incoming streams and passes them to the bridge for HTTP/3 processing.
 
 ### Flow Control
 
-Spooky configures QUIC transport parameters to balance memory usage and throughput:
+Impulse configures QUIC transport parameters to balance memory usage and throughput:
 
 - Connection-level flow control prevents excessive buffering across all streams
 - Stream-level flow control limits individual stream memory consumption
@@ -324,7 +324,7 @@ Spooky configures QUIC transport parameters to balance memory usage and throughp
 
 ### Congestion Control
 
-Spooky uses `quiche`'s default congestion controller, which is **CUBIC** (Spooky does not call `set_cc_algorithm`, so quiche's default applies). CUBIC balances fairness with TCP flows and predictable behavior across network conditions.
+Impulse uses `quiche`'s default congestion controller, which is **CUBIC** (Impulse does not call `set_cc_algorithm`, so quiche's default applies). CUBIC balances fairness with TCP flows and predictable behavior across network conditions.
 
 ## Performance Considerations
 
@@ -356,7 +356,7 @@ Each QUIC connection maintains state for:
 - Loss recovery metadata (sent packet information)
 - Congestion control state (RTT estimates, congestion window)
 
-Spooky limits concurrent connections and streams to bound memory usage.
+Impulse limits concurrent connections and streams to bound memory usage.
 
 ## Comparison with TCP
 

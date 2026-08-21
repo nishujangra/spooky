@@ -21,7 +21,7 @@ impl StickyCid {
 
 #[cfg(test)]
 mod tests {
-    use spooky_config::config::{Backend, HealthCheck};
+    use impulse_config::config::{Backend, HealthCheck};
 
     use super::StickyCid;
     use crate::{backend::BackendState, backend_pool::BackendPool};

@@ -4,7 +4,7 @@ use bytes::Bytes;
 use http::{Request, Response, StatusCode};
 use http_body_util::combinators::BoxBody;
 use hyper::{body::Incoming, upgrade::OnUpgrade};
-use spooky_errors::{BridgeError, ProxyError};
+use impulse_errors::{BridgeError, ProxyError};
 
 use super::{
     super::{protocol::is_head_method, validation::validate_http_request},

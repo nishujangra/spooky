@@ -74,7 +74,7 @@ fi
 
 if [[ ! -x "${H3_CLIENT_BIN}" ]]; then
   echo "error: h3 client binary not found: ${H3_CLIENT_BIN}" >&2
-  echo "build with: cargo build --release -p spooky --bin h3_client" >&2
+  echo "build with: cargo build --release -p impulse --bin h3_client" >&2
   exit 1
 fi
 
@@ -171,7 +171,7 @@ for profile_dir in "${RUN_DIR}"/*; do
 done
 
 {
-  echo "# Spooky Load Matrix Summary"
+  echo "# Impulse Load Matrix Summary"
   echo
   echo "- Run ID: \`${RUN_ID}\`"
   echo "- Run Dir: \`${RUN_DIR}\`"

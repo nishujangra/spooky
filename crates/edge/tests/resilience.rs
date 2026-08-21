@@ -1,9 +1,9 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use spooky_config::config::{
+use impulse_config::config::{
     Resilience as ResilienceConfig, ScopedRateLimit as ScopedRateLimitConfig, ScopedRateLimitScope,
 };
-use spooky_edge::resilience::{
+use impulse_edge::resilience::{
     adaptive_admission::AdaptiveAdmission,
     brownout::BrownoutController,
     circuit_breaker::CircuitBreakers,

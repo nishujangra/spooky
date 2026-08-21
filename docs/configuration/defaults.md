@@ -1,11 +1,11 @@
 # Configuration Defaults
 
-This page is the central reference for configuration defaults in Spooky.
+This page is the central reference for configuration defaults in Impulse.
 
 Use it when you need to answer two questions quickly:
 
 - which fields may be omitted from the YAML
-- what value or behavior Spooky applies when they are omitted
+- what value or behavior Impulse applies when they are omitted
 
 This page reflects the defaults defined in `crates/config/src/default.rs` and the `Default`-backed config structs in `crates/config/src/config.rs`.
 
@@ -21,7 +21,7 @@ Use [Configuration Reference](reference.md) when you need exact field semantics 
 
 ## How Defaults Work
 
-Spooky applies defaults in three different ways:
+Impulse applies defaults in three different ways:
 
 - explicit helper-function defaults such as `get_default_port()` or `perf_default_worker_threads()`
 - struct-level `Default` implementations for nested sections such as `performance`, `observability`, and `resilience`
@@ -105,7 +105,7 @@ These defaults apply to the top-level `upstream_tls` block and to per-upstream `
 | `upstream.<name>.load_balancing.key` | `null` | No hash/sticky key source by default |
 | `upstream.<name>.host_policy.mode` | `pass_through` | Preserve downstream host by default |
 | `upstream.<name>.host_policy.host` | `null` | No rewrite target |
-| `upstream.<name>.forwarded_headers.mode` | `overwrite` | Spooky rewrites forwarded headers by default |
+| `upstream.<name>.forwarded_headers.mode` | `overwrite` | Impulse rewrites forwarded headers by default |
 | `upstream.<name>.tls` | `null` | Uses global `upstream_tls` unless an override block is set |
 
 ### Route Defaults
@@ -142,7 +142,7 @@ These apply when a backend provides a `health_check` object and omits individual
 | --- | --- | --- |
 | `log.level` | `"info"` | Standard default log verbosity |
 | `log.file.enabled` | `false` | Logs go to stderr unless file logging is enabled |
-| `log.file.path` | `"/var/log/spooky/spooky.log"` | Used only when file logging is enabled |
+| `log.file.path` | `"/var/log/impulse/impulse.log"` | Used only when file logging is enabled |
 | `log.format` | `plain` | Human-readable text output |
 
 ## Performance Defaults
@@ -266,12 +266,12 @@ These apply when a backend provides a `health_check` object and omits individual
 | `resilience.quota.enforcement` | `enforce` | Enforced unless explicitly set to `shadow` |
 | `resilience.quota.backend_failure_policy` | `fail_closed` | Backend failures deny by default when quota is enabled |
 | `resilience.quota.backend.kind` | `in_memory` | Local in-memory backend is the default base backend |
-| `resilience.quota.backend.key_prefix` | `"spooky:quota"` | Default counter key prefix |
+| `resilience.quota.backend.key_prefix` | `"impulse:quota"` | Default counter key prefix |
 | `resilience.quota.backend.connect_timeout_ms` | `250` | Redis only |
 | `resilience.quota.backend.command_timeout_ms` | `100` | Redis only |
 | `resilience.quota.backend.max_inflight` | `1024` | Redis only |
 | `resilience.quota.local_fallback` | `null` | No degraded local fallback unless configured explicitly |
-| `resilience.quota.local_fallback.key_prefix` | `"spooky:quota:fallback"` | Default fallback key prefix when fallback is enabled |
+| `resilience.quota.local_fallback.key_prefix` | `"impulse:quota:fallback"` | Default fallback key prefix when fallback is enabled |
 | `resilience.quota.policies` | `[]` | Quota stays inert until explicit policies are configured |
 
 ### Watchdog
@@ -327,7 +327,7 @@ These apply when a backend provides a `health_check` object and omits individual
 | Field | Default | Notes |
 | --- | --- | --- |
 | `observability.tracing.enabled` | `false` | Tracing disabled by default |
-| `observability.tracing.service_name` | `"spooky"` | Default OTLP service name |
+| `observability.tracing.service_name` | `"impulse"` | Default OTLP service name |
 | `observability.tracing.otlp_endpoint` | `null` | No exporter endpoint by default |
 | `observability.tracing.sample_ratio` | `1.0` | Full sampling if tracing is enabled |
 
@@ -338,7 +338,7 @@ These apply when a backend provides a `health_check` object and omits individual
 | `observability.routing.enabled` | `false` | Route-decision reporting disabled by default |
 | `observability.routing.include_reason` | `true` | Include decision reasons when routing transparency is enabled |
 | `observability.routing.expose_header` | `false` | Response header exposure disabled by default |
-| `observability.routing.header_name` | `"x-spooky-route-decision"` | Default transparency header name |
+| `observability.routing.header_name` | `"x-impulse-route-decision"` | Default transparency header name |
 
 ## Security Defaults
 

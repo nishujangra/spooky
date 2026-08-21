@@ -2,7 +2,7 @@
 
 use core::net::SocketAddr;
 
-use spooky_edge::{stable_hash_socket_addr, stable_hash64};
+use impulse_edge::{stable_hash_socket_addr, stable_hash64};
 
 #[test]
 fn stable_hash64_is_deterministic() {

@@ -1,15 +1,15 @@
 services:
-  spooky:
+  impulse:
     build:
       context: ../..
       dockerfile: packaging/docker/Dockerfile
-    image: spooky:packaging
+    image: impulse:packaging
     user: "0"
-    container_name: spooky-packaging
-    command: ["--config", "/etc/spooky/config.yaml"]
+    container_name: impulse-packaging
+    command: ["--config", "/etc/impulse/config.yaml"]
     volumes:
-      - ./config.docker.yaml:/etc/spooky/config.yaml:ro
-      - ../../certs:/etc/spooky/certs:ro
+      - ./config.docker.yaml:/etc/impulse/config.yaml:ro
+      - ../../certs:/etc/impulse/certs:ro
     ports:
       - "9889:9889/udp"
       - "9889:9889/tcp"

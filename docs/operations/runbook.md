@@ -50,7 +50,7 @@ Upstream mTLS client cert/key and upstream CA changes are generation-owned, not 
 
 Check:
 
-- `spooky_overload_shed_by_reason_total`
+- `impulse_overload_shed_by_reason_total`
 - quota backend health and quota outcome series
 - route latency and backend timeout signals
 - active connections and inflight pressure

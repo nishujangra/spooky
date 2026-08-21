@@ -19,7 +19,7 @@ use helpers::*;
 pub const VALID_LOG_LEVELS: &[&str] = &[
     "whisper",
     "haunt",
-    "spooky",
+    "impulse",
     "scream",
     "poltergeist",
     "silence",

@@ -4,7 +4,7 @@ use bytes::Bytes;
 use http::{Method, Request, Uri, Version};
 use http_body_util::combinators::BoxBody;
 use hyper::ext::Protocol;
-use spooky_errors::BridgeError;
+use impulse_errors::BridgeError;
 
 use crate::{
     request::{

@@ -1,7 +1,7 @@
-use spooky_edge::benchmark::{
+use impulse_edge::benchmark::{
     connection_lookup::ConnectionLookupBench, route_lookup::RouteLookupBench,
 };
-use spooky_lb::upstream_pool::UpstreamPool;
+use impulse_lb::upstream_pool::UpstreamPool;
 
 use crate::{
     benchmark::{headers::synth_h3_headers, lb::build_lb_pool, runner::run_case_with_latencies},

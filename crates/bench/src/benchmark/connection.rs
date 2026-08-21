@@ -1,4 +1,4 @@
-use spooky_edge::benchmark::connection_lookup::ConnectionLookupBench;
+use impulse_edge::benchmark::connection_lookup::ConnectionLookupBench;
 
 use crate::{benchmark::runner::run_case_aggregate, report::BenchCase};
 

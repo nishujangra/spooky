@@ -1,5 +1,5 @@
 [package]
-name = "spooky-edge"
+name = "impulse-edge"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,12 +9,12 @@ boring.workspace = true
 base64.workspace = true
 log.workspace = true
 quiche.workspace = true
-spooky-config = { path = "../config" }
-spooky-lb = { path = "../lb" }
-spooky-bridge = { path = "../bridge" }
-spooky-transport = { path = "../transport" }
-spooky-errors = { path = "../errors" }
-spooky-utils = { path = "../utils" }
+impulse-config = { path = "../config" }
+impulse-lb = { path = "../lb" }
+impulse-bridge = { path = "../bridge" }
+impulse-transport = { path = "../transport" }
+impulse-errors = { path = "../errors" }
+impulse-utils = { path = "../utils" }
 bytes.workspace = true
 http.workspace = true
 http-body-util.workspace = true

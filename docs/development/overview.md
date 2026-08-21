@@ -4,7 +4,7 @@ This section is for contributors and maintainers working on the codebase itself.
 
 ## Start Here
 
-- [Contributing Guide](https://github.com/Supernova-Labs-Org/spooky/blob/master/CONTRIBUTING.md) covers workflow expectations and project contribution basics.
+- [Contributing Guide](https://github.com/Supernova-Labs-Org/impulse/blob/master/CONTRIBUTING.md) covers workflow expectations and project contribution basics.
 - [Architecture Overview](../architecture/overview.md) explains runtime structure before you modify it.
 - [Component Breakdown](../architecture/components.md) maps the crates and major responsibilities.
 - [Codebase Map](codebase-map.md) is the quickest route to finding the correct crate or module for a change.

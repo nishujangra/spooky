@@ -5,12 +5,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use spooky_config::{
+use impulse_config::{
     backend_endpoint::BackendEndpoint,
     runtime::{ListenerRuntimeConfig, RuntimeUpstreamPolicy},
 };
-use spooky_lb::upstream_pool::UpstreamPool;
-use spooky_transport::{SharedDnsResolver, UpstreamTransportPool};
+use impulse_lb::upstream_pool::UpstreamPool;
+use impulse_transport::{SharedDnsResolver, UpstreamTransportPool};
 use tokio::sync::Semaphore;
 
 use crate::{

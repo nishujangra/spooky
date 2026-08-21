@@ -77,7 +77,7 @@ impl LoadBalancing {
     }
 
     pub fn from_runtime_strategy(
-        strategy: spooky_config::runtime::RuntimeLoadBalancingStrategy,
+        strategy: impulse_config::runtime::RuntimeLoadBalancingStrategy,
     ) -> Result<Self, String> {
         Self::from_config(strategy.canonical_name())
     }

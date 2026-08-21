@@ -5,7 +5,7 @@ source "$(dirname "$0")/common.sh"
 
 ensure_bins
 
-cat > /tmp/spooky-lb-rr.yaml <<'YAML'
+cat > /tmp/impulse-lb-rr.yaml <<'YAML'
 version: 1
 
 listen:
@@ -49,7 +49,7 @@ YAML
 B1=$(start_backend 8081)
 B2=$(start_backend 8082)
 B3=$(start_backend 8083)
-SPOOKY=$(start_spooky /tmp/spooky-lb-rr.yaml)
+IMPULSE=$(start_impulse /tmp/impulse-lb-rr.yaml)
 
 sleep 1
 
@@ -60,4 +60,4 @@ done
 sleep 1
 print_selection_log
 
-cleanup_pids "${SPOOKY}" "${B1}" "${B2}" "${B3}"
+cleanup_pids "${IMPULSE}" "${B1}" "${B2}" "${B3}"

@@ -1,6 +1,6 @@
 # Load Balancing
 
-Comprehensive guide to load balancing algorithms, health checking, and backend management in Spooky.
+Comprehensive guide to load balancing algorithms, health checking, and backend management in Impulse.
 
 ---
 
@@ -23,7 +23,7 @@ If you are migrating from NGINX `least_conn`, use `least-connections`. If you ar
 
 ## Load Balancing Algorithms
 
-Spooky implements six load balancing algorithms, each optimized for different use cases. Each upstream pool configures its own algorithm independently via `load_balancing.type`.
+Impulse implements six load balancing algorithms, each optimized for different use cases. Each upstream pool configures its own algorithm independently via `load_balancing.type`.
 
 ### Round Robin
 
@@ -340,7 +340,7 @@ backends:
 
 ## Health Checking
 
-Spooky performs active health checks on all backends. Unhealthy backends are automatically removed from rotation.
+Impulse performs active health checks on all backends. Unhealthy backends are automatically removed from rotation.
 
 ### Health Check Mechanism
 
@@ -428,7 +428,7 @@ State transitions:
 
 ## Multiple Upstream Pools
 
-Spooky supports multiple upstream pools with independent routing and load balancing configuration. Each pool specifies its own algorithm.
+Impulse supports multiple upstream pools with independent routing and load balancing configuration. Each pool specifies its own algorithm.
 
 ### Configuration Example
 
@@ -505,36 +505,36 @@ Health check events are logged:
 
 ```bash
 # Monitor health check activity (systemd)
-sudo journalctl -u spooky.service -f | grep -i health
+sudo journalctl -u impulse.service -f | grep -i health
 
 # Monitor health check activity (direct process)
-spooky --config config.yaml 2>&1 | grep -i health
+impulse --config config.yaml 2>&1 | grep -i health
 
 # Count backend state changes (systemd)
-sudo journalctl -u spooky.service | grep "marked unhealthy\|marked healthy" | tail -20
+sudo journalctl -u impulse.service | grep "marked unhealthy\|marked healthy" | tail -20
 
 # Count backend state changes (if redirected to file)
-grep "marked unhealthy\|marked healthy" /var/log/spooky/spooky.log | tail -20
+grep "marked unhealthy\|marked healthy" /var/log/impulse/impulse.log | tail -20
 
 # Track specific backend (systemd)
-sudo journalctl -u spooky.service | grep "backend1" | grep health
+sudo journalctl -u impulse.service | grep "backend1" | grep health
 
 # Track specific backend (if redirected to file)
-grep "backend1" /var/log/spooky/spooky.log | grep health
+grep "backend1" /var/log/impulse/impulse.log | grep health
 ```
 
 ### Load Distribution Analysis
 
 ```bash
 # Extract backend selection counts (systemd)
-sudo journalctl -u spooky.service | grep "routing to backend" | \
+sudo journalctl -u impulse.service | grep "routing to backend" | \
   awk '{print $NF}' | sort | uniq -c | sort -rn
 
 # Monitor routing decisions in real-time (systemd)
-sudo journalctl -u spooky.service -f | grep "routing to backend"
+sudo journalctl -u impulse.service -f | grep "routing to backend"
 
 # If redirected to file
-grep "routing to backend" /var/log/spooky/spooky.log | \
+grep "routing to backend" /var/log/impulse/impulse.log | \
   awk '{print $NF}' | sort | uniq -c | sort -rn
 ```
 
@@ -579,18 +579,18 @@ mark_failure(index)            // O(1) - direct index access
 grep -A 10 "backends:" config.yaml | grep -E "id|weight"
 
 # Monitor actual distribution (systemd)
-sudo journalctl -u spooky.service | grep "routing to backend" | \
+sudo journalctl -u impulse.service | grep "routing to backend" | \
   awk '{print $NF}' | sort | uniq -c
 
 # If redirected to file
-grep "routing to backend" /var/log/spooky/spooky.log | \
+grep "routing to backend" /var/log/impulse/impulse.log | \
   awk '{print $NF}' | sort | uniq -c
 
 # Verify all backends are healthy (systemd)
-sudo journalctl -u spooky.service | grep "healthy" | tail -20
+sudo journalctl -u impulse.service | grep "healthy" | tail -20
 
 # If redirected to file
-grep "healthy" /var/log/spooky/spooky.log | tail -20
+grep "healthy" /var/log/impulse/impulse.log | tail -20
 ```
 
 **Solutions**:
@@ -609,10 +609,10 @@ grep "healthy" /var/log/spooky/spooky.log | tail -20
 grep -A 5 "load_balancing:" config.yaml | grep -E "type|key"
 
 # Check if hash key is present in requests (systemd)
-sudo journalctl -u spooky.service -f | grep "consistent-hash"
+sudo journalctl -u impulse.service -f | grep "consistent-hash"
 
 # Check if hash key is present in requests (if redirected to file)
-tail -f /var/log/spooky/spooky.log | grep "consistent-hash"
+tail -f /var/log/impulse/impulse.log | grep "consistent-hash"
 
 # Test with known hash key
 curl --http3-only -H "X-User-ID: test123" https://localhost:9889/
@@ -635,10 +635,10 @@ curl --http3-only -H "X-User-ID: test123" https://localhost:9889/
 **Diagnosis**:
 ```bash
 # Monitor health check failures (systemd)
-sudo journalctl -u spooky.service -f | grep "health check failed"
+sudo journalctl -u impulse.service -f | grep "health check failed"
 
 # If redirected to file
-tail -f /var/log/spooky/spooky.log | grep "health check failed"
+tail -f /var/log/impulse/impulse.log | grep "health check failed"
 
 # Test health endpoint directly
 curl -v http://10.0.1.10:8080/health
@@ -668,10 +668,10 @@ traceroute 10.0.1.10
 grep -A 10 "health_check:" config.yaml | grep cooldown_ms
 
 # Monitor recovery attempts (systemd)
-sudo journalctl -u spooky.service -f | grep -E "marked healthy|success"
+sudo journalctl -u impulse.service -f | grep -E "marked healthy|success"
 
 # If redirected to file
-tail -f /var/log/spooky/spooky.log | grep -E "marked healthy|success"
+tail -f /var/log/impulse/impulse.log | grep -E "marked healthy|success"
 
 # Verify backend is actually healthy
 curl http://10.0.1.10:8080/health
@@ -690,10 +690,10 @@ curl http://10.0.1.10:8080/health
 **Diagnosis**:
 ```bash
 # List all backend states (systemd)
-sudo journalctl -u spooky.service | grep -i "backend.*health" | tail -20
+sudo journalctl -u impulse.service | grep -i "backend.*health" | tail -20
 
 # If redirected to file
-grep -i "backend.*health" /var/log/spooky/spooky.log | tail -20
+grep -i "backend.*health" /var/log/impulse/impulse.log | tail -20
 
 # Check configuration
 grep -A 15 "backends:" config.yaml
@@ -709,7 +709,7 @@ done
 - Fix backend health endpoints
 - Adjust health check parameters (increase timeout, threshold)
 - Verify backends are actually running and accessible
-- Check firewall rules between Spooky and backends
+- Check firewall rules between Impulse and backends
 
 ## Best Practices
 

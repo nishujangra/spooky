@@ -2,11 +2,11 @@
 
 use std::time::Duration;
 
-use rcgen::{Certificate, CertificateParams, SanType};
-use spooky_config::{
+use impulse_config::{
     config::{Listen, LogFormat, SecretRef, Tls, UpstreamTls},
     runtime::RuntimeListenerSource,
 };
+use rcgen::{Certificate, CertificateParams, SanType};
 use tempfile::tempdir;
 
 use crate::common::{
@@ -55,7 +55,7 @@ fn runtime_config_keeps_generation_policies_normalized_and_listener_inputs_raw()
         config.performance.reuseport = true;
         config.performance.quic_initial_max_data = 2_000_000;
         config.observability.tracing.enabled = true;
-        config.observability.tracing.service_name = "spooky-edge-prod".to_string();
+        config.observability.tracing.service_name = "impulse-edge-prod".to_string();
         config.observability.tracing.sample_ratio = 0.42;
         config.observability.tracing.otlp_endpoint =
             Some("http://otel-collector.internal:4317".to_string());
@@ -84,7 +84,7 @@ fn runtime_config_keeps_generation_policies_normalized_and_listener_inputs_raw()
     assert!(listener.observability.tracing.enabled);
     assert_eq!(
         listener.observability.tracing.service_name,
-        "spooky-edge-prod"
+        "impulse-edge-prod"
     );
     assert_eq!(listener.observability.tracing.sample_ratio, 0.42);
     assert_eq!(
@@ -178,7 +178,7 @@ fn runtime_config_excludes_log_sink_shape_from_generation_owned_runtime_state() 
     let json_runtime = sample_runtime_config_with(|config| {
         config.log.level = "debug".to_string();
         config.log.file.enabled = true;
-        config.log.file.path = "/var/log/spooky/edge.json".to_string();
+        config.log.file.path = "/var/log/impulse/edge.json".to_string();
         config.log.format = LogFormat::Json;
     });
 

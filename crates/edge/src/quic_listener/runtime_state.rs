@@ -5,10 +5,10 @@ use std::{
     time::Instant,
 };
 
-use spooky_config::runtime::{ListenerRuntimeConfig, RuntimeConfig};
-use spooky_errors::ProxyError;
-use spooky_lb::upstream_pool::UpstreamPool;
-use spooky_transport::{SharedDnsResolver, UpstreamTransportPool};
+use impulse_config::runtime::{ListenerRuntimeConfig, RuntimeConfig};
+use impulse_errors::ProxyError;
+use impulse_lb::upstream_pool::UpstreamPool;
+use impulse_transport::{SharedDnsResolver, UpstreamTransportPool};
 
 use crate::{
     Metrics,
@@ -36,8 +36,8 @@ pub(super) struct ControlPlaneRuntimeView {
     backend_dns_resolver: SharedDnsResolver,
     upstream_pools: HashMap<String, Arc<RwLock<UpstreamPool>>>,
     listener_runtime_configs: Arc<HashMap<String, ListenerRuntimeConfig>>,
-    backend_endpoints: Arc<HashMap<String, spooky_config::backend_endpoint::BackendEndpoint>>,
-    backend_health_checks: Arc<HashMap<String, spooky_config::runtime::RuntimeBackendHealthCheck>>,
+    backend_endpoints: Arc<HashMap<String, impulse_config::backend_endpoint::BackendEndpoint>>,
+    backend_health_checks: Arc<HashMap<String, impulse_config::runtime::RuntimeBackendHealthCheck>>,
     generation_tasks: Arc<RuntimeTaskRegistry>,
     listener_tls_store: Arc<ListenerTlsReloadStore>,
     primary_listener_label: Option<String>,
@@ -138,13 +138,13 @@ impl ControlPlaneRuntimeView {
 
     pub(super) fn backend_endpoints(
         &self,
-    ) -> Arc<HashMap<String, spooky_config::backend_endpoint::BackendEndpoint>> {
+    ) -> Arc<HashMap<String, impulse_config::backend_endpoint::BackendEndpoint>> {
         Arc::clone(&self.backend_endpoints)
     }
 
     pub(super) fn backend_health_checks(
         &self,
-    ) -> Arc<HashMap<String, spooky_config::runtime::RuntimeBackendHealthCheck>> {
+    ) -> Arc<HashMap<String, impulse_config::runtime::RuntimeBackendHealthCheck>> {
         Arc::clone(&self.backend_health_checks)
     }
 

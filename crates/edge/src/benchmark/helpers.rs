@@ -1,4 +1,4 @@
-use spooky_config::config::{Backend, HealthCheck, LoadBalancing, RouteMatch, Upstream};
+use impulse_config::config::{Backend, HealthCheck, LoadBalancing, RouteMatch, Upstream};
 
 pub fn default_health_check() -> HealthCheck {
     HealthCheck {

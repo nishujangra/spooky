@@ -1,13 +1,13 @@
 //! Secret-reference parsing and validation compatibility coverage.
 
-use rcgen::{Certificate, CertificateParams, SanType};
-use spooky_config::{
+use impulse_config::{
     config::{
         ExternalAuth, ExternalAuthFailureMode, JwtAuth, SecretProvider, SecretRef, UpstreamTls,
     },
     runtime::RuntimeExternalAuth,
     validator::validate,
 };
+use rcgen::{Certificate, CertificateParams, SanType};
 use tempfile::tempdir;
 
 use crate::common::{
@@ -53,7 +53,7 @@ secrets:
   providers:
     local_files:
       kind: file
-      base_dir: /etc/spooky/secrets
+      base_dir: /etc/impulse/secrets
 upstream:
   api:
     route:
@@ -182,7 +182,7 @@ fn runtime_config_resolves_oidc_client_secret_ref_eagerly_from_file() {
         client_secret_ref: Some(SecretRef {
             reference: format!("file://{}", secret_path.display()),
         }),
-        audience: Some("spooky-api".to_string()),
+        audience: Some("impulse-api".to_string()),
         scopes: vec!["openid".to_string()],
         request_headers: Vec::new(),
         response_header_allowlist: Vec::new(),
@@ -219,12 +219,12 @@ fn runtime_config_materializes_control_api_token_refs_before_runtime_snapshot() 
         reference: format!("file://{}", auth_token.display()),
     });
     config.observability.control_api.auth.bearer_tokens.push(
-        spooky_config::config::ControlApiBearerToken {
+        impulse_config::config::ControlApiBearerToken {
             token: String::new(),
             token_ref: Some(SecretRef {
                 reference: format!("file://{}", viewer_token.display()),
             }),
-            role: spooky_config::config::ControlApiRole::Viewer,
+            role: impulse_config::config::ControlApiRole::Viewer,
             actor_id: Some("viewer".to_string()),
         },
     );

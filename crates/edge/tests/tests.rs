@@ -1,7 +1,7 @@
 use std::{collections::HashMap, time::Instant};
 
-use spooky_config::config::{LoadBalancing, RouteMatch, Upstream};
-use spooky_edge::routing::{
+use impulse_config::config::{LoadBalancing, RouteMatch, Upstream};
+use impulse_edge::routing::{
     decision::RouteDecisionReason,
     index::RouteIndex,
     scan::{scan_lookup, scan_lookup_for_method},

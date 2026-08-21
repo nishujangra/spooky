@@ -12,7 +12,7 @@ MICRO_REPORT="${MICRO_REPORT:-bench/micro/latest.json}"
 MACRO_REPORT="${MACRO_REPORT:-bench/macro/latest.json}"
 SET_CURRENT="${SET_CURRENT:-true}"
 
-cargo run -q -p spooky-bench -- \
+cargo run -q -p impulse-bench -- \
   --promote-release "$RELEASE" \
   --baseline-index "$BASELINE_INDEX" \
   --promote-micro-report "$MICRO_REPORT" \

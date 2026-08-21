@@ -1,10 +1,10 @@
-# Spooky Basics
+# Impulse Basics
 
-This guide covers fundamental concepts and basic usage of Spooky, an HTTP/3 to HTTP/2 edge proxy.
+This guide covers fundamental concepts and basic usage of Impulse, an HTTP/3 to HTTP/2 edge proxy.
 
 ## Architecture Overview
 
-Spooky operates as a protocol translation layer between HTTP/3 clients and HTTP/2 backend services:
+Impulse operates as a protocol translation layer between HTTP/3 clients and HTTP/2 backend services:
 
 1. **QUIC Connection Termination**: Accepts incoming HTTP/3 requests over QUIC
 2. **Protocol Translation**: Converts HTTP/3 streams to HTTP/2 requests
@@ -13,7 +13,7 @@ Spooky operates as a protocol translation layer between HTTP/3 clients and HTTP/
 5. **Client Delivery**: Returns responses to the client over QUIC
 
 ```
-Client (HTTP/3/QUIC) → Spooky Edge → Backend (HTTP/2)
+Client (HTTP/3/QUIC) → Impulse Edge → Backend (HTTP/2)
                             ↓
                     Route Matching
                     Load Balancing
@@ -73,11 +73,11 @@ log:
 **log**: Logging configuration
 - `level`: Log verbosity (trace, debug, info, warn, error)
 - `file.enabled`: Write logs to a file instead of stderr (default: false)
-- `file.path`: Log file path (default: `/var/log/spooky/spooky.log`)
+- `file.path`: Log file path (default: `/var/log/impulse/impulse.log`)
 
 ## Upstream Pools and Routing
 
-Spooky supports multiple upstream pools with independent routing rules. Requests are matched using longest-prefix matching across all configured routes.
+Impulse supports multiple upstream pools with independent routing rules. Requests are matched using longest-prefix matching across all configured routes.
 
 ### Path-Based Routing
 
@@ -227,14 +227,14 @@ def health():
 
 ## Command Line Interface
 
-### Starting Spooky
+### Starting Impulse
 
 ```bash
 # Start with configuration file
-spooky --config config.yaml
+impulse --config config.yaml
 
 # Display version
-spooky --version
+impulse --version
 ```
 
 ### Command Line Options
@@ -281,11 +281,11 @@ done
 wait
 
 # Monitor backend request distribution (systemd)
-sudo journalctl -u spooky.service | grep "routing to backend" | \
+sudo journalctl -u impulse.service | grep "routing to backend" | \
   awk '{print $NF}' | sort | uniq -c
 
 # Monitor backend request distribution (if redirected to file)
-grep "routing to backend" /var/log/spooky/spooky.log | \
+grep "routing to backend" /var/log/impulse/impulse.log | \
   awk '{print $NF}' | sort | uniq -c
 ```
 
@@ -293,16 +293,16 @@ grep "routing to backend" /var/log/spooky/spooky.log | \
 
 ```bash
 # Monitor health check activity (systemd)
-sudo journalctl -u spooky.service -f | grep -i health
+sudo journalctl -u impulse.service -f | grep -i health
 
 # Monitor health check activity (direct process)
-spooky --config config.yaml 2>&1 | grep -i health
+impulse --config config.yaml 2>&1 | grep -i health
 
 # Check backend status (systemd)
-sudo journalctl -u spooky.service | grep "backend.*healthy" | tail -20
+sudo journalctl -u impulse.service | grep "backend.*healthy" | tail -20
 
 # Check backend status (if redirected to file)
-grep "backend.*healthy" /var/log/spooky/spooky.log | tail -20
+grep "backend.*healthy" /var/log/impulse/impulse.log | tail -20
 ```
 
 ## Logging
@@ -329,7 +329,7 @@ log:
   level: info
   file:
     enabled: true
-    path: /var/log/spooky/spooky.log
+    path: /var/log/impulse/impulse.log
 ```
 
 ### Log Analysis
@@ -338,38 +338,38 @@ log:
 
 ```bash
 # Follow logs in real-time
-sudo journalctl -u spooky.service -f
+sudo journalctl -u impulse.service -f
 
 # Filter by severity
-sudo journalctl -u spooky.service | grep ERROR
+sudo journalctl -u impulse.service | grep ERROR
 
 # Search for specific requests
-sudo journalctl -u spooky.service | grep "GET /api/users"
+sudo journalctl -u impulse.service | grep "GET /api/users"
 
 # Monitor backend selection
-sudo journalctl -u spooky.service | grep "routing to backend"
+sudo journalctl -u impulse.service | grep "routing to backend"
 
 # Track health check failures
-sudo journalctl -u spooky.service | grep "health check failed"
+sudo journalctl -u impulse.service | grep "health check failed"
 ```
 
 **File (log.file.enabled: true)**
 
 ```bash
 # Follow logs in real-time
-tail -f /var/log/spooky/spooky.log
+tail -f /var/log/impulse/impulse.log
 
 # Filter by severity
-grep ERROR /var/log/spooky/spooky.log
+grep ERROR /var/log/impulse/impulse.log
 
 # Search for specific requests
-grep "GET /api/users" /var/log/spooky/spooky.log
+grep "GET /api/users" /var/log/impulse/impulse.log
 
 # Monitor backend selection
-grep "routing to backend" /var/log/spooky/spooky.log
+grep "routing to backend" /var/log/impulse/impulse.log
 
 # Track health check failures
-grep "health check failed" /var/log/spooky/spooky.log
+grep "health check failed" /var/log/impulse/impulse.log
 ```
 
 ## Common Deployment Patterns
@@ -412,13 +412,13 @@ log:
   level: debug
 EOF
 
-# Start Spooky
-spooky --config dev-config.yaml
+# Start Impulse
+impulse --config dev-config.yaml
 ```
 
 ### Example Multi-Backend Setup
 
-> **Note:** Spooky is beta. The configuration below demonstrates structure and routing patterns; use the deployment guide hardening checklist before production rollout.
+> **Note:** Impulse is beta. The configuration below demonstrates structure and routing patterns; use the deployment guide hardening checklist before production rollout.
 
 ```bash
 # Obtain certificates (Let's Encrypt)
@@ -469,8 +469,8 @@ log:
 EOF
 
 # Deploy as systemd service
-sudo systemctl start spooky
-sudo systemctl enable spooky
+sudo systemctl start impulse
+sudo systemctl enable impulse
 ```
 
 ## Troubleshooting
@@ -478,7 +478,7 @@ sudo systemctl enable spooky
 ### Connection Issues
 
 ```bash
-# Verify Spooky is listening on UDP
+# Verify Impulse is listening on UDP
 sudo netstat -uln | grep 9889
 # or
 sudo ss -uln | grep 9889
@@ -500,10 +500,10 @@ openssl s_client -connect localhost:9889 -showcerts
 # Test backend directly
 curl -v http://127.0.0.1:8080/health
 
-# Test through Spooky
+# Test through Impulse
 curl --http3-only -k -v https://localhost:9889/health
 
-# Check backend reachability from Spooky host
+# Check backend reachability from the Impulse host
 telnet 10.0.1.10 8080
 ```
 
@@ -511,7 +511,7 @@ telnet 10.0.1.10 8080
 
 ```bash
 # Validate configuration syntax (startup validation happens before serving)
-spooky --config config.yaml
+impulse --config config.yaml
 
 # Check for YAML syntax errors
 yamllint config.yaml
@@ -524,8 +524,8 @@ grep -A 10 "route:" config.yaml
 
 ```bash
 # Monitor system resources
-top -p $(pgrep spooky)
-htop -p $(pgrep spooky)
+top -p $(pgrep impulse)
+htop -p $(pgrep impulse)
 
 # Check UDP buffer statistics
 netstat -su | grep Udp

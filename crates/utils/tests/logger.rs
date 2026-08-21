@@ -4,15 +4,15 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-use log::LevelFilter;
-use serde_json::json;
-use spooky_utils::logger::{
+use impulse_utils::logger::{
     CONTROL_API_AUDIT_LOG_TARGET,
     errors::{build_create_log_dir_error, build_open_log_file_error},
     formatter::{build_json_payload, should_passthrough_raw_json_target},
     init::{LoggerInitStatus, try_init_logger},
     set_log_level,
 };
+use log::LevelFilter;
+use serde_json::json;
 
 fn logger_test_guard() -> std::sync::MutexGuard<'static, ()> {
     static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
@@ -40,7 +40,7 @@ fn set_log_level_accepts_all_supported_aliases() {
         ("trace", LevelFilter::Trace),
         ("haunt", LevelFilter::Debug),
         ("debug", LevelFilter::Debug),
-        ("spooky", LevelFilter::Info),
+        ("impulse", LevelFilter::Info),
         ("info", LevelFilter::Info),
         ("scream", LevelFilter::Warn),
         ("warn", LevelFilter::Warn),
@@ -72,35 +72,35 @@ fn set_log_level_rejects_invalid_values() {
 fn create_log_dir_error_includes_directory_and_file_path() {
     let err = io::Error::new(io::ErrorKind::PermissionDenied, "permission denied");
     let msg = build_create_log_dir_error(
-        "/var/log/spooky/spooky.log",
-        Path::new("/var/log/spooky"),
+        "/var/log/impulse/impulse.log",
+        Path::new("/var/log/impulse"),
         &err,
     );
 
-    assert!(msg.contains("/var/log/spooky"));
-    assert!(msg.contains("/var/log/spooky/spooky.log"));
+    assert!(msg.contains("/var/log/impulse"));
+    assert!(msg.contains("/var/log/impulse/impulse.log"));
     assert!(msg.contains("permission denied"));
 }
 
 #[test]
 fn open_log_file_error_includes_file_path() {
     let err = io::Error::new(io::ErrorKind::PermissionDenied, "permission denied");
-    let msg = build_open_log_file_error("/var/log/spooky/spooky.log", &err);
+    let msg = build_open_log_file_error("/var/log/impulse/impulse.log", &err);
 
-    assert!(msg.contains("/var/log/spooky/spooky.log"));
+    assert!(msg.contains("/var/log/impulse/impulse.log"));
     assert!(msg.contains("permission denied"));
 }
 
 #[test]
 fn json_payload_preserves_plain_message_verbatim() {
-    let payload = build_json_payload("123", "info", "spooky", "request_id=42 status=200");
+    let payload = build_json_payload("123", "info", "impulse", "request_id=42 status=200");
 
     assert_eq!(
         payload,
         json!({
             "ts": "123",
             "level": "info",
-            "target": "spooky",
+            "target": "impulse",
             "msg": "request_id=42 status=200",
         })
     );
@@ -111,7 +111,7 @@ fn json_payload_preserves_malformed_kv_like_message_verbatim() {
     let payload = build_json_payload(
         "123",
         "warn",
-        "spooky_edge",
+        "impulse_edge",
         r#"request_id= status="" path=, trace_id==broken"#,
     );
 
@@ -120,7 +120,7 @@ fn json_payload_preserves_malformed_kv_like_message_verbatim() {
         json!({
             "ts": "123",
             "level": "warn",
-            "target": "spooky_edge",
+            "target": "impulse_edge",
             "msg": r#"request_id= status="" path=, trace_id==broken"#,
         })
     );
@@ -131,7 +131,7 @@ fn json_payload_preserves_embedded_quotes_and_whitespace() {
     let payload = build_json_payload(
         "123",
         "error",
-        "spooky_edge::quic_listener::forwarding",
+        "impulse_edge::quic_listener::forwarding",
         r#"msg="backend failed" path="/api v1" detail="x=y, z""#,
     );
 
@@ -140,7 +140,7 @@ fn json_payload_preserves_embedded_quotes_and_whitespace() {
         json!({
             "ts": "123",
             "level": "error",
-            "target": "spooky_edge::quic_listener::forwarding",
+            "target": "impulse_edge::quic_listener::forwarding",
             "msg": r#"msg="backend failed" path="/api v1" detail="x=y, z""#,
         })
     );
@@ -151,5 +151,5 @@ fn control_api_audit_target_is_marked_for_raw_json_passthrough() {
     assert!(should_passthrough_raw_json_target(
         CONTROL_API_AUDIT_LOG_TARGET
     ));
-    assert!(!should_passthrough_raw_json_target("spooky_edge"));
+    assert!(!should_passthrough_raw_json_target("impulse_edge"));
 }

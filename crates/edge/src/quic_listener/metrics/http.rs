@@ -106,11 +106,11 @@ mod tests {
         let body = String::from_utf8(full_body_bytes(response).await.to_vec())
             .expect("metrics response utf-8");
         assert!(
-            body.contains("# HELP spooky_requests_total Total requests seen by spooky.\n"),
-            "metrics body should expose prometheus text for spooky_requests_total"
+            body.contains("# HELP impulse_requests_total Total requests seen by impulse.\n"),
+            "metrics body should expose prometheus text for impulse_requests_total"
         );
         assert!(
-            body.contains("spooky_requests_total 0\n"),
+            body.contains("impulse_requests_total 0\n"),
             "metrics body should include the requests counter sample"
         );
     }

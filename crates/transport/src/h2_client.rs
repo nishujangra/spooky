@@ -23,6 +23,7 @@ use hyper_util::{
     },
     rt::TokioIo,
 };
+use impulse_config::runtime::{RuntimeBackendTlsPolicy, RuntimeUpstream};
 use log::warn;
 use rustls::{
     ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme,
@@ -30,7 +31,6 @@ use rustls::{
     pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime},
 };
 use rustls_pki_types::pem::PemObject;
-use spooky_config::runtime::{RuntimeBackendTlsPolicy, RuntimeUpstream};
 use tower_service::Service;
 
 /// TLS client policy applied to HTTP/2 backend connections.
@@ -552,7 +552,7 @@ mod tests {
     #[test]
     fn invalid_ca_file_is_rejected() {
         let unique = format!(
-            "spooky-invalid-ca-{}-{}.pem",
+            "impulse-invalid-ca-{}-{}.pem",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)

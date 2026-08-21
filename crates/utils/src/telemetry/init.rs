@@ -54,7 +54,7 @@ pub fn init_tracing(
         )
         .build();
 
-    let tracer = provider.tracer("spooky");
+    let tracer = provider.tracer("impulse");
     let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
     let subscriber = Registry::default().with(otel_layer);
     if let Err(err) = tracing::subscriber::set_global_default(subscriber) {

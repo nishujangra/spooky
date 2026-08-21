@@ -70,7 +70,7 @@ fi
 
 if [[ ! -x "${H3_CLIENT_BIN}" ]]; then
   echo "error: h3 client binary not found at ${H3_CLIENT_BIN}" >&2
-  echo "build it with: cargo build --release -p spooky --bin h3_client" >&2
+  echo "build it with: cargo build --release -p impulse --bin h3_client" >&2
   exit 1
 fi
 
@@ -437,7 +437,7 @@ fi
 
 # Markdown export
 {
-  echo "# Spooky Load Scenarios"
+  echo "# Impulse Load Scenarios"
   echo
   echo "- Target: \`${TARGET}\`"
   echo "- Host: \`${HOST}\`"

@@ -15,7 +15,7 @@ Use this page for current hard product limits and non-goals.
 
 ## Architectural Limits
 
-- Spooky is centered on **HTTP/3 downstream** with scheme-driven upstream transport: `https://` backends use HTTP/2, `http://` backends use HTTP/1.1. Mixed deployments are supported.
+- Impulse is centered on **HTTP/3 downstream** with scheme-driven upstream transport: `https://` backends use HTTP/2, `http://` backends use HTTP/1.1. Mixed deployments are supported.
 - It is not yet a broad multi-protocol reverse proxy in the same class as older general-purpose incumbents.
 - It is not yet a dynamic control-plane-driven proxy platform.
 

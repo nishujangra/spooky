@@ -9,8 +9,8 @@ use std::{
     time::Duration,
 };
 
+use impulse_config::runtime::ListenerRuntimeConfig;
 use log::{error, warn};
-use spooky_config::runtime::ListenerRuntimeConfig;
 
 use crate::{
     constants::MAX_DATAGRAM_SIZE_BYTES,
@@ -72,7 +72,7 @@ pub fn spawn_listener_worker_group(
     let mut worker_handles = Vec::with_capacity(sockets.len());
     for (socket_idx, socket) in sockets.into_iter().enumerate() {
         let worker_idx = config.worker_index_base.saturating_add(socket_idx);
-        let thread_name = format!("spooky-data-plane-{}", worker_idx);
+        let thread_name = format!("impulse-data-plane-{}", worker_idx);
         let worker_runtime = WorkerThreadRuntime {
             worker_idx,
             pin_workers: config.pin_workers,
@@ -161,7 +161,7 @@ fn run_sharded_listener_worker(
         let pin_workers = worker_runtime.pin_workers;
 
         let shard_name = format!(
-            "spooky-data-plane-{}-shard-{}",
+            "impulse-data-plane-{}-shard-{}",
             worker_runtime.worker_idx, shard_idx
         );
         let shard_handle = thread::Builder::new()

@@ -1,6 +1,6 @@
 # Docker Installation
 
-This page is the fastest way to run Spooky in containers and verify health, metrics, and first proxied traffic.
+This page is the fastest way to run Impulse in containers and verify health, metrics, and first proxied traffic.
 
 ## Prerequisites
 
@@ -10,7 +10,7 @@ This page is the fastest way to run Spooky in containers and verify health, metr
 ## Choose Your Docker Path
 
 - Want the fastest container evaluation path: use the provided Compose stack plus a small demo backend
-- Want to run only the Spooky container: use the single-container commands later in this page
+- Want to run only the Impulse container: use the single-container commands later in this page
 - Want full host and production guidance: use [Production Deployment](../deployment/production.md)
 
 ## Quick Start with Docker Compose
@@ -24,8 +24,8 @@ The fastest working container path is:
 **1. Clone the repository:**
 
 ```bash
-git clone https://github.com/Supernova-Labs-Org/spooky.git
-cd spooky
+git clone https://github.com/Supernova-Labs-Org/impulse.git
+cd impulse
 ```
 
 **2. Use the repo development certificates for local testing.**
@@ -37,7 +37,7 @@ For real deployments, replace them with your own certificate material and follow
 **3. Start a small demo backend:**
 
 ```bash
-docker run -d --name spooky-demo-backend --rm -p 8080:80 nginx:alpine
+docker run -d --name impulse-demo-backend --rm -p 8080:80 nginx:alpine
 ```
 
 **4. Edit the config to point at that backend:**
@@ -85,7 +85,7 @@ curl --http3-only -k https://127.0.0.1:9889/
 
 ```bash
 docker compose -f packaging/docker/docker-compose.yml down
-docker rm -f spooky-demo-backend 2>/dev/null || true
+docker rm -f impulse-demo-backend 2>/dev/null || true
 ```
 
 ## Running a Single Container
@@ -93,18 +93,18 @@ docker rm -f spooky-demo-backend 2>/dev/null || true
 If you prefer to manage the container directly:
 
 ```bash
-docker build -t spooky:latest -f packaging/docker/Dockerfile .
+docker build -t impulse:latest -f packaging/docker/Dockerfile .
 
 docker run -d \
-  --name spooky \
+  --name impulse \
   -p 9889:9889/udp \
   -p 9889:9889/tcp \
   -p 9901:9901 \
   -p 9902:9902 \
-  -v "$(pwd)/packaging/docker/config.docker.yaml:/etc/spooky/config.yaml:ro" \
-  -v "$(pwd)/certs:/etc/spooky/certs:ro" \
+  -v "$(pwd)/packaging/docker/config.docker.yaml:/etc/impulse/config.yaml:ro" \
+  -v "$(pwd)/certs:/etc/impulse/certs:ro" \
   --restart unless-stopped \
-  spooky:latest
+  impulse:latest
 ```
 
 ## Ports
@@ -121,13 +121,13 @@ Mount your own config file instead of the default:
 
 ```bash
 docker run -d \
-  --name spooky \
+  --name impulse \
   -p 9889:9889/udp -p 9889:9889/tcp \
   -p 9901:9901 -p 9902:9902 \
-  -v "/path/to/your/config.yaml:/etc/spooky/config.yaml:ro" \
-  -v "/path/to/your/certs:/etc/spooky/certs:ro" \
+  -v "/path/to/your/config.yaml:/etc/impulse/config.yaml:ro" \
+  -v "/path/to/your/certs:/etc/impulse/certs:ro" \
   --restart unless-stopped \
-  spooky:latest
+  impulse:latest
 ```
 
 See `packaging/docker/config.docker.yaml` for the packaged container reference config.
@@ -137,11 +137,11 @@ See `packaging/docker/config.docker.yaml` for the packaged container reference c
 A helper script is provided to build and tag the image:
 
 ```bash
-# Default tag: spooky:packaging
+# Default tag: impulse:packaging
 ./packaging/docker/scripts/build-image.sh
 
 # Custom tag
-./packaging/docker/scripts/build-image.sh spooky:1.0.0
+./packaging/docker/scripts/build-image.sh impulse:1.0.0
 ```
 
 ## Smoke Test
@@ -162,10 +162,10 @@ This validates:
 
 ```bash
 # Follow live logs
-docker logs -f spooky
+docker logs -f impulse
 
 # With Compose
-docker compose -f packaging/docker/docker-compose.yml logs -f spooky
+docker compose -f packaging/docker/docker-compose.yml logs -f impulse
 ```
 
 By default, the container logs to stdout/stderr. To persist logs to a file, set in your config:
@@ -174,10 +174,10 @@ By default, the container logs to stdout/stderr. To persist logs to a file, set 
 log:
   file:
     enabled: true
-    path: /var/log/spooky/spooky.log
+    path: /var/log/impulse/impulse.log
 ```
 
-And mount a volume for `/var/log/spooky/`.
+And mount a volume for `/var/log/impulse/`.
 
 ## Upgrading
 
@@ -186,14 +186,14 @@ And mount a volume for `/var/log/spooky/`.
 docker compose -f packaging/docker/docker-compose.yml up -d --build
 
 # Or for a single container
-docker build -t spooky:latest -f packaging/docker/Dockerfile .
-docker rm -f spooky
+docker build -t impulse:latest -f packaging/docker/Dockerfile .
+docker rm -f impulse
 docker run -d ...   # same run command as before
 ```
 
 ## What to Read Next
 
 - [Quickstart](../tutorials/quickstart.md) - fastest local non-container first run
-- [Installation](installation.md) - install Spooky directly on a host
+- [Installation](installation.md) - install Impulse directly on a host
 - [Minimum Production](minimum-production.md) - minimum safe production posture
 - [Production Deployment](../deployment/production.md) - full deployment guidance

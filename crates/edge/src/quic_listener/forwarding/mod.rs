@@ -10,8 +10,8 @@ use std::convert::Infallible;
 
 use http_body_util::Full;
 #[cfg(test)]
-use spooky_config::config::ScopedRateLimitScope;
-use spooky_errors::ClassifiedUpstreamProxyError;
+use impulse_config::config::ScopedRateLimitScope;
+use impulse_errors::ClassifiedUpstreamProxyError;
 
 use self::prepare::{RequestFinalizationConfig, StartedRequestEnvelope};
 #[cfg(test)]
@@ -708,7 +708,7 @@ impl QUICListener {
                                 None,
                                 Duration::from_millis(0),
                                 Some(status),
-                                &ProxyError::Bridge(spooky_errors::BridgeError::InvalidHeader),
+                                &ProxyError::Bridge(impulse_errors::BridgeError::InvalidHeader),
                                 None,
                             );
                             let _ = Self::send_simple_response(
@@ -983,7 +983,7 @@ impl QUICListener {
                                     None,
                                     elapsed,
                                     Some(http::StatusCode::BAD_REQUEST),
-                                    &ProxyError::Bridge(spooky_errors::BridgeError::InvalidHeader),
+                                    &ProxyError::Bridge(impulse_errors::BridgeError::InvalidHeader),
                                     None,
                                 );
                                 Self::send_simple_response(
@@ -1252,15 +1252,15 @@ mod tests {
         sign::Signer,
     };
     use hmac::{Hmac, Mac};
-    use serde_json::Value;
-    use sha2::Sha256;
-    use spooky_config::{
+    use impulse_config::{
         config::{JwtAlgorithm, ScopedRateLimit, ScopedRateLimitScope},
         runtime::{
             RuntimeApiKeyAuth, RuntimeAuthPolicy, RuntimeJwtAuth, RuntimeJwtVerificationKey,
             RuntimeUpstreamPolicy,
         },
     };
+    use serde_json::Value;
+    use sha2::Sha256;
 
     use super::{auth::append_auth_request_headers, *};
     use crate::runtime::connection::auth::PendingHeaderMutation;
@@ -1416,12 +1416,12 @@ mod tests {
     #[test]
     fn send_connect_error_with_tls_details_maps_to_tls_health_failure() {
         assert_eq!(
-            spooky_errors::classify_upstream_error_detail(
+            impulse_errors::classify_upstream_error_detail(
                 "client error (Connect): tls handshake failed: invalid certificate",
                 true,
             ),
-            spooky_errors::UpstreamErrorClassification::tls(
-                spooky_errors::UpstreamTlsReason::Handshake,
+            impulse_errors::UpstreamErrorClassification::tls(
+                impulse_errors::UpstreamTlsReason::Handshake,
             )
         );
     }
@@ -1429,19 +1429,19 @@ mod tests {
     #[test]
     fn send_connect_error_without_tls_details_maps_to_transport_health_failure() {
         assert_eq!(
-            spooky_errors::classify_upstream_error_detail(
+            impulse_errors::classify_upstream_error_detail(
                 "client error (Connect): connection refused",
                 true,
             ),
-            spooky_errors::UpstreamErrorClassification::transport()
+            impulse_errors::UpstreamErrorClassification::transport()
         );
     }
 
     #[test]
     fn send_error_with_timeout_detail_maps_to_timeout_health_failure() {
         assert_eq!(
-            spooky_errors::classify_upstream_error_detail("request timed out", false),
-            spooky_errors::UpstreamErrorClassification::timeout()
+            impulse_errors::classify_upstream_error_detail("request timed out", false),
+            impulse_errors::UpstreamErrorClassification::timeout()
         );
     }
 
@@ -1467,7 +1467,7 @@ mod tests {
         );
         assert_eq!(
             backend_failure_reason_for_proxy_error(&ProxyError::Bridge(
-                spooky_errors::BridgeError::InvalidHeader
+                impulse_errors::BridgeError::InvalidHeader
             )),
             BackendFailureReason::UpstreamBridge
         );
@@ -1599,7 +1599,7 @@ mod tests {
         .expect("validated jwt");
         assert_eq!(
             validated.algorithm,
-            spooky_config::config::JwtAlgorithm::Hs256
+            impulse_config::config::JwtAlgorithm::Hs256
         );
         assert_eq!(
             validated.claims.get("sub").and_then(Value::as_str),
@@ -1626,7 +1626,7 @@ mod tests {
                 secret: "jwt-secret".to_string(),
                 issuer: Some("issuer-1".to_string()),
                 audience: Some("aud-1".to_string()),
-                allowed_algorithms: vec![spooky_config::config::JwtAlgorithm::Rs256],
+                allowed_algorithms: vec![impulse_config::config::JwtAlgorithm::Rs256],
                 clock_skew: Duration::from_secs(30),
                 ..RuntimeJwtAuth::default()
             },
@@ -2527,8 +2527,8 @@ mod tests {
             Some(&lookup),
         );
         let routed_header = QUICListener::resolve_lb_key_for_runtime_request(
-            spooky_config::runtime::RuntimeLoadBalancingStrategy::RoundRobin,
-            Some(&spooky_config::runtime::RuntimeRequestKeySpec::Header(
+            impulse_config::runtime::RuntimeLoadBalancingStrategy::RoundRobin,
+            Some(&impulse_config::runtime::RuntimeRequestKeySpec::Header(
                 "x-user-id".to_string(),
             )),
             &route_request,
@@ -2550,8 +2550,8 @@ mod tests {
             Some(&lookup),
         );
         let routed_sticky = QUICListener::resolve_lb_key_for_runtime_request(
-            spooky_config::runtime::RuntimeLoadBalancingStrategy::StickyCid,
-            Some(&spooky_config::runtime::RuntimeRequestKeySpec::Header(
+            impulse_config::runtime::RuntimeLoadBalancingStrategy::StickyCid,
+            Some(&impulse_config::runtime::RuntimeRequestKeySpec::Header(
                 "x-missing".to_string(),
             )),
             &route_request,

@@ -6,7 +6,7 @@ use std::{
     },
 };
 
-use spooky_errors::RetryPolicyDenialReason;
+use impulse_errors::RetryPolicyDenialReason;
 
 pub struct RetryBudget {
     enabled: bool,
@@ -82,7 +82,7 @@ impl RetryBudget {
 mod tests {
     use std::collections::HashMap;
 
-    use spooky_errors::RetryPolicyDenialReason;
+    use impulse_errors::RetryPolicyDenialReason;
 
     use super::RetryBudget;
 

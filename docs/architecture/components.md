@@ -1,23 +1,23 @@
 # Component Architecture
 
-This document provides a detailed breakdown of Spooky's modular component architecture, including responsibilities, APIs, and implementation details for each crate.
+This document provides a detailed breakdown of Impulse's modular component architecture, including responsibilities, APIs, and implementation details for each crate.
 
 ## Component Overview
 
-Spooky is organized as a Rust workspace with the following crates:
+Impulse is organized as a Rust workspace with the following crates:
 
 | Crate | Path | Responsibility |
 |-------|------|----------------|
-| spooky | `spooky/` | Main binary and application lifecycle |
-| spooky-edge | `crates/edge/` | QUIC listener and HTTP/3 session management |
-| spooky-bridge | `crates/bridge/` | HTTP/3 to HTTP/2 protocol conversion |
-| spooky-transport | `crates/transport/` | HTTP/2 client and connection pooling |
-| spooky-lb | `crates/lb/` | Load balancing algorithms and health tracking |
-| spooky-config | `crates/config/` | Configuration parsing and validation |
-| spooky-utils | `crates/utils/` | TLS utilities and logging setup |
-| spooky-errors | `crates/errors/` | Shared error types (minimal) |
+| impulse | `impulse/` | Main binary and application lifecycle |
+| impulse-edge | `crates/edge/` | QUIC listener and HTTP/3 session management |
+| impulse-bridge | `crates/bridge/` | HTTP/3 to HTTP/2 protocol conversion |
+| impulse-transport | `crates/transport/` | HTTP/2 client and connection pooling |
+| impulse-lb | `crates/lb/` | Load balancing algorithms and health tracking |
+| impulse-config | `crates/config/` | Configuration parsing and validation |
+| impulse-utils | `crates/utils/` | TLS utilities and logging setup |
+| impulse-errors | `crates/errors/` | Shared error types (minimal) |
 
-## Main Application (`spooky`)
+## Main Application (`impulse`)
 
 ### Responsibilities
 
@@ -94,7 +94,7 @@ internally; that per-worker loop is where packets are actually processed.
 - `tokio`: Async runtime
 - `log`: Logging facade
 
-## Edge Listener (`spooky-edge`)
+## Edge Listener (`impulse-edge`)
 
 ### Responsibilities
 
@@ -282,12 +282,12 @@ Errors are logged and result in appropriate HTTP error responses to clients wher
 - `tokio`: Async backend request execution
 - `bytes`: Efficient byte buffer handling
 - `http`: HTTP types for request construction
-- `spooky-config`: Configuration types
-- `spooky-lb`: Load balancing and health tracking
-- `spooky-bridge`: Protocol conversion
-- `spooky-transport`: HTTP/2 backend communication
+- `impulse-config`: Configuration types
+- `impulse-lb`: Load balancing and health tracking
+- `impulse-bridge`: Protocol conversion
+- `impulse-transport`: HTTP/2 backend communication
 
-## Protocol Bridge (`spooky-bridge`)
+## Protocol Bridge (`impulse-bridge`)
 
 ### Responsibilities
 
@@ -359,7 +359,7 @@ All errors are propagated to caller with specific error types. Invalid requests 
 - `bytes`: Byte buffer types
 - `quiche`: HTTP/3 header types (NameValue)
 
-## Transport Layer (`spooky-transport`)
+## Transport Layer (`impulse-transport`)
 
 ### Responsibilities
 
@@ -456,7 +456,7 @@ impl H2Client {
 - `tokio`: Async runtime
 - `bytes`: Byte buffers
 
-## Load Balancer (`spooky-lb`)
+## Load Balancer (`impulse-lb`)
 
 ### Responsibilities
 
@@ -625,10 +625,10 @@ Default replicas for consistent hash: 64
 ### Dependencies
 
 - `rand`: Random number generation
-- `spooky-config`: Configuration types (Backend, HealthCheck, Upstream)
+- `impulse-config`: Configuration types (Backend, HealthCheck, Upstream)
 - Standard library: BTreeMap for hash ring, Duration/Instant for timing
 
-## Configuration System (`spooky-config`)
+## Configuration System (`impulse-config`)
 
 ### Responsibilities
 
@@ -750,7 +750,7 @@ pub fn validate(config: &Config) -> bool;
 - `serde_yml`: YAML parsing
 - `log`: Logging
 
-## Utilities (`spooky-utils`)
+## Utilities (`impulse-utils`)
 
 ### Responsibilities
 
@@ -783,33 +783,33 @@ pub fn init_logger(level: &str);
 ```
 Client HTTP/3 Request
          ▼
-[spooky-edge::QUICListener]
+[impulse-edge::QUICListener]
   ├─ Receive QUIC packets
   ├─ Decode HTTP/3 headers
   └─ Create RequestEnvelope
          ▼
-[spooky-edge::quic_listener::find_upstream_for_request]
+[impulse-edge::quic_listener::find_upstream_for_request]
   ├─ Match path_prefix and host
   └─ Select upstream pool
          ▼
-[spooky-lb::LoadBalancing::pick]
+[impulse-lb::LoadBalancing::pick]
   ├─ Filter to healthy backends
   ├─ Apply algorithm
   └─ Return backend index
          ▼
-[spooky-bridge::build_h2_request]
+[impulse-bridge::build_h2_request]
   ├─ Convert HTTP/3 → HTTP/2
   ├─ Normalize headers
   └─ Construct Request<Full<Bytes>>
          ▼
-[spooky-transport::H2Pool::send]
+[impulse-transport::H2Pool::send]
   ├─ Acquire semaphore permit
   ├─ Get backend client
   └─ Forward request
          ▼
 Backend HTTP/2 Server
          ▼
-[spooky-edge::QUICListener]
+[impulse-edge::QUICListener]
   ├─ Receive response
   ├─ Update health state
   ├─ Update metrics
@@ -819,20 +819,20 @@ Backend HTTP/2 Server
 ### Configuration Path
 
 ```
-[spooky::main]
+[impulse::main]
   └─ Parse CLI args
          ▼
-[spooky-config::loader::read_config]
+[impulse-config::loader::read_config]
   ├─ Read YAML file
   └─ Parse with serde
          ▼
-[spooky-config::validator::validate]
+[impulse-config::validator::validate]
   ├─ Check TLS files
   ├─ Validate structure
   └─ Return bool
          ▼
-[spooky-edge::QUICListener::new]
-  ├─ Load TLS via spooky-utils
+[impulse-edge::QUICListener::new]
+  ├─ Load TLS via impulse-utils
   ├─ Create H2Pool with backends
   ├─ Create UpstreamPools
   └─ Initialize load balancers
@@ -846,31 +846,31 @@ Runtime
 
 Each crate includes unit tests for core functionality:
 
-**spooky-lb:**
+**impulse-lb:**
 - Round robin cycling behavior
 - Consistent hash stability
 - Health state transitions
 - Backend recovery
 - Empty pool handling
 
-**spooky-bridge:**
+**impulse-bridge:**
 - Header conversion
 - Pseudo-header handling
 - URI construction
 - Error cases
 
-**spooky-config:**
+**impulse-config:**
 - YAML parsing
 - Default value application
 - Validation logic
 
-**spooky-transport:**
+**impulse-transport:**
 - Pool initialization
 - Backend existence checks
 
 ### Integration Tests
 
-**spooky-edge:**
+**impulse-edge:**
 - Full request/response flow
 - Health check integration
 - Upstream routing
@@ -883,10 +883,10 @@ Each crate includes unit tests for core functionality:
 cargo test
 
 # Specific crate
-cargo test -p spooky-lb
+cargo test -p impulse-lb
 
 # Integration tests only
-cargo test -p spooky-edge --test lb_integration
+cargo test -p impulse-edge --test lb_integration
 ```
 
 ## Performance Optimization

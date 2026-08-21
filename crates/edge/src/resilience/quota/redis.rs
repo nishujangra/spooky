@@ -596,10 +596,10 @@ mod tests {
     #[test]
     fn redis_window_specs_encode_protocol_and_bucket_identity() {
         let request = sample_request();
-        let windows = build_window_specs("spooky:quota", &request, 1_700_000_000_125);
+        let windows = build_window_specs("impulse:quota", &request, 1_700_000_000_125);
 
         assert_eq!(windows.len(), 2);
-        assert!(windows[0].storage_key.starts_with("spooky:quota:qv1:"));
+        assert!(windows[0].storage_key.starts_with("impulse:quota:qv1:"));
         assert!(
             windows[0]
                 .storage_key
@@ -630,7 +630,7 @@ mod tests {
             "875".to_string(),
             "1700000000000".to_string(),
             "1700000001000".to_string(),
-            "spooky:quota:qv1:12:tenant-quota:burst:1000:1700000000000:abc".to_string(),
+            "impulse:quota:qv1:12:tenant-quota:burst:1000:1700000000000:abc".to_string(),
             "sustained".to_string(),
             "500".to_string(),
             "320".to_string(),
@@ -639,7 +639,7 @@ mod tests {
             "59875".to_string(),
             "1699999980000".to_string(),
             "1700000040000".to_string(),
-            "spooky:quota:qv1:12:tenant-quota:sustained:60000:1699999980000:def".to_string(),
+            "impulse:quota:qv1:12:tenant-quota:sustained:60000:1699999980000:def".to_string(),
         ];
 
         let outcome = parse_eval_response(request, &response).expect("response should parse");
@@ -664,7 +664,7 @@ mod tests {
                 .burst
                 .as_ref()
                 .and_then(|window| window.storage_key.as_deref()),
-            Some("spooky:quota:qv1:12:tenant-quota:burst:1000:1700000000000:abc")
+            Some("impulse:quota:qv1:12:tenant-quota:burst:1000:1700000000000:abc")
         );
         assert_eq!(
             outcome
@@ -693,7 +693,7 @@ mod tests {
             "875".to_string(),
             "1700000000000".to_string(),
             "1700000001000".to_string(),
-            "spooky:quota:qv1:12:tenant-quota:burst:1000:1700000000000:abc".to_string(),
+            "impulse:quota:qv1:12:tenant-quota:burst:1000:1700000000000:abc".to_string(),
             "sustained".to_string(),
             "500".to_string(),
             "129".to_string(),
@@ -702,7 +702,7 @@ mod tests {
             "59875".to_string(),
             "1699999980000".to_string(),
             "1700000040000".to_string(),
-            "spooky:quota:qv1:12:tenant-quota:sustained:60000:1699999980000:def".to_string(),
+            "impulse:quota:qv1:12:tenant-quota:sustained:60000:1699999980000:def".to_string(),
         ];
 
         let outcome = parse_eval_response(request, &response).expect("response should parse");

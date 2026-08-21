@@ -60,7 +60,7 @@ fn send_h3_request_and_close(
         quiche::h3::Header::new(b":scheme", b"https"),
         quiche::h3::Header::new(b":authority", b"localhost"),
         quiche::h3::Header::new(b":path", path.as_bytes()),
-        quiche::h3::Header::new(b"user-agent", b"spooky-auth-teardown-test"),
+        quiche::h3::Header::new(b"user-agent", b"impulse-auth-teardown-test"),
     ];
     req_headers.extend(
         headers
@@ -105,7 +105,7 @@ async fn external_auth_allow_injects_headers_and_forwards() {
         assert_eq!(req.method(), http::Method::GET);
         assert_eq!(
             req.headers()
-                .get("x-spooky-original-method")
+                .get("x-impulse-original-method")
                 .and_then(|value| value.to_str().ok()),
             Some("GET")
         );
@@ -192,7 +192,7 @@ async fn external_auth_challenge_returns_www_authenticate_and_body() {
     let auth_addr = start_http_auth_server(|_req| async move {
         let response = Response::builder()
             .status(http::StatusCode::UNAUTHORIZED)
-            .header("www-authenticate", "Bearer realm=\"spooky\"")
+            .header("www-authenticate", "Bearer realm=\"impulse\"")
             .header("x-auth-reason", "expired")
             .body(Full::new(Bytes::from("token expired")))
             .expect("auth challenge response");
@@ -219,7 +219,7 @@ async fn external_auth_challenge_returns_www_authenticate_and_body() {
     assert_eq!(response.status, 401);
     assert_eq!(
         response.header("www-authenticate"),
-        Some("Bearer realm=\"spooky\"")
+        Some("Bearer realm=\"impulse\"")
     );
     assert_eq!(response.header("x-auth-reason"), Some("expired"));
     assert!(response.body.contains("token expired"));

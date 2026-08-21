@@ -1,6 +1,6 @@
 # Sizing And Capacity
 
-This page explains how to size Spooky nodes and how to think about safe concurrency. Exact numbers must be validated against your own workload.
+This page explains how to size Impulse nodes and how to think about safe concurrency. Exact numbers must be validated against your own workload.
 
 ## Inputs That Matter Most
 

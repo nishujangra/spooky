@@ -4,14 +4,14 @@
 
 use std::collections::HashMap;
 
-use spooky_config::{
+use impulse_config::{
     config::{
         Backend, Config, HealthCheck, Listen, LoadBalancing as ConfigLoadBalancing, RouteMatch,
         Tls, Upstream,
     },
     runtime::{RuntimeConfig, RuntimeUpstream},
 };
-use spooky_lb::upstream_pool::UpstreamPool;
+use impulse_lb::upstream_pool::UpstreamPool;
 
 pub(crate) fn runtime_upstream(strategy: &str, backends: Vec<Backend>) -> RuntimeUpstream {
     let mut upstreams = HashMap::new();

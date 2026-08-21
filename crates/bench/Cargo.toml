@@ -1,5 +1,5 @@
 [package]
-name = "spooky-bench"
+name = "impulse-bench"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,6 +12,6 @@ serde_yaml.workspace = true
 libc.workspace = true
 smallvec.workspace = true
 
-spooky-config = { path = "../config" }
-spooky-edge = { path = "../edge" }
-spooky-lb = { path = "../lb" }
+impulse-config = { path = "../config" }
+impulse-edge = { path = "../edge" }
+impulse-lb = { path = "../lb" }

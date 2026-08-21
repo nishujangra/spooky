@@ -1,12 +1,12 @@
-# Spooky
+# Impulse
 
-Spooky is a modern edge runtime for high-trust APIs. It sits in front of application traffic, terminates HTTP/3 and QUIC at the edge, routes requests to existing backends, and gives operators explicit control over resilience, policy, and failure handling.
+Impulse is a modern edge runtime for high-trust APIs. It sits in front of application traffic, terminates HTTP/3 and QUIC at the edge, routes requests to existing backends, and gives operators explicit control over resilience, policy, and failure handling.
 
 It is designed for teams that need more than basic reverse proxying, especially in environments where latency, availability, traffic contracts, auditability, and clear failure semantics matter.
 
-Spooky is not just a proxy binary. It is an operator-facing traffic layer for teams that want one place to understand, control, and protect critical API traffic.
+Impulse is not just a proxy binary. It is an operator-facing traffic layer for teams that want one place to understand, control, and protect critical API traffic.
 
-## Why Spooky
+## Why Impulse
 
 - **Modern edge ingress**: native HTTP/3 over QUIC with a bootstrap HTTP/1.1 and HTTP/2 compatibility path.
 - **Clear traffic control**: routing, load balancing, admission, quota, overload protection, retries, hedging, and circuit breaking are explicit runtime concerns.
@@ -15,18 +15,18 @@ Spooky is not just a proxy binary. It is an operator-facing traffic layer for te
 
 ## Built For Operators
 
-Spooky is built for the moments when traffic is no longer normal:
+Impulse is built for the moments when traffic is no longer normal:
 
 - when latency climbs and teams need to know whether the issue is overload, quota, auth, or backend failure
 - when backends are unstable and operators need the edge to absorb pressure instead of amplifying it
 - when policy decisions need to be explicit, observable, and auditable
 - when platform teams want production-grade dashboards, alerts, and runtime visibility without assembling everything from scratch
 
-## How Spooky Works
+## How Impulse Works
 
-Spooky gives teams one runtime to receive traffic, make explicit decisions, protect backends, and surface operator-usable outcomes.
+Impulse gives teams one runtime to receive traffic, make explicit decisions, protect backends, and surface operator-usable outcomes.
 
-![Spooky request lifecycle](assets/image.png)
+![Impulse request lifecycle](assets/image.png)
 
 - accepts modern client traffic at the edge
 - routes requests by host and path
@@ -73,7 +73,7 @@ Spooky gives teams one runtime to receive traffic, make explicit decisions, prot
 
 ## Where It Fits
 
-Spooky is a strong fit for:
+Impulse is a strong fit for:
 
 - fintech and payment infrastructure
 - banking and wallet APIs
@@ -86,20 +86,20 @@ Spooky is a strong fit for:
 ```bash
 cargo build --release
 make certs-selfsigned
-./target/release/spooky --config config/config.development.yaml
+./target/release/impulse --config config/config.development.yaml
 ```
 
 Then test the edge with an HTTP/3 request:
 
 ```bash
 curl --http3-only -k \
-  --resolve proxy.spooky.local:9889:127.0.0.1 \
-  https://proxy.spooky.local:9889/api/health
+  --resolve proxy.impulse.local:9889:127.0.0.1 \
+  https://proxy.impulse.local:9889/api/health
 ```
 
 ## Configuration
 
-Spooky uses validated YAML configuration.
+Impulse uses validated YAML configuration.
 
 Useful starting points:
 
@@ -157,7 +157,7 @@ Primary code areas:
 
 ## Production And Operations
 
-Spooky is intended for controlled, production-minded deployment:
+Impulse is intended for controlled, production-minded deployment:
 
 - Linux runtime
 - UDP access for QUIC ingress
@@ -186,7 +186,7 @@ Start here for deployment and operations:
 
 ## Project Status
 
-**Beta.** Spooky is suitable for controlled production rollouts, but it remains pre-GA and should be deployed with staged rollout, monitoring, and rollback readiness.
+**Beta.** Impulse is suitable for controlled production rollouts, but it remains pre-GA and should be deployed with staged rollout, monitoring, and rollback readiness.
 
 See:
 
@@ -217,7 +217,7 @@ Recommended deep links:
 
 ## Development
 
-Want to help build Spooky? See our [contribution guidelines](CONTRIBUTING.md).
+Want to help build Impulse? See our [contribution guidelines](CONTRIBUTING.md).
 
 For a minimal development loop:
 

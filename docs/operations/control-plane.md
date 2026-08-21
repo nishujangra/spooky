@@ -1,6 +1,6 @@
 # Control Plane
 
-This document explains the operator-facing control-plane services in Spooky and the boundaries each service is allowed to know about runtime state.
+This document explains the operator-facing control-plane services in Impulse and the boundaries each service is allowed to know about runtime state.
 
 ## Operator Fast Path
 
@@ -127,7 +127,7 @@ Compatibility guidance:
 - `observability.control_api.auth_token` remains supported intentionally to avoid operator lockout during migration
 - the legacy token is treated as an `admin` identity so existing reload/restart automation keeps current behavior
 - this is compatibility mode, not the target production design
-- one-way boundary: a newer Spooky binary accepts legacy control API config, but older binaries reject configs that use the newer nested admin-plane fields because the config schema uses `deny_unknown_fields`
+- one-way boundary: a newer Impulse binary accepts legacy control API config, but older binaries reject configs that use the newer nested admin-plane fields because the config schema uses `deny_unknown_fields`
 
 Recommended production posture:
 

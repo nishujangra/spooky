@@ -1,6 +1,6 @@
 use std::{net::SocketAddr, time::SystemTime};
 
-use spooky_lb::health::HealthFailureReason;
+use impulse_lb::health::HealthFailureReason;
 
 use super::resolution::{RuntimeBackendAddressKind, RuntimeBackendResolution};
 

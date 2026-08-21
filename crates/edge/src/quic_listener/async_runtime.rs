@@ -82,7 +82,7 @@ fn fallback_runtime() -> Option<&'static tokio::runtime::Runtime> {
             tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .worker_threads(FALLBACK_RT_THREADS.load(Ordering::Relaxed))
-                .thread_name("spooky-edge-fallback-rt")
+                .thread_name("impulse-edge-fallback-rt")
                 .build()
                 .ok()
         })

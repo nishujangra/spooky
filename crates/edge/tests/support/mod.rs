@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use bytes::Bytes;
 use http_body_util::Full;
 use hyper::Response;
-use spooky_config::config::{
+use impulse_config::config::{
     ClientAuth, Config, Listen, LoadBalancing, Log, LogFormat, Secrets, Security, Tls, Upstream,
     UpstreamTls,
 };
@@ -51,9 +51,9 @@ pub(super) fn base_quic_test_config(
             file: Default::default(),
             format: LogFormat::Plain,
         },
-        performance: spooky_config::config::Performance::default(),
-        observability: spooky_config::config::Observability::default(),
-        resilience: spooky_config::config::Resilience::default(),
+        performance: impulse_config::config::Performance::default(),
+        observability: impulse_config::config::Observability::default(),
+        resilience: impulse_config::config::Resilience::default(),
         security: Security::default(),
     }
 }

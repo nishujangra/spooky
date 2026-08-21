@@ -25,15 +25,15 @@ secrets:
   providers:
     local_filesystem:
       kind: file
-      base_dir: "/etc/spooky/secrets"
+      base_dir: "/etc/impulse/secrets"
 
 upstream:
   payments:
     tls:
       client_certificate_ref:
-        ref: "file:///etc/spooky/secrets/upstream/payments-client.crt"
+        ref: "file:///etc/impulse/secrets/upstream/payments-client.crt"
       client_key_ref:
-        ref: "file:///etc/spooky/secrets/upstream/payments-client.key"
+        ref: "file:///etc/impulse/secrets/upstream/payments-client.key"
 ```
 
 A `_ref` field and its plaintext sibling (`client_certificate` / `client_certificate_ref`, `client_key` / `client_key_ref`, `secret` / `secret_ref`, `client_secret` / `client_secret_ref`, `auth_token` / `auth_token_ref`, `token` / `token_ref`) are mutually exclusive — setting both fails validation. Supported ref schemes are `literal:<value>` and `file://<path>`.
@@ -52,7 +52,7 @@ Secret references resolve **eagerly during activation**, not lazily on first req
 
    The path is whatever `observability.control_api.reload_certs_path` is configured to (default `/admin/runtime/reload-certs`).
 3. Confirm the new cert in the runtime snapshot: `GET /admin/runtime` → `tls.listeners.<listener>` shows an updated `generation`, `last_loaded_at_unix_ms`, and `default_cert_not_after_unix_seconds`.
-4. Confirm `spooky_control_plane_cert_reload_total{result="success"}` incremented and downstream cert-expiry metrics reflect the new material.
+4. Confirm `impulse_control_plane_cert_reload_total{result="success"}` incremented and downstream cert-expiry metrics reflect the new material.
 
 This does not rebuild the runtime generation, mutate route/policy state, or affect already-negotiated sessions — only new handshakes see the new certificate.
 
@@ -73,7 +73,7 @@ This does not rebuild the runtime generation, mutate route/policy state, or affe
 
 3. Confirm the generation changed: `GET /admin/runtime/history` shows a new `entries` record, and its diff includes a `backend_policies` domain entry with `secret_material_changed: true`.
 4. Confirm the connection pool rebuilt rather than mutated in place — a client identity change always produces a new pool instance for that backend, never a live in-place swap.
-5. Confirm upstream mTLS handshakes succeed against the rotated identity, and `spooky_upstream_tls_failure_total` is not climbing for that upstream/backend pair.
+5. Confirm upstream mTLS handshakes succeed against the rotated identity, and `impulse_upstream_tls_failure_total` is not climbing for that upstream/backend pair.
 
 **Same-path rotation is detected.** If the file at the same `file://` reference path changes content, activation recomputes the fingerprint and the diff still reports `secret_material_changed: true` even though the reference string itself did not change — you do not need to introduce a new reference to force detection.
 
@@ -96,18 +96,18 @@ Prefer an atomic rename into place over in-place truncate-and-write for any file
 
 ```bash
 # Write to a temp file in the same directory, then rename atomically.
-install -m 0640 payments-client.crt.new /etc/spooky/secrets/upstream/payments-client.crt
+install -m 0640 payments-client.crt.new /etc/impulse/secrets/upstream/payments-client.crt
 ```
 
 `install`, `mv` within the same filesystem, or an equivalent atomic rename avoids a window where a reader observes a partially-written file. Truncate-and-write can produce a transient empty or malformed file that activation reads as `EmptySecret` or `MalformedPemCertificate` even though the final content would have been fine — an atomic rename avoids that window entirely.
 
 ## Rollback Expectations
 
-Runtime rollback (`POST /admin/runtime/rollback`) restores a previously retained **runtime generation view** — the resolved policy state Spooky held for that generation. It does not, and cannot, restore external secret files.
+Runtime rollback (`POST /admin/runtime/rollback`) restores a previously retained **runtime generation view** — the resolved policy state Impulse held for that generation. It does not, and cannot, restore external secret files.
 
 Concretely:
 
-- if you roll back to a generation that referenced `file:///etc/spooky/secrets/upstream/payments-client.crt`, and that file has since been deleted or overwritten, the rollback will re-resolve the reference against whatever is on disk **now**, not what was on disk when that generation was originally active.
+- if you roll back to a generation that referenced `file:///etc/impulse/secrets/upstream/payments-client.crt`, and that file has since been deleted or overwritten, the rollback will re-resolve the reference against whatever is on disk **now**, not what was on disk when that generation was originally active.
 - a rollback that re-reads a now-missing or now-different secret file can fail activation, or silently activate with different material than the original generation had, if the fingerprint at rollback time doesn't match what was recorded historically.
 - do not treat retained runtime history as a backup of secret material. If you need to guarantee exact secret-content recovery, that is a secret-file backup/versioning problem, separate from runtime generation retention.
 
@@ -132,13 +132,13 @@ When a secret or cert rotation does not behave as expected, inspect in this orde
 
    | Metric | Use |
    | --- | --- |
-   | `spooky_secret_reload_total{scope,result,reason}` | reload attempts by scope (`listeners`/`upstreams`) and outcome |
-   | `spooky_secret_resolve_total{provider,result,reason}` | resolution attempts by provider and outcome |
-   | `spooky_secret_last_success_unixtime{scope}` | staleness — how long since the last successful resolve for a scope |
-   | `spooky_upstream_tls_failure_total{upstream,backend,phase,reason}` | live TLS/mTLS handshake failures against a rotated or misconfigured identity, by request phase |
-   | `spooky_upstream_client_certificate_not_after_seconds{upstream}` | absolute expiry timestamp per upstream |
-   | `spooky_upstream_client_certificate_days_remaining{upstream}` | days-remaining gauge for alerting ahead of expiry |
-   | `spooky_control_plane_cert_reload_total{result,reason}` | listener cert reload outcomes |
+   | `impulse_secret_reload_total{scope,result,reason}` | reload attempts by scope (`listeners`/`upstreams`) and outcome |
+   | `impulse_secret_resolve_total{provider,result,reason}` | resolution attempts by provider and outcome |
+   | `impulse_secret_last_success_unixtime{scope}` | staleness — how long since the last successful resolve for a scope |
+   | `impulse_upstream_tls_failure_total{upstream,backend,phase,reason}` | live TLS/mTLS handshake failures against a rotated or misconfigured identity, by request phase |
+   | `impulse_upstream_client_certificate_not_after_seconds{upstream}` | absolute expiry timestamp per upstream |
+   | `impulse_upstream_client_certificate_days_remaining{upstream}` | days-remaining gauge for alerting ahead of expiry |
+   | `impulse_control_plane_cert_reload_total{result,reason}` | listener cert reload outcomes |
 
 None of the control-plane JSON, audit events, or metrics expose secret contents, private key bytes, or full provider URIs that could leak credentials — only sanitized scope, source kind, fingerprint, and timing/status metadata.
 

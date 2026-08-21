@@ -15,14 +15,12 @@ use http::{Method, StatusCode};
 use http_body_util::{BodyExt, Empty, Full};
 use hyper::{Request, Response, body::Incoming, client::conn::http1};
 use hyper_util::rt::TokioIo;
-use rustls_pki_types::{CertificateDer, pem::PemObject};
-use serde_json::Value as JsonValue;
-use spooky_config::{
+use impulse_config::{
     config::{Config, ControlApi, MetricsEndpoint, Observability, SecretRef, Upstream},
     runtime::RuntimeConfig,
     validator::validate,
 };
-use spooky_edge::{
+use impulse_edge::{
     MAX_DATAGRAM_SIZE_BYTES, MAX_UDP_PAYLOAD_BYTES, QUIC_IDLE_TIMEOUT_MS, QUIC_INITIAL_MAX_DATA,
     QUIC_INITIAL_MAX_STREAMS_BIDI, QUIC_INITIAL_MAX_STREAMS_UNI, QUIC_INITIAL_STREAM_DATA,
     runtime::{
@@ -31,6 +29,8 @@ use spooky_edge::{
         policy::{LifecycleTransitionResult, RuntimeLifecyclePhase},
     },
 };
+use rustls_pki_types::{CertificateDer, pem::PemObject};
+use serde_json::Value as JsonValue;
 use tempfile::{TempDir, tempdir};
 use tokio::net::TcpStream;
 use tokio_rustls::{
@@ -88,7 +88,7 @@ impl RuntimeSwapHarness {
             rt: tokio::runtime::Runtime::new().expect("runtime"),
             tls,
             control_api_initial_cert_pem,
-            config_path: config_dir.path().join("spooky-runtime-swap.yaml"),
+            config_path: config_dir.path().join("impulse-runtime-swap.yaml"),
             config_dir,
             listen_port: reserve_udp_port(),
             metrics_port: reserve_tcp_port(),

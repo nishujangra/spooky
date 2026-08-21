@@ -1,6 +1,6 @@
-## Contributing to Spooky
+## Contributing to Impulse
 
-Spooky is an HTTP/3 edge proxy in Rust. It terminates QUIC at the
+Impulse is an HTTP/3 edge proxy in Rust. It terminates QUIC at the
 edge and forwards to HTTP/2 backends.
 
 ### Setup
@@ -8,8 +8,8 @@ edge and forwards to HTTP/2 backends.
 Requirements: Rust 1.85+, cmake, pkg-config
 
 ```sh
-git clone https://github.com/Supernova-Labs-Org/spooky.git
-cd spooky
+git clone https://github.com/Supernova-Labs-Org/impulse.git
+cd impulse
 cargo build
 cargo test
 ```
@@ -25,7 +25,7 @@ cargo test --workspace
 ### Code Layout
 
 ```text
-    spooky/            entry point and initialization
+    impulse/            entry point and initialization
     crates/config/     YAML parsing and validation
     crates/edge/       QUIC/HTTP3 listener, TLS handshake
     crates/bridge/     HTTP/3 to HTTP/2 header and stream conversion

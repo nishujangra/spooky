@@ -79,7 +79,7 @@ fn configure_and_init_logger(
 ) -> LoggerInitStatus {
     let level = parse_log_level_filter(log_level).unwrap_or_else(|_| {
         eprintln!(
-            "Invalid log level '{}', defaulting to 'spooky' (info)",
+            "Invalid log level '{}', defaulting to 'impulse' (info)",
             log_level
         );
         LevelFilter::Info
@@ -170,7 +170,7 @@ fn parse_log_level_filter(level: &str) -> Result<LevelFilter, LogLevelError> {
     match level.to_ascii_lowercase().as_str() {
         "whisper" | "trace" => Ok(LevelFilter::Trace),
         "haunt" | "debug" => Ok(LevelFilter::Debug),
-        "spooky" | "info" => Ok(LevelFilter::Info),
+        "impulse" | "info" => Ok(LevelFilter::Info),
         "scream" | "warn" => Ok(LevelFilter::Warn),
         "poltergeist" | "error" => Ok(LevelFilter::Error),
         "silence" | "off" => Ok(LevelFilter::Off),

@@ -2,7 +2,7 @@
 
 ## Current Stage: Beta
 
-Spooky is currently **beta**. That means:
+Impulse is currently **beta**. That means:
 
 - the core H3 edge to upstream flow (H2 and H1) is implemented and heavily exercised
 - the project has meaningful operational and correctness work in place

@@ -8,9 +8,9 @@
 
 use std::sync::Arc;
 
+use impulse_config::{loader::read_config, runtime::RuntimeConfig};
+use impulse_errors::ProxyError;
 use serde::{Deserialize, Serialize};
-use spooky_config::{loader::read_config, runtime::RuntimeConfig};
-use spooky_errors::ProxyError;
 
 use crate::runtime::{
     bundle::{
@@ -1107,7 +1107,7 @@ pub(crate) fn plan_runtime_reload(
         },
     };
 
-    match spooky_config::validator::validate(&config) {
+    match impulse_config::validator::validate(&config) {
         Ok(()) => validation.push(PlanningPhaseResult {
             phase: PlanningPhase::ValidateConfig,
             status: PlanningPhaseStatus::Accepted,
@@ -2013,9 +2013,9 @@ fn summarize_auth_admission_resilience(bundle: &RuntimeBundle) -> String {
                     jwt.allowed_algorithms
                         .iter()
                         .map(|algorithm| match algorithm {
-                            spooky_config::config::JwtAlgorithm::Hs256 => "HS256",
-                            spooky_config::config::JwtAlgorithm::Rs256 => "RS256",
-                            spooky_config::config::JwtAlgorithm::Es256 => "ES256",
+                            impulse_config::config::JwtAlgorithm::Hs256 => "HS256",
+                            impulse_config::config::JwtAlgorithm::Rs256 => "RS256",
+                            impulse_config::config::JwtAlgorithm::Es256 => "ES256",
                         })
                         .collect::<Vec<_>>()
                         .join(",")
@@ -2065,7 +2065,7 @@ fn summarize_auth_admission_resilience(bundle: &RuntimeBundle) -> String {
     format!("auth=[{}]; policies=[{}]", auth.join(" | "), resilience)
 }
 
-fn runtime_jwt_summary_mode(jwt: &spooky_config::runtime::RuntimeJwtAuth) -> &'static str {
+fn runtime_jwt_summary_mode(jwt: &impulse_config::runtime::RuntimeJwtAuth) -> &'static str {
     let has_hs256 = !jwt.secret.is_empty();
     let has_static_asymmetric = !jwt.static_keys.is_empty();
     let has_jwks = jwt.jwks_url.is_some();

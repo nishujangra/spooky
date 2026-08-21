@@ -44,7 +44,7 @@ impl Default for RoundRobin {
 
 #[cfg(test)]
 mod tests {
-    use spooky_config::config::{Backend, HealthCheck};
+    use impulse_config::config::{Backend, HealthCheck};
 
     use super::RoundRobin;
     use crate::{backend::BackendState, backend_pool::BackendPool};

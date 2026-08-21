@@ -6,8 +6,8 @@ use std::{
     time::Instant,
 };
 
+use impulse_config::config::Watchdog as WatchdogConfig;
 use log::warn;
-use spooky_config::config::Watchdog as WatchdogConfig;
 
 use crate::watchdog::{config::WatchdogRuntimeConfig, time::now_millis};
 

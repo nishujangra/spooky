@@ -54,7 +54,7 @@ pub fn write_release_index(path: &Path, index: &ReleaseBaselineIndex) -> Result<
 
 pub fn merge_reports(reports: Vec<BenchReport>) -> BenchReport {
     let mut merged = BenchReport {
-        suite: "spooky-performance-baseline".to_string(),
+        suite: "impulse-performance-baseline".to_string(),
         report_kind: "merged".to_string(),
         profile: "baseline".to_string(),
         generated_unix_secs: unix_now(),

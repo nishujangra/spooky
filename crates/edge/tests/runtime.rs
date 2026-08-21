@@ -3,7 +3,7 @@ use std::{
     time::SystemTime,
 };
 
-use spooky_edge::runtime::backend::{
+use impulse_edge::runtime::backend::{
     event::{BackendLifecycleMutation, BackendRefreshOutcome},
     resolution::{RuntimeBackendAddressKind, RuntimeBackendResolution},
     store::RuntimeBackendResolutionStore,

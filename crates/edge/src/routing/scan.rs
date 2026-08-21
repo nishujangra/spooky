@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use spooky_config::config::Upstream;
+use impulse_config::config::Upstream;
 
 use crate::routing::{
     host::{
@@ -164,7 +164,7 @@ pub fn scan_lookup_for_method<'a>(
 mod tests {
     use std::collections::HashMap;
 
-    use spooky_config::config::{Backend, LoadBalancing, RouteMatch, Upstream};
+    use impulse_config::config::{Backend, LoadBalancing, RouteMatch, Upstream};
 
     use crate::routing::{
         index::RouteIndex,

@@ -1,8 +1,8 @@
-//! Shared error and error-policy contract for Spooky runtime crates.
+//! Shared error and error-policy contract for Impulse runtime crates.
 //!
 //! Consumers should depend on the re-exported error types and classifier
 //! entrypoints from this crate root instead of reaching into module internals.
-//! Backend-selection policy types remain owned by `spooky-lb`.
+//! Backend-selection policy types remain owned by `impulse-lb`.
 
 mod bridge;
 mod pool;

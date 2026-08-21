@@ -5,16 +5,16 @@ use std::{convert::Infallible, net::SocketAddr};
 use bytes::Bytes;
 use http::HeaderMap;
 use http_body_util::{BodyExt, Empty, combinators::BoxBody};
-use quiche::h3::Header;
-use spooky_bridge::request::{
+use impulse_bridge::request::{
     RequestBodyMode, RequestBuildInput, RequestBuildPolicies, RequestBuildTarget,
     RequestForwardedContext, RequestTraceContext, build_h1_request, build_h2_request_for_target,
 };
-use spooky_config::{
+use impulse_config::{
     backend_endpoint::BackendEndpoint,
     config::{ForwardedHeaderPolicy, UpstreamHostPolicy},
 };
-use spooky_errors::BridgeError;
+use impulse_errors::BridgeError;
+use quiche::h3::Header;
 
 pub(crate) type CanonicalBridgeRequest = http::Request<BoxBody<Bytes, Infallible>>;
 pub(crate) type CanonicalBridgeRequestPair = (CanonicalBridgeRequest, CanonicalBridgeRequest);

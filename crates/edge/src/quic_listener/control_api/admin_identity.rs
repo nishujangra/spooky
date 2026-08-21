@@ -15,12 +15,12 @@ pub(super) enum AdminRole {
     Admin,
 }
 
-impl From<spooky_config::config::ControlApiRole> for AdminRole {
-    fn from(value: spooky_config::config::ControlApiRole) -> Self {
+impl From<impulse_config::config::ControlApiRole> for AdminRole {
+    fn from(value: impulse_config::config::ControlApiRole) -> Self {
         match value {
-            spooky_config::config::ControlApiRole::Viewer => Self::Viewer,
-            spooky_config::config::ControlApiRole::Operator => Self::Operator,
-            spooky_config::config::ControlApiRole::Admin => Self::Admin,
+            impulse_config::config::ControlApiRole::Viewer => Self::Viewer,
+            impulse_config::config::ControlApiRole::Operator => Self::Operator,
+            impulse_config::config::ControlApiRole::Admin => Self::Admin,
         }
     }
 }

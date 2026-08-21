@@ -21,7 +21,7 @@ declare -A TUNING=(
   ["net.ipv4.udp_wmem_min"]="16384"
 )
 
-echo "Applying Spooky network sysctl tuning..."
+echo "Applying Impulse network sysctl tuning..."
 for key in "${!TUNING[@]}"; do
   value="${TUNING[$key]}"
   sysctl -w "${key}=${value}" >/dev/null
@@ -30,4 +30,4 @@ for key in "${!TUNING[@]}"; do
 done
 
 echo
-echo "Done. Persist these values in /etc/sysctl.d/99-spooky-network.conf if needed."
+echo "Done. Persist these values in /etc/sysctl.d/99-impulse-network.conf if needed."

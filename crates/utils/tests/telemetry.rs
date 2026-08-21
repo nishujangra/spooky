@@ -1,4 +1,4 @@
-use spooky_utils::telemetry::{
+use impulse_utils::telemetry::{
     endpoint::{OtlpEndpointSource, resolve_otlp_endpoint},
     init::DEFAULT_OTLP_ENDPOINT,
 };

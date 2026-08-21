@@ -1,7 +1,7 @@
 use std::{collections::VecDeque, convert::Infallible};
 
 use http_body_util::Full;
-use spooky_config::runtime::RuntimeExternalAuth;
+use impulse_config::runtime::RuntimeExternalAuth;
 use tokio::{sync::oneshot, task::AbortHandle};
 
 use super::{auth::start_external_auth_task, resolve::ForwardTargetResolution, *};
@@ -167,10 +167,10 @@ impl PendingForward {
     fn request_build_target<'a>(
         &'a self,
         endpoint: &'a BackendEndpoint,
-    ) -> spooky_bridge::request::RequestBuildTarget<'a> {
-        spooky_bridge::request::RequestBuildTarget {
+    ) -> impulse_bridge::request::RequestBuildTarget<'a> {
+        impulse_bridge::request::RequestBuildTarget {
             endpoint,
-            policies: spooky_bridge::request::RequestBuildPolicies {
+            policies: impulse_bridge::request::RequestBuildPolicies {
                 host_policy: &self.host_policy,
                 forwarded_header_policy: &self.forwarded_header_policy,
             },
@@ -183,8 +183,8 @@ impl PendingForward {
         headers: &'a [quiche::h3::Header],
         body: BoxBody<Bytes, Infallible>,
         content_length: Option<usize>,
-    ) -> spooky_bridge::request::RequestBuildInput<'a, BoxBody<Bytes, Infallible>> {
-        spooky_bridge::request::RequestBuildInput {
+    ) -> impulse_bridge::request::RequestBuildInput<'a, BoxBody<Bytes, Infallible>> {
+        impulse_bridge::request::RequestBuildInput {
             method,
             path: &self.path,
             authority: self.authority.as_deref(),
@@ -192,12 +192,12 @@ impl PendingForward {
             body,
             content_length,
             body_mode:
-                spooky_bridge::request::RequestBuildInput::<BoxBody<Bytes, Infallible>>::body_mode_for_length(content_length),
-            trace: spooky_bridge::request::RequestTraceContext {
+                impulse_bridge::request::RequestBuildInput::<BoxBody<Bytes, Infallible>>::body_mode_for_length(content_length),
+            trace: impulse_bridge::request::RequestTraceContext {
                 request_id: self.request_id,
                 traceparent: self.traceparent.as_deref(),
             },
-            forwarded: spooky_bridge::request::RequestForwardedContext {
+            forwarded: impulse_bridge::request::RequestForwardedContext {
                 client_addr: self.client_addr,
             },
         }
@@ -211,13 +211,13 @@ impl PendingForward {
     ) -> Result<Request<BoxBody<Bytes, Infallible>>, ProxyError> {
         let headers = self.request_headers();
         if endpoint.scheme() == BackendScheme::Http {
-            spooky_bridge::request::build_h1_request(
+            impulse_bridge::request::build_h1_request(
                 self.request_build_target(endpoint),
                 self.request_build_input(&self.method, &headers, body, content_length),
             )
             .map_err(ProxyError::from)
         } else {
-            spooky_bridge::request::build_h2_request_for_target(
+            impulse_bridge::request::build_h2_request_for_target(
                 self.request_build_target(endpoint),
                 self.request_build_input(&self.method, &headers, body, content_length),
             )
@@ -250,7 +250,7 @@ impl PendingForward {
             request_headers.push(quiche::h3::Header::new(b"connection", b"upgrade"));
         }
 
-        spooky_bridge::request::build_h1_request(
+        impulse_bridge::request::build_h1_request(
             self.request_build_target(endpoint),
             self.request_build_input(
                 "GET",
@@ -294,7 +294,7 @@ impl QUICListener {
             .zip(span_id.as_ref())
             .map(|(trace_id, span_id)| {
                 info_span!(
-                    "spooky.request",
+                    "impulse.request",
                     request_id = request_id,
                     trace_id = %trace_id,
                     span_id = %span_id,
@@ -791,11 +791,11 @@ mod tests {
     use bytes::Bytes;
     use http::header::HOST;
     use http_body_util::{Full, combinators::BoxBody};
-    use spooky_config::config::{
+    use impulse_config::config::{
         ForwardedHeaderPolicy, ForwardedHeaderPolicyMode, UpstreamHostPolicy,
         UpstreamHostPolicyMode,
     };
-    use spooky_errors::{BridgeError, ProxyError};
+    use impulse_errors::{BridgeError, ProxyError};
 
     use super::*;
     use crate::runtime::connection::auth::PendingHeaderMutation;

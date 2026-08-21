@@ -121,7 +121,7 @@ mod tests {
     use http_body_util::Empty;
     use hyper::Uri;
     use hyper_util::{client::legacy::Client, rt::TokioExecutor};
-    use spooky_lb::health::HealthFailureReason;
+    use impulse_lb::health::HealthFailureReason;
 
     use super::{ProxyError, UpstreamProxyErrorKind, classify_upstream_proxy_error};
     use crate::{

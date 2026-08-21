@@ -10,11 +10,11 @@ use bytes::Bytes;
 use http::{Response, StatusCode};
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::body::{Body, Frame, Incoming};
-use spooky_bridge::response::{
+use impulse_bridge::response::{
     ResponseBodyMode, ResponseBodyPolicy, ResponseNormalizationInput,
     ResponseNormalizationProtocol, ResponseProtocolConstraints, normalize_upstream_response,
 };
-use spooky_lb::upstream_pool::UpstreamPool;
+use impulse_lb::upstream_pool::UpstreamPool;
 
 use super::{
     context::BootstrapDispatchCtx,
@@ -258,7 +258,7 @@ pub(in crate::quic_listener) fn write_bootstrap_response(
     let status = input.upstream_resp.status();
     let response_mode = BootstrapResponseMode::from_request_mode(input.request_mode, status);
     let normalized_response = normalize_upstream_response(ResponseNormalizationInput {
-        upstream: spooky_bridge::response::UpstreamResponseView {
+        upstream: impulse_bridge::response::UpstreamResponseView {
             status,
             headers: input.upstream_resp.headers(),
             trailers: None,
@@ -399,7 +399,7 @@ pub(in crate::quic_listener) fn write_bootstrap_response(
 #[cfg(test)]
 mod tests {
     use http::{HeaderMap, HeaderValue};
-    use spooky_bridge::response::{
+    use impulse_bridge::response::{
         ResponseBodyMode, ResponseBodyPolicy, ResponseNormalizationInput,
         ResponseNormalizationProtocol, normalize_upstream_response,
     };
@@ -407,7 +407,7 @@ mod tests {
     use super::*;
 
     fn header_value<'a>(
-        headers: &'a [spooky_bridge::response::NormalizedHeader],
+        headers: &'a [impulse_bridge::response::NormalizedHeader],
         name: &str,
     ) -> Option<&'a str> {
         let name = http::header::HeaderName::from_bytes(name.as_bytes()).ok()?;
@@ -466,7 +466,7 @@ mod tests {
         headers.insert(http::header::ETAG, HeaderValue::from_static("\"etag-1\""));
 
         let quic = normalize_upstream_response(ResponseNormalizationInput {
-            upstream: spooky_bridge::response::UpstreamResponseView {
+            upstream: impulse_bridge::response::UpstreamResponseView {
                 status: StatusCode::OK,
                 headers: &headers,
                 trailers: None,
@@ -480,7 +480,7 @@ mod tests {
             },
         });
         let bootstrap = normalize_upstream_response(ResponseNormalizationInput {
-            upstream: spooky_bridge::response::UpstreamResponseView {
+            upstream: impulse_bridge::response::UpstreamResponseView {
                 status: StatusCode::OK,
                 headers: &headers,
                 trailers: None,
@@ -512,7 +512,7 @@ mod tests {
         headers.insert(http::header::CONTENT_LENGTH, HeaderValue::from_static("0"));
 
         let head = normalize_upstream_response(ResponseNormalizationInput {
-            upstream: spooky_bridge::response::UpstreamResponseView {
+            upstream: impulse_bridge::response::UpstreamResponseView {
                 status: StatusCode::OK,
                 headers: &headers,
                 trailers: None,
@@ -521,7 +521,7 @@ mod tests {
             constraints: bootstrap_response_constraints(BootstrapResponseMode::StandardResponse),
         });
         let no_content = normalize_upstream_response(ResponseNormalizationInput {
-            upstream: spooky_bridge::response::UpstreamResponseView {
+            upstream: impulse_bridge::response::UpstreamResponseView {
                 status: StatusCode::NO_CONTENT,
                 headers: &headers,
                 trailers: None,
@@ -558,7 +558,7 @@ mod tests {
         );
 
         let normalized = normalize_upstream_response(ResponseNormalizationInput {
-            upstream: spooky_bridge::response::UpstreamResponseView {
+            upstream: impulse_bridge::response::UpstreamResponseView {
                 status: StatusCode::SWITCHING_PROTOCOLS,
                 headers: &headers,
                 trailers: None,

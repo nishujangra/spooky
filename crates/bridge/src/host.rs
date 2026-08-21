@@ -1,8 +1,8 @@
-use spooky_config::{
+use impulse_config::{
     backend_endpoint::BackendEndpoint,
     config::{UpstreamHostPolicy, UpstreamHostPolicyMode},
 };
-use spooky_errors::BridgeError;
+use impulse_errors::BridgeError;
 
 pub fn resolve_upstream_host_value<'a>(
     endpoint: &'a BackendEndpoint,

@@ -1,5 +1,5 @@
 [package]
-name = "spooky-transport"
+name = "impulse-transport"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -16,8 +16,8 @@ rustls-pki-types.workspace = true
 tokio.workspace = true
 tower-service = "0.3"
 webpki-roots.workspace = true
-spooky-errors = { path = "../errors" }
-spooky-config = { path = "../config" }
+impulse-errors = { path = "../errors" }
+impulse-config = { path = "../config" }
 
 [dev-dependencies]
 rcgen = "0.12"

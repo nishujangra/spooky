@@ -1,6 +1,6 @@
 # Host Tuning
 
-This page groups host-level tuning guidance for production Spooky deployments. Use it together with [Production Deployment](../deployment/production.md) and [Sizing And Capacity](sizing-and-capacity.md).
+This page groups host-level tuning guidance for production Impulse deployments. Use it together with [Production Deployment](../deployment/production.md) and [Sizing And Capacity](sizing-and-capacity.md).
 
 ## Primary Goals
 
@@ -28,7 +28,7 @@ Validate these areas first:
 - start from the Linux baseline in [Production Deployment](../deployment/production.md)
 - use `scripts/sysctl-linux-network-tuning.sh` only as a baseline helper, not as a final answer
 - keep the metrics and Control API surfaces reachable from operations tooling but isolated from public traffic
-- isolate Spooky from unrelated batch or noisy-neighbor workloads where possible
+- isolate Impulse from unrelated batch or noisy-neighbor workloads where possible
 
 ## Host Validation Checklist
 

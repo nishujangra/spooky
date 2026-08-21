@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The Debian package's default `config.yaml` now ships the control API **disabled** (`observability.control_api.enabled: false`) with a placeholder-token comment block instead of an enabled control API with a literal `replace-with-strong-token` credential — a fresh install no longer boots with a live, weakly-credentialed admin surface.
-- The systemd unit (`packaging/deb/debian/spooky.service`) restarts with `Restart=always` instead of `Restart=on-failure`, adds `StartLimitIntervalSec=60`/`StartLimitBurst=5` under `[Unit]`, raises `LimitNOFILE=65535`, and tightens sandboxing (`ProtectKernelTunables`, `ProtectKernelModules`, `ProtectControlGroups`, `RestrictAddressFamilies`, `RestrictNamespaces`, `RestrictSUIDSGID`, `LockPersonality`); `/etc/spooky` is no longer in `ReadWritePaths`, so only `/var/log/spooky` stays writable.
+- The systemd unit (`packaging/deb/debian/impulse.service`) restarts with `Restart=always` instead of `Restart=on-failure`, adds `StartLimitIntervalSec=60`/`StartLimitBurst=5` under `[Unit]`, raises `LimitNOFILE=65535`, and tightens sandboxing (`ProtectKernelTunables`, `ProtectKernelModules`, `ProtectControlGroups`, `RestrictAddressFamilies`, `RestrictNamespaces`, `RestrictSUIDSGID`, `LockPersonality`); `/etc/impulse` is no longer in `ReadWritePaths`, so only `/var/log/impulse` stays writable.
 
 ### Fixed
 
@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Compatibility
 
 - Purely additive for existing deployments. The new `observability` block in `/admin/runtime` and the `audit.rs` event fields are additive JSON fields; existing consumers that don't read them are unaffected.
-- The Debian package's default config and systemd unit changes apply only to fresh installs/packages built from this version — existing deployed configs and units are not modified in place. Operators upgrading the package should review the new `spooky.service` sandboxing and `ReadWritePaths` restriction before rolling out, particularly if `resilience.watchdog.restart_command` or any in-process config write depends on `/etc/spooky` being writable.
+- The Debian package's default config and systemd unit changes apply only to fresh installs/packages built from this version — existing deployed configs and units are not modified in place. Operators upgrading the package should review the new Impulse service sandboxing and `ReadWritePaths` restriction before rolling out, particularly if `resilience.watchdog.restart_command` or any in-process config write depends on `/etc/impulse` being writable.
 
 ## [0.5.0-beta] - 2026-08-10
 
@@ -37,12 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Distributed quota policies under `resilience.quota` — cluster-wide request budgets enforced at admission, evaluated before forwarding. Disabled by default (`enabled: false`), so an unchanged 0.4.3 config engages none of this machinery.
 - Composite quota policies via `resilience.quota.policies[]`, each carrying a `name`, an optional `route_allowlist`, a `selector`, and one or both of a `burst` and `sustained` window (`requests`, `window_secs`). A policy's identity is the composite of its selected dimensions, so one policy can budget per tenant-and-route without collapsing distinct callers into a shared counter.
 - Quota identity extraction via `selector` — `route` (bool), plus `tenant`, `token`, and `client`, each resolved from a request `key`. `tenant`/`token` accept `header:*`, `cookie:*`, `query:*`, and `bearer_token`; `client` additionally accepts `peer_ip` and `client_ip`.
-- Redis-backed counter store (`resilience.quota.backend.kind: redis`) with `url`, `key_prefix` (default `spooky:quota`), `connect_timeout_ms` (default `250`), `command_timeout_ms` (default `100`), and `max_inflight` (default `1024`). Burst and sustained windows are incremented and tested in a single atomic Lua evaluation, so a request never charges one window and abandons the other.
+- Redis-backed counter store (`resilience.quota.backend.kind: redis`) with `url`, `key_prefix` (default `impulse:quota`), `connect_timeout_ms` (default `250`), `command_timeout_ms` (default `100`), and `max_inflight` (default `1024`). Burst and sustained windows are incremented and tested in a single atomic Lua evaluation, so a request never charges one window and abandons the other.
 - In-memory counter backend (`kind: in_memory`, the default) for single-node deployments and tests, sharing the fixed-window semantics of the Redis path.
 - Bounded local fallback via `resilience.quota.local_fallback` (Redis backends only) with `key_prefix` and a required `max_entries`. Fallback engages only for outage-style failures — backend timeout and unavailability — and never for protocol, config, or logic errors, which stay hard failures rather than silently degrading to a weaker budget.
 - Enforcement modes via `resilience.quota.enforcement` — `shadow` records what would have been denied without blocking, `enforce` (default) rejects. Shadow mode lets a policy be sized against live traffic before it starts turning requests away.
 - Backend failure policy via `resilience.quota.backend_failure_policy` — `fail_closed` (default) rejects with `503` when the counter store is unreachable, `fail_open` admits. The default is fail-closed: an unreachable Redis stops enforcing budgets, and admitting unbounded traffic is the worse outcome.
-- Quota metrics — `spooky_quota_policy_outcomes_total{policy,decision,reason,selector_dimensions,backend_mode}` and `spooky_quota_backend_health_total{backend_mode,reason}`. Decisions are `allowed`, `denied`, `shadow_denied`, `failed_open`, `failed_closed`, and `not_applied`; degraded operation is visible in `backend_mode` as `<kind>_local_fallback_<reason>`, so running on fallback counters is distinguishable from running on the real backend.
+- Quota metrics — `impulse_quota_policy_outcomes_total{policy,decision,reason,selector_dimensions,backend_mode}` and `impulse_quota_backend_health_total{backend_mode,reason}`. Decisions are `allowed`, `denied`, `shadow_denied`, `failed_open`, `failed_closed`, and `not_applied`; degraded operation is visible in `backend_mode` as `<kind>_local_fallback_<reason>`, so running on fallback counters is distinguishable from running on the real backend.
 - Runtime introspection for quota — `GET /admin/runtime` gained a `quota` block carrying `enabled`, `enforcement`, `backend_failure_policy`, `active_backend`, a `backend_status` object (`availability`, `degraded`, `health_reason`, `last_observed_at_unix_ms`, `recent_errors[]`), and the resolved `policies[]` with their selectors and windows.
 - Documentation: `docs/architecture/quota-policy-contract.md` defines the policy semantics and decision model, and `docs/operations/distributed-quota.md` covers backend selection, degraded operation, and migration from scoped rate limiting.
 
@@ -77,7 +77,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - JWKS cache state machine with explicit states — `never_fetched`, `fresh`, `stale`, `refresh_failed_retained`, `quarantined_retained`, `empty_unusable` — so retained last-known-good keys are distinguishable from an unusable key set.
 - Startup readiness gating via `auth.jwt.jwks_startup_behavior`. Under `require_ready`, a source that cannot load fails startup rather than admitting traffic with no keys, and reload activation preflights the same condition instead of committing a generation that cannot validate tokens.
 - Explicit algorithm policy — `auth.jwt.allowed_algorithms` and `require_kid` are configured independently of the key material present, and multi-valued `issuers`/`audiences` complement the existing singular `issuer`/`audience` fields.
-- JWT and JWKS metrics: `spooky_jwt_validation_failures_total{reason}`, `spooky_jwt_algorithm_rejections_total{algorithm}`, and per-source `spooky_jwks_unknown_kid_total`, `spooky_jwks_refresh_success_total`, `spooky_jwks_refresh_failure_total`, `spooky_jwks_age_seconds`, `spooky_jwks_state`, `spooky_jwks_active_keys`, `spooky_jwks_last_refresh_attempt_seconds`, and `spooky_jwks_last_refresh_success_seconds`.
+- JWT and JWKS metrics: `impulse_jwt_validation_failures_total{reason}`, `impulse_jwt_algorithm_rejections_total{algorithm}`, and per-source `impulse_jwks_unknown_kid_total`, `impulse_jwks_refresh_success_total`, `impulse_jwks_refresh_failure_total`, `impulse_jwks_age_seconds`, `impulse_jwks_state`, `impulse_jwks_active_keys`, `impulse_jwks_last_refresh_attempt_seconds`, and `impulse_jwks_last_refresh_success_seconds`.
 - Runtime introspection for auth — `GET /admin/runtime` gained a `jwks.sources[]` block (source id, sanitized endpoint, cache state, active key count, refresh timestamps, last failure reason) and per-upstream JWT provider state under `auth.providers[]`, alongside validation-failure and algorithm-rejection counters.
 - Structured JWT rejection logs carrying the canonical reason, token `alg` and `kid`, JWKS source id, cache state, and whether the staleness window had expired.
 
@@ -114,7 +114,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Role-scoped admin credentials via `observability.control_api.auth.bearer_tokens[]`, each carrying a `role` and an optional `actor_id` used for audit attribution.
 - mTLS client-certificate identity — subject, common name, and DNS/URI SANs are extracted from the handshake certificate, with roles resolved from a configurable subject attribute via `auth.identity_source`.
 - Structured admin audit stream with a stable JSON schema (`event_type`, `time_unix_ms`, `actor`, `action`, `target`, `generation`, `result`, `reason`, `event_id`, `peer_addr`, `authn`). Events cover authentication success and failure, authorization denial, runtime snapshot reads, and attempt/result pairs for reload, activate, rollback, restart, cert reload, validate, and preview.
-- Dedicated audit sink under `observability.control_api.audit` — either a `spooky.control_api.audit` log target that emits raw JSON lines regardless of the application log format, or a file sink that keeps audit records out of the application log entirely.
+- Dedicated audit sink under `observability.control_api.audit` — either a `impulse.control_api.audit` log target that emits raw JSON lines regardless of the application log format, or a file sink that keeps audit records out of the application log entirely.
 - Optional source-address gating via `observability.control_api.ip_allowlist`, evaluated before credential validation. The source is always the TCP peer address.
 
 ### Changed
@@ -202,7 +202,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Large runtime modules split into focused submodules: `quic_listener/mod.rs` → `bootstrap_tls`, `control_api/`, `forwarding`, `metrics_endpoint`, `tls_runtime`; `spooky/main.rs` → `app`, `listener_group`; `config/validator.rs` → `helpers`; `config/runtime.rs` → `listeners`, `upstreams`.
+- Large runtime modules split into focused submodules: `quic_listener/mod.rs` → `bootstrap_tls`, `control_api/`, `forwarding`, `metrics_endpoint`, `tls_runtime`; `impulse/main.rs` → `app`, `listener_group`; `config/validator.rs` → `helpers`; `config/runtime.rs` → `listeners`, `upstreams`.
 - Integration tests extracted into per-subsystem modules (`h3_edge/`, `h3_bridge/protocol`, `lb/tests`, `control_api/tests`).
 
 ## [0.3.0-beta] - 2026-06-20
@@ -307,7 +307,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Upstream send errors now log the full error cause chain instead of the opaque `client error (Connect)`, making TLS failures (missing SAN, untrusted root, cert/SNI mismatch) immediately diagnosable from logs without requiring a packet trace.
 - Validator no longer hard-rejects `upstream_tls.verify_certificates=false`; it now emits a warning and allows startup to continue.
-- Debian package and systemd unit: TLS certificate files must be owned `root:spooky` with mode `640` so the `spooky` service user can read them. Documentation and all installation examples corrected accordingly.
+- Debian package and systemd unit: TLS certificate files must be owned `root:impulse` with mode `640` so the `impulse` service user can read them. Documentation and all installation examples corrected accordingly.
 
 ### Changed
 - Packaging layout cleanup: Debian assets moved under `packaging/deb/` (`make-deb.sh`, systemd unit, default config).
@@ -316,7 +316,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.0-beta] - 2026-05-12
 
-Initial release of Spooky HTTP/3 edge proxy and load balancer.
+Initial release of Impulse HTTP/3 edge proxy and load balancer.
 
 ### Core Features
 
@@ -373,7 +373,7 @@ Initial release of Spooky HTTP/3 edge proxy and load balancer.
 - Downstream mTLS support via `listen.tls.client_auth.*`
 
 **Observability**
-- Structured JSON logging with standard and spooky-themed log levels
+- Structured JSON logging with standard and impulse-themed log levels
 - Request/response metrics: total requests, successes, failures, timeouts
 - Backend selection and health transition logging
 - QUIC connection error classification and deduplication
@@ -384,7 +384,7 @@ Initial release of Spooky HTTP/3 edge proxy and load balancer.
 - TLS-enabled control-plane listener path support and startup hardening
 
 **Operational**
-- Debian package with systemd unit, system user/group, and config at `/etc/spooky/config.yaml`
+- Debian package with systemd unit, system user/group, and config at `/etc/impulse/config.yaml`
 - Docker packaging with compose bootstrap and operator smoke-test scripts
 - CLI with `--config` flag
 - Streaming request/response handling with bounded queues and hard body caps

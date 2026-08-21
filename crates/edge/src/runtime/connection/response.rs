@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use http::StatusCode;
 use hyper::body::Incoming;
-use spooky_errors::{
+use impulse_errors::{
     HedgeOutcomeTelemetryReason, HedgeTriggerTelemetryReason, ProxyError,
     RetryAttemptTelemetryReason, RetryPolicyDenialReason,
 };
@@ -158,7 +158,7 @@ impl HedgeTelemetry {
 #[cfg(test)]
 mod tests {
     mod retry_policy_telemetry {
-        use spooky_errors::{RetryAttemptTelemetryReason, RetryPolicyDenialReason};
+        use impulse_errors::{RetryAttemptTelemetryReason, RetryPolicyDenialReason};
 
         use super::super::RetryTelemetry;
 
@@ -205,7 +205,7 @@ mod tests {
     }
 
     mod hedge_policy_telemetry {
-        use spooky_errors::{HedgeOutcomeTelemetryReason, HedgeTriggerTelemetryReason};
+        use impulse_errors::{HedgeOutcomeTelemetryReason, HedgeTriggerTelemetryReason};
 
         use super::super::HedgeTelemetry;
 

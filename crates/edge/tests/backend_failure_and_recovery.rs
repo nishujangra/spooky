@@ -13,9 +13,9 @@ use std::{
 use bytes::Bytes;
 use http_body_util::Full;
 use hyper::{Response, body::Incoming};
+use impulse_config::config::{Backend, HealthCheck, LoadBalancing, RouteMatch, Upstream};
+use impulse_edge::runtime::backend::{event::BackendRefreshOutcome, state::BackendHealthState};
 use serial_test::serial;
-use spooky_config::config::{Backend, HealthCheck, LoadBalancing, RouteMatch, Upstream};
-use spooky_edge::runtime::backend::{event::BackendRefreshOutcome, state::BackendHealthState};
 
 mod support;
 
@@ -93,7 +93,7 @@ fn run_keyed_request(
         path: "/",
         headers: &headers,
         body: None,
-        user_agent: "spooky-request-path-test",
+        user_agent: "impulse-request-path-test",
     })
 }
 
@@ -569,7 +569,7 @@ fn passive_request_failures_mark_backend_unhealthy_and_shift_selection_to_health
             assert!(
                 !matches!(
                     backend_state.health,
-                    spooky_edge::runtime::backend::state::BackendHealthState::Unhealthy { .. }
+                    impulse_edge::runtime::backend::state::BackendHealthState::Unhealthy { .. }
                 ),
                 "backend should stay healthy until the passive failure threshold is crossed"
             );

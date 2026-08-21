@@ -1,86 +1,86 @@
-# Spooky SLO operator queries
+# Impulse SLO operator queries
 #
 # Use these packaged definitions for dashboards and operator reports. They are
-# built on the `spooky:slo_*` recording rules and other bounded recording-rule
+# built on the `impulse:slo_*` recording rules and other bounded recording-rule
 # series, not on raw scrape-time PromQL.
 
 # Availability
-spooky:slo_availability_ratio:30m
+impulse:slo_availability_ratio:30m
 
 # Availability failure ratio
-spooky:slo_request_server_error_ratio:rate30m
+impulse:slo_request_server_error_ratio:rate30m
 
 # Availability error-budget burn relative to a 99.9% objective
-spooky:slo_request_server_error_ratio:rate30m / 0.001
+impulse:slo_request_server_error_ratio:rate30m / 0.001
 
 # p50 latency in milliseconds
-spooky:slo_request_latency_ms:p50_30m
+impulse:slo_request_latency_ms:p50_30m
 
 # p95 latency in milliseconds
-spooky:slo_request_latency_ms:p95_30m
+impulse:slo_request_latency_ms:p95_30m
 
 # p99 latency in milliseconds
-spooky:slo_request_latency_ms:p99_30m
+impulse:slo_request_latency_ms:p99_30m
 
 # Overload shed ratio
-spooky:slo_overload_shed_ratio:30m
+impulse:slo_overload_shed_ratio:30m
 
 # Backend timeout ratio
-spooky:slo_backend_timeout_ratio:30m
+impulse:slo_backend_timeout_ratio:30m
 
 # Auth failure ratio
-spooky:slo_auth_denial_ratio:30m
+impulse:slo_auth_denial_ratio:30m
 
 # Quota denial ratio
-spooky:slo_quota_denial_ratio:30m
+impulse:slo_quota_denial_ratio:30m
 
 # TLS handshake failure ratio
-spooky:slo_tls_handshake_failure_ratio:30m
+impulse:slo_tls_handshake_failure_ratio:30m
 
 # Control-plane error-event rate
-spooky:slo_control_plane_error_events:rate30m
+impulse:slo_control_plane_error_events:rate30m
 
 # Current request rate for SLO population context
-spooky:slo_requests:rate30m
+impulse:slo_requests:rate30m
 
 # Short-window companion queries for burn-rate panels
-spooky:request_server_error_ratio:rate5m
-spooky:request_latency_ms:p99_5m
-spooky:backend_timeout_ratio:rate5m
-spooky:auth_denial_ratio:rate5m
-spooky:quota_denial_ratio:rate5m
-spooky:overload_shed_ratio:rate5m
+impulse:request_server_error_ratio:rate5m
+impulse:request_latency_ms:p99_5m
+impulse:backend_timeout_ratio:rate5m
+impulse:auth_denial_ratio:rate5m
+impulse:quota_denial_ratio:rate5m
+impulse:overload_shed_ratio:rate5m
 
 # Breakdown views for operators
 
 # By-upstream server-error ratio
-spooky:request_server_error_ratio_by_upstream:rate5m
+impulse:request_server_error_ratio_by_upstream:rate5m
 
 # By-upstream request rate
-spooky:requests_by_upstream:rate5m
+impulse:requests_by_upstream:rate5m
 
 # By-upstream outcome mix
-spooky:requests_by_upstream_outcome:rate5m
+impulse:requests_by_upstream_outcome:rate5m
 
 # By-upstream latency
-spooky:request_latency_ms_by_upstream:p50_5m
-spooky:request_latency_ms_by_upstream:p95_5m
-spooky:request_latency_ms_by_upstream:p99_5m
+impulse:request_latency_ms_by_upstream:p50_5m
+impulse:request_latency_ms_by_upstream:p95_5m
+impulse:request_latency_ms_by_upstream:p99_5m
 
 # By-upstream and backend backend-error view
-spooky:backend_errors_by_upstream_backend:rate5m
+impulse:backend_errors_by_upstream_backend:rate5m
 
 # Overload reason breakdown
-spooky:overload_shed_by_reason:rate5m
+impulse:overload_shed_by_reason:rate5m
 
 # JWT auth denials by reason
-spooky:jwt_auth_denials_by_reason:rate5m
+impulse:jwt_auth_denials_by_reason:rate5m
 
 # Quota denials by policy, reason, and backend mode
-spooky:quota_denials_by_policy_reason_backend_mode:rate5m
+impulse:quota_denials_by_policy_reason_backend_mode:rate5m
 
 # Quota backend health by backend mode and reason
-spooky:quota_backend_health_events_by_mode_reason:rate5m
+impulse:quota_backend_health_events_by_mode_reason:rate5m
 
 # TLS handshake failures by listener and reason
-spooky:tls_handshake_failures_by_listener_reason:rate5m
+impulse:tls_handshake_failures_by_listener_reason:rate5m

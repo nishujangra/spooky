@@ -4,14 +4,14 @@ use std::convert::Infallible;
 
 use bytes::Bytes;
 use http_body_util::combinators::BoxBody;
-use quiche::h3::Header;
-use spooky_config::{
+use impulse_config::{
     backend_endpoint::BackendEndpoint,
     config::{
         ForwardedHeaderPolicy, ForwardedHeaderPolicyMode, UpstreamHostPolicy,
         UpstreamHostPolicyMode,
     },
 };
+use quiche::h3::Header;
 
 use crate::common::{RequestInputMeta, build_h1_and_h2_requests};
 

@@ -1,5 +1,5 @@
 [package]
-name = "spooky-utils"
+name = "impulse-utils"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

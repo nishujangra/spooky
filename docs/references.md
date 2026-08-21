@@ -1,6 +1,6 @@
 # References
 
-Technical references and external resources for Spooky development.
+Technical references and external resources for Impulse development.
 
 ## Protocol Specifications
 
@@ -148,4 +148,4 @@ To add a reference:
 3. Include a brief description
 4. Test all links
 
-See [contributing guide](https://github.com/Supernova-Labs-Org/spooky/blob/master/CONTRIBUTING.md) for more details.
+See [contributing guide](https://github.com/Supernova-Labs-Org/impulse/blob/master/CONTRIBUTING.md) for more details.

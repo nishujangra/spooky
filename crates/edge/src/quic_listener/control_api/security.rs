@@ -1,6 +1,6 @@
 use std::{net::IpAddr, sync::Arc};
 
-use spooky_config::config::{
+use impulse_config::config::{
     ControlApi as ControlApiConfig, ControlApiBearerToken, ControlApiClientAuthMode,
     ControlApiIdentitySource, ControlApiRole,
 };

@@ -3,6 +3,6 @@
 target
 bench/load/matrix
 docs/site
-spooky-test-suite
+impulse-test-suite
 *.log
 *.tmp

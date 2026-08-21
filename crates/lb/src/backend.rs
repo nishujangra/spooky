@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use spooky_config::config::{Backend, HealthCheck};
+use impulse_config::config::{Backend, HealthCheck};
 
 use crate::health::{HealthFailureReason, HealthTransition};
 

@@ -1,6 +1,6 @@
 # Backend Lifecycle
 
-This document explains how Spooky models backend resolution, health, pool placement, and request feedback as one lifecycle instead of several unrelated side effects.
+This document explains how Impulse models backend resolution, health, pool placement, and request feedback as one lifecycle instead of several unrelated side effects.
 
 ## Purpose
 

@@ -19,7 +19,7 @@
           "uid": "${datasource}"
         },
         "enable": true,
-        "expr": "sum(increase(spooky_runtime_activation_total{result=\"success\"}[1m])) > 0",
+        "expr": "sum(increase(impulse_runtime_activation_total{result=\"success\"}[1m])) > 0",
         "hide": false,
         "iconColor": "rgba(0, 191, 255, 1)",
         "name": "Runtime Activations",
@@ -34,7 +34,7 @@
           "uid": "${datasource}"
         },
         "enable": true,
-        "expr": "sum(increase(spooky_runtime_rollback_total{result=\"success\"}[1m])) > 0",
+        "expr": "sum(increase(impulse_runtime_rollback_total{result=\"success\"}[1m])) > 0",
         "hide": false,
         "iconColor": "rgba(255, 140, 0, 1)",
         "name": "Runtime Rollbacks",
@@ -120,7 +120,7 @@
       },
       "targets": [
         {
-          "expr": "100 * sum(spooky:health_check_failure_ratio:rate5m)",
+          "expr": "100 * sum(impulse:health_check_failure_ratio:rate5m)",
           "legendFormat": "health check failure ratio",
           "refId": "A"
         }
@@ -184,7 +184,7 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:backend_timeouts:rate5m)",
+          "expr": "sum(impulse:backend_timeouts:rate5m)",
           "legendFormat": "timeouts",
           "refId": "A"
         }
@@ -248,7 +248,7 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:backend_errors:rate5m)",
+          "expr": "sum(impulse:backend_errors:rate5m)",
           "legendFormat": "errors",
           "refId": "A"
         }
@@ -312,7 +312,7 @@
       },
       "targets": [
         {
-          "expr": "100 * sum(spooky:backend_dns_refresh_failure_ratio:rate5m)",
+          "expr": "100 * sum(impulse:backend_dns_refresh_failure_ratio:rate5m)",
           "legendFormat": "dns refresh failure ratio",
           "refId": "A"
         }
@@ -371,12 +371,12 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:health_checks_success:rate5m)",
+          "expr": "sum(impulse:health_checks_success:rate5m)",
           "legendFormat": "success",
           "refId": "A"
         },
         {
-          "expr": "sum(spooky:health_checks_failure:rate5m)",
+          "expr": "sum(impulse:health_checks_failure:rate5m)",
           "legendFormat": "failure",
           "refId": "B"
         }
@@ -435,7 +435,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (reason) (spooky:health_failures_by_reason:rate5m)",
+          "expr": "sum by (reason) (impulse:health_failures_by_reason:rate5m)",
           "legendFormat": "{{reason}}",
           "refId": "A"
         }
@@ -494,12 +494,12 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:backend_timeouts:rate5m)",
+          "expr": "sum(impulse:backend_timeouts:rate5m)",
           "legendFormat": "timeouts",
           "refId": "A"
         },
         {
-          "expr": "sum(spooky:backend_errors:rate5m)",
+          "expr": "sum(impulse:backend_errors:rate5m)",
           "legendFormat": "errors",
           "refId": "B"
         }
@@ -563,7 +563,7 @@
       },
       "targets": [
         {
-          "expr": "topk(12, sum by (upstream, backend) (spooky:backend_errors_by_upstream_backend:rate5m{upstream=~\"${upstream:regex}\",backend=~\"${backend:regex}\"}))",
+          "expr": "topk(12, sum by (upstream, backend) (impulse:backend_errors_by_upstream_backend:rate5m{upstream=~\"${upstream:regex}\",backend=~\"${backend:regex}\"}))",
           "legendFormat": "{{upstream}} / {{backend}}",
           "refId": "A"
         }
@@ -635,17 +635,17 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:backend_dns_refresh_successes:rate5m)",
+          "expr": "sum(impulse:backend_dns_refresh_successes:rate5m)",
           "legendFormat": "refresh success",
           "refId": "A"
         },
         {
-          "expr": "sum(spooky:backend_dns_refresh_failures:rate5m)",
+          "expr": "sum(impulse:backend_dns_refresh_failures:rate5m)",
           "legendFormat": "refresh failure",
           "refId": "B"
         },
         {
-          "expr": "sum(spooky:backend_dns_address_set_changes:rate5m)",
+          "expr": "sum(impulse:backend_dns_address_set_changes:rate5m)",
           "legendFormat": "address-set changes",
           "refId": "C"
         }
@@ -704,12 +704,12 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:backend_client_rotation_events:rate5m)",
+          "expr": "sum(impulse:backend_client_rotation_events:rate5m)",
           "legendFormat": "rotation events",
           "refId": "A"
         },
         {
-          "expr": "sum(spooky:backend_client_rotation_failures:rate5m)",
+          "expr": "sum(impulse:backend_client_rotation_failures:rate5m)",
           "legendFormat": "rotation failures",
           "refId": "B"
         }
@@ -768,7 +768,7 @@
       },
       "targets": [
         {
-          "expr": "topk(12, max by (backend) (spooky_backend_dns_resolved_addresses))",
+          "expr": "topk(12, max by (backend) (impulse_backend_dns_resolved_addresses))",
           "legendFormat": "{{backend}}",
           "refId": "A"
         }
@@ -832,7 +832,7 @@
       },
       "targets": [
         {
-          "expr": "topk(12, max by (backend) ((time() - spooky_backend_dns_last_refresh_success_seconds{backend=~\"${backend:regex}\"})))",
+          "expr": "topk(12, max by (backend) ((time() - impulse_backend_dns_last_refresh_success_seconds{backend=~\"${backend:regex}\"})))",
           "legendFormat": "{{backend}}",
           "refId": "A"
         }
@@ -909,7 +909,7 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:backend_failure_pressure:rate5m) or vector(0)",
+          "expr": "sum(impulse:backend_failure_pressure:rate5m) or vector(0)",
           "legendFormat": "backend failure pressure",
           "refId": "A"
         }
@@ -973,7 +973,7 @@
       },
       "targets": [
         {
-          "expr": "topk(12, sum by (backend) (spooky:backend_connect_attempts_by_backend:rate5m{backend=~\"${backend:regex}\"}))",
+          "expr": "topk(12, sum by (backend) (impulse:backend_connect_attempts_by_backend:rate5m{backend=~\"${backend:regex}\"}))",
           "legendFormat": "{{backend}}",
           "refId": "A"
         }
@@ -1037,7 +1037,7 @@
       },
       "targets": [
         {
-          "expr": "topk(12, max by (backend) (spooky_backend_dns_resolved_addresses{backend=~\"${backend:regex}\"}))",
+          "expr": "topk(12, max by (backend) (impulse_backend_dns_resolved_addresses{backend=~\"${backend:regex}\"}))",
           "legendFormat": "{{backend}}",
           "refId": "A"
         }
@@ -1049,7 +1049,7 @@
   "refresh": "30s",
   "schemaVersion": 39,
   "tags": [
-    "spooky",
+    "impulse",
     "observability",
     "backend",
     "health",
@@ -1089,7 +1089,7 @@
           "type": "prometheus",
           "uid": "${datasource}"
         },
-        "definition": "label_values(spooky_upstream_requests_total, upstream)",
+        "definition": "label_values(impulse_upstream_requests_total, upstream)",
         "hide": 0,
         "includeAll": true,
         "label": "Upstream",
@@ -1098,7 +1098,7 @@
         "options": [],
         "query": {
           "qryType": 1,
-          "query": "label_values(spooky_upstream_requests_total, upstream)",
+          "query": "label_values(impulse_upstream_requests_total, upstream)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 2,
@@ -1121,7 +1121,7 @@
           "type": "prometheus",
           "uid": "${datasource}"
         },
-        "definition": "label_values(spooky_backend_requests_total, backend)",
+        "definition": "label_values(impulse_backend_requests_total, backend)",
         "hide": 0,
         "includeAll": true,
         "label": "Backend",
@@ -1130,7 +1130,7 @@
         "options": [],
         "query": {
           "qryType": 1,
-          "query": "label_values(spooky_backend_requests_total, backend)",
+          "query": "label_values(impulse_backend_requests_total, backend)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 2,
@@ -1146,8 +1146,8 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "Spooky Backend Health and DNS Lifecycle",
-  "uid": "spooky-backend-health",
+  "title": "Impulse Backend Health and DNS Lifecycle",
+  "uid": "impulse-backend-health",
   "version": 2,
   "weekStart": ""
 }

@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "spooky",
+    "impulse",
     "crates/config",
     "crates/utils",
     "crates/edge",

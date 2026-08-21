@@ -4,7 +4,7 @@ use bytes::Bytes;
 use http::{Request, Response, StatusCode};
 use http_body_util::combinators::BoxBody;
 use hyper::body::Incoming;
-use spooky_errors::ProxyError;
+use impulse_errors::ProxyError;
 
 use super::{
     context::BootstrapDispatchCtx,

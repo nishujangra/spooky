@@ -4,11 +4,11 @@ use std::{
 };
 
 use http::StatusCode;
-use log::{error, info};
-use spooky_errors::{
+use impulse_errors::{
     ClassifiedUpstreamProxyError, PoolError, ProxyError, UpstreamErrorCategory, UpstreamTlsReason,
 };
-use spooky_lb::{HealthTransition, health::HealthFailureReason, upstream_pool::UpstreamPool};
+use impulse_lb::{HealthTransition, health::HealthFailureReason, upstream_pool::UpstreamPool};
+use log::{error, info};
 
 use crate::{
     Metrics, OverloadShedReason, RouteOutcome,
@@ -853,7 +853,7 @@ pub(crate) fn log_backend_health_transition(addr: &str, transition: &HealthTrans
 mod tests {
     use std::{collections::HashMap, time::Duration};
 
-    use spooky_config::{
+    use impulse_config::{
         config::{
             Backend, Config, ForwardedHeaderPolicy, HealthCheck, Listen, LoadBalancing, RouteAuth,
             RouteMatch, Tls, Upstream, UpstreamHostPolicy,
@@ -1522,7 +1522,7 @@ mod tests {
             });
             assert!(matches!(healthy, Some(HealthTransition::BecameHealthy)));
 
-            let classified = spooky_errors::classify_upstream_proxy_error(&ProxyError::Timeout)
+            let classified = impulse_errors::classify_upstream_proxy_error(&ProxyError::Timeout)
                 .expect("classified timeout");
             let transition = observe_classified_backend_failure(ClassifiedBackendFailureInput {
                 metrics_phase: "bootstrap",
@@ -1622,7 +1622,7 @@ mod tests {
         fn classified_backend_failure_metrics_follow_the_shared_health_mapping_contract() {
             let metrics = test_metrics();
 
-            let tls = spooky_errors::classify_upstream_proxy_error(&ProxyError::Tls(
+            let tls = impulse_errors::classify_upstream_proxy_error(&ProxyError::Tls(
                 "unknown issuer".to_string(),
             ))
             .expect("classified tls");
@@ -1641,7 +1641,7 @@ mod tests {
                 0
             );
 
-            let transport = spooky_errors::classify_upstream_proxy_error(&ProxyError::Transport(
+            let transport = impulse_errors::classify_upstream_proxy_error(&ProxyError::Transport(
                 "connection reset by peer".to_string(),
             ))
             .expect("classified transport");

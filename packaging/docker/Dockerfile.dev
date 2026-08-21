@@ -14,15 +14,15 @@ RUN apt-get update \
 
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
-COPY spooky ./spooky
+COPY impulse ./impulse
 COPY config ./config
 COPY certs ./certs
 
-RUN cargo build -p spooky --bin spooky
+RUN cargo build -p impulse --bin impulse
 
 EXPOSE 9889/udp
 EXPOSE 9889/tcp
 EXPOSE 9901/tcp
 EXPOSE 9902/tcp
 
-CMD ["cargo", "run", "-p", "spooky", "--bin", "spooky", "--", "--config", "config/config.development.yaml"]
+CMD ["cargo", "run", "-p", "impulse", "--bin", "impulse", "--", "--config", "config/config.development.yaml"]

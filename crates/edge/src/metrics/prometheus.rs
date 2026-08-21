@@ -4,94 +4,94 @@ use crate::runtime::activation::{RuntimeOperationOutcomeReason, RuntimeRejection
 impl Metrics {
     pub fn render_prometheus(&self) -> String {
         let mut out = String::with_capacity(8 * 1024);
-        out.push_str("# HELP spooky_requests_total Total requests seen by spooky.\n");
-        out.push_str("# TYPE spooky_requests_total counter\n");
+        out.push_str("# HELP impulse_requests_total Total requests seen by impulse.\n");
+        out.push_str("# TYPE impulse_requests_total counter\n");
         out.push_str(&format!(
-            "spooky_requests_total {}\n",
+            "impulse_requests_total {}\n",
             self.requests_total.load(Ordering::Relaxed)
         ));
 
-        out.push_str("# HELP spooky_requests_success Total successful upstream responses.\n");
-        out.push_str("# TYPE spooky_requests_success counter\n");
+        out.push_str("# HELP impulse_requests_success Total successful upstream responses.\n");
+        out.push_str("# TYPE impulse_requests_success counter\n");
         out.push_str(&format!(
-            "spooky_requests_success {}\n",
+            "impulse_requests_success {}\n",
             self.requests_success.load(Ordering::Relaxed)
         ));
 
-        out.push_str("# HELP spooky_requests_failure Total failed requests.\n");
-        out.push_str("# TYPE spooky_requests_failure counter\n");
+        out.push_str("# HELP impulse_requests_failure Total failed requests.\n");
+        out.push_str("# TYPE impulse_requests_failure counter\n");
         out.push_str(&format!(
-            "spooky_requests_failure {}\n",
+            "impulse_requests_failure {}\n",
             self.requests_failure.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_request_validation_rejects Total requests rejected by protocol validation.\n",
+            "# HELP impulse_request_validation_rejects Total requests rejected by protocol validation.\n",
         );
-        out.push_str("# TYPE spooky_request_validation_rejects counter\n");
+        out.push_str("# TYPE impulse_request_validation_rejects counter\n");
         out.push_str(&format!(
-            "spooky_request_validation_rejects {}\n",
+            "impulse_request_validation_rejects {}\n",
             self.request_validation_rejects.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_policy_denied Total requests denied by runtime method/path policies.\n",
+            "# HELP impulse_policy_denied Total requests denied by runtime method/path policies.\n",
         );
-        out.push_str("# TYPE spooky_policy_denied counter\n");
+        out.push_str("# TYPE impulse_policy_denied counter\n");
         out.push_str(&format!(
-            "spooky_policy_denied {}\n",
+            "impulse_policy_denied {}\n",
             self.policy_denied.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_external_auth_allowed Total requests explicitly allowed by external auth.\n",
+            "# HELP impulse_external_auth_allowed Total requests explicitly allowed by external auth.\n",
         );
-        out.push_str("# TYPE spooky_external_auth_allowed counter\n");
+        out.push_str("# TYPE impulse_external_auth_allowed counter\n");
         out.push_str(&format!(
-            "spooky_external_auth_allowed {}\n",
+            "impulse_external_auth_allowed {}\n",
             self.external_auth_allowed.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_external_auth_denied Total requests denied, challenged, or redirected by external auth.\n",
+            "# HELP impulse_external_auth_denied Total requests denied, challenged, or redirected by external auth.\n",
         );
-        out.push_str("# TYPE spooky_external_auth_denied counter\n");
+        out.push_str("# TYPE impulse_external_auth_denied counter\n");
         out.push_str(&format!(
-            "spooky_external_auth_denied {}\n",
+            "impulse_external_auth_denied {}\n",
             self.external_auth_denied.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_external_auth_timeout Total external auth decisions that timed out.\n",
+            "# HELP impulse_external_auth_timeout Total external auth decisions that timed out.\n",
         );
-        out.push_str("# TYPE spooky_external_auth_timeout counter\n");
+        out.push_str("# TYPE impulse_external_auth_timeout counter\n");
         out.push_str(&format!(
-            "spooky_external_auth_timeout {}\n",
+            "impulse_external_auth_timeout {}\n",
             self.external_auth_timeout.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_external_auth_error Total external auth transport or execution errors.\n",
+            "# HELP impulse_external_auth_error Total external auth transport or execution errors.\n",
         );
-        out.push_str("# TYPE spooky_external_auth_error counter\n");
+        out.push_str("# TYPE impulse_external_auth_error counter\n");
         out.push_str(&format!(
-            "spooky_external_auth_error {}\n",
+            "impulse_external_auth_error {}\n",
             self.external_auth_error.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_request_rate_limited Total requests rejected by scoped request rate limits.\n",
+            "# HELP impulse_request_rate_limited Total requests rejected by scoped request rate limits.\n",
         );
-        out.push_str("# TYPE spooky_request_rate_limited counter\n");
+        out.push_str("# TYPE impulse_request_rate_limited counter\n");
         out.push_str(&format!(
-            "spooky_request_rate_limited {}\n",
+            "impulse_request_rate_limited {}\n",
             self.request_rate_limited.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_quota_policy_outcomes_total Total quota policy outcomes grouped by policy, decision, reason, selector dimensions, and backend mode.\n",
+            "# HELP impulse_quota_policy_outcomes_total Total quota policy outcomes grouped by policy, decision, reason, selector dimensions, and backend mode.\n",
         );
-        out.push_str("# TYPE spooky_quota_policy_outcomes_total counter\n");
+        out.push_str("# TYPE impulse_quota_policy_outcomes_total counter\n");
         if let Ok(guard) = self.quota_policy_outcomes.read() {
             let mut rows = guard.iter().collect::<Vec<_>>();
             rows.sort_by(|(left, _), (right, _)| {
@@ -104,7 +104,7 @@ impl Metrics {
             });
             for (key, count) in rows {
                 out.push_str(&format!(
-                    "spooky_quota_policy_outcomes_total{{policy=\"{}\",decision=\"{}\",reason=\"{}\",selector_dimensions=\"{}\",backend_mode=\"{}\"}} {}\n",
+                    "impulse_quota_policy_outcomes_total{{policy=\"{}\",decision=\"{}\",reason=\"{}\",selector_dimensions=\"{}\",backend_mode=\"{}\"}} {}\n",
                     escape_prometheus_label(&key.policy),
                     escape_prometheus_label(&key.decision),
                     escape_prometheus_label(&key.reason),
@@ -116,9 +116,9 @@ impl Metrics {
         }
 
         out.push_str(
-            "# HELP spooky_quota_backend_health_total Total quota backend health/error observations grouped by backend mode and reason.\n",
+            "# HELP impulse_quota_backend_health_total Total quota backend health/error observations grouped by backend mode and reason.\n",
         );
-        out.push_str("# TYPE spooky_quota_backend_health_total counter\n");
+        out.push_str("# TYPE impulse_quota_backend_health_total counter\n");
         if let Ok(guard) = self.quota_backend_health.read() {
             let mut rows = guard.iter().collect::<Vec<_>>();
             rows.sort_by(|(left, _), (right, _)| {
@@ -128,7 +128,7 @@ impl Metrics {
             });
             for (key, count) in rows {
                 out.push_str(&format!(
-                    "spooky_quota_backend_health_total{{backend_mode=\"{}\",reason=\"{}\"}} {}\n",
+                    "impulse_quota_backend_health_total{{backend_mode=\"{}\",reason=\"{}\"}} {}\n",
                     escape_prometheus_label(&key.backend_mode),
                     escape_prometheus_label(&key.reason),
                     count
@@ -136,70 +136,70 @@ impl Metrics {
             }
         }
 
-        out.push_str("# HELP spooky_early_data_accepted Total requests accepted in early data.\n");
-        out.push_str("# TYPE spooky_early_data_accepted counter\n");
+        out.push_str("# HELP impulse_early_data_accepted Total requests accepted in early data.\n");
+        out.push_str("# TYPE impulse_early_data_accepted counter\n");
         out.push_str(&format!(
-            "spooky_early_data_accepted {}\n",
+            "impulse_early_data_accepted {}\n",
             self.early_data_accepted.load(Ordering::Relaxed)
         ));
 
-        out.push_str("# HELP spooky_early_data_rejected Total requests rejected in early data.\n");
-        out.push_str("# TYPE spooky_early_data_rejected counter\n");
+        out.push_str("# HELP impulse_early_data_rejected Total requests rejected in early data.\n");
+        out.push_str("# TYPE impulse_early_data_rejected counter\n");
         out.push_str(&format!(
-            "spooky_early_data_rejected {}\n",
+            "impulse_early_data_rejected {}\n",
             self.early_data_rejected.load(Ordering::Relaxed)
         ));
 
-        out.push_str("# HELP spooky_health_checks_total Total active health checks executed.\n");
-        out.push_str("# TYPE spooky_health_checks_total counter\n");
+        out.push_str("# HELP impulse_health_checks_total Total active health checks executed.\n");
+        out.push_str("# TYPE impulse_health_checks_total counter\n");
         out.push_str(&format!(
-            "spooky_health_checks_total {}\n",
+            "impulse_health_checks_total {}\n",
             self.health_checks_total.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_health_checks_success Total successful active health checks.\n",
+            "# HELP impulse_health_checks_success Total successful active health checks.\n",
         );
-        out.push_str("# TYPE spooky_health_checks_success counter\n");
+        out.push_str("# TYPE impulse_health_checks_success counter\n");
         out.push_str(&format!(
-            "spooky_health_checks_success {}\n",
+            "impulse_health_checks_success {}\n",
             self.health_checks_success.load(Ordering::Relaxed)
         ));
 
-        out.push_str("# HELP spooky_health_checks_failure Total failed active health checks.\n");
-        out.push_str("# TYPE spooky_health_checks_failure counter\n");
+        out.push_str("# HELP impulse_health_checks_failure Total failed active health checks.\n");
+        out.push_str("# TYPE impulse_health_checks_failure counter\n");
         out.push_str(&format!(
-            "spooky_health_checks_failure {}\n",
+            "impulse_health_checks_failure {}\n",
             self.health_checks_failure.load(Ordering::Relaxed)
         ));
 
-        out.push_str("# HELP spooky_backend_timeouts Total backend timeout events.\n");
-        out.push_str("# TYPE spooky_backend_timeouts counter\n");
+        out.push_str("# HELP impulse_backend_timeouts Total backend timeout events.\n");
+        out.push_str("# TYPE impulse_backend_timeouts counter\n");
         out.push_str(&format!(
-            "spooky_backend_timeouts {}\n",
+            "impulse_backend_timeouts {}\n",
             self.backend_timeouts.load(Ordering::Relaxed)
         ));
 
-        out.push_str("# HELP spooky_backend_errors Total backend error events.\n");
-        out.push_str("# TYPE spooky_backend_errors counter\n");
+        out.push_str("# HELP impulse_backend_errors Total backend error events.\n");
+        out.push_str("# TYPE impulse_backend_errors counter\n");
         out.push_str(&format!(
-            "spooky_backend_errors {}\n",
+            "impulse_backend_errors {}\n",
             self.backend_errors.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_overload_shed Total requests dropped due to overload controls.\n",
+            "# HELP impulse_overload_shed Total requests dropped due to overload controls.\n",
         );
-        out.push_str("# TYPE spooky_overload_shed counter\n");
+        out.push_str("# TYPE impulse_overload_shed counter\n");
         out.push_str(&format!(
-            "spooky_overload_shed {}\n",
+            "impulse_overload_shed {}\n",
             self.overload_shed.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_overload_shed_by_reason_total Total overload shed decisions grouped by reason.\n",
+            "# HELP impulse_overload_shed_by_reason_total Total overload shed decisions grouped by reason.\n",
         );
-        out.push_str("# TYPE spooky_overload_shed_by_reason_total counter\n");
+        out.push_str("# TYPE impulse_overload_shed_by_reason_total counter\n");
         // Phase 2 (step 5): the `reason=` label vocabulary comes from the canonical
         // `OverloadShedReason::reason_label()` (→ AdmissionOverloadCause slug), not
         // ad hoc string literals, so metric and canonical enum cannot drift.
@@ -250,36 +250,36 @@ impl Metrics {
                 }
             };
             out.push_str(&format!(
-                "spooky_overload_shed_by_reason_total{{reason=\"{}\"}} {}\n",
+                "impulse_overload_shed_by_reason_total{{reason=\"{}\"}} {}\n",
                 reason.reason_label(),
                 count
             ));
         }
 
         out.push_str(
-            "# HELP spooky_inflight_wait_admit_total Successful inflight admissions after micro-wait.\n",
+            "# HELP impulse_inflight_wait_admit_total Successful inflight admissions after micro-wait.\n",
         );
-        out.push_str("# TYPE spooky_inflight_wait_admit_total counter\n");
+        out.push_str("# TYPE impulse_inflight_wait_admit_total counter\n");
         out.push_str(&format!(
-            "spooky_inflight_wait_admit_total{{scope=\"global\"}} {}\n",
+            "impulse_inflight_wait_admit_total{{scope=\"global\"}} {}\n",
             self.inflight_wait_admit_global.load(Ordering::Relaxed)
         ));
         out.push_str(&format!(
-            "spooky_inflight_wait_admit_total{{scope=\"upstream\"}} {}\n",
+            "impulse_inflight_wait_admit_total{{scope=\"upstream\"}} {}\n",
             self.inflight_wait_admit_upstream.load(Ordering::Relaxed)
         ));
 
-        out.push_str("# HELP spooky_active_connections Current active QUIC connections.\n");
-        out.push_str("# TYPE spooky_active_connections gauge\n");
+        out.push_str("# HELP impulse_active_connections Current active QUIC connections.\n");
+        out.push_str("# TYPE impulse_active_connections gauge\n");
         out.push_str(&format!(
-            "spooky_active_connections {}\n",
+            "impulse_active_connections {}\n",
             self.active_connections.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_runtime_rejections_total Total runtime activation or rollback rejections grouped by canonical operator reason.\n",
+            "# HELP impulse_runtime_rejections_total Total runtime activation or rollback rejections grouped by canonical operator reason.\n",
         );
-        out.push_str("# TYPE spooky_runtime_rejections_total counter\n");
+        out.push_str("# TYPE impulse_runtime_rejections_total counter\n");
         for reason in [
             RuntimeRejectionReason::InvalidConfig,
             RuntimeRejectionReason::StartupOwnedChange,
@@ -290,37 +290,37 @@ impl Metrics {
             RuntimeRejectionReason::RollbackNotAllowed,
         ] {
             out.push_str(&format!(
-                "spooky_runtime_rejections_total{{reason=\"{}\"}} {}\n",
+                "impulse_runtime_rejections_total{{reason=\"{}\"}} {}\n",
                 reason.slug(),
                 self.runtime_rejection_reason_count(reason)
             ));
         }
 
         out.push_str(
-            "# HELP spooky_runtime_validation_attempts_total Total staged runtime validation requests accepted by the control plane.\n",
+            "# HELP impulse_runtime_validation_attempts_total Total staged runtime validation requests accepted by the control plane.\n",
         );
-        out.push_str("# TYPE spooky_runtime_validation_attempts_total counter\n");
+        out.push_str("# TYPE impulse_runtime_validation_attempts_total counter\n");
         out.push_str(&format!(
-            "spooky_runtime_validation_attempts_total {}\n",
+            "impulse_runtime_validation_attempts_total {}\n",
             self.runtime_validation_attempts.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_runtime_preview_attempts_total Total staged runtime preview requests accepted by the control plane.\n",
+            "# HELP impulse_runtime_preview_attempts_total Total staged runtime preview requests accepted by the control plane.\n",
         );
-        out.push_str("# TYPE spooky_runtime_preview_attempts_total counter\n");
+        out.push_str("# TYPE impulse_runtime_preview_attempts_total counter\n");
         out.push_str(&format!(
-            "spooky_runtime_preview_attempts_total {}\n",
+            "impulse_runtime_preview_attempts_total {}\n",
             self.runtime_preview_attempts.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_runtime_activation_total Total runtime activation outcomes grouped by result and canonical reason.\n",
+            "# HELP impulse_runtime_activation_total Total runtime activation outcomes grouped by result and canonical reason.\n",
         );
-        out.push_str("# TYPE spooky_runtime_activation_total counter\n");
+        out.push_str("# TYPE impulse_runtime_activation_total counter\n");
         for reason in RuntimeOperationOutcomeReason::ALL {
             out.push_str(&format!(
-                "spooky_runtime_activation_total{{result=\"{}\",reason=\"{}\"}} {}\n",
+                "impulse_runtime_activation_total{{result=\"{}\",reason=\"{}\"}} {}\n",
                 reason.result_label(),
                 reason.slug(),
                 self.runtime_activation_outcome_count(reason)
@@ -328,12 +328,12 @@ impl Metrics {
         }
 
         out.push_str(
-            "# HELP spooky_runtime_rollback_total Total runtime rollback outcomes grouped by result and canonical reason.\n",
+            "# HELP impulse_runtime_rollback_total Total runtime rollback outcomes grouped by result and canonical reason.\n",
         );
-        out.push_str("# TYPE spooky_runtime_rollback_total counter\n");
+        out.push_str("# TYPE impulse_runtime_rollback_total counter\n");
         for reason in RuntimeOperationOutcomeReason::ALL {
             out.push_str(&format!(
-                "spooky_runtime_rollback_total{{result=\"{}\",reason=\"{}\"}} {}\n",
+                "impulse_runtime_rollback_total{{result=\"{}\",reason=\"{}\"}} {}\n",
                 reason.result_label(),
                 reason.slug(),
                 self.runtime_rollback_outcome_count(reason)
@@ -341,417 +341,417 @@ impl Metrics {
         }
 
         out.push_str(
-            "# HELP spooky_runtime_active_generation Current active runtime generation identifier.\n",
+            "# HELP impulse_runtime_active_generation Current active runtime generation identifier.\n",
         );
-        out.push_str("# TYPE spooky_runtime_active_generation gauge\n");
+        out.push_str("# TYPE impulse_runtime_active_generation gauge\n");
         out.push_str(&format!(
-            "spooky_runtime_active_generation {}\n",
+            "impulse_runtime_active_generation {}\n",
             self.runtime_active_generation.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_runtime_history_depth Number of retained runtime history entries visible to the active generation.\n",
+            "# HELP impulse_runtime_history_depth Number of retained runtime history entries visible to the active generation.\n",
         );
-        out.push_str("# TYPE spooky_runtime_history_depth gauge\n");
+        out.push_str("# TYPE impulse_runtime_history_depth gauge\n");
         out.push_str(&format!(
-            "spooky_runtime_history_depth {}\n",
+            "impulse_runtime_history_depth {}\n",
             self.runtime_history_depth.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_connection_cap_rejects Total new-connection attempts rejected by max_active_connections cap.\n",
+            "# HELP impulse_connection_cap_rejects Total new-connection attempts rejected by max_active_connections cap.\n",
         );
-        out.push_str("# TYPE spooky_connection_cap_rejects counter\n");
+        out.push_str("# TYPE impulse_connection_cap_rejects counter\n");
         out.push_str(&format!(
-            "spooky_connection_cap_rejects {}\n",
+            "impulse_connection_cap_rejects {}\n",
             self.connection_cap_rejects.load(Ordering::Relaxed)
         ));
 
-        out.push_str("# HELP spooky_hedge_triggered_total Total hedge attempts started.\n");
-        out.push_str("# TYPE spooky_hedge_triggered_total counter\n");
+        out.push_str("# HELP impulse_hedge_triggered_total Total hedge attempts started.\n");
+        out.push_str("# TYPE impulse_hedge_triggered_total counter\n");
         out.push_str(&format!(
-            "spooky_hedge_triggered_total {}\n",
+            "impulse_hedge_triggered_total {}\n",
             self.hedge_triggered.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_hedge_won_total Total requests where hedge response arrived first.\n",
+            "# HELP impulse_hedge_won_total Total requests where hedge response arrived first.\n",
         );
-        out.push_str("# TYPE spooky_hedge_won_total counter\n");
+        out.push_str("# TYPE impulse_hedge_won_total counter\n");
         out.push_str(&format!(
-            "spooky_hedge_won_total {}\n",
+            "impulse_hedge_won_total {}\n",
             self.hedge_won.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_hedge_wasted_total Total hedge attempts that did not win the race.\n",
+            "# HELP impulse_hedge_wasted_total Total hedge attempts that did not win the race.\n",
         );
-        out.push_str("# TYPE spooky_hedge_wasted_total counter\n");
+        out.push_str("# TYPE impulse_hedge_wasted_total counter\n");
         out.push_str(&format!(
-            "spooky_hedge_wasted_total {}\n",
+            "impulse_hedge_wasted_total {}\n",
             self.hedge_wasted.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_hedge_primary_won_after_trigger_total Total hedged requests where primary still won.\n",
+            "# HELP impulse_hedge_primary_won_after_trigger_total Total hedged requests where primary still won.\n",
         );
-        out.push_str("# TYPE spooky_hedge_primary_won_after_trigger_total counter\n");
+        out.push_str("# TYPE impulse_hedge_primary_won_after_trigger_total counter\n");
         out.push_str(&format!(
-            "spooky_hedge_primary_won_after_trigger_total {}\n",
+            "impulse_hedge_primary_won_after_trigger_total {}\n",
             self.hedge_primary_won_after_trigger.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_hedge_primary_late_ms_total Aggregate milliseconds primary was late after hedge trigger.\n",
+            "# HELP impulse_hedge_primary_late_ms_total Aggregate milliseconds primary was late after hedge trigger.\n",
         );
-        out.push_str("# TYPE spooky_hedge_primary_late_ms_total counter\n");
+        out.push_str("# TYPE impulse_hedge_primary_late_ms_total counter\n");
         out.push_str(&format!(
-            "spooky_hedge_primary_late_ms_total {}\n",
+            "impulse_hedge_primary_late_ms_total {}\n",
             self.hedge_primary_late_ms_total.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_hedge_primary_late_samples_total Number of late-primary observations used in hedge tuning.\n",
+            "# HELP impulse_hedge_primary_late_samples_total Number of late-primary observations used in hedge tuning.\n",
         );
-        out.push_str("# TYPE spooky_hedge_primary_late_samples_total counter\n");
+        out.push_str("# TYPE impulse_hedge_primary_late_samples_total counter\n");
         out.push_str(&format!(
-            "spooky_hedge_primary_late_samples_total {}\n",
+            "impulse_hedge_primary_late_samples_total {}\n",
             self.hedge_primary_late_samples.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_ingress_packets_total Total UDP packets processed by ingress.\n",
+            "# HELP impulse_ingress_packets_total Total UDP packets processed by ingress.\n",
         );
-        out.push_str("# TYPE spooky_ingress_packets_total counter\n");
+        out.push_str("# TYPE impulse_ingress_packets_total counter\n");
         out.push_str(&format!(
-            "spooky_ingress_packets_total {}\n",
+            "impulse_ingress_packets_total {}\n",
             self.ingress_packets_total.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_ingress_queue_drops Total ingress packets dropped due to full shard queues.\n",
+            "# HELP impulse_ingress_queue_drops Total ingress packets dropped due to full shard queues.\n",
         );
-        out.push_str("# TYPE spooky_ingress_queue_drops counter\n");
+        out.push_str("# TYPE impulse_ingress_queue_drops counter\n");
         out.push_str(&format!(
-            "spooky_ingress_queue_drops {}\n",
+            "impulse_ingress_queue_drops {}\n",
             self.ingress_queue_drops.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_ingress_queue_drop_bytes Total UDP datagram bytes dropped due to full shard queues.\n",
+            "# HELP impulse_ingress_queue_drop_bytes Total UDP datagram bytes dropped due to full shard queues.\n",
         );
-        out.push_str("# TYPE spooky_ingress_queue_drop_bytes counter\n");
+        out.push_str("# TYPE impulse_ingress_queue_drop_bytes counter\n");
         out.push_str(&format!(
-            "spooky_ingress_queue_drop_bytes {}\n",
+            "impulse_ingress_queue_drop_bytes {}\n",
             self.ingress_queue_drop_bytes.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_ingress_queue_bytes Current bytes buffered in ingress shard queues.\n",
+            "# HELP impulse_ingress_queue_bytes Current bytes buffered in ingress shard queues.\n",
         );
-        out.push_str("# TYPE spooky_ingress_queue_bytes gauge\n");
+        out.push_str("# TYPE impulse_ingress_queue_bytes gauge\n");
         out.push_str(&format!(
-            "spooky_ingress_queue_bytes {}\n",
+            "impulse_ingress_queue_bytes {}\n",
             self.ingress_queue_bytes.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_ingress_bad_header_total Ingress packets dropped due to unparseable QUIC header.\n",
+            "# HELP impulse_ingress_bad_header_total Ingress packets dropped due to unparseable QUIC header.\n",
         );
-        out.push_str("# TYPE spooky_ingress_bad_header_total counter\n");
+        out.push_str("# TYPE impulse_ingress_bad_header_total counter\n");
         out.push_str(&format!(
-            "spooky_ingress_bad_header_total {}\n",
+            "impulse_ingress_bad_header_total {}\n",
             self.ingress_bad_header_total.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_ingress_rate_limited_total Initial packets dropped by the new-connection rate limiter.\n",
+            "# HELP impulse_ingress_rate_limited_total Initial packets dropped by the new-connection rate limiter.\n",
         );
-        out.push_str("# TYPE spooky_ingress_rate_limited_total counter\n");
+        out.push_str("# TYPE impulse_ingress_rate_limited_total counter\n");
         out.push_str(&format!(
-            "spooky_ingress_rate_limited_total {}\n",
+            "impulse_ingress_rate_limited_total {}\n",
             self.ingress_rate_limited_total.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_ingress_unroutable_total Non-Initial packets received for unknown connections.\n",
+            "# HELP impulse_ingress_unroutable_total Non-Initial packets received for unknown connections.\n",
         );
-        out.push_str("# TYPE spooky_ingress_unroutable_total counter\n");
+        out.push_str("# TYPE impulse_ingress_unroutable_total counter\n");
         out.push_str(&format!(
-            "spooky_ingress_unroutable_total {}\n",
+            "impulse_ingress_unroutable_total {}\n",
             self.ingress_unroutable_total.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_ingress_draining_drops_total Packets dropped because the listener is draining.\n",
+            "# HELP impulse_ingress_draining_drops_total Packets dropped because the listener is draining.\n",
         );
-        out.push_str("# TYPE spooky_ingress_draining_drops_total counter\n");
+        out.push_str("# TYPE impulse_ingress_draining_drops_total counter\n");
         out.push_str(&format!(
-            "spooky_ingress_draining_drops_total {}\n",
+            "impulse_ingress_draining_drops_total {}\n",
             self.ingress_draining_drops_total.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_ingress_connection_create_failed_total Packets dropped because quiche::accept() failed to create a new connection.\n",
+            "# HELP impulse_ingress_connection_create_failed_total Packets dropped because quiche::accept() failed to create a new connection.\n",
         );
-        out.push_str("# TYPE spooky_ingress_connection_create_failed_total counter\n");
+        out.push_str("# TYPE impulse_ingress_connection_create_failed_total counter\n");
         out.push_str(&format!(
-            "spooky_ingress_connection_create_failed_total {}\n",
+            "impulse_ingress_connection_create_failed_total {}\n",
             self.ingress_connection_create_failed_total
                 .load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_ingress_version_neg_failed_total Packets dropped because version negotiation response could not be constructed.\n",
+            "# HELP impulse_ingress_version_neg_failed_total Packets dropped because version negotiation response could not be constructed.\n",
         );
-        out.push_str("# TYPE spooky_ingress_version_neg_failed_total counter\n");
+        out.push_str("# TYPE impulse_ingress_version_neg_failed_total counter\n");
         out.push_str(&format!(
-            "spooky_ingress_version_neg_failed_total {}\n",
+            "impulse_ingress_version_neg_failed_total {}\n",
             self.ingress_version_neg_failed_total
                 .load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_request_buffered_bytes Current bytes buffered in request backpressure queues.\n",
+            "# HELP impulse_request_buffered_bytes Current bytes buffered in request backpressure queues.\n",
         );
-        out.push_str("# TYPE spooky_request_buffered_bytes gauge\n");
+        out.push_str("# TYPE impulse_request_buffered_bytes gauge\n");
         out.push_str(&format!(
-            "spooky_request_buffered_bytes {}\n",
+            "impulse_request_buffered_bytes {}\n",
             self.request_buffered_bytes.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_request_buffered_high_watermark_bytes Peak request-buffered bytes since process start.\n",
+            "# HELP impulse_request_buffered_high_watermark_bytes Peak request-buffered bytes since process start.\n",
         );
-        out.push_str("# TYPE spooky_request_buffered_high_watermark_bytes gauge\n");
+        out.push_str("# TYPE impulse_request_buffered_high_watermark_bytes gauge\n");
         out.push_str(&format!(
-            "spooky_request_buffered_high_watermark_bytes {}\n",
+            "impulse_request_buffered_high_watermark_bytes {}\n",
             self.request_buffered_high_watermark_bytes
                 .load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_request_buffer_limit_rejects Total requests rejected due to request buffer byte caps.\n",
+            "# HELP impulse_request_buffer_limit_rejects Total requests rejected due to request buffer byte caps.\n",
         );
-        out.push_str("# TYPE spooky_request_buffer_limit_rejects counter\n");
+        out.push_str("# TYPE impulse_request_buffer_limit_rejects counter\n");
         out.push_str(&format!(
-            "spooky_request_buffer_limit_rejects {}\n",
+            "impulse_request_buffer_limit_rejects {}\n",
             self.request_buffer_limit_rejects.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_response_prebuffer_limit_rejects Total unknown-length upstream responses rejected due to prebuffer cap.\n",
+            "# HELP impulse_response_prebuffer_limit_rejects Total unknown-length upstream responses rejected due to prebuffer cap.\n",
         );
-        out.push_str("# TYPE spooky_response_prebuffer_limit_rejects counter\n");
+        out.push_str("# TYPE impulse_response_prebuffer_limit_rejects counter\n");
         out.push_str(&format!(
-            "spooky_response_prebuffer_limit_rejects {}\n",
+            "impulse_response_prebuffer_limit_rejects {}\n",
             self.response_prebuffer_limit_rejects
                 .load(Ordering::Relaxed)
         ));
 
-        out.push_str("# HELP spooky_scid_rotations Total SCID rotations.\n");
-        out.push_str("# TYPE spooky_scid_rotations counter\n");
+        out.push_str("# HELP impulse_scid_rotations Total SCID rotations.\n");
+        out.push_str("# TYPE impulse_scid_rotations counter\n");
         out.push_str(&format!(
-            "spooky_scid_rotations {}\n",
+            "impulse_scid_rotations {}\n",
             self.scid_rotations.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_control_api_connection_limit_drops Total control API connections dropped due to max-connection limiter.\n",
+            "# HELP impulse_control_api_connection_limit_drops Total control API connections dropped due to max-connection limiter.\n",
         );
-        out.push_str("# TYPE spooky_control_api_connection_limit_drops counter\n");
+        out.push_str("# TYPE impulse_control_api_connection_limit_drops counter\n");
         out.push_str(&format!(
-            "spooky_control_api_connection_limit_drops {}\n",
+            "impulse_control_api_connection_limit_drops {}\n",
             self.control_api_connection_limit_drops
                 .load(Ordering::Relaxed)
         ));
 
-        out.push_str("# HELP spooky_watchdog_restart_requests Total watchdog restart requests.\n");
-        out.push_str("# TYPE spooky_watchdog_restart_requests counter\n");
+        out.push_str("# HELP impulse_watchdog_restart_requests Total watchdog restart requests.\n");
+        out.push_str("# TYPE impulse_watchdog_restart_requests counter\n");
         out.push_str(&format!(
-            "spooky_watchdog_restart_requests {}\n",
+            "impulse_watchdog_restart_requests {}\n",
             self.watchdog_restart_requests.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_watchdog_restart_hooks Total executed watchdog restart hooks.\n",
+            "# HELP impulse_watchdog_restart_hooks Total executed watchdog restart hooks.\n",
         );
-        out.push_str("# TYPE spooky_watchdog_restart_hooks counter\n");
+        out.push_str("# TYPE impulse_watchdog_restart_hooks counter\n");
         out.push_str(&format!(
-            "spooky_watchdog_restart_hooks {}\n",
+            "impulse_watchdog_restart_hooks {}\n",
             self.watchdog_restart_hooks.load(Ordering::Relaxed)
         ));
 
-        out.push_str("# HELP spooky_runtime_panics Total runtime task panics observed.\n");
-        out.push_str("# TYPE spooky_runtime_panics counter\n");
+        out.push_str("# HELP impulse_runtime_panics Total runtime task panics observed.\n");
+        out.push_str("# TYPE impulse_runtime_panics counter\n");
         out.push_str(&format!(
-            "spooky_runtime_panics {}\n",
+            "impulse_runtime_panics {}\n",
             self.runtime_panics.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_watchdog_degraded_windows Total degraded watchdog evaluation windows.\n",
+            "# HELP impulse_watchdog_degraded_windows Total degraded watchdog evaluation windows.\n",
         );
-        out.push_str("# TYPE spooky_watchdog_degraded_windows counter\n");
+        out.push_str("# TYPE impulse_watchdog_degraded_windows counter\n");
         out.push_str(&format!(
-            "spooky_watchdog_degraded_windows {}\n",
+            "impulse_watchdog_degraded_windows {}\n",
             self.watchdog_degraded_windows.load(Ordering::Relaxed)
         ));
 
-        out.push_str("# HELP spooky_retries_total Total retry attempts across all routes.\n");
-        out.push_str("# TYPE spooky_retries_total counter\n");
+        out.push_str("# HELP impulse_retries_total Total retry attempts across all routes.\n");
+        out.push_str("# TYPE impulse_retries_total counter\n");
         out.push_str(&format!(
-            "spooky_retries_total {}\n",
+            "impulse_retries_total {}\n",
             self.retries_total.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_retry_denied_total Total retry attempts blocked, by denial reason.\n",
+            "# HELP impulse_retry_denied_total Total retry attempts blocked, by denial reason.\n",
         );
-        out.push_str("# TYPE spooky_retry_denied_total counter\n");
+        out.push_str("# TYPE impulse_retry_denied_total counter\n");
         out.push_str(&format!(
-            "spooky_retry_denied_total{{reason=\"budget\"}} {}\n",
+            "impulse_retry_denied_total{{reason=\"budget\"}} {}\n",
             self.retry_denied_budget.load(Ordering::Relaxed)
         ));
         out.push_str(&format!(
-            "spooky_retry_denied_total{{reason=\"no_bodyless\"}} {}\n",
+            "impulse_retry_denied_total{{reason=\"no_bodyless\"}} {}\n",
             self.retry_denied_no_bodyless.load(Ordering::Relaxed)
         ));
         out.push_str(&format!(
-            "spooky_retry_denied_total{{reason=\"no_alternate\"}} {}\n",
+            "impulse_retry_denied_total{{reason=\"no_alternate\"}} {}\n",
             self.retry_denied_no_alternate.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_retry_attempts_total Total retries triggered, by error reason.\n",
+            "# HELP impulse_retry_attempts_total Total retries triggered, by error reason.\n",
         );
-        out.push_str("# TYPE spooky_retry_attempts_total counter\n");
+        out.push_str("# TYPE impulse_retry_attempts_total counter\n");
         out.push_str(&format!(
-            "spooky_retry_attempts_total{{reason=\"timeout\"}} {}\n",
+            "impulse_retry_attempts_total{{reason=\"timeout\"}} {}\n",
             self.retry_reason_timeout.load(Ordering::Relaxed)
         ));
         out.push_str(&format!(
-            "spooky_retry_attempts_total{{reason=\"transport\"}} {}\n",
+            "impulse_retry_attempts_total{{reason=\"transport\"}} {}\n",
             self.retry_reason_transport.load(Ordering::Relaxed)
         ));
         out.push_str(&format!(
-            "spooky_retry_attempts_total{{reason=\"pool\"}} {}\n",
+            "impulse_retry_attempts_total{{reason=\"pool\"}} {}\n",
             self.retry_reason_pool.load(Ordering::Relaxed)
         ));
 
-        out.push_str("# HELP spooky_circuit_breaker_rejected_total Requests rejected by an open circuit breaker.\n");
-        out.push_str("# TYPE spooky_circuit_breaker_rejected_total counter\n");
+        out.push_str("# HELP impulse_circuit_breaker_rejected_total Requests rejected by an open circuit breaker.\n");
+        out.push_str("# TYPE impulse_circuit_breaker_rejected_total counter\n");
         out.push_str(&format!(
-            "spooky_circuit_breaker_rejected_total {}\n",
+            "impulse_circuit_breaker_rejected_total {}\n",
             self.circuit_breaker_rejected_total.load(Ordering::Relaxed)
         ));
 
-        out.push_str("# HELP spooky_brownout_active Whether brownout mode is currently active (1=active, 0=inactive).\n");
-        out.push_str("# TYPE spooky_brownout_active gauge\n");
+        out.push_str("# HELP impulse_brownout_active Whether brownout mode is currently active (1=active, 0=inactive).\n");
+        out.push_str("# TYPE impulse_brownout_active gauge\n");
         out.push_str(&format!(
-            "spooky_brownout_active {}\n",
+            "impulse_brownout_active {}\n",
             self.brownout_active.load(Ordering::Relaxed)
         ));
 
         out.push_str(
-            "# HELP spooky_health_failures_total Backend health failures, by failure reason.\n",
+            "# HELP impulse_health_failures_total Backend health failures, by failure reason.\n",
         );
-        out.push_str("# TYPE spooky_health_failures_total counter\n");
+        out.push_str("# TYPE impulse_health_failures_total counter\n");
         out.push_str(&format!(
-            "spooky_health_failures_total{{reason=\"5xx\"}} {}\n",
+            "impulse_health_failures_total{{reason=\"5xx\"}} {}\n",
             self.health_failure_5xx.load(Ordering::Relaxed)
         ));
         out.push_str(&format!(
-            "spooky_health_failures_total{{reason=\"timeout\"}} {}\n",
+            "impulse_health_failures_total{{reason=\"timeout\"}} {}\n",
             self.health_failure_timeout.load(Ordering::Relaxed)
         ));
         out.push_str(&format!(
-            "spooky_health_failures_total{{reason=\"transport\"}} {}\n",
+            "impulse_health_failures_total{{reason=\"transport\"}} {}\n",
             self.health_failure_transport.load(Ordering::Relaxed)
         ));
         out.push_str(&format!(
-            "spooky_health_failures_total{{reason=\"tls\"}} {}\n",
+            "impulse_health_failures_total{{reason=\"tls\"}} {}\n",
             self.health_failure_tls.load(Ordering::Relaxed)
         ));
         out.push_str(
-            "# HELP spooky_downstream_tls_handshake_success_total Successful downstream TLS handshakes.\n",
+            "# HELP impulse_downstream_tls_handshake_success_total Successful downstream TLS handshakes.\n",
         );
-        out.push_str("# TYPE spooky_downstream_tls_handshake_success_total counter\n");
+        out.push_str("# TYPE impulse_downstream_tls_handshake_success_total counter\n");
         out.push_str(&format!(
-            "spooky_downstream_tls_handshake_success_total {}\n",
+            "impulse_downstream_tls_handshake_success_total {}\n",
             self.downstream_tls_handshake_success
                 .load(Ordering::Relaxed)
         ));
         out.push_str(
-            "# HELP spooky_downstream_tls_handshake_failure_total Downstream TLS handshake failures grouped by listener and reason.\n",
+            "# HELP impulse_downstream_tls_handshake_failure_total Downstream TLS handshake failures grouped by listener and reason.\n",
         );
-        out.push_str("# TYPE spooky_downstream_tls_handshake_failure_total counter\n");
+        out.push_str("# TYPE impulse_downstream_tls_handshake_failure_total counter\n");
         for (key, value) in self.snapshot_downstream_tls_handshake_failures() {
             out.push_str(&format!(
-                "spooky_downstream_tls_handshake_failure_total{{listener=\"{}\",reason=\"{}\"}} {}\n",
+                "impulse_downstream_tls_handshake_failure_total{{listener=\"{}\",reason=\"{}\"}} {}\n",
                 escape_prometheus_label(&key.listener),
                 escape_prometheus_label(&key.reason),
                 value
             ));
         }
         out.push_str(
-            "# HELP spooky_downstream_tls_certificate_selection_total Downstream TLS certificate selection outcomes grouped by listener.\n",
+            "# HELP impulse_downstream_tls_certificate_selection_total Downstream TLS certificate selection outcomes grouped by listener.\n",
         );
-        out.push_str("# TYPE spooky_downstream_tls_certificate_selection_total counter\n");
+        out.push_str("# TYPE impulse_downstream_tls_certificate_selection_total counter\n");
         for (key, value) in self.snapshot_downstream_tls_cert_selections() {
             out.push_str(&format!(
-                "spooky_downstream_tls_certificate_selection_total{{listener=\"{}\",selection=\"{}\"}} {}\n",
+                "impulse_downstream_tls_certificate_selection_total{{listener=\"{}\",selection=\"{}\"}} {}\n",
                 escape_prometheus_label(&key.listener),
                 escape_prometheus_label(&key.selection),
                 value
             ));
         }
         out.push_str(
-            "# HELP spooky_downstream_tls_alpn_total Negotiated downstream ALPN protocols grouped by listener.\n",
+            "# HELP impulse_downstream_tls_alpn_total Negotiated downstream ALPN protocols grouped by listener.\n",
         );
-        out.push_str("# TYPE spooky_downstream_tls_alpn_total counter\n");
+        out.push_str("# TYPE impulse_downstream_tls_alpn_total counter\n");
         for (key, value) in self.snapshot_downstream_tls_alpn() {
             out.push_str(&format!(
-                "spooky_downstream_tls_alpn_total{{listener=\"{}\",protocol=\"{}\"}} {}\n",
+                "impulse_downstream_tls_alpn_total{{listener=\"{}\",protocol=\"{}\"}} {}\n",
                 escape_prometheus_label(&key.listener),
                 escape_prometheus_label(&key.protocol),
                 value
             ));
         }
         out.push_str(
-            "# HELP spooky_downstream_tls_certificate_not_after_seconds Downstream certificate expiration timestamps grouped by listener and server name.\n",
+            "# HELP impulse_downstream_tls_certificate_not_after_seconds Downstream certificate expiration timestamps grouped by listener and server name.\n",
         );
-        out.push_str("# TYPE spooky_downstream_tls_certificate_not_after_seconds gauge\n");
+        out.push_str("# TYPE impulse_downstream_tls_certificate_not_after_seconds gauge\n");
         out.push_str(
-            "# HELP spooky_downstream_tls_certificate_days_remaining Estimated whole days remaining before certificate expiration.\n",
+            "# HELP impulse_downstream_tls_certificate_days_remaining Estimated whole days remaining before certificate expiration.\n",
         );
-        out.push_str("# TYPE spooky_downstream_tls_certificate_days_remaining gauge\n");
+        out.push_str("# TYPE impulse_downstream_tls_certificate_days_remaining gauge\n");
         let now_unix_seconds = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|duration| duration.as_secs() as i64)
             .unwrap_or_default();
         for (key, value) in self.snapshot_downstream_tls_cert_expiry() {
             out.push_str(&format!(
-                "spooky_downstream_tls_certificate_not_after_seconds{{listener=\"{}\",server_name=\"{}\"}} {}\n",
+                "impulse_downstream_tls_certificate_not_after_seconds{{listener=\"{}\",server_name=\"{}\"}} {}\n",
                 escape_prometheus_label(&key.listener),
                 escape_prometheus_label(&key.server_name),
                 value
             ));
             let days_remaining = ((value - now_unix_seconds).max(0) as f64) / 86_400.0;
             out.push_str(&format!(
-                "spooky_downstream_tls_certificate_days_remaining{{listener=\"{}\",server_name=\"{}\"}} {:.6}\n",
+                "impulse_downstream_tls_certificate_days_remaining{{listener=\"{}\",server_name=\"{}\"}} {:.6}\n",
                 escape_prometheus_label(&key.listener),
                 escape_prometheus_label(&key.server_name),
                 days_remaining
             ));
         }
         out.push_str(
-            "# HELP spooky_upstream_tls_failure_total Upstream TLS failures grouped by upstream, backend, request phase, and reason.\n",
+            "# HELP impulse_upstream_tls_failure_total Upstream TLS failures grouped by upstream, backend, request phase, and reason.\n",
         );
-        out.push_str("# TYPE spooky_upstream_tls_failure_total counter\n");
+        out.push_str("# TYPE impulse_upstream_tls_failure_total counter\n");
         for (key, value) in self.snapshot_upstream_tls_failures() {
             out.push_str(&format!(
-                "spooky_upstream_tls_failure_total{{upstream=\"{}\",backend=\"{}\",phase=\"{}\",reason=\"{}\"}} {}\n",
+                "impulse_upstream_tls_failure_total{{upstream=\"{}\",backend=\"{}\",phase=\"{}\",reason=\"{}\"}} {}\n",
                 escape_prometheus_label(&key.upstream),
                 escape_prometheus_label(&key.backend),
                 escape_prometheus_label(&key.phase),
@@ -760,12 +760,12 @@ impl Metrics {
             ));
         }
         out.push_str(
-            "# HELP spooky_secret_reload_total Total secret or certificate reload outcomes grouped by scope, result, and reason.\n",
+            "# HELP impulse_secret_reload_total Total secret or certificate reload outcomes grouped by scope, result, and reason.\n",
         );
-        out.push_str("# TYPE spooky_secret_reload_total counter\n");
+        out.push_str("# TYPE impulse_secret_reload_total counter\n");
         for (key, value) in self.snapshot_secret_reload_totals() {
             out.push_str(&format!(
-                "spooky_secret_reload_total{{scope=\"{}\",result=\"{}\",reason=\"{}\"}} {}\n",
+                "impulse_secret_reload_total{{scope=\"{}\",result=\"{}\",reason=\"{}\"}} {}\n",
                 escape_prometheus_label(&key.scope),
                 escape_prometheus_label(&key.result),
                 escape_prometheus_label(&key.reason),
@@ -773,12 +773,12 @@ impl Metrics {
             ));
         }
         out.push_str(
-            "# HELP spooky_secret_resolve_total Total secret resolution outcomes grouped by provider, result, and reason.\n",
+            "# HELP impulse_secret_resolve_total Total secret resolution outcomes grouped by provider, result, and reason.\n",
         );
-        out.push_str("# TYPE spooky_secret_resolve_total counter\n");
+        out.push_str("# TYPE impulse_secret_resolve_total counter\n");
         for (key, value) in self.snapshot_secret_resolve_totals() {
             out.push_str(&format!(
-                "spooky_secret_resolve_total{{provider=\"{}\",result=\"{}\",reason=\"{}\"}} {}\n",
+                "impulse_secret_resolve_total{{provider=\"{}\",result=\"{}\",reason=\"{}\"}} {}\n",
                 escape_prometheus_label(&key.provider),
                 escape_prometheus_label(&key.result),
                 escape_prometheus_label(&key.reason),
@@ -786,152 +786,152 @@ impl Metrics {
             ));
         }
         out.push_str(
-            "# HELP spooky_secret_last_success_unixtime Unix timestamp of the last successful secret or certificate load by scope.\n",
+            "# HELP impulse_secret_last_success_unixtime Unix timestamp of the last successful secret or certificate load by scope.\n",
         );
-        out.push_str("# TYPE spooky_secret_last_success_unixtime gauge\n");
+        out.push_str("# TYPE impulse_secret_last_success_unixtime gauge\n");
         for (key, value) in self.snapshot_secret_last_success_unixtime() {
             out.push_str(&format!(
-                "spooky_secret_last_success_unixtime{{scope=\"{}\"}} {}\n",
+                "impulse_secret_last_success_unixtime{{scope=\"{}\"}} {}\n",
                 escape_prometheus_label(&key.scope),
                 value
             ));
         }
         out.push_str(
-            "# HELP spooky_upstream_client_certificate_not_after_seconds Upstream client certificate expiration timestamps grouped by upstream.\n",
+            "# HELP impulse_upstream_client_certificate_not_after_seconds Upstream client certificate expiration timestamps grouped by upstream.\n",
         );
-        out.push_str("# TYPE spooky_upstream_client_certificate_not_after_seconds gauge\n");
+        out.push_str("# TYPE impulse_upstream_client_certificate_not_after_seconds gauge\n");
         out.push_str(
-            "# HELP spooky_upstream_client_certificate_days_remaining Estimated whole days remaining before upstream client certificate expiration.\n",
+            "# HELP impulse_upstream_client_certificate_days_remaining Estimated whole days remaining before upstream client certificate expiration.\n",
         );
-        out.push_str("# TYPE spooky_upstream_client_certificate_days_remaining gauge\n");
+        out.push_str("# TYPE impulse_upstream_client_certificate_days_remaining gauge\n");
         for (key, value) in self.snapshot_upstream_client_cert_expiry() {
             out.push_str(&format!(
-                "spooky_upstream_client_certificate_not_after_seconds{{upstream=\"{}\"}} {}\n",
+                "impulse_upstream_client_certificate_not_after_seconds{{upstream=\"{}\"}} {}\n",
                 escape_prometheus_label(&key.upstream),
                 value
             ));
             let days_remaining = ((value - now_unix_seconds).max(0) as f64) / 86_400.0;
             out.push_str(&format!(
-                "spooky_upstream_client_certificate_days_remaining{{upstream=\"{}\"}} {:.6}\n",
+                "impulse_upstream_client_certificate_days_remaining{{upstream=\"{}\"}} {:.6}\n",
                 escape_prometheus_label(&key.upstream),
                 days_remaining
             ));
         }
         out.push_str(
-            "# HELP spooky_control_plane_cert_reload_total Total control-plane listener certificate reload outcomes grouped by result and reason.\n",
+            "# HELP impulse_control_plane_cert_reload_total Total control-plane listener certificate reload outcomes grouped by result and reason.\n",
         );
-        out.push_str("# TYPE spooky_control_plane_cert_reload_total counter\n");
+        out.push_str("# TYPE impulse_control_plane_cert_reload_total counter\n");
         for (key, value) in self.snapshot_control_plane_cert_reload_totals() {
             out.push_str(&format!(
-                "spooky_control_plane_cert_reload_total{{result=\"{}\",reason=\"{}\"}} {}\n",
+                "impulse_control_plane_cert_reload_total{{result=\"{}\",reason=\"{}\"}} {}\n",
                 escape_prometheus_label(&key.result),
                 escape_prometheus_label(&key.reason),
                 value
             ));
         }
         out.push_str(
-            "# HELP spooky_backend_dns_refresh_success_total Total successful backend DNS refreshes.\n",
+            "# HELP impulse_backend_dns_refresh_success_total Total successful backend DNS refreshes.\n",
         );
-        out.push_str("# TYPE spooky_backend_dns_refresh_success_total counter\n");
+        out.push_str("# TYPE impulse_backend_dns_refresh_success_total counter\n");
         out.push_str(&format!(
-            "spooky_backend_dns_refresh_success_total {}\n",
+            "impulse_backend_dns_refresh_success_total {}\n",
             self.backend_dns_refresh_success.load(Ordering::Relaxed)
         ));
         out.push_str(
-            "# HELP spooky_backend_dns_refresh_failure_total Total failed backend DNS refreshes.\n",
+            "# HELP impulse_backend_dns_refresh_failure_total Total failed backend DNS refreshes.\n",
         );
-        out.push_str("# TYPE spooky_backend_dns_refresh_failure_total counter\n");
+        out.push_str("# TYPE impulse_backend_dns_refresh_failure_total counter\n");
         out.push_str(&format!(
-            "spooky_backend_dns_refresh_failure_total {}\n",
+            "impulse_backend_dns_refresh_failure_total {}\n",
             self.backend_dns_refresh_failure.load(Ordering::Relaxed)
         ));
         out.push_str(
-            "# HELP spooky_backend_dns_address_set_changes_total Total successful backend DNS refreshes that changed the resolved address set.\n",
+            "# HELP impulse_backend_dns_address_set_changes_total Total successful backend DNS refreshes that changed the resolved address set.\n",
         );
-        out.push_str("# TYPE spooky_backend_dns_address_set_changes_total counter\n");
+        out.push_str("# TYPE impulse_backend_dns_address_set_changes_total counter\n");
         out.push_str(&format!(
-            "spooky_backend_dns_address_set_changes_total {}\n",
+            "impulse_backend_dns_address_set_changes_total {}\n",
             self.backend_dns_refresh_address_changes
                 .load(Ordering::Relaxed)
         ));
         out.push_str(
-            "# HELP spooky_backend_client_rotations_total Total backend client rotations triggered by DNS address-set changes.\n",
+            "# HELP impulse_backend_client_rotations_total Total backend client rotations triggered by DNS address-set changes.\n",
         );
-        out.push_str("# TYPE spooky_backend_client_rotations_total counter\n");
+        out.push_str("# TYPE impulse_backend_client_rotations_total counter\n");
         out.push_str(&format!(
-            "spooky_backend_client_rotations_total {}\n",
+            "impulse_backend_client_rotations_total {}\n",
             self.backend_client_rotations.load(Ordering::Relaxed)
         ));
         out.push_str(
-            "# HELP spooky_backend_client_rotation_failures_total Total backend client rotations that failed after a DNS address-set change (stale pooled connections may persist).\n",
+            "# HELP impulse_backend_client_rotation_failures_total Total backend client rotations that failed after a DNS address-set change (stale pooled connections may persist).\n",
         );
-        out.push_str("# TYPE spooky_backend_client_rotation_failures_total counter\n");
+        out.push_str("# TYPE impulse_backend_client_rotation_failures_total counter\n");
         out.push_str(&format!(
-            "spooky_backend_client_rotation_failures_total {}\n",
+            "impulse_backend_client_rotation_failures_total {}\n",
             self.backend_client_rotation_failures
                 .load(Ordering::Relaxed)
         ));
         out.push_str(
-            "# HELP spooky_jwt_validation_failures_total Total JWT validation failures grouped by stable rejection reason.\n",
+            "# HELP impulse_jwt_validation_failures_total Total JWT validation failures grouped by stable rejection reason.\n",
         );
-        out.push_str("# TYPE spooky_jwt_validation_failures_total counter\n");
+        out.push_str("# TYPE impulse_jwt_validation_failures_total counter\n");
         for (reason, count) in self.snapshot_jwt_validation_failures() {
             out.push_str(&format!(
-                "spooky_jwt_validation_failures_total{{reason=\"{}\"}} {}\n",
+                "impulse_jwt_validation_failures_total{{reason=\"{}\"}} {}\n",
                 escape_prometheus_label(&reason),
                 count
             ));
         }
         out.push_str(
-            "# HELP spooky_jwt_algorithm_rejections_total Total JWT algorithm rejections grouped by JOSE alg.\n",
+            "# HELP impulse_jwt_algorithm_rejections_total Total JWT algorithm rejections grouped by JOSE alg.\n",
         );
-        out.push_str("# TYPE spooky_jwt_algorithm_rejections_total counter\n");
+        out.push_str("# TYPE impulse_jwt_algorithm_rejections_total counter\n");
         for (algorithm, count) in self.snapshot_jwt_algorithm_rejections() {
             out.push_str(&format!(
-                "spooky_jwt_algorithm_rejections_total{{algorithm=\"{}\"}} {}\n",
+                "impulse_jwt_algorithm_rejections_total{{algorithm=\"{}\"}} {}\n",
                 escape_prometheus_label(&algorithm),
                 count
             ));
         }
         out.push_str(
-            "# HELP spooky_jwks_unknown_kid_total Total unknown-kid events that triggered JWKS miss handling.\n",
+            "# HELP impulse_jwks_unknown_kid_total Total unknown-kid events that triggered JWKS miss handling.\n",
         );
-        out.push_str("# TYPE spooky_jwks_unknown_kid_total counter\n");
+        out.push_str("# TYPE impulse_jwks_unknown_kid_total counter\n");
         for (jwks_source_id, count) in self.snapshot_jwks_unknown_kid_events() {
             out.push_str(&format!(
-                "spooky_jwks_unknown_kid_total{{jwks_source_id=\"{}\"}} {}\n",
+                "impulse_jwks_unknown_kid_total{{jwks_source_id=\"{}\"}} {}\n",
                 escape_prometheus_label(&jwks_source_id),
                 count
             ));
         }
         out.push_str(
-            "# HELP spooky_jwks_refresh_success_total Total successful JWKS refreshes grouped by JWKS source identity.\n",
+            "# HELP impulse_jwks_refresh_success_total Total successful JWKS refreshes grouped by JWKS source identity.\n",
         );
-        out.push_str("# TYPE spooky_jwks_refresh_success_total counter\n");
+        out.push_str("# TYPE impulse_jwks_refresh_success_total counter\n");
         out.push_str(
-            "# HELP spooky_jwks_refresh_failure_total Total failed JWKS refreshes grouped by JWKS source identity.\n",
+            "# HELP impulse_jwks_refresh_failure_total Total failed JWKS refreshes grouped by JWKS source identity.\n",
         );
-        out.push_str("# TYPE spooky_jwks_refresh_failure_total counter\n");
+        out.push_str("# TYPE impulse_jwks_refresh_failure_total counter\n");
         out.push_str(
-            "# HELP spooky_jwks_age_seconds Current age of the active JWKS key set in seconds.\n",
+            "# HELP impulse_jwks_age_seconds Current age of the active JWKS key set in seconds.\n",
         );
-        out.push_str("# TYPE spooky_jwks_age_seconds gauge\n");
+        out.push_str("# TYPE impulse_jwks_age_seconds gauge\n");
         out.push_str(
-            "# HELP spooky_jwks_state Current JWKS cache state for a configured JWKS source.\n",
+            "# HELP impulse_jwks_state Current JWKS cache state for a configured JWKS source.\n",
         );
-        out.push_str("# TYPE spooky_jwks_state gauge\n");
+        out.push_str("# TYPE impulse_jwks_state gauge\n");
         out.push_str(
-            "# HELP spooky_jwks_active_keys Current count of active verification keys retained for a configured JWKS source.\n",
+            "# HELP impulse_jwks_active_keys Current count of active verification keys retained for a configured JWKS source.\n",
         );
-        out.push_str("# TYPE spooky_jwks_active_keys gauge\n");
+        out.push_str("# TYPE impulse_jwks_active_keys gauge\n");
         out.push_str(
-            "# HELP spooky_jwks_last_refresh_attempt_seconds Unix timestamp of the last JWKS refresh attempt.\n",
+            "# HELP impulse_jwks_last_refresh_attempt_seconds Unix timestamp of the last JWKS refresh attempt.\n",
         );
-        out.push_str("# TYPE spooky_jwks_last_refresh_attempt_seconds gauge\n");
+        out.push_str("# TYPE impulse_jwks_last_refresh_attempt_seconds gauge\n");
         out.push_str(
-            "# HELP spooky_jwks_last_refresh_success_seconds Unix timestamp of the last successful JWKS refresh.\n",
+            "# HELP impulse_jwks_last_refresh_success_seconds Unix timestamp of the last successful JWKS refresh.\n",
         );
-        out.push_str("# TYPE spooky_jwks_last_refresh_success_seconds gauge\n");
+        out.push_str("# TYPE impulse_jwks_last_refresh_success_seconds gauge\n");
         let now_unix_seconds = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .ok()
@@ -940,29 +940,29 @@ impl Metrics {
         for state in self.snapshot_jwks_source_state() {
             let jwks_source_id = escape_prometheus_label(&state.jwks_source_id);
             out.push_str(&format!(
-                "spooky_jwks_refresh_success_total{{jwks_source_id=\"{}\"}} {}\n",
+                "impulse_jwks_refresh_success_total{{jwks_source_id=\"{}\"}} {}\n",
                 jwks_source_id, state.refresh_success_total
             ));
             out.push_str(&format!(
-                "spooky_jwks_refresh_failure_total{{jwks_source_id=\"{}\"}} {}\n",
+                "impulse_jwks_refresh_failure_total{{jwks_source_id=\"{}\"}} {}\n",
                 jwks_source_id, state.refresh_failure_total
             ));
             out.push_str(&format!(
-                "spooky_jwks_state{{jwks_source_id=\"{}\",state=\"{}\"}} 1\n",
+                "impulse_jwks_state{{jwks_source_id=\"{}\",state=\"{}\"}} 1\n",
                 jwks_source_id,
                 escape_prometheus_label(&state.state)
             ));
             out.push_str(&format!(
-                "spooky_jwks_active_keys{{jwks_source_id=\"{}\"}} {}\n",
+                "impulse_jwks_active_keys{{jwks_source_id=\"{}\"}} {}\n",
                 jwks_source_id, state.active_key_count
             ));
             out.push_str(&format!(
-                "spooky_jwks_last_refresh_attempt_seconds{{jwks_source_id=\"{}\"}} {}\n",
+                "impulse_jwks_last_refresh_attempt_seconds{{jwks_source_id=\"{}\"}} {}\n",
                 jwks_source_id,
                 state.last_refresh_attempt_unix_seconds.unwrap_or_default()
             ));
             out.push_str(&format!(
-                "spooky_jwks_last_refresh_success_seconds{{jwks_source_id=\"{}\"}} {}\n",
+                "impulse_jwks_last_refresh_success_seconds{{jwks_source_id=\"{}\"}} {}\n",
                 jwks_source_id,
                 state.last_refresh_success_unix_seconds.unwrap_or_default()
             ));
@@ -971,41 +971,41 @@ impl Metrics {
                 .map(|last_success| now_unix_seconds.saturating_sub(last_success))
                 .unwrap_or_default();
             out.push_str(&format!(
-                "spooky_jwks_age_seconds{{jwks_source_id=\"{}\"}} {}\n",
+                "impulse_jwks_age_seconds{{jwks_source_id=\"{}\"}} {}\n",
                 jwks_source_id, age_seconds
             ));
         }
         out.push_str(
-            "# HELP spooky_backend_dns_last_refresh_success_seconds Unix timestamp of the last successful backend DNS refresh.\n",
+            "# HELP impulse_backend_dns_last_refresh_success_seconds Unix timestamp of the last successful backend DNS refresh.\n",
         );
-        out.push_str("# TYPE spooky_backend_dns_last_refresh_success_seconds gauge\n");
+        out.push_str("# TYPE impulse_backend_dns_last_refresh_success_seconds gauge\n");
         out.push_str(
-            "# HELP spooky_backend_dns_resolved_addresses Current number of resolved addresses retained for a backend identity.\n",
+            "# HELP impulse_backend_dns_resolved_addresses Current number of resolved addresses retained for a backend identity.\n",
         );
-        out.push_str("# TYPE spooky_backend_dns_resolved_addresses gauge\n");
+        out.push_str("# TYPE impulse_backend_dns_resolved_addresses gauge\n");
         out.push_str(
-            "# HELP spooky_backend_client_rotations Per-backend client rotation count triggered by DNS changes.\n",
+            "# HELP impulse_backend_client_rotations Per-backend client rotation count triggered by DNS changes.\n",
         );
-        out.push_str("# TYPE spooky_backend_client_rotations counter\n");
+        out.push_str("# TYPE impulse_backend_client_rotations counter\n");
         out.push_str(
-            "# HELP spooky_backend_connect_attempt_total Observed upstream socket connects grouped by backend identity, hostname, and resolved address.\n",
+            "# HELP impulse_backend_connect_attempt_total Observed upstream socket connects grouped by backend identity, hostname, and resolved address.\n",
         );
-        out.push_str("# TYPE spooky_backend_connect_attempt_total counter\n");
+        out.push_str("# TYPE impulse_backend_connect_attempt_total counter\n");
         for (backend, state) in self.snapshot_backend_dns_state() {
             let backend = escape_prometheus_label(&backend);
             out.push_str(&format!(
-                "spooky_backend_dns_last_refresh_success_seconds{{backend=\"{}\"}} {}\n",
+                "impulse_backend_dns_last_refresh_success_seconds{{backend=\"{}\"}} {}\n",
                 backend, state.last_success_unix_seconds
             ));
             out.push_str(&format!(
-                "spooky_backend_dns_resolved_addresses{{backend=\"{}\"}} {}\n",
+                "impulse_backend_dns_resolved_addresses{{backend=\"{}\"}} {}\n",
                 backend, state.resolved_address_count
             ));
         }
         for (backend, state) in self.snapshot_backend_rotation_state() {
             let backend = escape_prometheus_label(&backend);
             out.push_str(&format!(
-                "spooky_backend_client_rotations{{backend=\"{}\"}} {}\n",
+                "impulse_backend_client_rotations{{backend=\"{}\"}} {}\n",
                 backend, state.rotations
             ));
         }
@@ -1014,17 +1014,17 @@ impl Metrics {
             let hostname = escape_prometheus_label(&key.hostname);
             let resolved_addr = escape_prometheus_label(&key.resolved_addr);
             out.push_str(&format!(
-                "spooky_backend_connect_attempt_total{{backend=\"{}\",hostname=\"{}\",resolved_addr=\"{}\"}} {}\n",
+                "impulse_backend_connect_attempt_total{{backend=\"{}\",hostname=\"{}\",resolved_addr=\"{}\"}} {}\n",
                 backend, hostname, resolved_addr, count
             ));
         }
         out.push_str(
-            "# HELP spooky_upstream_requests_total Total completed requests grouped by upstream, status class, and outcome.\n",
+            "# HELP impulse_upstream_requests_total Total completed requests grouped by upstream, status class, and outcome.\n",
         );
-        out.push_str("# TYPE spooky_upstream_requests_total counter\n");
+        out.push_str("# TYPE impulse_upstream_requests_total counter\n");
         for (key, count) in self.snapshot_upstream_request_counts() {
             out.push_str(&format!(
-                "spooky_upstream_requests_total{{upstream=\"{}\",status_class=\"{}\",outcome=\"{}\"}} {}\n",
+                "impulse_upstream_requests_total{{upstream=\"{}\",status_class=\"{}\",outcome=\"{}\"}} {}\n",
                 escape_prometheus_label(&key.upstream),
                 escape_prometheus_label(&key.status_class),
                 escape_prometheus_label(&key.outcome),
@@ -1032,12 +1032,12 @@ impl Metrics {
             ));
         }
         out.push_str(
-            "# HELP spooky_backend_requests_total Total completed requests grouped by upstream, backend, status class, and outcome.\n",
+            "# HELP impulse_backend_requests_total Total completed requests grouped by upstream, backend, status class, and outcome.\n",
         );
-        out.push_str("# TYPE spooky_backend_requests_total counter\n");
+        out.push_str("# TYPE impulse_backend_requests_total counter\n");
         for (key, count) in self.snapshot_backend_request_counts() {
             out.push_str(&format!(
-                "spooky_backend_requests_total{{upstream=\"{}\",backend=\"{}\",status_class=\"{}\",outcome=\"{}\"}} {}\n",
+                "impulse_backend_requests_total{{upstream=\"{}\",backend=\"{}\",status_class=\"{}\",outcome=\"{}\"}} {}\n",
                 escape_prometheus_label(&key.upstream),
                 escape_prometheus_label(&key.backend),
                 escape_prometheus_label(&key.status_class),
@@ -1046,9 +1046,9 @@ impl Metrics {
             ));
         }
         out.push_str(
-            "# HELP spooky_upstream_request_latency_ms Upstream request latency histogram grouped by upstream and final outcome.\n",
+            "# HELP impulse_upstream_request_latency_ms Upstream request latency histogram grouped by upstream and final outcome.\n",
         );
-        out.push_str("# TYPE spooky_upstream_request_latency_ms histogram\n");
+        out.push_str("# TYPE impulse_upstream_request_latency_ms histogram\n");
         for (key, stats) in self.snapshot_upstream_request_latency() {
             let upstream = escape_prometheus_label(&key.upstream);
             let outcome = escape_prometheus_label(&key.outcome);
@@ -1060,25 +1060,25 @@ impl Metrics {
                     .map(u64::to_string)
                     .unwrap_or_else(|| "+Inf".to_string());
                 out.push_str(&format!(
-                    "spooky_upstream_request_latency_ms_bucket{{upstream=\"{}\",outcome=\"{}\",le=\"{}\"}} {}\n",
+                    "impulse_upstream_request_latency_ms_bucket{{upstream=\"{}\",outcome=\"{}\",le=\"{}\"}} {}\n",
                     upstream, outcome, le, cumulative
                 ));
             }
             out.push_str(&format!(
-                "spooky_upstream_request_latency_ms_sum{{upstream=\"{}\",outcome=\"{}\"}} {}\n",
+                "impulse_upstream_request_latency_ms_sum{{upstream=\"{}\",outcome=\"{}\"}} {}\n",
                 upstream, outcome, stats.latency_ms_sum
             ));
             out.push_str(&format!(
-                "spooky_upstream_request_latency_ms_count{{upstream=\"{}\",outcome=\"{}\"}} {}\n",
+                "impulse_upstream_request_latency_ms_count{{upstream=\"{}\",outcome=\"{}\"}} {}\n",
                 upstream, outcome, stats.count
             ));
         }
         out.push_str(
-            "# HELP spooky_route_latency_sample_every Route latency histogram sampling interval (1 = every request).\n",
+            "# HELP impulse_route_latency_sample_every Route latency histogram sampling interval (1 = every request).\n",
         );
-        out.push_str("# TYPE spooky_route_latency_sample_every gauge\n");
+        out.push_str("# TYPE impulse_route_latency_sample_every gauge\n");
         out.push_str(&format!(
-            "spooky_route_latency_sample_every {}\n",
+            "impulse_route_latency_sample_every {}\n",
             self.route_latency_sample_every
         ));
 
@@ -1097,45 +1097,45 @@ impl Metrics {
         for (route, stats) in snapshot {
             let route = escape_prometheus_label(&route);
             out.push_str(&format!(
-                "spooky_route_requests_total{{route=\"{}\"}} {}\n",
+                "impulse_route_requests_total{{route=\"{}\"}} {}\n",
                 route, stats.requests_total
             ));
             out.push_str(&format!(
-                "spooky_route_success_total{{route=\"{}\"}} {}\n",
+                "impulse_route_success_total{{route=\"{}\"}} {}\n",
                 route, stats.success
             ));
             out.push_str(&format!(
-                "spooky_route_failure_total{{route=\"{}\"}} {}\n",
+                "impulse_route_failure_total{{route=\"{}\"}} {}\n",
                 route, stats.failure
             ));
             out.push_str(&format!(
-                "spooky_route_timeout_total{{route=\"{}\"}} {}\n",
+                "impulse_route_timeout_total{{route=\"{}\"}} {}\n",
                 route, stats.timeout
             ));
             out.push_str(&format!(
-                "spooky_route_rate_limited_total{{route=\"{}\"}} {}\n",
+                "impulse_route_rate_limited_total{{route=\"{}\"}} {}\n",
                 route, stats.rate_limited
             ));
             out.push_str(&format!(
-                "spooky_route_backend_error_total{{route=\"{}\"}} {}\n",
+                "impulse_route_backend_error_total{{route=\"{}\"}} {}\n",
                 route, stats.backend_error
             ));
             out.push_str(&format!(
-                "spooky_route_overload_shed_total{{route=\"{}\"}} {}\n",
+                "impulse_route_overload_shed_total{{route=\"{}\"}} {}\n",
                 route, stats.overload_shed
             ));
             out.push_str(&format!(
-                "spooky_route_latency_ms_p50{{route=\"{}\"}} {:.2}\n",
+                "impulse_route_latency_ms_p50{{route=\"{}\"}} {:.2}\n",
                 route,
                 percentile_ms(&stats, 0.50)
             ));
             out.push_str(&format!(
-                "spooky_route_latency_ms_p95{{route=\"{}\"}} {:.2}\n",
+                "impulse_route_latency_ms_p95{{route=\"{}\"}} {:.2}\n",
                 route,
                 percentile_ms(&stats, 0.95)
             ));
             out.push_str(&format!(
-                "spooky_route_latency_ms_p99{{route=\"{}\"}} {:.2}\n",
+                "impulse_route_latency_ms_p99{{route=\"{}\"}} {:.2}\n",
                 route,
                 percentile_ms(&stats, 0.99)
             ));
@@ -1154,54 +1154,54 @@ impl Metrics {
         worker_snapshot.sort_by(|(left, _), (right, _)| left.cmp(right));
 
         out.push_str(
-            "# HELP spooky_worker_requests_total Total requests handled by each worker thread.\n",
+            "# HELP impulse_worker_requests_total Total requests handled by each worker thread.\n",
         );
-        out.push_str("# TYPE spooky_worker_requests_total counter\n");
+        out.push_str("# TYPE impulse_worker_requests_total counter\n");
         out.push_str(
-            "# HELP spooky_worker_requests_success Total successful requests by worker thread.\n",
+            "# HELP impulse_worker_requests_success Total successful requests by worker thread.\n",
         );
-        out.push_str("# TYPE spooky_worker_requests_success counter\n");
+        out.push_str("# TYPE impulse_worker_requests_success counter\n");
         out.push_str(
-            "# HELP spooky_worker_requests_failure Total failed requests by worker thread.\n",
+            "# HELP impulse_worker_requests_failure Total failed requests by worker thread.\n",
         );
-        out.push_str("# TYPE spooky_worker_requests_failure counter\n");
+        out.push_str("# TYPE impulse_worker_requests_failure counter\n");
         out.push_str(
-            "# HELP spooky_worker_ingress_packets_total Total ingress packets by worker thread.\n",
+            "# HELP impulse_worker_ingress_packets_total Total ingress packets by worker thread.\n",
         );
-        out.push_str("# TYPE spooky_worker_ingress_packets_total counter\n");
+        out.push_str("# TYPE impulse_worker_ingress_packets_total counter\n");
         out.push_str(
-            "# HELP spooky_worker_ingress_queue_drops Total ingress queue drops by worker thread.\n",
+            "# HELP impulse_worker_ingress_queue_drops Total ingress queue drops by worker thread.\n",
         );
-        out.push_str("# TYPE spooky_worker_ingress_queue_drops counter\n");
+        out.push_str("# TYPE impulse_worker_ingress_queue_drops counter\n");
         out.push_str(
-            "# HELP spooky_worker_ingress_queue_drop_bytes Total ingress queue drop bytes by worker thread.\n",
+            "# HELP impulse_worker_ingress_queue_drop_bytes Total ingress queue drop bytes by worker thread.\n",
         );
-        out.push_str("# TYPE spooky_worker_ingress_queue_drop_bytes counter\n");
+        out.push_str("# TYPE impulse_worker_ingress_queue_drop_bytes counter\n");
 
         for (worker, stats) in worker_snapshot {
             let worker = escape_prometheus_label(&worker);
             out.push_str(&format!(
-                "spooky_worker_requests_total{{worker=\"{}\"}} {}\n",
+                "impulse_worker_requests_total{{worker=\"{}\"}} {}\n",
                 worker, stats.requests_total
             ));
             out.push_str(&format!(
-                "spooky_worker_requests_success{{worker=\"{}\"}} {}\n",
+                "impulse_worker_requests_success{{worker=\"{}\"}} {}\n",
                 worker, stats.requests_success
             ));
             out.push_str(&format!(
-                "spooky_worker_requests_failure{{worker=\"{}\"}} {}\n",
+                "impulse_worker_requests_failure{{worker=\"{}\"}} {}\n",
                 worker, stats.requests_failure
             ));
             out.push_str(&format!(
-                "spooky_worker_ingress_packets_total{{worker=\"{}\"}} {}\n",
+                "impulse_worker_ingress_packets_total{{worker=\"{}\"}} {}\n",
                 worker, stats.ingress_packets_total
             ));
             out.push_str(&format!(
-                "spooky_worker_ingress_queue_drops{{worker=\"{}\"}} {}\n",
+                "impulse_worker_ingress_queue_drops{{worker=\"{}\"}} {}\n",
                 worker, stats.ingress_queue_drops
             ));
             out.push_str(&format!(
-                "spooky_worker_ingress_queue_drop_bytes{{worker=\"{}\"}} {}\n",
+                "impulse_worker_ingress_queue_drop_bytes{{worker=\"{}\"}} {}\n",
                 worker, stats.ingress_queue_drop_bytes
             ));
         }
