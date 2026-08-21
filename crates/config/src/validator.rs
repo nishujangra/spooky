@@ -8,7 +8,7 @@ use crate::{
     config::{
         CURRENT_CONFIG_VERSION, Config, ControlApi, ControlApiAuditSink, ControlApiClientAuthMode,
         ExternalAuth, JwtVerificationKey, Listen, SUPPORTED_CONFIG_VERSIONS, ScopedRateLimitScope,
-        UpstreamHostPolicyMode, UpstreamTls,
+        SecretProvider, SecretRef, UpstreamHostPolicyMode, UpstreamTls,
     },
 };
 
@@ -121,6 +121,105 @@ fn is_valid_cidr(cidr: &str) -> bool {
     valid_prefix_len(addr.trim(), prefix.trim())
 }
 
+fn validate_secret_ref(secret_ref: &SecretRef, field_name: &str) -> bool {
+    let reference = secret_ref.raw_value().trim();
+    if reference.is_empty() {
+        validation_error!("{field_name}.ref must be non-empty");
+        return false;
+    }
+
+    match secret_ref.scheme() {
+        Some("literal") => {
+            let Some(value) = reference.strip_prefix("literal:") else {
+                validation_error!("{field_name}.ref must use literal:<value> format");
+                return false;
+            };
+            if value.trim().is_empty() {
+                validation_error!("{field_name}.ref literal value must be non-empty");
+                return false;
+            }
+        }
+        Some("file") => {
+            let Some(path) = reference.strip_prefix("file://") else {
+                validation_error!("{field_name}.ref must use file://<path> format");
+                return false;
+            };
+            if path.trim().is_empty() {
+                validation_error!("{field_name}.ref file path must be non-empty");
+                return false;
+            }
+        }
+        Some(other) => {
+            validation_error!(
+                "{field_name}.ref uses unsupported secret scheme '{other}'; supported schemes are literal and file"
+            );
+            return false;
+        }
+        None => {
+            validation_error!("{field_name}.ref must include a supported secret scheme prefix");
+            return false;
+        }
+    }
+
+    true
+}
+
+fn validate_secret_source_exclusivity(
+    literal_present: bool,
+    secret_ref: Option<&SecretRef>,
+    literal_field_name: &str,
+    ref_field_name: &str,
+) -> bool {
+    if literal_present && secret_ref.is_some() {
+        validation_error!("{literal_field_name} and {ref_field_name} cannot both be set");
+        return false;
+    }
+    if let Some(secret_ref) = secret_ref
+        && !validate_secret_ref(secret_ref, ref_field_name)
+    {
+        return false;
+    }
+    true
+}
+
+fn validate_secrets_config(config: &Config) -> bool {
+    if let Some(default_provider) = config.secrets.default_provider.as_deref() {
+        if default_provider.trim().is_empty() {
+            validation_error!("secrets.default_provider cannot be empty when provided");
+            return false;
+        }
+        if !config.secrets.providers.contains_key(default_provider) {
+            validation_error!(
+                "secrets.default_provider '{}' must reference a configured provider",
+                default_provider
+            );
+            return false;
+        }
+    }
+
+    for (name, provider) in &config.secrets.providers {
+        if name.trim().is_empty() {
+            validation_error!("secrets.providers keys must be non-empty");
+            return false;
+        }
+        match provider {
+            SecretProvider::File { base_dir } => {
+                if let Some(base_dir) = base_dir.as_deref()
+                    && base_dir.trim().is_empty()
+                {
+                    validation_error!(
+                        "secrets.providers.{}.base_dir cannot be empty when provided",
+                        name
+                    );
+                    return false;
+                }
+            }
+        }
+    }
+
+    true
+}
+
 fn validate_control_api_authentication(control_api: &ControlApi) -> bool {
     if let Some(token) = control_api.auth_token.as_ref()
         && token.trim().is_empty()
@@ -128,13 +227,33 @@ fn validate_control_api_authentication(control_api: &ControlApi) -> bool {
         validation_error!("observability.control_api.auth_token cannot be empty when provided");
         return false;
     }
+    if !validate_secret_source_exclusivity(
+        control_api
+            .auth_token
+            .as_deref()
+            .is_some_and(|token| !token.trim().is_empty()),
+        control_api.auth_token_ref.as_ref(),
+        "observability.control_api.auth_token",
+        "observability.control_api.auth_token_ref",
+    ) {
+        return false;
+    }
 
     for (idx, token) in control_api.auth.bearer_tokens.iter().enumerate() {
-        if token.token.trim().is_empty() {
+        let has_literal_token = !token.token.trim().is_empty();
+        if !has_literal_token && token.token_ref.is_none() {
             validation_error!(
-                "observability.control_api.auth.bearer_tokens[{}].token cannot be empty",
+                "observability.control_api.auth.bearer_tokens[{}] must configure token or token_ref",
                 idx
             );
+            return false;
+        }
+        if !validate_secret_source_exclusivity(
+            has_literal_token,
+            token.token_ref.as_ref(),
+            &format!("observability.control_api.auth.bearer_tokens[{idx}].token"),
+            &format!("observability.control_api.auth.bearer_tokens[{idx}].token_ref"),
+        ) {
             return false;
         }
         if let Some(actor_id) = token.actor_id.as_ref()
@@ -166,8 +285,16 @@ fn validate_control_api_authentication(control_api: &ControlApi) -> bool {
         }
     }
 
-    let has_legacy_token = control_api.auth_token.is_some();
-    let has_static_tokens = !control_api.auth.bearer_tokens.is_empty();
+    let has_legacy_token = control_api
+        .auth_token
+        .as_deref()
+        .is_some_and(|token| !token.trim().is_empty())
+        || control_api.auth_token_ref.is_some();
+    let has_static_tokens = control_api
+        .auth
+        .bearer_tokens
+        .iter()
+        .any(|token| !token.token.trim().is_empty() || token.token_ref.is_some());
     match control_api.tls.client_auth.mode {
         ControlApiClientAuthMode::Disabled => {
             if !has_legacy_token && !has_static_tokens {
@@ -397,6 +524,10 @@ fn validate_inner(config: &Config) -> bool {
             "Config version '{}' is supported but not current (current={}); please migrate when possible",
             config.version, CURRENT_CONFIG_VERSION
         );
+    }
+
+    if !validate_secrets_config(config) {
+        return false;
     }
 
     // --- Validate effective listen blocks ---
@@ -1439,6 +1570,7 @@ fn validate_inner(config: &Config) -> bool {
                     issuer_url,
                     client_id,
                     client_secret,
+                    client_secret_ref,
                     audience,
                     scopes,
                     request_headers,
@@ -1484,6 +1616,22 @@ fn validate_inner(config: &Config) -> bool {
                             "upstream '{}' auth.external_auth.oidc.client_id must be non-empty",
                             upstream_name
                         );
+                        return false;
+                    }
+                    if !validate_secret_source_exclusivity(
+                        client_secret
+                            .as_deref()
+                            .is_some_and(|value| !value.trim().is_empty()),
+                        client_secret_ref.as_ref(),
+                        &format!(
+                            "upstream '{}' auth.external_auth.oidc.client_secret",
+                            upstream_name
+                        ),
+                        &format!(
+                            "upstream '{}' auth.external_auth.oidc.client_secret_ref",
+                            upstream_name
+                        ),
+                    ) {
                         return false;
                     }
                     if client_secret
@@ -1558,16 +1706,25 @@ fn validate_inner(config: &Config) -> bool {
                 );
                 return false;
             }
-            if has_hs256 && jwt.secret.trim().is_empty() {
+            if !validate_secret_source_exclusivity(
+                !jwt.secret.trim().is_empty(),
+                jwt.secret_ref.as_ref(),
+                &format!("upstream '{}' auth.jwt.secret", upstream_name),
+                &format!("upstream '{}' auth.jwt.secret_ref", upstream_name),
+            ) {
+                return false;
+            }
+            let has_hs256_secret_source = !jwt.secret.trim().is_empty() || jwt.secret_ref.is_some();
+            if has_hs256 && !has_hs256_secret_source {
                 validation_error!(
-                    "upstream '{}' auth.jwt.secret must be non-empty",
+                    "upstream '{}' auth.jwt.secret or auth.jwt.secret_ref must be configured when HS256 is enabled",
                     upstream_name
                 );
                 return false;
             }
-            if !jwt.secret.trim().is_empty() && !has_hs256 {
+            if has_hs256_secret_source && !has_hs256 {
                 validation_error!(
-                    "upstream '{}' auth.jwt.secret requires auth.jwt.allowed_algorithms to include HS256",
+                    "upstream '{}' auth.jwt.secret/auth.jwt.secret_ref requires auth.jwt.allowed_algorithms to include HS256",
                     upstream_name
                 );
                 return false;
@@ -1766,8 +1923,7 @@ fn validate_inner(config: &Config) -> bool {
                     }
                 }
             }
-            if jwt.secret.trim().is_empty() && jwt.static_keys.is_empty() && jwt.jwks_url.is_none()
-            {
+            if !has_hs256_secret_source && jwt.static_keys.is_empty() && jwt.jwks_url.is_none() {
                 validation_error!(
                     "upstream '{}' auth.jwt must configure at least one key source",
                     upstream_name

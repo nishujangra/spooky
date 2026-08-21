@@ -46,6 +46,7 @@ pub(crate) fn runtime_upstream(strategy: &str, backends: Vec<Backend>) -> Runtim
         upstream: upstreams,
         load_balancing: None,
         upstream_tls: Default::default(),
+        secrets: Default::default(),
         log: Default::default(),
         performance: Default::default(),
         observability: Default::default(),

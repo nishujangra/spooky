@@ -21,10 +21,10 @@ use crate::{
 struct BackendClientState {
     client: Arc<H2Client>,
     generation: u64,
+    tls: TlsClientConfig,
 }
 
 struct BackendHandle {
-    tls: TlsClientConfig,
     state: RwLock<BackendClientState>,
     inflight: Arc<Semaphore>,
 }
@@ -73,10 +73,10 @@ impl H2Pool {
             map.insert(
                 backend,
                 BackendHandle {
-                    tls,
                     state: RwLock::new(BackendClientState {
                         client,
                         generation: 0,
+                        tls,
                     }),
                     inflight: Arc::new(Semaphore::new(inflight)),
                 },
@@ -100,11 +100,17 @@ impl H2Pool {
             return Ok(BackendClientRotation::missing_backend());
         };
 
+        let tls = handle
+            .state
+            .read()
+            .map(|state| state.tls.clone())
+            .map_err(|_| format!("backend client state poisoned for '{backend}'"))?;
+
         let client = Arc::new(H2Client::new_with_observer(
             self.max_idle_per_backend,
             self.pool_idle_timeout,
             self.connect_timeout,
-            handle.tls.clone(),
+            tls,
             self.dns_resolver.clone(),
             self.connect_observer.clone(),
         )?);
@@ -115,6 +121,51 @@ impl H2Pool {
             .map_err(|_| format!("backend client state poisoned for '{backend}'"))?;
         let previous_generation = state.generation;
         state.client = client;
+        state.generation = state.generation.saturating_add(1);
+        Ok(BackendClientRotation::rotated(
+            previous_generation,
+            state.generation,
+        ))
+    }
+
+    pub(crate) fn rotate_backend_client_with_tls(
+        &self,
+        backend: &str,
+        tls: TlsClientConfig,
+    ) -> Result<BackendClientRotation, String> {
+        let Some(handle) = self.backends.get(backend) else {
+            return Ok(BackendClientRotation::missing_backend());
+        };
+
+        {
+            let state = handle
+                .state
+                .read()
+                .map_err(|_| format!("backend client state poisoned for '{backend}'"))?;
+            if state.tls == tls {
+                return Ok(BackendClientRotation::unchanged(state.generation));
+            }
+        }
+
+        let client = Arc::new(H2Client::new_with_observer(
+            self.max_idle_per_backend,
+            self.pool_idle_timeout,
+            self.connect_timeout,
+            tls.clone(),
+            self.dns_resolver.clone(),
+            self.connect_observer.clone(),
+        )?);
+
+        let mut state = handle
+            .state
+            .write()
+            .map_err(|_| format!("backend client state poisoned for '{backend}'"))?;
+        if state.tls == tls {
+            return Ok(BackendClientRotation::unchanged(state.generation));
+        }
+        let previous_generation = state.generation;
+        state.client = client;
+        state.tls = tls;
         state.generation = state.generation.saturating_add(1);
         Ok(BackendClientRotation::rotated(
             previous_generation,

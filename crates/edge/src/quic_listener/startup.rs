@@ -14,6 +14,7 @@ use spooky_transport::{ConnectObservation, ConnectObserver, UpstreamTransportPoo
 use tokio::sync::Semaphore;
 
 use crate::{
+    Metrics,
     constants::UDP_READ_TIMEOUT_MS,
     quic_listener::{ListenerRuntimeSettings, TokenBucket, runtime_state::PreparedListenerStartup},
     resilience::{quota::QuotaRuntime, runtime::RuntimeResilience},
@@ -186,7 +187,10 @@ impl QUICListener {
             .into_iter()
             .map(|listener_config| (Self::listener_label(&listener_config), listener_config))
             .collect::<HashMap<_, _>>();
-        let listener_tls_store = Arc::new(Self::build_listener_tls_reload_store(config)?);
+        let listener_tls_store = match carried.as_ref() {
+            Some(carried) => Arc::clone(&carried.listener_tls_store),
+            None => Arc::new(Self::build_listener_tls_reload_store(config)?),
+        };
 
         let mut backend_resolutions = Vec::new();
         let mut seen_backend_origins: HashMap<String, (String, String)> = HashMap::new();
@@ -353,6 +357,7 @@ impl QUICListener {
         for (listener_label, inventory) in listener_tls_store.snapshot() {
             Self::update_listener_tls_expiry_metrics(&metrics, &listener_label, &inventory);
         }
+        Self::update_runtime_secret_lifecycle_metrics(&metrics, config);
 
         Ok(SharedRuntimeState::from_parts(
             RuntimeSharedServices {
@@ -648,5 +653,50 @@ impl QUICListener {
         }
 
         Ok(socket.into())
+    }
+
+    fn update_runtime_secret_lifecycle_metrics(metrics: &Metrics, config: &RuntimeConfig) {
+        let mut upstream_client_cert_expiry = Vec::new();
+        let mut latest_listener_load_unix_seconds = 0u64;
+        let mut latest_upstream_load_unix_seconds = 0u64;
+
+        for listener in config.listener_runtime_configs() {
+            let label = Self::listener_label(&listener);
+            if let Ok(state) = Self::build_listener_tls_reload_state(&listener) {
+                latest_listener_load_unix_seconds =
+                    latest_listener_load_unix_seconds.max(state.loaded_at_unix_ms / 1_000);
+                Self::update_listener_tls_expiry_metrics(metrics, &label, &state.inventory);
+            }
+        }
+
+        for (upstream_name, upstream) in &config.upstreams {
+            let tls_policy = upstream.backend_tls_policy();
+
+            if let Some(metadata) = tls_policy.client_certificate.as_ref() {
+                metrics.record_secret_resolve(metadata.source_kind.as_str(), "success", "resolved");
+                latest_upstream_load_unix_seconds =
+                    latest_upstream_load_unix_seconds.max(metadata.loaded_at_unix_ms / 1_000);
+            }
+            if let Some(metadata) = tls_policy.client_key.as_ref() {
+                metrics.record_secret_resolve(metadata.source_kind.as_str(), "success", "resolved");
+                latest_upstream_load_unix_seconds =
+                    latest_upstream_load_unix_seconds.max(metadata.loaded_at_unix_ms / 1_000);
+            }
+            if let Some(not_after_unix_seconds) =
+                tls_policy.client_certificate_not_after_unix_seconds
+            {
+                upstream_client_cert_expiry.push((upstream_name.clone(), not_after_unix_seconds));
+            }
+        }
+
+        metrics.replace_upstream_client_cert_expiry(upstream_client_cert_expiry);
+        if latest_listener_load_unix_seconds > 0 {
+            metrics
+                .set_secret_last_success_unixtime("listeners", latest_listener_load_unix_seconds);
+        }
+        if latest_upstream_load_unix_seconds > 0 {
+            metrics
+                .set_secret_last_success_unixtime("upstreams", latest_upstream_load_unix_seconds);
+        }
     }
 }

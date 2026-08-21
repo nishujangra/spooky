@@ -8,6 +8,7 @@ impl RuntimeUpstream {
         name: &str,
         upstream: &Upstream,
         base_policies: &RuntimePolicySet,
+        secret_resolver: &RuntimeSecretResolver,
     ) -> Result<Self, RuntimeConfigError> {
         let effective_tls = upstream
             .tls
@@ -21,18 +22,37 @@ impl RuntimeUpstream {
             forwarded_headers: RuntimeForwardedHeaderPolicy(upstream.forwarded_headers.clone()),
             protocol: base_policies.admission.protocol.clone(),
         };
+        let backends = upstream
+            .backends
+            .iter()
+            .map(|backend| RuntimeBackend::normalize(name, backend))
+            .collect::<Result<Vec<_>, _>>()?;
+
+        // HTTP-only upstreams never establish a TLS connection, so TLS-backed
+        // fields (CA bundle, client cert/key) are not resolved for them. This
+        // avoids failing runtime lowering on stale or placeholder TLS config
+        // that is simply irrelevant for a plaintext backend.
+        let uses_https_backends = backends
+            .iter()
+            .any(|backend| backend.endpoint.transport_kind == RuntimeBackendTransportKind::H2);
+        let backend_tls_policy = if uses_https_backends {
+            RuntimeBackendTlsPolicy::from_effective_tls(
+                &effective_tls,
+                &format!("upstream '{name}' tls"),
+                secret_resolver,
+            )?
+        } else {
+            RuntimeBackendTlsPolicy::empty()
+        };
+
         let runtime_upstream = Self {
             name: name.to_string(),
             load_balancing: load_balancing.clone(),
             route: route.clone(),
             policy,
             effective_tls: effective_tls.clone(),
-            backend_tls_policy: RuntimeBackendTlsPolicy::from_effective_tls(&effective_tls),
-            backends: upstream
-                .backends
-                .iter()
-                .map(|backend| RuntimeBackend::normalize(name, backend))
-                .collect::<Result<Vec<_>, _>>()?,
+            backend_tls_policy,
+            backends,
         };
 
         Ok(runtime_upstream)
@@ -74,6 +94,7 @@ pub(super) fn normalize_upstreams(
     }
 
     validate_protocol_policy(&config.resilience.protocol)?;
+    let secret_resolver = RuntimeSecretResolver::from_secrets_config(&config.secrets);
 
     let mut seen_route_matchers: HashMap<RouteMatcherKey, String> = HashMap::new();
     let mut seen_backend_origins: HashMap<String, (String, String)> = HashMap::new();
@@ -97,8 +118,13 @@ pub(super) fn normalize_upstreams(
             });
         }
 
-        let runtime_upstream =
-            RuntimeUpstream::from_config(config, upstream_name.as_str(), upstream, base_policies)?;
+        let runtime_upstream = RuntimeUpstream::from_config(
+            config,
+            upstream_name.as_str(),
+            upstream,
+            base_policies,
+            &secret_resolver,
+        )?;
         let mut upstream_uses_https_backends = false;
 
         for backend in &runtime_upstream.backends {
@@ -126,10 +152,9 @@ pub(super) fn normalize_upstreams(
         }
 
         if upstream_uses_https_backends {
-            validate_runtime_upstream_tls(
-                upstream_name,
-                &runtime_upstream.backend_tls_policy.as_upstream_tls(),
-            )?;
+            validate_runtime_upstream_tls(upstream_name, &runtime_upstream.effective_tls, true)?;
+        } else {
+            validate_runtime_upstream_tls(upstream_name, &runtime_upstream.effective_tls, false)?;
         }
 
         normalized.insert(upstream_name.clone(), runtime_upstream);
@@ -686,7 +711,32 @@ fn validate_upstream_policy(
 fn validate_runtime_upstream_tls(
     upstream_name: &str,
     tls: &UpstreamTls,
+    uses_https_backends: bool,
 ) -> Result<(), RuntimeConfigError> {
+    let has_client_certificate = tls
+        .client_certificate
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        || tls.client_certificate_ref.is_some();
+    let has_client_key = tls
+        .client_key
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        || tls.client_key_ref.is_some();
+
+    if has_client_certificate != has_client_key {
+        return Err(RuntimeConfigError::UnsupportedPolicyCombination(format!(
+            "upstream '{upstream_name}' tls.client_certificate and tls.client_key must be configured as a complete mTLS pair"
+        )));
+    }
+    if (has_client_certificate || has_client_key) && !uses_https_backends {
+        return Err(RuntimeConfigError::UnsupportedPolicyCombination(format!(
+            "upstream '{upstream_name}' tls.client_certificate/tls.client_key require at least one HTTPS backend"
+        )));
+    }
+    if !uses_https_backends {
+        return Ok(());
+    }
     if tls
         .ca_file
         .as_deref()
@@ -826,6 +876,7 @@ mod tests {
             upstream: upstreams,
             load_balancing: None,
             upstream_tls: Default::default(),
+            secrets: Default::default(),
             log: Default::default(),
             performance: Default::default(),
             observability: Default::default(),

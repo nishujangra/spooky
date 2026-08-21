@@ -21,8 +21,16 @@ use spooky_transport::{SharedDnsResolver, UpstreamTransportPool};
 use crate::support::{
     ConcurrencyTracker, TransportTestProtocol, build_pool, build_pool_with_policy,
     connection_policy, loopback_bind_restricted, read_body, request, request_to_backend,
-    reserve_unused_port, start_backend_server, start_shared_backend_pool,
+    start_backend_server, start_shared_backend_pool,
 };
+
+fn reserve_unused_port_or_skip() -> Option<u16> {
+    match std::net::TcpListener::bind("127.0.0.1:0") {
+        Ok(listener) => listener.local_addr().ok().map(|addr| addr.port()),
+        Err(err) if loopback_bind_restricted(&err) => None,
+        Err(err) => panic!("bind ephemeral port: {err}"),
+    }
+}
 
 fn transport_test_config(http_backend: &str, https_backend: &str) -> Config {
     let mut config = Config {
@@ -42,6 +50,7 @@ fn transport_test_config(http_backend: &str, https_backend: &str) -> Config {
         upstream: HashMap::new(),
         load_balancing: None,
         upstream_tls: UpstreamTls::default(),
+        secrets: Default::default(),
         log: Log::default(),
         performance: Performance::default(),
         observability: Observability::default(),
@@ -218,7 +227,9 @@ async fn transport_facade_maps_unknown_backend_send_failure_and_overload_consist
         1,
         SharedDnsResolver::new(),
     );
-    let h1_port = reserve_unused_port();
+    let Some(h1_port) = reserve_unused_port_or_skip() else {
+        return;
+    };
     let h1_err = failing_h1_pool
         .send_backend_request("h1-fail", request(&format!("http://127.0.0.1:{h1_port}/")))
         .await
@@ -233,7 +244,9 @@ async fn transport_facade_maps_unknown_backend_send_failure_and_overload_consist
         1,
         SharedDnsResolver::new(),
     );
-    let h2_port = reserve_unused_port();
+    let Some(h2_port) = reserve_unused_port_or_skip() else {
+        return;
+    };
     let h2_err = failing_h2_pool
         .send_backend_request("h2-fail", request(&format!("http://127.0.0.1:{h2_port}/")))
         .await

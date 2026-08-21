@@ -125,6 +125,7 @@ fn http_only_upstream_starts_and_forwards_requests_end_to_end() {
                 strict_sni: true,
                 ca_file: Some("/path/does/not/exist.pem".to_string()),
                 ca_dir: Some("/path/does/not/exist".to_string()),
+                ..UpstreamTls::default()
             }),
             "round-robin",
         ),
@@ -138,6 +139,7 @@ fn http_only_upstream_starts_and_forwards_requests_end_to_end() {
             strict_sni: true,
             ca_file: Some("/path/does/not/exist-global.pem".to_string()),
             ca_dir: Some("/path/does/not/exist-global".to_string()),
+            ..UpstreamTls::default()
         },
     );
 
@@ -309,6 +311,7 @@ fn mixed_http_and_https_upstreams_route_by_scheme() {
                 strict_sni: true,
                 ca_file: None,
                 ca_dir: None,
+                ..UpstreamTls::default()
             }),
             "round-robin",
         ),

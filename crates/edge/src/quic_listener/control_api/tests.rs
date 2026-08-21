@@ -99,6 +99,7 @@ fn test_config(cert: String, key: String) -> SpookyConfigConfig {
             key: None,
         }),
         upstream_tls: UpstreamTls::default(),
+        secrets: Default::default(),
         log: Log::default(),
         performance: Performance::default(),
         observability: Observability::default(),
@@ -1382,6 +1383,7 @@ async fn control_api_gate_returns_forbidden_for_under_scoped_identity() {
     startup.observability.control_api.auth_token = None;
     startup.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
         token: "viewer-token".to_string(),
+        token_ref: None,
         role: ControlApiRole::Viewer,
         actor_id: Some("viewer".to_string()),
     }];
@@ -1441,6 +1443,7 @@ async fn control_api_gate_returns_forbidden_for_operator_hitting_restart() {
     startup.observability.control_api.auth_token = None;
     startup.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
         token: "operator-token".to_string(),
+        token_ref: None,
         role: ControlApiRole::Operator,
         actor_id: Some("operator".to_string()),
     }];
@@ -1626,6 +1629,7 @@ async fn control_api_runtime_snapshot_endpoint_allows_viewer() {
     startup.observability.control_api.auth_token = None;
     startup.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
         token: "viewer-token".to_string(),
+        token_ref: None,
         role: ControlApiRole::Viewer,
         actor_id: Some("viewer".to_string()),
     }];
@@ -1717,6 +1721,9 @@ async fn control_api_runtime_snapshot_includes_jwks_cache_visibility() {
     assert_eq!(sources[0]["startup_behavior"], "allow_degraded");
     assert_eq!(sources[0]["cache_state"], "fresh");
     assert_eq!(sources[0]["active_key_count"], 1);
+    assert!(payload["tls"]["upstreams"]["api"].is_object());
+    assert!(payload["secrets"]["providers"].is_array());
+    assert!(payload["secrets"]["material"].is_array());
     assert_eq!(
         sources[0]["allowed_algorithms"]
             .as_array()
@@ -1801,6 +1808,7 @@ async fn control_api_reload_endpoint_denies_viewer() {
     startup.observability.control_api.auth_token = None;
     startup.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
         token: "viewer-token".to_string(),
+        token_ref: None,
         role: ControlApiRole::Viewer,
         actor_id: Some("viewer".to_string()),
     }];
@@ -1825,6 +1833,7 @@ async fn control_api_restart_endpoint_denies_operator() {
     startup.observability.control_api.auth_token = None;
     startup.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
         token: "operator-token".to_string(),
+        token_ref: None,
         role: ControlApiRole::Operator,
         actor_id: Some("operator".to_string()),
     }];
@@ -1850,6 +1859,7 @@ async fn control_api_restart_endpoint_allows_admin() {
     startup.observability.control_api.auth_token = None;
     startup.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
         token: "admin-token".to_string(),
+        token_ref: None,
         role: ControlApiRole::Admin,
         actor_id: Some("admin".to_string()),
     }];
@@ -1913,6 +1923,7 @@ async fn control_api_snapshot_read_emits_audit_event() {
     config.observability.control_api.auth_token = None;
     config.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
         token: "viewer-token".to_string(),
+        token_ref: None,
         role: ControlApiRole::Viewer,
         actor_id: Some("viewer".to_string()),
     }];
@@ -1966,6 +1977,7 @@ async fn control_api_reload_emits_attempt_and_result_audit_events() {
     config.observability.control_api.auth_token = None;
     config.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
         token: "operator-token".to_string(),
+        token_ref: None,
         role: ControlApiRole::Operator,
         actor_id: Some("operator".to_string()),
     }];
@@ -2008,6 +2020,7 @@ async fn control_api_restart_emits_attempt_and_result_audit_events() {
     config.observability.control_api.auth_token = None;
     config.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
         token: "admin-token".to_string(),
+        token_ref: None,
         role: ControlApiRole::Admin,
         actor_id: Some("admin".to_string()),
     }];
@@ -2100,6 +2113,7 @@ fn control_api_state_builds_runtime_security_policy_from_reloaded_config() {
     reloaded.observability.control_api.tls.client_auth.ca_file = Some(cert.clone());
     reloaded.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
         token: "operator-token".to_string(),
+        token_ref: None,
         role: ControlApiRole::Operator,
         actor_id: Some("ops".to_string()),
     }];
@@ -3594,6 +3608,21 @@ async fn runtime_bundle_cert_reload_ignores_unrelated_config_drift_and_bundle_sw
         .to_bytes();
     let payload: serde_json::Value = serde_json::from_slice(&body).expect("response json");
     assert_eq!(payload["reloaded"], serde_json::Value::Bool(true));
+    assert_eq!(payload["reason"], "cert_reload_applied");
+    assert_eq!(payload["listener_count"], 1);
+    assert_eq!(payload["listeners"][0]["status"], "cert_reload_applied");
+    assert!(
+        payload["listeners"][0]["loaded_at_unix_ms"]
+            .as_u64()
+            .expect("loaded at timestamp")
+            > 0
+    );
+    assert!(
+        payload["listeners"][0]["default_cert_not_after_unix_seconds"]
+            .as_i64()
+            .expect("cert expiry")
+            > 0
+    );
 
     let current_runtime = runtime_handle.current_view();
     assert_eq!(current_runtime.generation(), generation_before);

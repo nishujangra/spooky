@@ -33,9 +33,52 @@ pub fn classify_upstream_error_detail(
         return UpstreamErrorClassification::timeout();
     }
 
+    // TLS alert/certificate vocabulary is unambiguous regardless of whether the
+    // underlying HTTP client reports the failure as a connect-phase or
+    // send-phase error. In particular, a fresh HTTP/2 connection's TLS
+    // handshake can fail while the first request is being sent (hyper-util
+    // reports this as `SendRequest`, not `Connect`), so gating this detection
+    // on `is_connect` misses exactly the case it exists to catch.
+    if normalized.contains("client_certificate_missing") {
+        return UpstreamErrorClassification::tls(UpstreamTlsReason::ClientCertificateMissing);
+    }
+    if normalized.contains("client_key_missing") {
+        return UpstreamErrorClassification::tls(UpstreamTlsReason::ClientKeyMissing);
+    }
+    if normalized.contains("client_identity_invalid") {
+        return UpstreamErrorClassification::tls(UpstreamTlsReason::ClientIdentityInvalid);
+    }
+    if normalized.contains("client_certificate_expired") {
+        return UpstreamErrorClassification::tls(UpstreamTlsReason::ClientCertificateExpired);
+    }
+    if normalized.contains("client_auth_rejected")
+        || normalized.contains("certificaterequired")
+        || normalized.contains("certificate required")
+        || normalized.contains("peer sent no certificates")
+        || normalized.contains("bad certificate")
+        || normalized.contains("badcertificate")
+        || normalized.contains("certificate unknown")
+        || normalized.contains("certificateunknown")
+        || normalized.contains("unknown ca")
+        || normalized.contains("unknownca")
+    {
+        return UpstreamErrorClassification::tls(UpstreamTlsReason::ClientAuthRejected);
+    }
+    if normalized.contains("unknownissuer") || normalized.contains("unknown issuer") {
+        return UpstreamErrorClassification::tls(UpstreamTlsReason::UnknownIssuer);
+    }
+    if normalized.contains("alpn") {
+        return UpstreamErrorClassification::tls(UpstreamTlsReason::Alpn);
+    }
+
+    // These buckets rely on more generic vocabulary ("expired", "hostname",
+    // bare "certificate"/"tls") that is more plausible outside of a TLS
+    // context (e.g. an application error body), so they stay gated on
+    // `is_connect` to avoid misclassifying unrelated protocol/application
+    // errors as TLS failures.
     if is_connect {
-        if normalized.contains("unknownissuer") || normalized.contains("unknown issuer") {
-            return UpstreamErrorClassification::tls(UpstreamTlsReason::UnknownIssuer);
+        if normalized.contains("expired") && normalized.contains("client") {
+            return UpstreamErrorClassification::tls(UpstreamTlsReason::ClientCertificateExpired);
         }
         if normalized.contains("expired")
             || normalized.contains("not yet valid")
@@ -49,9 +92,6 @@ pub fn classify_upstream_error_detail(
             || normalized.contains("not valid for")
         {
             return UpstreamErrorClassification::tls(UpstreamTlsReason::HostnameMismatch);
-        }
-        if normalized.contains("alpn") {
-            return UpstreamErrorClassification::tls(UpstreamTlsReason::Alpn);
         }
         if normalized.contains("invalidcertificate")
             || normalized.contains("certificate")
@@ -94,6 +134,11 @@ pub enum UpstreamTlsReason {
     HostnameMismatch,
     Alpn,
     Handshake,
+    ClientCertificateMissing,
+    ClientKeyMissing,
+    ClientIdentityInvalid,
+    ClientAuthRejected,
+    ClientCertificateExpired,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -162,6 +207,11 @@ impl UpstreamErrorClassification {
                     UpstreamTlsReason::HostnameMismatch => "hostname_mismatch",
                     UpstreamTlsReason::Alpn => "alpn",
                     UpstreamTlsReason::Handshake => "handshake",
+                    UpstreamTlsReason::ClientCertificateMissing => "client_certificate_missing",
+                    UpstreamTlsReason::ClientKeyMissing => "client_key_missing",
+                    UpstreamTlsReason::ClientIdentityInvalid => "client_identity_invalid",
+                    UpstreamTlsReason::ClientAuthRejected => "client_auth_rejected",
+                    UpstreamTlsReason::ClientCertificateExpired => "client_certificate_expired",
                 },
             },
             UpstreamErrorCategory::Protocol | UpstreamErrorCategory::Internal => {

@@ -446,8 +446,14 @@ fn metrics_render_includes_downstream_tls_telemetry() {
 #[test]
 fn metrics_render_includes_upstream_tls_telemetry() {
     let metrics = Metrics::default();
-    metrics.record_upstream_tls_failure("backend.internal:443", "data_plane", "unknown_issuer");
     metrics.record_upstream_tls_failure(
+        "api",
+        "backend.internal:443",
+        "data_plane",
+        "unknown_issuer",
+    );
+    metrics.record_upstream_tls_failure(
+        "api",
         "backend.internal:443",
         "health_check",
         "hostname_mismatch",
@@ -455,10 +461,10 @@ fn metrics_render_includes_upstream_tls_telemetry() {
 
     let output = metrics.render_prometheus();
     assert!(output.contains(
-        "spooky_upstream_tls_failure_total{backend=\"backend.internal:443\",phase=\"data_plane\",reason=\"unknown_issuer\"} 1"
+        "spooky_upstream_tls_failure_total{upstream=\"api\",backend=\"backend.internal:443\",phase=\"data_plane\",reason=\"unknown_issuer\"} 1"
     ));
     assert!(output.contains(
-        "spooky_upstream_tls_failure_total{backend=\"backend.internal:443\",phase=\"health_check\",reason=\"hostname_mismatch\"} 1"
+        "spooky_upstream_tls_failure_total{upstream=\"api\",backend=\"backend.internal:443\",phase=\"health_check\",reason=\"hostname_mismatch\"} 1"
     ));
 }
 

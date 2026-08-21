@@ -3,7 +3,6 @@
 use std::{
     collections::HashMap,
     convert::Infallible,
-    fmt::Write as _,
     future::Future,
     net::{SocketAddr, TcpListener as StdTcpListener, UdpSocket as StdUdpSocket},
     path::{Path, PathBuf},
@@ -19,7 +18,7 @@ use hyper_util::rt::TokioIo;
 use rustls_pki_types::{CertificateDer, pem::PemObject};
 use serde_json::Value as JsonValue;
 use spooky_config::{
-    config::{Config, ControlApi, LogFormat, MetricsEndpoint, Observability, Upstream},
+    config::{Config, ControlApi, MetricsEndpoint, Observability, SecretRef, Upstream},
     runtime::RuntimeConfig,
     validator::validate,
 };
@@ -43,7 +42,7 @@ use super::{
     base_quic_test_config,
     request_path::{
         BackendFixture, H3RequestSpec, H3Response, ListenerTaskGuard, TestTlsMaterial,
-        run_request_to, start_h1_backend, start_h1_backend_on,
+        run_request_to, start_h1_backend, start_h1_backend_on, start_h2_backend_with_client_auth,
     },
     static_full_response,
 };
@@ -53,6 +52,7 @@ pub struct RuntimeSwapHarness {
     listener_task: Option<ListenerTaskGuard>,
     rt: tokio::runtime::Runtime,
     tls: TestTlsMaterial,
+    control_api_initial_cert_pem: String,
     config_dir: TempDir,
     config_path: PathBuf,
     listen_port: u16,
@@ -63,14 +63,31 @@ pub struct RuntimeSwapHarness {
     listen_addr: Option<SocketAddr>,
 }
 
+// `ControlApi::auth_token` is `#[serde(skip_serializing)]` so it never survives a
+// write-to-disk/reload round trip (the redaction rule that protects live snapshots
+// from leaking secrets also strips it from any re-serialized config file). The
+// harness reloads by writing `current_config` back out as YAML, so it must carry
+// the control-API token via a file-backed `auth_token_ref` instead of the plain
+// `auth_token` field to survive that round trip.
+const CONTROL_API_TOKEN: &str = "runtime-swap-token";
+
 impl RuntimeSwapHarness {
     pub fn new() -> Self {
         let config_dir = tempdir().expect("runtime swap tempdir");
+        let tls = TestTlsMaterial::localhost();
+        let control_api_initial_cert_pem =
+            std::fs::read_to_string(&tls.cert_path).expect("read initial control api cert");
+        std::fs::write(
+            config_dir.path().join("control-api-token"),
+            CONTROL_API_TOKEN,
+        )
+        .expect("write control api token file");
         Self {
             backends: Vec::new(),
             listener_task: None,
             rt: tokio::runtime::Runtime::new().expect("runtime"),
-            tls: TestTlsMaterial::localhost(),
+            tls,
+            control_api_initial_cert_pem,
             config_path: config_dir.path().join("spooky-runtime-swap.yaml"),
             config_dir,
             listen_port: reserve_udp_port(),
@@ -114,7 +131,12 @@ impl RuntimeSwapHarness {
                 restart_path: "/restart".to_string(),
                 reload_path: "/reload".to_string(),
                 reload_certs_path: "/reload-certs".to_string(),
-                auth_token: Some("runtime-swap-token".to_string()),
+                auth_token_ref: Some(SecretRef {
+                    reference: format!(
+                        "file://{}",
+                        self.config_dir.path().join("control-api-token").display()
+                    ),
+                }),
                 max_connections: 32,
                 connection_timeout_ms: 5_000,
                 ..ControlApi::default()
@@ -154,6 +176,28 @@ impl RuntimeSwapHarness {
         self.start_h1_backend(
             move |_req| async move { Ok::<_, Infallible>(static_full_response(body)) },
         )
+    }
+
+    pub fn start_h2_backend_with_client_auth<F, Fut>(
+        &mut self,
+        cert_path: &str,
+        key_path: &str,
+        client_ca_path: &str,
+        handler: F,
+    ) -> SocketAddr
+    where
+        F: Fn(Request<Incoming>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response<Full<Bytes>>, Infallible>> + Send + 'static,
+    {
+        let fixture = self.rt.block_on(start_h2_backend_with_client_auth(
+            cert_path,
+            key_path,
+            client_ca_path,
+            handler,
+        ));
+        let addr = fixture.addr;
+        self.backends.push(fixture);
+        addr
     }
 
     pub fn start_listener(&mut self, config: Config) -> Result<SocketAddr, String> {
@@ -241,6 +285,46 @@ impl RuntimeSwapHarness {
         ))
     }
 
+    pub fn runtime_history(&self) -> Result<JsonValue, String> {
+        let base = self
+            .current_config
+            .as_ref()
+            .ok_or_else(|| "listener not started".to_string())?
+            .observability
+            .control_api
+            .runtime_path
+            .clone();
+        let path = format!("{}/history", base.trim_end_matches('/'));
+        let token = self.control_api_token()?;
+        self.rt.block_on(self.poll_control_api_json(
+            Method::GET,
+            path,
+            token,
+            StatusCode::OK,
+            Duration::from_secs(5),
+        ))
+    }
+
+    pub fn runtime_history_generation(&self, generation: u64) -> Result<JsonValue, String> {
+        let base = self
+            .current_config
+            .as_ref()
+            .ok_or_else(|| "listener not started".to_string())?
+            .observability
+            .control_api
+            .runtime_path
+            .clone();
+        let path = format!("{}/history/{generation}", base.trim_end_matches('/'));
+        let token = self.control_api_token()?;
+        self.rt.block_on(self.poll_control_api_json(
+            Method::GET,
+            path,
+            token,
+            StatusCode::OK,
+            Duration::from_secs(5),
+        ))
+    }
+
     pub fn ready_snapshot_expect(&self, expected_status: StatusCode) -> Result<JsonValue, String> {
         let path = self
             .current_config
@@ -275,6 +359,32 @@ impl RuntimeSwapHarness {
             .observability
             .control_api
             .reload_path
+            .clone();
+        let token = self.control_api_token()?;
+        self.rt.block_on(self.poll_control_api_json(
+            Method::POST,
+            path,
+            token,
+            expected_status,
+            Duration::from_secs(5),
+        ))
+    }
+
+    pub fn trigger_runtime_reload_certs(&self) -> Result<JsonValue, String> {
+        self.trigger_runtime_reload_certs_expect(StatusCode::ACCEPTED)
+    }
+
+    pub fn trigger_runtime_reload_certs_expect(
+        &self,
+        expected_status: StatusCode,
+    ) -> Result<JsonValue, String> {
+        let path = self
+            .current_config
+            .as_ref()
+            .ok_or_else(|| "listener not started".to_string())?
+            .observability
+            .control_api
+            .reload_certs_path
             .clone();
         let token = self.control_api_token()?;
         self.rt.block_on(self.poll_control_api_json(
@@ -321,6 +431,10 @@ impl RuntimeSwapHarness {
     pub fn listen_addr(&self) -> Result<SocketAddr, String> {
         self.listen_addr
             .ok_or_else(|| "listener not started".to_string())
+    }
+
+    pub fn listener_tls_paths(&self) -> (&str, &str) {
+        (&self.tls.cert_path, &self.tls.key_path)
     }
 
     pub fn current_generation(&self) -> Result<u64, String> {
@@ -376,14 +490,15 @@ impl RuntimeSwapHarness {
     }
 
     fn control_api_token(&self) -> Result<String, String> {
-        self.current_config
-            .as_ref()
-            .and_then(|config| config.observability.control_api.auth_token.clone())
-            .ok_or_else(|| "missing control api auth token".to_string())
+        if self.current_config.is_none() {
+            return Err("missing control api auth token".to_string());
+        }
+        Ok(CONTROL_API_TOKEN.to_string())
     }
 
     fn write_config_file(&self, config: &Config) -> Result<(), String> {
-        let rendered = render_runtime_swap_config(config)?;
+        let rendered =
+            serde_yaml::to_string(config).map_err(|err| format!("serialize config: {err}"))?;
         std::fs::write(&self.config_path, rendered)
             .map_err(|err| format!("write config file '{}': {err}", self.config_path.display()))
     }
@@ -455,8 +570,15 @@ impl RuntimeSwapHarness {
         let mut last_error = String::new();
 
         while Instant::now() < deadline {
-            match control_api_request_once(addr, &self.tls.cert_path, method.clone(), &path, &token)
-                .await
+            match control_api_request_once(
+                addr,
+                &self.tls.cert_path,
+                &self.control_api_initial_cert_pem,
+                method.clone(),
+                &path,
+                &token,
+            )
+            .await
             {
                 Ok((status, body)) if status == expected_status => return Ok(body),
                 Ok((status, body)) => {
@@ -492,19 +614,27 @@ fn reserve_udp_port() -> u16 {
         .port()
 }
 
-fn read_test_root_store(cert_path: &str) -> Result<RootCertStore, String> {
-    let mut roots = RootCertStore::empty();
-    let certs = CertificateDer::pem_file_iter(cert_path)
-        .map_err(|err| format!("open cert file: {err}"))?
+fn add_pem_certs_to_root_store(roots: &mut RootCertStore, pem: &str) -> Result<(), String> {
+    let certs = CertificateDer::pem_slice_iter(pem.as_bytes())
         .collect::<Result<Vec<_>, _>>()
         .map_err(|err| format!("parse certs: {err}"))?;
-
     for cert in certs {
         roots
             .add(cert)
             .map_err(|err| format!("add root cert: {err}"))?;
     }
 
+    Ok(())
+}
+
+fn read_test_root_store(cert_path: &str, initial_cert_pem: &str) -> Result<RootCertStore, String> {
+    let mut roots = RootCertStore::empty();
+    add_pem_certs_to_root_store(&mut roots, initial_cert_pem)?;
+    let current_pem =
+        std::fs::read_to_string(cert_path).map_err(|err| format!("open cert file: {err}"))?;
+    if current_pem != initial_cert_pem {
+        add_pem_certs_to_root_store(&mut roots, &current_pem)?;
+    }
     Ok(roots)
 }
 
@@ -546,11 +676,12 @@ async fn metrics_request_once(
 async fn control_api_request_once(
     addr: SocketAddr,
     cert_path: &str,
+    initial_cert_pem: &str,
     method: Method,
     path: &str,
     token: &str,
 ) -> Result<(StatusCode, JsonValue), String> {
-    let roots = read_test_root_store(cert_path)?;
+    let roots = read_test_root_store(cert_path, initial_cert_pem)?;
     let tls_config = ClientConfig::builder()
         .with_root_certificates(roots)
         .with_no_client_auth();
@@ -680,207 +811,4 @@ fn quic_connection_establishes_within(addr: SocketAddr, timeout: Duration) -> Re
     }
 
     Ok(false)
-}
-
-fn render_runtime_swap_config(config: &Config) -> Result<String, String> {
-    let mut yaml = String::new();
-    writeln!(&mut yaml, "version: {}", config.version).map_err(|err| err.to_string())?;
-    writeln!(&mut yaml, "listen:").map_err(|err| err.to_string())?;
-    writeln!(&mut yaml, "  protocol: {}", config.listen.protocol).map_err(|err| err.to_string())?;
-    writeln!(&mut yaml, "  address: \"{}\"", config.listen.address)
-        .map_err(|err| err.to_string())?;
-    writeln!(&mut yaml, "  port: {}", config.listen.port).map_err(|err| err.to_string())?;
-    writeln!(&mut yaml, "  tls:").map_err(|err| err.to_string())?;
-    writeln!(&mut yaml, "    cert: \"{}\"", config.listen.tls.cert)
-        .map_err(|err| err.to_string())?;
-    writeln!(&mut yaml, "    key: \"{}\"", config.listen.tls.key).map_err(|err| err.to_string())?;
-
-    if let Some(load_balancing) = &config.load_balancing {
-        writeln!(&mut yaml, "load_balancing:").map_err(|err| err.to_string())?;
-        writeln!(&mut yaml, "  type: {}", load_balancing.lb_type).map_err(|err| err.to_string())?;
-    }
-
-    writeln!(&mut yaml, "upstream:").map_err(|err| err.to_string())?;
-    for (name, upstream) in &config.upstream {
-        writeln!(&mut yaml, "  {}:", yaml_scalar(name)).map_err(|err| err.to_string())?;
-        writeln!(&mut yaml, "    load_balancing:").map_err(|err| err.to_string())?;
-        writeln!(&mut yaml, "      type: {}", upstream.load_balancing.lb_type)
-            .map_err(|err| err.to_string())?;
-        writeln!(&mut yaml, "    route:").map_err(|err| err.to_string())?;
-        if let Some(path_prefix) = upstream.route.path_prefix.as_deref() {
-            writeln!(&mut yaml, "      path_prefix: \"{}\"", path_prefix)
-                .map_err(|err| err.to_string())?;
-        }
-        writeln!(&mut yaml, "    backends:").map_err(|err| err.to_string())?;
-        for backend in &upstream.backends {
-            writeln!(&mut yaml, "      - id: {}", yaml_scalar(&backend.id))
-                .map_err(|err| err.to_string())?;
-            writeln!(&mut yaml, "        address: \"{}\"", backend.address)
-                .map_err(|err| err.to_string())?;
-            writeln!(&mut yaml, "        weight: {}", backend.weight)
-                .map_err(|err| err.to_string())?;
-        }
-    }
-
-    writeln!(&mut yaml, "log:").map_err(|err| err.to_string())?;
-    writeln!(&mut yaml, "  level: {}", yaml_scalar(&config.log.level))
-        .map_err(|err| err.to_string())?;
-    writeln!(&mut yaml, "  file:").map_err(|err| err.to_string())?;
-    writeln!(&mut yaml, "    enabled: {}", config.log.file.enabled)
-        .map_err(|err| err.to_string())?;
-    writeln!(&mut yaml, "    path: \"{}\"", config.log.file.path).map_err(|err| err.to_string())?;
-    writeln!(
-        &mut yaml,
-        "  format: {}",
-        match config.log.format {
-            LogFormat::Plain => "plain",
-            LogFormat::Json => "json",
-        }
-    )
-    .map_err(|err| err.to_string())?;
-
-    writeln!(&mut yaml, "performance:").map_err(|err| err.to_string())?;
-    writeln!(
-        &mut yaml,
-        "  new_connections_burst: {}",
-        config.performance.new_connections_burst
-    )
-    .map_err(|err| err.to_string())?;
-    writeln!(
-        &mut yaml,
-        "  new_connections_per_sec: {}",
-        config.performance.new_connections_per_sec
-    )
-    .map_err(|err| err.to_string())?;
-
-    writeln!(&mut yaml, "observability:").map_err(|err| err.to_string())?;
-    writeln!(&mut yaml, "  metrics:").map_err(|err| err.to_string())?;
-    writeln!(
-        &mut yaml,
-        "    enabled: {}",
-        config.observability.metrics.enabled
-    )
-    .map_err(|err| err.to_string())?;
-    writeln!(
-        &mut yaml,
-        "    required: {}",
-        config.observability.metrics.required
-    )
-    .map_err(|err| err.to_string())?;
-    writeln!(
-        &mut yaml,
-        "    address: \"{}\"",
-        config.observability.metrics.address
-    )
-    .map_err(|err| err.to_string())?;
-    writeln!(&mut yaml, "    port: {}", config.observability.metrics.port)
-        .map_err(|err| err.to_string())?;
-    writeln!(
-        &mut yaml,
-        "    path: \"{}\"",
-        config.observability.metrics.path
-    )
-    .map_err(|err| err.to_string())?;
-    writeln!(
-        &mut yaml,
-        "    max_connections: {}",
-        config.observability.metrics.max_connections
-    )
-    .map_err(|err| err.to_string())?;
-    writeln!(
-        &mut yaml,
-        "    connection_timeout_ms: {}",
-        config.observability.metrics.connection_timeout_ms
-    )
-    .map_err(|err| err.to_string())?;
-
-    writeln!(&mut yaml, "  control_api:").map_err(|err| err.to_string())?;
-    writeln!(
-        &mut yaml,
-        "    enabled: {}",
-        config.observability.control_api.enabled
-    )
-    .map_err(|err| err.to_string())?;
-    writeln!(
-        &mut yaml,
-        "    required: {}",
-        config.observability.control_api.required
-    )
-    .map_err(|err| err.to_string())?;
-    writeln!(
-        &mut yaml,
-        "    address: \"{}\"",
-        config.observability.control_api.address
-    )
-    .map_err(|err| err.to_string())?;
-    writeln!(
-        &mut yaml,
-        "    port: {}",
-        config.observability.control_api.port
-    )
-    .map_err(|err| err.to_string())?;
-    writeln!(
-        &mut yaml,
-        "    health_path: \"{}\"",
-        config.observability.control_api.health_path
-    )
-    .map_err(|err| err.to_string())?;
-    writeln!(
-        &mut yaml,
-        "    ready_path: \"{}\"",
-        config.observability.control_api.ready_path
-    )
-    .map_err(|err| err.to_string())?;
-    writeln!(
-        &mut yaml,
-        "    runtime_path: \"{}\"",
-        config.observability.control_api.runtime_path
-    )
-    .map_err(|err| err.to_string())?;
-    writeln!(
-        &mut yaml,
-        "    restart_path: \"{}\"",
-        config.observability.control_api.restart_path
-    )
-    .map_err(|err| err.to_string())?;
-    writeln!(
-        &mut yaml,
-        "    reload_path: \"{}\"",
-        config.observability.control_api.reload_path
-    )
-    .map_err(|err| err.to_string())?;
-    writeln!(
-        &mut yaml,
-        "    reload_certs_path: \"{}\"",
-        config.observability.control_api.reload_certs_path
-    )
-    .map_err(|err| err.to_string())?;
-    if let Some(token) = config.observability.control_api.auth_token.as_deref() {
-        writeln!(&mut yaml, "    auth_token: \"{}\"", token).map_err(|err| err.to_string())?;
-    }
-    writeln!(
-        &mut yaml,
-        "    max_connections: {}",
-        config.observability.control_api.max_connections
-    )
-    .map_err(|err| err.to_string())?;
-    writeln!(
-        &mut yaml,
-        "    connection_timeout_ms: {}",
-        config.observability.control_api.connection_timeout_ms
-    )
-    .map_err(|err| err.to_string())?;
-
-    Ok(yaml)
-}
-
-fn yaml_scalar(value: &str) -> String {
-    if value
-        .chars()
-        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_' | '.'))
-    {
-        value.to_string()
-    } else {
-        format!("{value:?}")
-    }
 }

@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+use base64::{Engine as _engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use boring::{
     bn::BigNum,
     ec::{EcGroup, EcKey},
@@ -594,7 +594,7 @@ where
         return match handle.runtime_flavor() {
             RuntimeFlavor::MultiThread => Some(block_in_place(|| handle.block_on(future))),
             RuntimeFlavor::CurrentThread => None,
-            _ => None,
+            _engine => None,
         };
     }
 
@@ -3198,7 +3198,7 @@ fn jwt_string_claim_values(claims: &Value, claim_names: &[&str]) -> HashSet<Stri
 mod tests {
     use std::{collections::HashMap, sync::Arc, time::Duration};
 
-    use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+    use base64::{Engine as _engine, engine::general_purpose::URL_SAFE_NO_PAD};
     use boring::{
         hash::MessageDigest,
         pkey::{PKey, Private},
@@ -3371,6 +3371,7 @@ mod tests {
             upstream: upstreams,
             load_balancing: None,
             upstream_tls: Default::default(),
+            secrets: Default::default(),
             log: Default::default(),
             performance: Default::default(),
             observability: Default::default(),
@@ -3434,6 +3435,7 @@ mod tests {
             )]),
             load_balancing: None,
             upstream_tls: Default::default(),
+            secrets: Default::default(),
             log: Default::default(),
             performance: Default::default(),
             observability: Default::default(),

@@ -109,6 +109,7 @@ fn make_config(port: u32, cert: String, key: String, backend_address: String) ->
             key: None,
         }),
         upstream_tls: UpstreamTls::default(),
+        secrets: Default::default(),
         log: Log {
             level: "info".to_string(),
             file: Default::default(),
@@ -651,6 +652,7 @@ fn make_config_with_rate_limit(
             key: None,
         }),
         upstream_tls: UpstreamTls::default(),
+        secrets: Default::default(),
         log: Log {
             level: "error".to_string(),
             file: Default::default(),

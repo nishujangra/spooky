@@ -53,6 +53,7 @@ fn runtime_config_lowers_oidc_external_auth_metadata_into_canonical_contract() {
             issuer_url: Some("https://issuer.example.com".to_string()),
             client_id: "edge-gateway".to_string(),
             client_secret: Some("secret-1".to_string()),
+            client_secret_ref: None,
             audience: Some("spooky-api".to_string()),
             scopes: vec!["openid".to_string(), "profile".to_string()],
             request_headers: Vec::new(),

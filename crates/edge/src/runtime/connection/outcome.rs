@@ -5,7 +5,9 @@ use std::{
 
 use http::StatusCode;
 use log::{error, info};
-use spooky_errors::{ClassifiedUpstreamProxyError, PoolError, ProxyError};
+use spooky_errors::{
+    ClassifiedUpstreamProxyError, PoolError, ProxyError, UpstreamErrorCategory, UpstreamTlsReason,
+};
 use spooky_lb::{HealthTransition, health::HealthFailureReason, upstream_pool::UpstreamPool};
 
 use crate::{
@@ -35,6 +37,25 @@ fn emit_backend_health_transition(
         Some(transition)
     } else {
         None
+    }
+}
+
+fn tls_metrics_reason(classified: &ClassifiedUpstreamProxyError) -> &'static str {
+    match classified
+        .classification
+        .tls_reason
+        .unwrap_or(UpstreamTlsReason::Handshake)
+    {
+        UpstreamTlsReason::UnknownIssuer => "unknown_issuer",
+        UpstreamTlsReason::ExpiredCertificate => "expired_certificate",
+        UpstreamTlsReason::HostnameMismatch => "hostname_mismatch",
+        UpstreamTlsReason::Alpn => "alpn",
+        UpstreamTlsReason::Handshake => "handshake",
+        UpstreamTlsReason::ClientCertificateMissing => "client_certificate_missing",
+        UpstreamTlsReason::ClientKeyMissing => "client_key_missing",
+        UpstreamTlsReason::ClientIdentityInvalid => "client_identity_invalid",
+        UpstreamTlsReason::ClientAuthRejected => "client_auth_rejected",
+        UpstreamTlsReason::ClientCertificateExpired => "client_certificate_expired",
     }
 }
 
@@ -682,6 +703,7 @@ pub(crate) struct BackendHealthObservationInput<'a> {
 #[derive(Clone, Copy)]
 pub(crate) struct ClassifiedBackendFailureInput<'a> {
     pub(crate) metrics_phase: &'a str,
+    pub(crate) upstream_name: &'a str,
     pub(crate) backend_addr: &'a str,
     pub(crate) backend_index: usize,
     pub(crate) upstream_pool: Option<&'a Arc<RwLock<UpstreamPool>>>,
@@ -750,19 +772,21 @@ pub(crate) fn observe_backend_response_status_and_log(
 
 pub(crate) fn record_classified_backend_failure_metrics(
     metrics_phase: &str,
+    upstream_name: &str,
     backend_addr: &str,
     metrics: &Metrics,
     classified: &ClassifiedUpstreamProxyError,
 ) -> Option<HealthFailureReason> {
-    let health_mapping = classified.health_failure?;
-    metrics.inc_health_failure(health_mapping.failure_reason);
-    if health_mapping.failure_reason == HealthFailureReason::Tls {
+    if classified.classification.category == UpstreamErrorCategory::Tls {
         metrics.record_upstream_tls_failure(
+            upstream_name,
             backend_addr,
             metrics_phase,
-            health_mapping.metrics_reason,
+            tls_metrics_reason(classified),
         );
     }
+    let health_mapping = classified.health_failure?;
+    metrics.inc_health_failure(health_mapping.failure_reason);
     Some(health_mapping.failure_reason)
 }
 
@@ -771,6 +795,7 @@ pub(crate) fn observe_classified_backend_failure(
 ) -> Option<HealthTransition> {
     let ClassifiedBackendFailureInput {
         metrics_phase,
+        upstream_name,
         backend_addr,
         backend_index,
         upstream_pool,
@@ -780,6 +805,7 @@ pub(crate) fn observe_classified_backend_failure(
 
     let reason = record_classified_backend_failure_metrics(
         metrics_phase,
+        upstream_name,
         backend_addr,
         metrics,
         classified,
@@ -901,6 +927,7 @@ mod tests {
             upstream: upstreams,
             load_balancing: None,
             upstream_tls: Default::default(),
+            secrets: Default::default(),
             log: Default::default(),
             performance: Default::default(),
             observability: Default::default(),
@@ -1499,6 +1526,7 @@ mod tests {
                 .expect("classified timeout");
             let transition = observe_classified_backend_failure(ClassifiedBackendFailureInput {
                 metrics_phase: "bootstrap",
+                upstream_name: "api",
                 backend_addr: "backend-a",
                 backend_index: 0,
                 upstream_pool: Some(&pool),
@@ -1600,6 +1628,7 @@ mod tests {
             .expect("classified tls");
             let tls_reason = record_classified_backend_failure_metrics(
                 "forwarding",
+                "api",
                 "backend-a",
                 &metrics,
                 &tls,
@@ -1618,6 +1647,7 @@ mod tests {
             .expect("classified transport");
             let transport_reason = record_classified_backend_failure_metrics(
                 "forwarding",
+                "api",
                 "backend-a",
                 &metrics,
                 &transport,

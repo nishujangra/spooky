@@ -25,13 +25,17 @@ Use this for routes, upstreams, backends, timeouts, resilience, quota, and simil
 5. Verify the active generation and runtime history.
 6. Watch latency, backend health, overload, quota, and auth outcomes before expanding rollout.
 
-### Certificate-only change
+### Certificate-only change (listener)
 
 1. Write new cert material with correct permissions.
 2. Verify expiry and SAN coverage.
 3. `POST /admin/runtime/reload-certs`
 4. Confirm new handshakes present the new certificate.
 5. Keep the previous cert material until verification is complete.
+
+### Upstream client certificate or CA rotation
+
+Upstream mTLS client cert/key and upstream CA changes are generation-owned, not `reload-certs`-scoped. Use the runtime-managed config change workflow above (`validate` → `preview` → `activate`). See [Secret and Certificate Rotation](secret-and-cert-rotation.md) for the full flow, overlap strategy for CA transitions, and rollback caveats.
 
 ### Restart-required change or binary upgrade
 

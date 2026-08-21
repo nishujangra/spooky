@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 pub const CURRENT_CONFIG_VERSION: u32 = 1;
 pub const SUPPORTED_CONFIG_VERSIONS: &[u32] = &[CURRENT_CONFIG_VERSION];
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde(default = "Config::default_version")] // Make version optional with default
@@ -23,6 +23,9 @@ pub struct Config {
 
     #[serde(default)]
     pub upstream_tls: UpstreamTls,
+
+    #[serde(default)]
+    pub secrets: Secrets,
 
     #[serde(default)]
     pub log: Log,
@@ -77,6 +80,40 @@ pub fn effective_listens(config: &Config) -> Vec<Listen> {
         vec![config.listen.clone()]
     } else {
         config.listeners.clone()
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default, PartialEq, Eq)]
+#[serde(default)]
+#[serde(deny_unknown_fields)]
+pub struct Secrets {
+    pub default_provider: Option<String>,
+    pub providers: HashMap<String, SecretProvider>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SecretProvider {
+    File {
+        #[serde(default)]
+        base_dir: Option<String>,
+    },
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SecretRef {
+    #[serde(rename = "ref")]
+    pub reference: String,
+}
+
+impl SecretRef {
+    pub fn scheme(&self) -> Option<&str> {
+        self.reference.split_once(':').map(|(scheme, _)| scheme)
+    }
+
+    pub fn raw_value(&self) -> &str {
+        &self.reference
     }
 }
 
@@ -138,6 +175,10 @@ pub struct UpstreamTls {
     pub strict_sni: bool,
     pub ca_file: Option<String>,
     pub ca_dir: Option<String>,
+    pub client_certificate: Option<String>,
+    pub client_certificate_ref: Option<SecretRef>,
+    pub client_key: Option<String>,
+    pub client_key_ref: Option<SecretRef>,
 }
 
 impl Default for UpstreamTls {
@@ -147,11 +188,15 @@ impl Default for UpstreamTls {
             strict_sni: true,
             ca_file: None,
             ca_dir: None,
+            client_certificate: None,
+            client_certificate_ref: None,
+            client_key: None,
+            client_key_ref: None,
         }
     }
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Upstream {
     #[serde(default)]
@@ -218,6 +263,8 @@ pub enum ExternalAuth {
         #[serde(default)]
         client_secret: Option<String>,
         #[serde(default)]
+        client_secret_ref: Option<SecretRef>,
+        #[serde(default)]
         audience: Option<String>,
         #[serde(default)]
         scopes: Vec<String>,
@@ -267,6 +314,7 @@ impl Default for ApiKeyAuth {
 #[serde(deny_unknown_fields)]
 pub struct JwtAuth {
     pub secret: String,
+    pub secret_ref: Option<SecretRef>,
     pub issuer: Option<String>,
     pub audience: Option<String>,
     pub issuers: Option<Vec<String>>,
@@ -293,6 +341,7 @@ impl Default for JwtAuth {
     fn default() -> Self {
         Self {
             secret: String::new(),
+            secret_ref: None,
             issuer: None,
             audience: None,
             issuers: None,
@@ -410,7 +459,7 @@ pub struct UpstreamHostPolicy {
     pub host: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct Backend {
     pub id: String, // "backend1"
@@ -432,7 +481,7 @@ impl Backend {
     }
 }
 
-#[derive(Debug, Deserialize, Clone, Default)]
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct RouteMatch {
@@ -443,7 +492,7 @@ pub struct RouteMatch {
     pub method: Option<String>, // Optional HTTP method filtering (GET, POST, etc.)
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct HealthCheck {
@@ -1501,6 +1550,8 @@ impl std::fmt::Debug for ControlApiAuth {
 pub struct ControlApiBearerToken {
     #[serde(skip_serializing)]
     pub token: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token_ref: Option<SecretRef>,
     pub role: ControlApiRole,
     pub actor_id: Option<String>,
 }
@@ -1509,6 +1560,7 @@ impl Default for ControlApiBearerToken {
     fn default() -> Self {
         Self {
             token: String::new(),
+            token_ref: None,
             role: ControlApiRole::Admin,
             actor_id: None,
         }
@@ -1519,6 +1571,10 @@ impl std::fmt::Debug for ControlApiBearerToken {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ControlApiBearerToken")
             .field("token", &"<redacted>")
+            .field(
+                "token_ref",
+                &self.token_ref.as_ref().map(|_| "<configured>"),
+            )
             .field("role", &self.role)
             .field("actor_id", &self.actor_id)
             .finish()
@@ -1610,10 +1666,15 @@ pub struct ControlApi {
 
     pub reload_certs_path: String,
 
-    // Admin credential: never emitted by Serialize (e.g. the /admin/runtime
-    // dump) and redacted in Debug; still accepted on deserialize.
+    // Admin credential: plaintext auth_token is never emitted by Serialize
+    // (e.g. the /admin/runtime dump) and redacted in Debug; still accepted on
+    // deserialize. auth_token_ref carries only a reference, not secret
+    // material, so it is safe to serialize (and must be, so it survives a
+    // config write-back/reload round trip).
     #[serde(skip_serializing)]
     pub auth_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auth_token_ref: Option<SecretRef>,
 
     pub tls: ControlApiTls,
 
@@ -1644,6 +1705,7 @@ impl Default for ControlApi {
             reload_path: "/admin/runtime/reload".to_string(),
             reload_certs_path: "/admin/runtime/reload-certs".to_string(),
             auth_token: None,
+            auth_token_ref: None,
             tls: ControlApiTls::default(),
             auth: ControlApiAuth::default(),
             authorization: ControlApiAuthorization::default(),
@@ -1672,6 +1734,10 @@ impl std::fmt::Debug for ControlApi {
             .field(
                 "auth_token",
                 &self.auth_token.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "auth_token_ref",
+                &self.auth_token_ref.as_ref().map(|_| "<configured>"),
             )
             .field("tls", &self.tls)
             .field("auth", &self.auth)
@@ -1739,7 +1805,8 @@ mod tests {
         ExternalAuth, ForwardedHeaderPolicy, JwtAuth, Listen, LoadBalancing, Log, MetricsEndpoint,
         Performance, PrivilegeDrop, QuotaBackendFailurePolicy, QuotaCounterBackend,
         QuotaEnforcementMode, QuotaLocalFallbackConfig, QuotaPolicyConfig, Resilience, RouteAuth,
-        RoutingTransparency, Tracing, UpstreamHostPolicy, UpstreamTls, Watchdog,
+        RoutingTransparency, SecretProvider, SecretRef, Secrets, Tracing, UpstreamHostPolicy,
+        UpstreamTls, Watchdog,
     };
     use crate::config::CURRENT_CONFIG_VERSION;
 
@@ -2098,6 +2165,76 @@ security:
         assert_eq!(upstream_tls.ca_dir, None);
 
         assert_eq!(ExternalAuth::default_timeout_ms(), 1_000);
+    }
+
+    #[test]
+    fn serde_defaults_for_secret_types_match_type_defaults() {
+        let secrets: Secrets =
+            serde_yaml::from_str("{}").expect("empty secrets config should parse");
+        assert_eq!(secrets, Secrets::default());
+
+        let secret_ref: SecretRef =
+            serde_yaml::from_str("ref: literal:test-secret").expect("secret ref should parse");
+        assert_eq!(secret_ref.reference, "literal:test-secret");
+        assert_eq!(secret_ref.scheme(), Some("literal"));
+
+        let file_provider: SecretProvider =
+            serde_yaml::from_str("kind: file\nbase_dir: /etc/spooky/secrets\n")
+                .expect("file secret provider should parse");
+        assert_eq!(
+            file_provider,
+            SecretProvider::File {
+                base_dir: Some("/etc/spooky/secrets".to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn partial_secret_reference_inputs_parse_into_compatibility_fields() {
+        let jwt: JwtAuth = serde_yaml::from_str(
+            r#"
+secret_ref:
+  ref: file:///etc/spooky/secrets/jwt-signing.key
+"#,
+        )
+        .expect("jwt secret ref should parse");
+        assert!(jwt.secret.is_empty());
+        assert_eq!(
+            jwt.secret_ref
+                .as_ref()
+                .map(|secret_ref| secret_ref.reference.as_str()),
+            Some("file:///etc/spooky/secrets/jwt-signing.key")
+        );
+
+        let control_api: ControlApi = serde_yaml::from_str(
+            r#"
+auth_token_ref:
+  ref: literal:admin-token
+auth:
+  bearer_tokens:
+    - token_ref:
+        ref: file:///etc/spooky/secrets/viewer-token
+      role: viewer
+"#,
+        )
+        .expect("control api secret refs should parse");
+        assert!(control_api.auth_token.is_none());
+        assert_eq!(
+            control_api
+                .auth_token_ref
+                .as_ref()
+                .map(|secret_ref| secret_ref.reference.as_str()),
+            Some("literal:admin-token")
+        );
+        assert_eq!(control_api.auth.bearer_tokens.len(), 1);
+        assert!(control_api.auth.bearer_tokens[0].token.is_empty());
+        assert_eq!(
+            control_api.auth.bearer_tokens[0]
+                .token_ref
+                .as_ref()
+                .map(|secret_ref| secret_ref.reference.as_str()),
+            Some("file:///etc/spooky/secrets/viewer-token")
+        );
     }
 
     #[test]

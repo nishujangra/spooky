@@ -2,12 +2,45 @@
 
 use std::time::Duration;
 
+use rcgen::{Certificate, CertificateParams, SanType};
 use spooky_config::{
-    config::{Listen, LogFormat, Tls},
+    config::{Listen, LogFormat, SecretRef, Tls, UpstreamTls},
     runtime::RuntimeListenerSource,
 };
+use tempfile::tempdir;
 
-use crate::common::{primary_listener_runtime_config, sample_runtime_config_with};
+use crate::common::{
+    api_runtime_upstream, api_upstream_mut, primary_listener_runtime_config,
+    sample_runtime_config_with,
+};
+
+fn write_test_cert(dir: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let mut params = CertificateParams::new(vec!["localhost".into()]);
+    params
+        .subject_alt_names
+        .push(SanType::IpAddress("127.0.0.1".parse().expect("ip")));
+    let cert = Certificate::from_params(params).expect("cert");
+    let path = dir.join(name);
+    std::fs::write(&path, cert.serialize_pem().expect("serialize cert")).expect("write cert");
+    path
+}
+
+fn write_test_key_pair(
+    dir: &std::path::Path,
+    cert_name: &str,
+    key_name: &str,
+) -> (std::path::PathBuf, std::path::PathBuf) {
+    let mut params = CertificateParams::new(vec!["localhost".into()]);
+    params
+        .subject_alt_names
+        .push(SanType::IpAddress("127.0.0.1".parse().expect("ip")));
+    let cert = Certificate::from_params(params).expect("identity");
+    let cert_path = dir.join(cert_name);
+    let key_path = dir.join(key_name);
+    std::fs::write(&cert_path, cert.serialize_pem().expect("serialize cert")).expect("cert");
+    std::fs::write(&key_path, cert.serialize_private_key_pem()).expect("key");
+    (cert_path, key_path)
+}
 
 #[test]
 fn runtime_config_keeps_generation_policies_normalized_and_listener_inputs_raw() {
@@ -176,5 +209,123 @@ fn runtime_config_excludes_log_sink_shape_from_generation_owned_runtime_state() 
     assert_eq!(
         plain_listener.policies.transport,
         json_listener.policies.transport
+    );
+}
+
+#[test]
+fn runtime_config_fingerprints_same_path_upstream_client_tls_material_changes() {
+    let dir = tempdir().expect("tempdir");
+    let ca_path = write_test_cert(dir.path(), "ca.pem");
+    let cert_path = dir.path().join("client-cert.pem");
+    let key_path = dir.path().join("client-key.pem");
+
+    let _ = write_test_key_pair(dir.path(), "client-cert.pem", "client-key.pem");
+    let first_runtime = sample_runtime_config_with(|config| {
+        config.upstream_tls = UpstreamTls {
+            verify_certificates: true,
+            strict_sni: true,
+            ca_file: Some(ca_path.to_string_lossy().to_string()),
+            ca_dir: None,
+            client_certificate: None,
+            client_certificate_ref: Some(SecretRef {
+                reference: format!("file://{}", cert_path.display()),
+            }),
+            client_key: None,
+            client_key_ref: Some(SecretRef {
+                reference: format!("file://{}", key_path.display()),
+            }),
+        };
+    });
+
+    let first_policy = api_runtime_upstream(&first_runtime)
+        .backend_tls_policy()
+        .clone();
+
+    let _ = write_test_key_pair(dir.path(), "client-cert.pem", "client-key.pem");
+    let second_runtime = sample_runtime_config_with(|config| {
+        config.upstream_tls = UpstreamTls {
+            verify_certificates: true,
+            strict_sni: true,
+            ca_file: Some(ca_path.to_string_lossy().to_string()),
+            ca_dir: None,
+            client_certificate: None,
+            client_certificate_ref: Some(SecretRef {
+                reference: format!("file://{}", cert_path.display()),
+            }),
+            client_key: None,
+            client_key_ref: Some(SecretRef {
+                reference: format!("file://{}", key_path.display()),
+            }),
+        };
+    });
+    let second_policy = api_runtime_upstream(&second_runtime)
+        .backend_tls_policy()
+        .clone();
+
+    assert_ne!(
+        first_policy
+            .client_certificate
+            .as_ref()
+            .map(|metadata| metadata.fingerprint_sha256.clone()),
+        second_policy
+            .client_certificate
+            .as_ref()
+            .map(|metadata| metadata.fingerprint_sha256.clone())
+    );
+    assert_ne!(
+        first_policy
+            .client_key
+            .as_ref()
+            .map(|metadata| metadata.fingerprint_sha256.clone()),
+        second_policy
+            .client_key
+            .as_ref()
+            .map(|metadata| metadata.fingerprint_sha256.clone())
+    );
+}
+
+#[test]
+fn runtime_config_fingerprints_same_path_upstream_ca_changes() {
+    let dir = tempdir().expect("tempdir");
+    let ca_path = dir.path().join("ca.pem");
+    std::fs::copy(write_test_cert(dir.path(), "ca-initial.pem"), &ca_path).expect("initial ca");
+
+    let first_runtime = sample_runtime_config_with(|config| {
+        api_upstream_mut(config).tls = Some(UpstreamTls {
+            verify_certificates: true,
+            strict_sni: true,
+            ca_file: Some(ca_path.to_string_lossy().to_string()),
+            ca_dir: None,
+            client_certificate: None,
+            client_certificate_ref: None,
+            client_key: None,
+            client_key_ref: None,
+        });
+    });
+    let first_policy = api_runtime_upstream(&first_runtime)
+        .backend_tls_policy()
+        .clone();
+
+    let next_ca = write_test_cert(dir.path(), "ca-next.pem");
+    std::fs::copy(next_ca, &ca_path).expect("rotated ca");
+    let second_runtime = sample_runtime_config_with(|config| {
+        api_upstream_mut(config).tls = Some(UpstreamTls {
+            verify_certificates: true,
+            strict_sni: true,
+            ca_file: Some(ca_path.to_string_lossy().to_string()),
+            ca_dir: None,
+            client_certificate: None,
+            client_certificate_ref: None,
+            client_key: None,
+            client_key_ref: None,
+        });
+    });
+    let second_policy = api_runtime_upstream(&second_runtime)
+        .backend_tls_policy()
+        .clone();
+
+    assert_ne!(
+        first_policy.ca_file_fingerprint_sha256,
+        second_policy.ca_file_fingerprint_sha256
     );
 }

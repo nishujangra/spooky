@@ -18,3 +18,8 @@ tower-service = "0.3"
 webpki-roots.workspace = true
 spooky-errors = { path = "../errors" }
 spooky-config = { path = "../config" }
+
+[dev-dependencies]
+rcgen = "0.12"
+tempfile = "3"
+tokio-rustls.workspace = true

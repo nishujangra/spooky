@@ -53,10 +53,11 @@ impl OwnedRuntimeState for StartupOwnedRuntimeState {
 /// long-lived services the data plane reaches through the active generation.
 ///
 /// Not every field is equally "shared": the config-derived services
-/// (`listener_tls_store`, `transport_pool`, `metrics`, `backend_lifecycle`,
+/// (`transport_pool`, `metrics`, `backend_lifecycle`,
 /// `backend_resolution_store`) legitimately track the active config and are
-/// rebuilt per generation on reload. The genuinely process-scoped services —
-/// [`Self::watchdog`] and [`Self::backend_dns_resolver`] — carry state that must
+/// rebuilt per generation on reload. The genuinely process-scoped services -
+/// [`Self::listener_tls_store`], [`Self::watchdog`], and
+/// [`Self::backend_dns_resolver`] - carry state that must
 /// survive a reload (an in-flight watchdog restart/drain; the DNS cache) and are
 /// therefore carried forward across generations by [`CarriedProcessSharedServices`]
 /// rather than reconstructed. See `build_shared_state` for how the reload path
@@ -89,6 +90,9 @@ pub struct RuntimeSharedServices {
 /// builder creates fresh instances.
 #[derive(Clone)]
 pub struct CarriedProcessSharedServices {
+    /// The live listener TLS material store, preserving reload-certs state and
+    /// listener identity metadata across generation-only reloads.
+    pub listener_tls_store: Arc<ListenerTlsReloadStore>,
     /// The live watchdog coordinator, preserving any in-flight restart/drain state.
     pub watchdog: Arc<WatchdogCoordinator>,
     /// The live DNS resolver, preserving its cache across the reload.
@@ -99,6 +103,7 @@ impl CarriedProcessSharedServices {
     /// Capture the process-scoped services from the currently active shared state.
     pub fn from_active(shared: &RuntimeSharedServices) -> Self {
         Self {
+            listener_tls_store: Arc::clone(&shared.listener_tls_store),
             watchdog: Arc::clone(&shared.watchdog),
             backend_dns_resolver: shared.backend_dns_resolver.clone(),
         }

@@ -1,5 +1,19 @@
 version: 1
 
+# secrets: optional provider registry for file-backed secret references.
+# Fields ending in `_ref` (e.g. jwt.secret_ref, upstream tls client_certificate_ref)
+# accept a SecretRef instead of a plaintext value. Supported ref schemes today:
+#   literal:<value>          — inline value, kept for compatibility/testing only
+#   file://<absolute-path>   — read secret bytes from a file on disk
+# A `_ref` field and its plaintext sibling (e.g. `secret` and `secret_ref`) are
+# mutually exclusive; setting both fails validation.
+# secrets:
+#   default_provider: local_filesystem
+#   providers:
+#     local_filesystem:
+#       kind: file
+#       base_dir: "/etc/spooky/secrets"
+
 listen:
     protocol: http3
     address: "0.0.0.0"
@@ -70,6 +84,12 @@ upstream:
     #   strict_sni: true
     #   ca_file: certs/private-ca.pem  # optional custom CA bundle for this upstream only
     #   ca_dir: null
+    #   # Upstream mTLS: client certificate and key, provided as a plaintext path
+    #   # or as a file-backed secret reference (mutually exclusive per field).
+    #   client_certificate_ref:
+    #     ref: "file:///etc/spooky/secrets/upstream/payments-client.crt"
+    #   client_key_ref:
+    #     ref: "file:///etc/spooky/secrets/upstream/payments-client.key"
 
     backends:
       - id: "backend1"

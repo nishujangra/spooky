@@ -36,8 +36,8 @@ struct ControlApiRuntimeRollbackPayload {
 }
 
 enum ControlApiActivationError {
-    Response(Response<Full<Bytes>>),
-    Activation(ActivationResult),
+    Response(Box<Response<Full<Bytes>>>),
+    Activation(Box<ActivationResult>),
 }
 
 impl QUICListener {
@@ -59,30 +59,49 @@ impl QUICListener {
         metrics: &Metrics,
     ) -> Response<Full<Bytes>> {
         let mut staged = Vec::with_capacity(listener_runtime_configs.len());
+        let mut failures = Vec::new();
         for (listener_label, listener_config) in listener_runtime_configs {
             let reloaded_state = match Self::build_listener_tls_reload_state(listener_config) {
-                Ok(state) => state,
+                Ok(mut state) => {
+                    state.last_reload_status = "cert_reload_applied".to_string();
+                    state
+                }
                 Err(err) => {
-                    return Self::json_response(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        json!({
-                            "reloaded": false,
-                            "listener": listener_label,
-                            "error": err.to_string(),
-                        }),
-                    );
+                    failures.push(json!({
+                        "listener": listener_label,
+                        "status": "failed",
+                        "reason": "listener_tls_invalid",
+                        "error": err.to_string(),
+                    }));
+                    continue;
                 }
             };
             staged.push((listener_label.clone(), reloaded_state));
         }
 
+        if !failures.is_empty() {
+            metrics.record_control_plane_cert_reload("failed", "cert_reload_failed");
+            metrics.record_secret_reload("listeners", "failed", "cert_reload_failed");
+            return Self::json_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                json!({
+                    "reloaded": false,
+                    "reason": "cert_reload_failed",
+                    "listeners": failures,
+                }),
+            );
+        }
+
         let generations = match listener_tls_store.replace_listeners(&staged) {
             Ok(generations) => generations,
             Err(err) => {
+                metrics.record_control_plane_cert_reload("failed", "cert_reload_failed");
+                metrics.record_secret_reload("listeners", "failed", "cert_reload_failed");
                 return Self::json_response(
                     StatusCode::INTERNAL_SERVER_ERROR,
                     json!({
                         "reloaded": false,
+                        "reason": "cert_reload_failed",
                         "error": err.to_string(),
                     }),
                 );
@@ -90,22 +109,38 @@ impl QUICListener {
         };
 
         let mut reloaded = Vec::with_capacity(staged.len());
+        let mut last_loaded_at_unix_ms = 0u64;
         for (listener_label, reloaded_state) in staged {
             Self::update_listener_tls_expiry_metrics(
                 metrics,
                 &listener_label,
                 &reloaded_state.inventory,
             );
+            last_loaded_at_unix_ms = last_loaded_at_unix_ms.max(reloaded_state.loaded_at_unix_ms);
             reloaded.push(json!({
                 "listener": listener_label,
+                "status": reloaded_state.last_reload_status,
+                "loaded_at_unix_ms": reloaded_state.loaded_at_unix_ms,
                 "generation": generations.get(&listener_label).copied().unwrap_or(0),
+                "default_cert_not_after_unix_seconds": reloaded_state
+                    .inventory
+                    .default_identity
+                    .metadata
+                    .not_after_unix_seconds,
             }));
         }
+        if last_loaded_at_unix_ms > 0 {
+            metrics.set_secret_last_success_unixtime("listeners", last_loaded_at_unix_ms / 1_000);
+        }
+        metrics.record_control_plane_cert_reload("success", "cert_reload_applied");
+        metrics.record_secret_reload("listeners", "success", "cert_reload_applied");
 
         Self::json_response(
             StatusCode::ACCEPTED,
             json!({
                 "reloaded": true,
+                "reason": "cert_reload_applied",
+                "listener_count": reloaded.len(),
                 "listeners": reloaded,
             }),
         )
@@ -149,7 +184,11 @@ impl QUICListener {
             identity.as_ref(),
             request_context.as_ref(),
             AdminAuditEventType::CertReload,
-            AdminAuditAction::CertReloadResult,
+            if succeeded {
+                AdminAuditAction::CertReloadApplied
+            } else {
+                AdminAuditAction::CertReloadResult
+            },
             Self::control_api_audit_target_for_route(ControlApiRoute::ReloadCerts, None),
             AdminAuditGeneration {
                 active_generation,
@@ -202,7 +241,7 @@ impl QUICListener {
                         AdminAuditResult::Failed,
                         Some("invalid_request_body".to_string()),
                     );
-                    return response;
+                    return *response;
                 }
             };
         let activation_request = Self::control_api_activation_request(
@@ -297,7 +336,7 @@ impl QUICListener {
                     AdminAuditResult::Failed,
                     Some("invalid_request_body".to_string()),
                 );
-                return response;
+                return *response;
             }
         };
         let activation_request = Self::control_api_activation_request(
@@ -376,7 +415,7 @@ impl QUICListener {
         .await
         {
             Ok(activation) => Self::json_response(StatusCode::ACCEPTED, activation),
-            Err(ControlApiActivationError::Response(response)) => response,
+            Err(ControlApiActivationError::Response(response)) => *response,
             Err(ControlApiActivationError::Activation(activation)) => Self::json_response(
                 activation_result_status(&activation),
                 activation_error_payload(&activation, activation_error(&activation)),
@@ -419,7 +458,7 @@ impl QUICListener {
                     }),
                 )
             }
-            Err(ControlApiActivationError::Response(response)) => response,
+            Err(ControlApiActivationError::Response(response)) => *response,
             Err(ControlApiActivationError::Activation(activation)) => Self::json_response(
                 legacy_reload_result_status(&activation),
                 legacy_reload_error_payload(&activation, activation_error(&activation)),
@@ -466,7 +505,7 @@ impl QUICListener {
                     }),
                 )
             }
-            Err(ControlApiActivationError::Response(response)) => response,
+            Err(ControlApiActivationError::Response(response)) => *response,
             Err(ControlApiActivationError::Activation(activation)) => Self::json_response(
                 legacy_reload_result_status(&activation),
                 legacy_reload_error_payload(&activation, activation_error(&activation)),
@@ -539,17 +578,19 @@ impl QUICListener {
     ) -> Result<ActivationResult, ControlApiActivationError> {
         let runtime_state = state.current_service_state();
         let Some(runtime_bundle_handle) = runtime_state.runtime_bundle_handle().cloned() else {
-            return Err(ControlApiActivationError::Response(
+            return Err(ControlApiActivationError::Response(Box::new(
                 Self::control_api_not_found_response(),
-            ));
+            )));
         };
         let Some(runtime) = runtime_state.generation.clone() else {
-            return Err(ControlApiActivationError::Response(Self::json_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({
-                    "reloaded": false,
-                    "error": "runtime generation unavailable",
-                }),
+            return Err(ControlApiActivationError::Response(Box::new(
+                Self::json_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    json!({
+                        "reloaded": false,
+                        "error": "runtime generation unavailable",
+                    }),
+                ),
             )));
         };
         let activation_request = Self::control_api_activation_request(
@@ -592,7 +633,7 @@ impl QUICListener {
             request_context.as_ref(),
             event_type,
             result_action,
-            Self::control_api_audit_target_for_route(route, config_path),
+            Self::control_api_audit_target_for_route(route, config_path.clone()),
             AdminAuditGeneration {
                 active_generation: Some(activation.active_generation),
                 candidate_generation: Some(activation.history_entry.generation),
@@ -603,23 +644,37 @@ impl QUICListener {
             } else {
                 AdminAuditResult::Failed
             },
-            Some(
-                activation
-                    .primary_rejection_reason()
-                    .map(|reason| reason.slug().to_string())
-                    .unwrap_or_else(|| activation.outcome_reason().slug().to_string()),
-            ),
+            Some(control_api_activation_reason(&activation)),
         );
+        if let Some((action, result, reason)) = upstream_mtls_material_audit_event(&activation) {
+            Self::emit_control_api_audit_event(
+                &runtime_state.security,
+                identity.as_ref(),
+                request_context.as_ref(),
+                AdminAuditEventType::UpstreamMtlsMaterial,
+                action,
+                Self::control_api_audit_target_for_route(route, config_path),
+                AdminAuditGeneration {
+                    active_generation: Some(activation.active_generation),
+                    candidate_generation: Some(activation.history_entry.generation),
+                    target_generation: activation.activated_generation,
+                },
+                result,
+                Some(reason),
+            );
+        }
         if !activation.succeeded() {
-            return Err(ControlApiActivationError::Activation(activation));
+            return Err(ControlApiActivationError::Activation(Box::new(activation)));
         }
         let Some(generation) = activation.activated_generation else {
-            return Err(ControlApiActivationError::Response(Self::json_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                json!({
-                    "reloaded": false,
-                    "error": "activation succeeded without an activated generation",
-                }),
+            return Err(ControlApiActivationError::Response(Box::new(
+                Self::json_response(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    json!({
+                        "reloaded": false,
+                        "error": "activation succeeded without an activated generation",
+                    }),
+                ),
             )));
         };
         let next_log_level = runtime_bundle_handle
@@ -665,7 +720,7 @@ impl QUICListener {
                         AdminAuditResult::Failed,
                         Some("invalid_request_body".to_string()),
                     );
-                    return response;
+                    return *response;
                 }
             };
         let current_generation = runtime_bundle_handle.current_generation();
@@ -1048,56 +1103,58 @@ impl QUICListener {
 }
 
 impl QUICListener {
-    async fn control_api_json_body<T>(req: Request<Incoming>) -> Result<T, Response<Full<Bytes>>>
+    async fn control_api_json_body<T>(
+        req: Request<Incoming>,
+    ) -> Result<T, Box<Response<Full<Bytes>>>>
     where
         T: DeserializeOwned,
     {
         let body = match req.into_body().collect().await {
             Ok(collected) => collected.to_bytes(),
             Err(err) => {
-                return Err(Self::json_response(
+                return Err(Box::new(Self::json_response(
                     StatusCode::BAD_REQUEST,
                     json!({ "error": format!("invalid request body: {err}") }),
-                ));
+                )));
             }
         };
         if body.is_empty() {
-            return Err(Self::json_response(
+            return Err(Box::new(Self::json_response(
                 StatusCode::BAD_REQUEST,
                 json!({ "error": "request body is required" }),
-            ));
+            )));
         }
         serde_json::from_slice(&body).map_err(|err| {
-            Self::json_response(
+            Box::new(Self::json_response(
                 StatusCode::BAD_REQUEST,
                 json!({ "error": format!("invalid request body: {err}") }),
-            )
+            ))
         })
     }
 
     async fn control_api_json_body_or_default<T>(
         req: Request<Incoming>,
-    ) -> Result<T, Response<Full<Bytes>>>
+    ) -> Result<T, Box<Response<Full<Bytes>>>>
     where
         T: DeserializeOwned + Default,
     {
         let body = match req.into_body().collect().await {
             Ok(collected) => collected.to_bytes(),
             Err(err) => {
-                return Err(Self::json_response(
+                return Err(Box::new(Self::json_response(
                     StatusCode::BAD_REQUEST,
                     json!({ "error": format!("invalid request body: {err}") }),
-                ));
+                )));
             }
         };
         if body.is_empty() {
             return Ok(T::default());
         }
         serde_json::from_slice(&body).map_err(|err| {
-            Self::json_response(
+            Box::new(Self::json_response(
                 StatusCode::BAD_REQUEST,
                 json!({ "error": format!("invalid request body: {err}") }),
-            )
+            ))
         })
     }
 
@@ -1204,6 +1261,7 @@ impl QUICListener {
         let metrics = Arc::clone(&current.shared_services().metrics);
         let outcome = activation.outcome_reason();
         metrics.record_runtime_activation_outcome(outcome);
+        record_control_api_secret_metrics(current.runtime_config(), metrics.as_ref(), activation);
         if let Some(reason) = activation.primary_rejection_reason() {
             metrics.inc_runtime_rejection_reason(reason);
             warn!(
@@ -1284,6 +1342,7 @@ fn activation_error(activation: &ActivationResult) -> &str {
 fn activation_error_payload(activation: &ActivationResult, error: &str) -> serde_json::Value {
     json!({
         "error": error,
+        "reason": control_api_activation_reason(activation),
         "rejection_reason": activation.primary_rejection_reason().map(RuntimeRejectionReason::slug),
         "active_generation": activation.active_generation,
         "candidate_generation": activation.history_entry.generation,
@@ -1297,11 +1356,166 @@ fn legacy_reload_error_payload(activation: &ActivationResult, error: &str) -> se
     json!({
         "reloaded": false,
         "error": error,
+        "reason": control_api_activation_reason(activation),
         "rejection_reason": activation.primary_rejection_reason().map(RuntimeRejectionReason::slug),
         "generation": activation.active_generation,
         "candidate_generation": activation.history_entry.generation,
         "status": activation.status,
     })
+}
+
+fn record_control_api_secret_metrics(
+    runtime_config: &spooky_config::runtime::RuntimeConfig,
+    metrics: &Metrics,
+    activation: &ActivationResult,
+) {
+    let reason = control_api_activation_reason(activation);
+    if activation.succeeded() {
+        if activation
+            .history_entry
+            .diff
+            .entries
+            .iter()
+            .any(|entry| entry.secret_material_changed)
+        {
+            metrics.record_secret_reload("upstreams", "success", &reason);
+            if let Some(last_loaded_at_unix_ms) = runtime_config
+                .upstreams
+                .values()
+                .flat_map(|upstream| {
+                    let policy = upstream.backend_tls_policy();
+                    [
+                        policy
+                            .client_certificate
+                            .as_ref()
+                            .map(|metadata| metadata.loaded_at_unix_ms),
+                        policy
+                            .client_key
+                            .as_ref()
+                            .map(|metadata| metadata.loaded_at_unix_ms),
+                    ]
+                })
+                .flatten()
+                .max()
+            {
+                metrics
+                    .set_secret_last_success_unixtime("upstreams", last_loaded_at_unix_ms / 1_000);
+            }
+        }
+        return;
+    }
+
+    if matches!(
+        classify_upstream_mtls_material_outcome(activation),
+        Some(UpstreamMtlsMaterialOutcome::ResolutionFailed | UpstreamMtlsMaterialOutcome::Invalid)
+    ) {
+        metrics.record_secret_reload("upstreams", "failed", &reason);
+    }
+    if let Some((provider, resolve_reason)) =
+        classify_secret_resolution_failure(activation_error(activation))
+    {
+        metrics.record_secret_resolve(provider, "failed", resolve_reason);
+    }
+}
+
+/// Secret/cert-specific classification of an activation outcome, shared by
+/// the operator-facing reason string and the dedicated audit event. Lets
+/// operators identify secret rotations and failures without parsing
+/// free-text diff summaries.
+enum UpstreamMtlsMaterialOutcome {
+    Changed,
+    ResolutionFailed,
+    Invalid,
+}
+
+impl UpstreamMtlsMaterialOutcome {
+    fn slug(&self) -> &'static str {
+        match self {
+            Self::Changed => "upstream_mtls_material_changed",
+            Self::ResolutionFailed => "secret_resolution_failed",
+            Self::Invalid => "upstream_mtls_material_invalid",
+        }
+    }
+
+    fn audit_action(&self) -> AdminAuditAction {
+        match self {
+            Self::Changed => AdminAuditAction::UpstreamMtlsMaterialChanged,
+            Self::ResolutionFailed => AdminAuditAction::SecretResolutionFailed,
+            Self::Invalid => AdminAuditAction::UpstreamMtlsMaterialInvalid,
+        }
+    }
+}
+
+fn classify_upstream_mtls_material_outcome(
+    activation: &ActivationResult,
+) -> Option<UpstreamMtlsMaterialOutcome> {
+    if activation.succeeded() {
+        return activation
+            .history_entry
+            .diff
+            .entries
+            .iter()
+            .any(|entry| entry.secret_material_changed)
+            .then_some(UpstreamMtlsMaterialOutcome::Changed);
+    }
+
+    let error = activation_error(activation);
+    if error.contains("secret_resolution_failed") || error.contains("secret resolution failed") {
+        return Some(UpstreamMtlsMaterialOutcome::ResolutionFailed);
+    }
+    if error.contains("tls_material_invalid")
+        || error.contains("client_certificate")
+        || error.contains("client_key")
+    {
+        return Some(UpstreamMtlsMaterialOutcome::Invalid);
+    }
+    None
+}
+
+fn classify_secret_resolution_failure(error: &str) -> Option<(&'static str, &str)> {
+    if !error.contains("secret resolution failed") {
+        return None;
+    }
+
+    let provider = if error.contains("file secret resolution failed") {
+        "file"
+    } else if error.contains("literal secret resolution failed") {
+        "literal"
+    } else {
+        "unknown"
+    };
+    let reason = error.rsplit_once(':').map(|(_, reason)| reason.trim())?;
+    if reason.is_empty() {
+        None
+    } else {
+        Some((provider, reason))
+    }
+}
+
+/// Emits a dedicated, precisely-typed audit event when this activation
+/// touched secret-backed upstream TLS material (client cert/key, CA bundle),
+/// alongside the generic runtime-activation audit event.
+fn upstream_mtls_material_audit_event(
+    activation: &ActivationResult,
+) -> Option<(AdminAuditAction, AdminAuditResult, String)> {
+    let outcome = classify_upstream_mtls_material_outcome(activation)?;
+    let result = if activation.succeeded() {
+        AdminAuditResult::Success
+    } else {
+        AdminAuditResult::Failed
+    };
+    Some((outcome.audit_action(), result, outcome.slug().to_string()))
+}
+
+fn control_api_activation_reason(activation: &ActivationResult) -> String {
+    if let Some(outcome) = classify_upstream_mtls_material_outcome(activation) {
+        return outcome.slug().to_string();
+    }
+
+    activation
+        .primary_rejection_reason()
+        .map(|reason| reason.slug().to_string())
+        .unwrap_or_else(|| activation.outcome_reason().slug().to_string())
 }
 
 fn legacy_reload_result_status(activation: &ActivationResult) -> StatusCode {

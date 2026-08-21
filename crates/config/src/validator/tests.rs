@@ -10,7 +10,7 @@ use crate::config::{
     ExternalAuthFailureMode, ExternalAuthRequestHeader, HealthCheck, JwtAlgorithm, JwtAuth,
     JwtVerificationKey, Listen, LoadBalancing, Log, LogFormat, MetricsEndpoint, Observability,
     Performance, Resilience, RouteAuth, RouteMatch, ScopedRateLimit, ScopedRateLimitScope,
-    Security, Tls, TlsCertificate, Tracing, Upstream, UpstreamTls,
+    SecretRef, Security, Tls, TlsCertificate, Tracing, Upstream, UpstreamTls,
 };
 
 fn write_test_certs(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
@@ -83,6 +83,7 @@ fn base_config(cert: &str, key: &str) -> Config {
             key: None,
         }),
         upstream_tls: UpstreamTls::default(),
+        secrets: Default::default(),
         log: Log {
             level: "info".to_string(),
             file: Default::default(),
@@ -908,6 +909,10 @@ fn skips_unused_per_upstream_tls_validation_for_http_only_backends() {
         strict_sni: true,
         ca_file: Some("/path/does/not/exist.pem".to_string()),
         ca_dir: Some("/path/does/not/exist".to_string()),
+        client_certificate: None,
+        client_certificate_ref: None,
+        client_key: None,
+        client_key_ref: None,
     });
     cfg.upstream
         .get_mut("test_upstream")
@@ -1008,6 +1013,7 @@ fn accepts_control_api_with_bearer_tokens_and_no_legacy_auth_token() {
     cfg.observability.control_api.auth_token = None;
     cfg.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
         token: "viewer-token".to_string(),
+        token_ref: None,
         role: ControlApiRole::Viewer,
         actor_id: Some("viewer".to_string()),
     }];
@@ -1629,6 +1635,7 @@ fn accepts_oidc_external_auth() {
         issuer_url: Some("https://issuer.example.com".to_string()),
         client_id: "edge-gateway".to_string(),
         client_secret: Some("secret-1".to_string()),
+        client_secret_ref: None,
         audience: Some("spooky-api".to_string()),
         scopes: vec!["openid".to_string(), "profile".to_string()],
         request_headers: Vec::new(),
@@ -1655,6 +1662,7 @@ fn rejects_oidc_external_auth_without_discovery_or_issuer() {
         issuer_url: None,
         client_id: "edge-gateway".to_string(),
         client_secret: Some("secret-1".to_string()),
+        client_secret_ref: None,
         audience: Some("spooky-api".to_string()),
         scopes: vec!["openid".to_string()],
         request_headers: Vec::new(),
@@ -1683,6 +1691,7 @@ fn rejects_oidc_external_auth_with_empty_client_secret() {
         issuer_url: Some("https://issuer.example.com".to_string()),
         client_id: "edge-gateway".to_string(),
         client_secret: Some("   ".to_string()),
+        client_secret_ref: None,
         audience: Some("spooky-api".to_string()),
         scopes: vec!["openid".to_string()],
         request_headers: Vec::new(),
@@ -1711,6 +1720,7 @@ fn rejects_oidc_external_auth_with_empty_scope() {
         issuer_url: Some("https://issuer.example.com".to_string()),
         client_id: "edge-gateway".to_string(),
         client_secret: Some("secret-1".to_string()),
+        client_secret_ref: None,
         audience: Some("spooky-api".to_string()),
         scopes: vec!["openid".to_string(), "   ".to_string()],
         request_headers: Vec::new(),
@@ -1791,6 +1801,7 @@ fn rejects_oidc_external_auth_with_empty_discovery_url() {
         issuer_url: None,
         client_id: "edge-gateway".to_string(),
         client_secret: Some("secret-1".to_string()),
+        client_secret_ref: None,
         audience: Some("spooky-api".to_string()),
         scopes: vec!["openid".to_string()],
         request_headers: Vec::new(),
@@ -1840,6 +1851,7 @@ fn rejects_oidc_external_auth_with_non_https_discovery_url() {
         issuer_url: Some("https://issuer.example.com".to_string()),
         client_id: "edge-gateway".to_string(),
         client_secret: Some("secret-1".to_string()),
+        client_secret_ref: None,
         audience: Some("spooky-api".to_string()),
         scopes: vec!["openid".to_string()],
         request_headers: Vec::new(),
@@ -1868,6 +1880,7 @@ fn rejects_oidc_external_auth_with_response_header_allowlist() {
         issuer_url: Some("https://issuer.example.com".to_string()),
         client_id: "edge-gateway".to_string(),
         client_secret: Some("secret-1".to_string()),
+        client_secret_ref: None,
         audience: Some("spooky-api".to_string()),
         scopes: vec!["openid".to_string()],
         request_headers: Vec::new(),
@@ -1903,6 +1916,147 @@ fn rejects_external_auth_with_rbac_requirements_in_v1() {
     };
 
     assert!(validate(&cfg).is_err());
+}
+
+#[test]
+fn accepts_upstream_jwt_secret_ref_without_plaintext_secret() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.upstream
+        .get_mut("test_upstream")
+        .expect("upstream")
+        .auth
+        .jwt = Some(JwtAuth {
+        secret: String::new(),
+        secret_ref: Some(SecretRef {
+            reference: "literal:jwt-secret".to_string(),
+        }),
+        ..JwtAuth::default()
+    });
+
+    assert!(validate(&cfg).is_ok());
+}
+
+#[test]
+fn rejects_upstream_jwt_with_plaintext_secret_and_secret_ref_together() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.upstream
+        .get_mut("test_upstream")
+        .expect("upstream")
+        .auth
+        .jwt = Some(JwtAuth {
+        secret: "jwt-secret".to_string(),
+        secret_ref: Some(SecretRef {
+            reference: "literal:jwt-secret".to_string(),
+        }),
+        ..JwtAuth::default()
+    });
+
+    let err = validate(&cfg).expect_err("jwt secret source conflict must fail");
+    assert_eq!(
+        err.to_string(),
+        "upstream 'test_upstream' auth.jwt.secret and upstream 'test_upstream' auth.jwt.secret_ref cannot both be set"
+    );
+}
+
+#[test]
+fn rejects_secret_ref_with_unsupported_scheme() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.upstream
+        .get_mut("test_upstream")
+        .expect("upstream")
+        .auth
+        .jwt = Some(JwtAuth {
+        secret: String::new(),
+        secret_ref: Some(SecretRef {
+            reference: "env:JWT_SECRET".to_string(),
+        }),
+        ..JwtAuth::default()
+    });
+
+    let err = validate(&cfg).expect_err("unsupported secret scheme must fail");
+    assert_eq!(
+        err.to_string(),
+        "upstream 'test_upstream' auth.jwt.secret_ref.ref uses unsupported secret scheme 'env'; supported schemes are literal and file"
+    );
+}
+
+#[test]
+fn accepts_control_api_bearer_token_ref_without_plaintext_token() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.observability.control_api.enabled = true;
+    cfg.observability.control_api.auth_token = None;
+    cfg.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
+        token: String::new(),
+        token_ref: Some(SecretRef {
+            reference: "file:///etc/spooky/secrets/viewer.token".to_string(),
+        }),
+        role: ControlApiRole::Viewer,
+        actor_id: Some("viewer".to_string()),
+    }];
+
+    assert!(validate(&cfg).is_ok());
+}
+
+#[test]
+fn rejects_control_api_bearer_token_with_plaintext_and_ref_together() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.observability.control_api.enabled = true;
+    cfg.observability.control_api.auth_token = None;
+    cfg.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
+        token: "viewer-token".to_string(),
+        token_ref: Some(SecretRef {
+            reference: "literal:viewer-token".to_string(),
+        }),
+        role: ControlApiRole::Viewer,
+        actor_id: Some("viewer".to_string()),
+    }];
+
+    let err = validate(&cfg).expect_err("control api token source conflict must fail");
+    assert_eq!(
+        err.to_string(),
+        "observability.control_api.auth.bearer_tokens[0].token and observability.control_api.auth.bearer_tokens[0].token_ref cannot both be set"
+    );
+}
+
+#[test]
+fn rejects_upstream_tls_partial_client_mtls_pair() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.upstream.get_mut("test_upstream").expect("upstream").tls = Some(UpstreamTls {
+        verify_certificates: true,
+        strict_sni: true,
+        ca_file: None,
+        ca_dir: None,
+        client_certificate: None,
+        client_certificate_ref: Some(SecretRef {
+            reference: "file:///etc/spooky/secrets/client.crt".to_string(),
+        }),
+        client_key: None,
+        client_key_ref: None,
+    });
+
+    let err = validate(&cfg).expect_err("partial upstream mTLS pair must fail");
+    assert_eq!(
+        err.to_string(),
+        "upstream['test_upstream'].tls.client_certificate and upstream['test_upstream'].tls.client_key must be configured as a complete mTLS pair"
+    );
 }
 
 #[test]

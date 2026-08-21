@@ -8,29 +8,39 @@ use std::{collections::HashMap, fmt, net::IpAddr};
 
 use crate::config::{
     Backend, ClientAuth, Config, ForwardedHeaderPolicy, Listen, Observability, Performance,
-    ProtocolPolicy, Resilience, Security, TlsCertificate, Upstream, UpstreamHostPolicy,
+    ProtocolPolicy, Resilience, Secrets, Security, TlsCertificate, Upstream, UpstreamHostPolicy,
     UpstreamHostPolicyMode, UpstreamTls,
 };
 
 mod listeners;
 mod policies;
+mod secrets;
 mod upstreams;
 
-pub use self::policies::{
-    RuntimeAdmissionPolicy, RuntimeAlternateBackendPolicy, RuntimeApiKeyAuth, RuntimeAuthPolicy,
-    RuntimeBackendAddressKind, RuntimeBackendConnectionPolicy, RuntimeBackendDnsPolicy,
-    RuntimeBackendEndpoint, RuntimeBackendHealthCheck, RuntimeBackendTlsPolicy,
-    RuntimeBackendTransportKind, RuntimeBrownoutPolicy, RuntimeCircuitBreakerPolicy,
-    RuntimeConnectionLimits, RuntimeExternalAuth, RuntimeExternalAuthFailureMode,
-    RuntimeExternalAuthRequestHeader, RuntimeHedgingPolicy, RuntimeJwtAuth,
-    RuntimeJwtVerificationKey, RuntimeListenerPolicySet, RuntimeLoadBalancingPolicy,
-    RuntimeLoadBalancingStrategy, RuntimePolicySet, RuntimeQuotaBackendFailurePolicy,
-    RuntimeQuotaCounterBackend, RuntimeQuotaEnforcementMode, RuntimeQuotaLocalFallback,
-    RuntimeQuotaPolicy, RuntimeQuotaPolicySet, RuntimeQuotaSelectorDimension,
-    RuntimeQuotaSelectorMatcher, RuntimeQuotaWindow, RuntimeRateLimitPolicy, RuntimeRequestKeySpec,
-    RuntimeRetryBudgetPolicy, RuntimeRouteHostPattern, RuntimeRouteMatchPolicy,
-    RuntimeRouteQueuePolicy, RuntimeScopedRateLimitPolicy, RuntimeTimeoutPolicy,
-    RuntimeTransportPolicy, RuntimeWatchdogPolicy,
+pub use self::{
+    policies::{
+        RuntimeAdmissionPolicy, RuntimeAlternateBackendPolicy, RuntimeApiKeyAuth,
+        RuntimeAuthPolicy, RuntimeBackendAddressKind, RuntimeBackendConnectionPolicy,
+        RuntimeBackendDnsPolicy, RuntimeBackendEndpoint, RuntimeBackendHealthCheck,
+        RuntimeBackendTlsPolicy, RuntimeBackendTransportKind, RuntimeBrownoutPolicy,
+        RuntimeCircuitBreakerPolicy, RuntimeConnectionLimits, RuntimeExternalAuth,
+        RuntimeExternalAuthFailureMode, RuntimeExternalAuthRequestHeader, RuntimeHedgingPolicy,
+        RuntimeJwtAuth, RuntimeJwtVerificationKey, RuntimeListenerPolicySet,
+        RuntimeLoadBalancingPolicy, RuntimeLoadBalancingStrategy, RuntimePolicySet,
+        RuntimeQuotaBackendFailurePolicy, RuntimeQuotaCounterBackend, RuntimeQuotaEnforcementMode,
+        RuntimeQuotaLocalFallback, RuntimeQuotaPolicy, RuntimeQuotaPolicySet,
+        RuntimeQuotaSelectorDimension, RuntimeQuotaSelectorMatcher, RuntimeQuotaWindow,
+        RuntimeRateLimitPolicy, RuntimeRequestKeySpec, RuntimeRetryBudgetPolicy,
+        RuntimeRouteHostPattern, RuntimeRouteMatchPolicy, RuntimeRouteQueuePolicy,
+        RuntimeScopedRateLimitPolicy, RuntimeTimeoutPolicy, RuntimeTransportPolicy,
+        RuntimeWatchdogPolicy,
+    },
+    secrets::{
+        FilesystemSecretProvider, LiteralSecretProvider, RuntimeResolvedSecret,
+        RuntimeResolvedSecretMetadata, RuntimeSecretProvider, RuntimeSecretResolutionError,
+        RuntimeSecretResolutionErrorKind, RuntimeSecretResolver, RuntimeSecretSourceKind,
+        resolve_config_secrets, resolve_file_secret_path,
+    },
 };
 
 #[derive(Debug, Clone)]
@@ -38,6 +48,7 @@ pub struct RuntimeConfig {
     pub version: u32,
     pub listeners: Vec<RuntimeListener>,
     pub upstreams: HashMap<String, RuntimeUpstream>,
+    pub secrets: Secrets,
     pub policies: RuntimePolicySet,
     pub performance: Performance,
     pub observability: Observability,
@@ -47,16 +58,18 @@ pub struct RuntimeConfig {
 
 impl RuntimeConfig {
     pub fn from_config(config: &Config) -> Result<Self, RuntimeConfigError> {
-        let policies = RuntimePolicySet::from_config(config)?;
+        let resolved_config = resolve_config_secrets(config)?;
+        let policies = RuntimePolicySet::from_config(&resolved_config)?;
         Ok(Self {
-            version: config.version,
-            listeners: listeners::runtime_listeners(config)?,
-            upstreams: upstreams::normalize_upstreams(config, &policies)?,
+            version: resolved_config.version,
+            listeners: listeners::runtime_listeners(&resolved_config)?,
+            upstreams: upstreams::normalize_upstreams(&resolved_config, &policies)?,
+            secrets: resolved_config.secrets.clone(),
             policies,
-            performance: config.performance.clone(),
-            observability: config.observability.clone(),
-            resilience: config.resilience.clone(),
-            security: config.security.clone(),
+            performance: resolved_config.performance.clone(),
+            observability: resolved_config.observability.clone(),
+            resilience: resolved_config.resilience.clone(),
+            security: resolved_config.security.clone(),
         })
     }
 
@@ -98,6 +111,7 @@ impl RuntimeConfig {
 pub enum RuntimeConfigError {
     ConfigInvalid(String),
     TlsMaterialInvalid(String),
+    SecretResolutionFailed(String),
     BackendAddressInvalid {
         upstream: String,
         backend: String,
@@ -125,6 +139,7 @@ impl RuntimeConfigError {
         match self {
             Self::ConfigInvalid(_) => "config_invalid",
             Self::TlsMaterialInvalid(_) => "tls_material_invalid",
+            Self::SecretResolutionFailed(_) => "secret_resolution_failed",
             Self::BackendAddressInvalid { .. } => "backend_address_invalid",
             Self::DuplicateRouteAmbiguity { .. } => "duplicate_route_ambiguity",
             Self::ListenerBindConflict { .. } => "listener_bind_conflict",
@@ -138,6 +153,7 @@ impl fmt::Display for RuntimeConfigError {
         match self {
             Self::ConfigInvalid(message)
             | Self::TlsMaterialInvalid(message)
+            | Self::SecretResolutionFailed(message)
             | Self::UnsupportedPolicyCombination(message) => {
                 write!(f, "{}: {}", self.category(), message)
             }
@@ -307,6 +323,7 @@ mod tests {
             upstream: HashMap::new(),
             load_balancing: None,
             upstream_tls: UpstreamTls::default(),
+            secrets: Default::default(),
             log: crate::config::Log::default(),
             performance: Performance::default(),
             observability: Observability::default(),
@@ -349,6 +366,13 @@ mod tests {
 
     #[test]
     fn runtime_upstream_carries_canonical_lb_auth_and_tls_shapes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let ca = rcgen::generate_simple_self_signed(vec!["upstream-ca".to_string()])
+            .expect("build upstream ca");
+        let ca_path = dir.path().join("upstream-ca.pem");
+        std::fs::write(&ca_path, ca.serialize_pem().expect("serialize upstream ca"))
+            .expect("write upstream ca");
+
         let mut config = sample_config();
         let upstream = config.upstream.get_mut("api").expect("api upstream");
         upstream.load_balancing = LoadBalancing {
@@ -362,8 +386,12 @@ mod tests {
         upstream.tls = Some(UpstreamTls {
             verify_certificates: false,
             strict_sni: false,
-            ca_file: Some("/tmp/upstream-ca.pem".to_string()),
+            ca_file: Some(ca_path.to_string_lossy().to_string()),
             ca_dir: None,
+            client_certificate: None,
+            client_certificate_ref: None,
+            client_key: None,
+            client_key_ref: None,
         });
         config.resilience.scoped_rate_limits = vec![crate::config::ScopedRateLimit {
             name: "client-default".to_string(),
@@ -393,7 +421,7 @@ mod tests {
         );
         assert_eq!(
             api.backend_tls_policy().ca_file.as_deref(),
-            Some("/tmp/upstream-ca.pem")
+            Some(ca_path.to_string_lossy().as_ref())
         );
         assert_eq!(
             runtime.policies.transport.backend_connections.max_inflight,

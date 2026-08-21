@@ -213,6 +213,7 @@ fn make_config_with_upstreams(
             key: None,
         }),
         upstream_tls: UpstreamTls::default(),
+        secrets: Default::default(),
         log: Log {
             level: "info".to_string(),
             file: Default::default(),

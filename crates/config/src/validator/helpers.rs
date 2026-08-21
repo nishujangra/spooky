@@ -101,6 +101,48 @@ pub(super) fn validate_upstream_tls(field_prefix: &str, tls: &UpstreamTls) -> bo
         }
     }
 
+    if !super::validate_secret_source_exclusivity(
+        tls.client_certificate
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()),
+        tls.client_certificate_ref.as_ref(),
+        &format!("{}.client_certificate", field_prefix),
+        &format!("{}.client_certificate_ref", field_prefix),
+    ) {
+        return false;
+    }
+
+    if !super::validate_secret_source_exclusivity(
+        tls.client_key
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()),
+        tls.client_key_ref.as_ref(),
+        &format!("{}.client_key", field_prefix),
+        &format!("{}.client_key_ref", field_prefix),
+    ) {
+        return false;
+    }
+
+    let has_client_certificate = tls
+        .client_certificate
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        || tls.client_certificate_ref.is_some();
+    let has_client_key = tls
+        .client_key
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        || tls.client_key_ref.is_some();
+
+    if has_client_certificate != has_client_key {
+        validation_error!(
+            "{}.client_certificate and {}.client_key must be configured as a complete mTLS pair",
+            field_prefix,
+            field_prefix
+        );
+        return false;
+    }
+
     true
 }
 

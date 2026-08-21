@@ -43,7 +43,10 @@ use tokio::{
 };
 use tokio_rustls::{
     TlsAcceptor, TlsConnector,
-    rustls::{ClientConfig, RootCertStore, ServerConfig, pki_types::ServerName},
+    rustls::{
+        ClientConfig, RootCertStore, ServerConfig, pki_types::ServerName,
+        server::WebPkiClientVerifier,
+    },
 };
 
 use super::{base_quic_test_config, static_full_response};
@@ -254,6 +257,28 @@ impl QuicRequestPathHarness {
         let fixture = self.rt.block_on(start_h2_backend(
             &self.tls.cert_path,
             &self.tls.key_path,
+            handler,
+        ));
+        let addr = fixture.addr;
+        self.backends.push(fixture);
+        addr
+    }
+
+    pub fn start_h2_backend_with_client_auth<F, Fut>(
+        &mut self,
+        cert_path: &str,
+        key_path: &str,
+        client_ca_path: &str,
+        handler: F,
+    ) -> SocketAddr
+    where
+        F: Fn(Request<Incoming>) -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = Result<Response<Full<Bytes>>, Infallible>> + Send + 'static,
+    {
+        let fixture = self.rt.block_on(start_h2_backend_with_client_auth(
+            cert_path,
+            key_path,
+            client_ca_path,
             handler,
         ));
         let addr = fixture.addr;
@@ -1241,6 +1266,66 @@ where
 {
     let mut tls_config = ServerConfig::builder()
         .with_no_client_auth()
+        .with_single_cert(read_test_chain(cert_path), read_test_key(key_path))
+        .expect("server tls config");
+    tls_config.alpn_protocols = vec![b"h2".to_vec()];
+    let acceptor = TlsAcceptor::from(Arc::new(tls_config));
+
+    let listener = bind_tcp_listener();
+    let addr = listener.local_addr().expect("h2 local addr");
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_flag = Arc::clone(&stop);
+    let handler = Arc::new(handler);
+
+    let accept_task = tokio::spawn(async move {
+        while !stop_flag.load(Ordering::Relaxed) {
+            let (stream, _) = match listener.accept().await {
+                Ok(value) => value,
+                Err(_) => break,
+            };
+            let acceptor = acceptor.clone();
+            let handler = Arc::clone(&handler);
+            tokio::spawn(async move {
+                let tls_stream = match acceptor.accept(stream).await {
+                    Ok(stream) => stream,
+                    Err(_) => return,
+                };
+                let service = service_fn(move |req: Request<Incoming>| {
+                    let handler = Arc::clone(&handler);
+                    async move { handler(req).await }
+                });
+
+                let _ = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
+                    .serve_connection(TokioIo::new(tls_stream), service)
+                    .await;
+            });
+        }
+    });
+
+    BackendFixture {
+        addr,
+        stop,
+        accept_task,
+    }
+}
+
+pub async fn start_h2_backend_with_client_auth<F, Fut>(
+    cert_path: &str,
+    key_path: &str,
+    client_ca_path: &str,
+    handler: F,
+) -> BackendFixture
+where
+    F: Fn(Request<Incoming>) -> Fut + Send + Sync + 'static,
+    Fut: Future<Output = Result<Response<Full<Bytes>>, Infallible>> + Send + 'static,
+{
+    let verifier = WebPkiClientVerifier::builder(Arc::new(
+        read_test_root_store(client_ca_path).expect("client auth root store"),
+    ))
+    .build()
+    .expect("client verifier");
+    let mut tls_config = ServerConfig::builder()
+        .with_client_cert_verifier(verifier)
         .with_single_cert(read_test_chain(cert_path), read_test_key(key_path))
         .expect("server tls config");
     tls_config.alpn_protocols = vec![b"h2".to_vec()];

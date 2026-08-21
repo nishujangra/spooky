@@ -24,6 +24,17 @@ listen:
 #       cert: "/etc/spooky/certs/internal-fullchain.pem"
 #       key: "/etc/spooky/certs/internal-privkey.pem"
 
+# secrets: file-backed secret provider used by *_ref fields below (JWT secret_ref,
+# OIDC client_secret_ref, control-plane auth_token_ref, upstream mTLS cert/key refs).
+# Prefer *_ref fields over plaintext in production; plaintext siblings remain
+# supported for compatibility but are considered lower-assurance.
+secrets:
+  default_provider: local_filesystem
+  providers:
+    local_filesystem:
+      kind: file
+      base_dir: "/etc/spooky/secrets"
+
 upstream_tls:
   verify_certificates: true
   strict_sni: true
@@ -39,6 +50,14 @@ upstream:
       # host: "origin.example.com"  # required when mode: rewrite
     forwarded_headers:
       mode: append         # append | preserve | overwrite
+    # tls: optional per-upstream mTLS; enable if this backend requires client certs.
+    # tls:
+    #   verify_certificates: true
+    #   strict_sni: true
+    #   client_certificate_ref:
+    #     ref: "file:///etc/spooky/secrets/upstream/default-client.crt"
+    #   client_key_ref:
+    #     ref: "file:///etc/spooky/secrets/upstream/default-client.key"
     backends:
       - id: "backend1"
         address: "backend.internal.example:8443" # verified HTTPS by default (no scheme needed)
@@ -67,6 +86,12 @@ observability:
         mode: required
         ca_file: "/etc/spooky/pki/admin-ca.pem"
     auth:
+      # Prefer file-backed refs over inline bearer tokens in production.
+      # bearer_tokens:
+      #   - token_ref:
+      #       ref: "file:///etc/spooky/secrets/control-api/operator-token"
+      #     role: operator
+      #     actor_id: "ops-automation"
       bearer_tokens:
         - token: "replace-with-operator-token"
           role: operator

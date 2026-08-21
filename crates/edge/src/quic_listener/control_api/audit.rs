@@ -103,6 +103,9 @@ pub(in crate::quic_listener) enum AdminAuditEventType {
     RuntimeRollback,
     RuntimeRestart,
     CertReload,
+    /// Upstream secret-backed TLS material (client cert/key, CA bundle)
+    /// changed and was applied through generation activation.
+    UpstreamMtlsMaterial,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
@@ -165,6 +168,14 @@ pub(in crate::quic_listener) enum AdminAuditAction {
     CertReloadAttempt,
     #[serde(rename = "cert_reload.result")]
     CertReloadResult,
+    #[serde(rename = "cert_reload_applied")]
+    CertReloadApplied,
+    #[serde(rename = "secret_resolution_failed")]
+    SecretResolutionFailed,
+    #[serde(rename = "upstream_mtls_material_changed")]
+    UpstreamMtlsMaterialChanged,
+    #[serde(rename = "upstream_mtls_material_invalid")]
+    UpstreamMtlsMaterialInvalid,
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
@@ -478,7 +489,10 @@ impl QUICListener {
             | AdminAuditEventType::RuntimePreview
             | AdminAuditEventType::RuntimeReload
             | AdminAuditEventType::RuntimeActivate
-            | AdminAuditEventType::RuntimeRollback => Some(AdminAuditFailureClass::RuntimeConfig),
+            | AdminAuditEventType::RuntimeRollback
+            | AdminAuditEventType::UpstreamMtlsMaterial => {
+                Some(AdminAuditFailureClass::RuntimeConfig)
+            }
             AdminAuditEventType::RuntimeRestart => Some(AdminAuditFailureClass::Watchdog),
             AdminAuditEventType::CertReload => Some(AdminAuditFailureClass::ListenerTls),
         }

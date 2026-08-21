@@ -9,7 +9,8 @@ use bytes::Bytes;
 use http_body_util::Full;
 use hyper::Response;
 use spooky_config::config::{
-    ClientAuth, Config, Listen, LoadBalancing, Log, LogFormat, Security, Tls, Upstream, UpstreamTls,
+    ClientAuth, Config, Listen, LoadBalancing, Log, LogFormat, Secrets, Security, Tls, Upstream,
+    UpstreamTls,
 };
 
 pub(crate) mod backend_lifecycle;
@@ -44,6 +45,7 @@ pub(super) fn base_quic_test_config(
             key: None,
         }),
         upstream_tls: UpstreamTls::default(),
+        secrets: Secrets::default(),
         log: Log {
             level: "info".to_string(),
             file: Default::default(),
