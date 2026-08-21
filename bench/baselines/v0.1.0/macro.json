@@ -1,5 +1,5 @@
 {
-  "suite": "spooky-performance-regression",
+  "suite": "impulse-performance-regression",
   "report_kind": "macro",
   "profile": "ci",
   "generated_unix_secs": 1776230398,

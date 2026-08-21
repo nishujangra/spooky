@@ -1,5 +1,5 @@
 {
-  "suite": "spooky-cpu-memory-regression",
+  "suite": "impulse-cpu-memory-regression",
   "generated_unix_secs": 1773680186,
   "cpu_threshold": 0.4,
   "mem_threshold": 0.2,
