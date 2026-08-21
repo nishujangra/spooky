@@ -1475,7 +1475,7 @@
 <li>Verify the active generation and runtime history.</li>
 <li>Watch latency, backend health, overload, quota, and auth outcomes before expanding rollout.</li>
 </ol>
-<h3 id="certificate-only-change">Certificate-only change</h3>
+<h3 id="certificate-only-change-listener">Certificate-only change (listener)</h3>
 <ol>
 <li>Write new cert material with correct permissions.</li>
 <li>Verify expiry and SAN coverage.</li>
@@ -1483,6 +1483,8 @@
 <li>Confirm new handshakes present the new certificate.</li>
 <li>Keep the previous cert material until verification is complete.</li>
 </ol>
+<h3 id="upstream-client-certificate-or-ca-rotation">Upstream client certificate or CA rotation</h3>
+<p>Upstream mTLS client cert/key and upstream CA changes are generation-owned, not <code>reload-certs</code>-scoped. Use the runtime-managed config change workflow above (<code>validate</code> → <code>preview</code> → <code>activate</code>). See <a href="../secret-and-cert-rotation/">Secret and Certificate Rotation</a> for the full flow, overlap strategy for CA transitions, and rollback caveats.</p>
 <h3 id="restart-required-change-or-binary-upgrade">Restart-required change or binary upgrade</h3>
 <ol>
 <li>Remove or drain one node from traffic.</li>
@@ -2153,10 +2155,16 @@
             Runtime-managed config change
         </a>
         
-        <a href="#certificate-only-change"
+        <a href="#certificate-only-change-listener"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#certificate-only-change');">
-            Certificate-only change
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#certificate-only-change-listener');">
+            Certificate-only change (listener)
+        </a>
+        
+        <a href="#upstream-client-certificate-or-ca-rotation"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#upstream-client-certificate-or-ca-rotation');">
+            Upstream client certificate or CA rotation
         </a>
         
         <a href="#restart-required-change-or-binary-upgrade"

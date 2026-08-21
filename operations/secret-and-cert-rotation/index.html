@@ -18,7 +18,7 @@
     
 
 
-<title>Reload and drain</title>
+<title>Secret and cert rotation</title>
 
 
 
@@ -28,18 +28,18 @@
 
 
 
-<link rel="canonical" href="https://supernova-labs-org.github.io/spooky/operations/reload-and-drain/">
+<link rel="canonical" href="https://supernova-labs-org.github.io/spooky/operations/secret-and-cert-rotation/">
 
 
 <!-- Open Graph (Facebook, LinkedIn) -->
 
-<meta property="og:title" content="Reload and drain">
+<meta property="og:title" content="Secret and cert rotation">
 
 
 
 
 
-<meta property="og:url" content="https://supernova-labs-org.github.io/spooky/operations/reload-and-drain/">
+<meta property="og:url" content="https://supernova-labs-org.github.io/spooky/operations/secret-and-cert-rotation/">
 
 
 
@@ -48,7 +48,7 @@
 
 <!-- Twitter Card -->
 
-<meta name="twitter:title" content="Reload and drain">
+<meta name="twitter:title" content="Secret and cert rotation">
 
 
 
@@ -1398,7 +1398,7 @@
     <div class="flex flex-col gap-2">
       <div id="page-header" class="flex items-start justify-between">
         <h1 class="scroll-m-20 text-4xl font-semibold tracking-tight sm:text-3xl xl:text-4xl">
-          Reload and drain
+          Secret and cert rotation
         </h1>
 
         <div class="flex items-center gap-2 pt-1.5">
@@ -1428,157 +1428,198 @@
     </div>
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
-    <p>This document explains which changes activate live, which changes require a restart, and what operators should expect from reload, rollback, cert reload, and drain workflows.</p>
-<h2 id="core-rule">Core Rule</h2>
-<p>Spooky does not patch runtime state in place. It prepares a complete next runtime generation and swaps it atomically when the change is compatible.</p>
-<p>That means:</p>
-<ul>
-<li>readers observe complete generations, not partial mutation</li>
-<li>in-flight requests continue on the generation they started with</li>
-<li>rejected activations leave the active generation unchanged</li>
-</ul>
-<h2 id="preferred-runtime-change-workflow">Preferred Runtime Change Workflow</h2>
-<p>For normal runtime-managed changes, use the staged Control API flow:</p>
+    <p>This page is the operator runbook for rotating listener certificates, upstream client certificates, and upstream CA trust material, and for reasoning about secret-backed config in general.</p>
+<p>Read <a href="../reload-and-drain/">Reload and Drain</a> first if you have not already — this page assumes you understand the generation model and the difference between <code>reload-certs</code> and generation activation.</p>
+<h2 id="which-path-applies">Which Path Applies</h2>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Material</th>
+<th>Path</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Downstream listener cert/key, listener client-auth CA</td>
+<td><code>POST /admin/runtime/reload-certs</code></td>
+<td>Listener-scoped hot swap; does not touch runtime generation</td>
+</tr>
+<tr>
+<td>Upstream client certificate/key (mTLS)</td>
+<td><code>validate</code> → <code>preview</code> → <code>activate</code></td>
+<td>Generation-owned; rebuilds the affected backend connection pool</td>
+</tr>
+<tr>
+<td>Upstream CA bundle (<code>ca_file</code>/<code>ca_dir</code>)</td>
+<td><code>validate</code> → <code>preview</code> → <code>activate</code></td>
+<td>Generation-owned; same reasoning as client cert/key</td>
+</tr>
+<tr>
+<td><code>secrets.providers</code> registry shape</td>
+<td><code>validate</code> → <code>preview</code> → <code>activate</code></td>
+<td>Generation-owned config, not a listener concern</td>
+</tr>
+</tbody>
+</table></div>
+<p>Upstream TLS material is never rotated through <code>reload-certs</code>, even when the change is "just a certificate." <code>reload-certs</code> is intentionally narrow: it only reloads listener identity and listener client-auth trust material for new downstream handshakes. Upstream client identity and upstream trust roots always go through the normal activation path so the change gets a diff, a generation number, and rollback semantics.</p>
+<h2 id="secret-references">Secret References</h2>
+<p>Prefer file-backed secret references over plaintext values for anything sensitive:</p>
+<pre><code class="language-yaml">secrets:
+  default_provider: local_filesystem
+  providers:
+    local_filesystem:
+      kind: file
+      base_dir: &quot;/etc/spooky/secrets&quot;
+
+upstream:
+  payments:
+    tls:
+      client_certificate_ref:
+        ref: &quot;file:///etc/spooky/secrets/upstream/payments-client.crt&quot;
+      client_key_ref:
+        ref: &quot;file:///etc/spooky/secrets/upstream/payments-client.key&quot;
+</code></pre>
+<p>A <code>_ref</code> field and its plaintext sibling (<code>client_certificate</code> / <code>client_certificate_ref</code>, <code>client_key</code> / <code>client_key_ref</code>, <code>secret</code> / <code>secret_ref</code>, <code>client_secret</code> / <code>client_secret_ref</code>, <code>auth_token</code> / <code>auth_token_ref</code>, <code>token</code> / <code>token_ref</code>) are mutually exclusive — setting both fails validation. Supported ref schemes are <code>literal:&lt;value&gt;</code> and <code>file://&lt;path&gt;</code>.</p>
+<p>Secret references resolve <strong>eagerly during activation</strong>, not lazily on first request. A missing file, unreadable file, empty file, or malformed PEM fails <code>validate</code>/<code>activate</code> before the candidate generation goes live — it never reaches request-serving code.</p>
+<h2 id="downstream-listener-certificate-rotation">Downstream Listener Certificate Rotation</h2>
 <ol>
-<li><code>POST /admin/runtime/validate</code>
-   Confirms whether the candidate config can be activated and reports rejected domains.</li>
-<li><code>POST /admin/runtime/preview</code>
-   Produces the same planning result, but records the attempt in operator history.</li>
-<li><code>POST /admin/runtime/activate</code>
-   Commits the compatible candidate generation.</li>
-<li><code>GET /admin/runtime/history</code>
-   Confirms the active generation and retains a rollback target.</li>
+<li>Replace the cert/key files on disk. Prefer an atomic rename into place — see <a href="#secret-file-replacement-safety">Secret File Replacement Safety</a> below.</li>
+<li>Call:</li>
 </ol>
-<p>Use <code>expected_generation</code> on activation so concurrent changes fail with <code>409</code> instead of silently overwriting each other.</p>
-<h2 id="what-activates-live">What Activates Live</h2>
-<p>Live activation is the normal path for runtime-managed domains such as:</p>
-<ul>
-<li>routes and upstream definitions</li>
-<li>backend sets and backend weights</li>
-<li>load-balancing policy</li>
-<li>admission, overload, retry, hedge, and quota policy</li>
-<li>runtime timeout and transport policy</li>
-<li><code>log.level</code></li>
-</ul>
-<p>After a successful activation:</p>
-<ul>
-<li>new requests use the new generation immediately</li>
-<li>existing requests continue on the previous generation until they complete or are otherwise terminated by normal request-path behavior</li>
-</ul>
-<h2 id="what-requires-restart">What Requires Restart</h2>
-<p>Some changes are restart-required because they affect startup-owned or separately bound service domains.</p>
-<p>Plan a drain-aware restart or node replacement for changes such as:</p>
-<ul>
-<li>listener removal</li>
-<li>listener bind-address or port changes</li>
-<li>control-plane or metrics bind changes</li>
-<li>logging sink settings such as log format or file output</li>
-<li>tracing startup configuration</li>
-<li>control-plane thread-count changes</li>
-</ul>
-<p>These changes should be rejected during activation planning, not partially applied.</p>
-<h2 id="legacy-runtime-reload-shortcut">Legacy Runtime Reload Shortcut</h2>
-<p><code>POST /admin/runtime/reload</code> still exists, but it is a compatibility shortcut.</p>
-<p>Use it only when:</p>
-<ul>
-<li>you intentionally want a direct apply path</li>
-<li>you do not need the fuller staged diff and rejection reporting from <code>activate</code></li>
-</ul>
-<p>For production automation, prefer <code>validate</code> plus <code>activate</code>.</p>
-<h2 id="certificate-reload">Certificate Reload</h2>
-<p><code>POST /admin/runtime/reload-certs</code> is only for listener TLS material and related trust material used by new downstream handshakes.</p>
-<p>It does not:</p>
-<ul>
-<li>rebuild the full runtime generation</li>
-<li>mutate route or policy state</li>
-<li>change existing live sessions</li>
-</ul>
-<p>Use it for certificate rotation when only the cert or trust material changed.</p>
-<p>Upstream client certificates, upstream CA bundles, and other secret-backed upstream TLS material are never rotated through <code>reload-certs</code> — they are generation-owned and go through <code>validate</code>/<code>preview</code>/<code>activate</code> instead. See <a href="../secret-and-cert-rotation/">Secret and Certificate Rotation</a> for the full rotation and rollback runbook.</p>
-<h2 id="rollback">Rollback</h2>
-<p>Rollback restores a previously retained runtime generation through <code>POST /admin/runtime/rollback</code>.</p>
-<p>Operator rules:</p>
-<ul>
-<li>choose a target from <code>GET /admin/runtime/history</code></li>
-<li>confirm <code>rollback_candidate: true</code></li>
-<li>pass <code>expected_active_generation</code></li>
-<li>treat rollback as a first-class production workflow, not as a last-minute improvisation</li>
-</ul>
-<p>Retained generations are bounded. Do not assume very old generations are still available.</p>
-<h2 id="drain-semantics">Drain Semantics</h2>
-<p>Drain is the controlled path for stopping admission of new useful work while allowing existing work to finish when possible.</p>
-<p>At a high level:</p>
-<ul>
-<li>the listener enters draining mode</li>
-<li>new connection or request admission is reduced or stopped according to lifecycle behavior</li>
-<li>in-flight work is given time to finish</li>
-<li>when the drain timeout is reached, remaining work is force-closed</li>
-</ul>
-<p>Drain is distinct from activation:</p>
-<ul>
-<li>activation swaps runtime generations</li>
-<li>drain moves the process toward restart or shutdown</li>
-</ul>
-<h2 id="restart-workflow">Restart Workflow</h2>
-<p>A restart can be operator-initiated or watchdog-initiated, but operators should expect the same high-level lifecycle:</p>
+<p><code>bash
+   curl -k --http1.1 -X POST https://127.0.0.1:9902/admin/runtime/reload-certs \
+     -H "Authorization: Bearer &lt;token&gt;"</code></p>
+<p>The path is whatever <code>observability.control_api.reload_certs_path</code> is configured to (default <code>/admin/runtime/reload-certs</code>).
+3. Confirm the new cert in the runtime snapshot: <code>GET /admin/runtime</code> → <code>tls.listeners.&lt;listener&gt;</code> shows an updated <code>generation</code>, <code>last_loaded_at_unix_ms</code>, and <code>default_cert_not_after_unix_seconds</code>.
+4. Confirm <code>spooky_control_plane_cert_reload_total{result="success"}</code> incremented and downstream cert-expiry metrics reflect the new material.</p>
+<p>This does not rebuild the runtime generation, mutate route/policy state, or affect already-negotiated sessions — only new handshakes see the new certificate.</p>
+<h2 id="upstream-client-certificate-rotation-mtls">Upstream Client Certificate Rotation (mTLS)</h2>
 <ol>
-<li>restart is requested</li>
-<li>the runtime enters draining mode</li>
-<li>workers drain or the configured drain grace elapses</li>
-<li>the process or node completes the restart workflow</li>
+<li>Write the new client cert/key to the staged secret path (atomic rename — see below).</li>
+<li>Run the staged activation flow against the config, using the same reference (if rotating in place at the same path) or a new reference (if introducing a new path):</li>
 </ol>
-<p>Use restart for:</p>
+<p>```bash
+   curl -k --http1.1 -X POST https://127.0.0.1:9902/admin/runtime/validate \
+     -H "Authorization: Bearer <token>" -H "content-type: application/json" \
+     -d '{"requested_by":"ops","reason":"rotate payments client cert"}'</p>
+<p>curl -k --http1.1 -X POST https://127.0.0.1:9902/admin/runtime/activate \
+     -H "Authorization: Bearer <token>" -H "content-type: application/json" \
+     -d '{"expected_generation":<current>,"requested_by":"ops","reason":"rotate payments client cert"}'
+   ```</p>
+<ol>
+<li>Confirm the generation changed: <code>GET /admin/runtime/history</code> shows a new <code>entries</code> record, and its diff includes a <code>backend_policies</code> domain entry with <code>secret_material_changed: true</code>.</li>
+<li>Confirm the connection pool rebuilt rather than mutated in place — a client identity change always produces a new pool instance for that backend, never a live in-place swap.</li>
+<li>Confirm upstream mTLS handshakes succeed against the rotated identity, and <code>spooky_upstream_tls_failure_total</code> is not climbing for that upstream/backend pair.</li>
+</ol>
+<p><strong>Same-path rotation is detected.</strong> If the file at the same <code>file://</code> reference path changes content, activation recomputes the fingerprint and the diff still reports <code>secret_material_changed: true</code> even though the reference string itself did not change — you do not need to introduce a new reference to force detection.</p>
+<h2 id="upstream-ca-rotation">Upstream CA Rotation</h2>
+<p>Upstream CA rotation (<code>ca_file</code> / <code>ca_dir</code>) follows the exact same <code>validate</code> → <code>preview</code> → <code>activate</code> flow as client certificate rotation, since it is also generation-owned, not <code>reload-certs</code>-scoped.</p>
+<p>For safe overlap during a CA transition:</p>
+<ol>
+<li>Stage the new CA alongside the old one — either append the new CA to the existing <code>ca_file</code> bundle, or add it as an additional file in <code>ca_dir</code> (all PEM files in the directory are trusted).</li>
+<li>Activate with both CAs trusted. Confirm upstream connections still succeed against backends serving certs from either CA.</li>
+<li>Once all backends have rotated to certs signed by the new CA, remove the old CA and activate again.</li>
+<li>Roll back (see below) if backend handshakes start failing at any step — do not proceed to the next step under active failures.</li>
+</ol>
+<p>Do not remove the old CA in the same activation that introduces the new one unless you have already confirmed every backend has rotated — that removes your rollback safety margin.</p>
+<h2 id="secret-file-replacement-safety">Secret File Replacement Safety</h2>
+<p>Prefer an atomic rename into place over in-place truncate-and-write for any file a <code>file://</code> secret reference points at:</p>
+<pre><code class="language-bash"># Write to a temp file in the same directory, then rename atomically.
+install -m 0640 payments-client.crt.new /etc/spooky/secrets/upstream/payments-client.crt
+</code></pre>
+<p><code>install</code>, <code>mv</code> within the same filesystem, or an equivalent atomic rename avoids a window where a reader observes a partially-written file. Truncate-and-write can produce a transient empty or malformed file that activation reads as <code>EmptySecret</code> or <code>MalformedPemCertificate</code> even though the final content would have been fine — an atomic rename avoids that window entirely.</p>
+<h2 id="rollback-expectations">Rollback Expectations</h2>
+<p>Runtime rollback (<code>POST /admin/runtime/rollback</code>) restores a previously retained <strong>runtime generation view</strong> — the resolved policy state Spooky held for that generation. It does not, and cannot, restore external secret files.</p>
+<p>Concretely:</p>
 <ul>
-<li>binary upgrades</li>
-<li>restart-required config changes</li>
-<li>controlled maintenance windows</li>
+<li>if you roll back to a generation that referenced <code>file:///etc/spooky/secrets/upstream/payments-client.crt</code>, and that file has since been deleted or overwritten, the rollback will re-resolve the reference against whatever is on disk <strong>now</strong>, not what was on disk when that generation was originally active.</li>
+<li>a rollback that re-reads a now-missing or now-different secret file can fail activation, or silently activate with different material than the original generation had, if the fingerprint at rollback time doesn't match what was recorded historically.</li>
+<li>do not treat retained runtime history as a backup of secret material. If you need to guarantee exact secret-content recovery, that is a secret-file backup/versioning problem, separate from runtime generation retention.</li>
 </ul>
-<h2 id="what-operators-should-verify">What Operators Should Verify</h2>
-<p>After activation:</p>
-<ul>
-<li>the active generation changed as expected</li>
-<li>runtime history recorded the action</li>
-<li>the diff matches the intended change</li>
-<li>route, backend, quota, and overload metrics still look healthy</li>
-</ul>
-<p>After cert reload:</p>
-<ul>
-<li>new handshakes present the expected certificate</li>
-<li>certificate-expiry and handshake dashboards stay healthy</li>
-</ul>
-<p>During drain:</p>
-<ul>
-<li>readiness state reflects the transition</li>
-<li>worker drain progresses</li>
-<li>drain duration stays within the configured budget</li>
-<li>remaining traffic is handled by other healthy instances</li>
-</ul>
-<h2 id="failure-expectations">Failure Expectations</h2>
-<p>If activation fails:</p>
-<ul>
-<li>the active generation remains unchanged</li>
-<li>the rejection should identify the incompatible or invalid domain</li>
-<li>operators should correct the config or use a restart path if the change is restart-required</li>
-</ul>
-<p>If rollback fails:</p>
-<ul>
-<li>inspect retained-generation history first</li>
-<li>confirm the target still has a retained bundle</li>
-<li>confirm the active generation did not move unexpectedly</li>
-</ul>
-<p>If drain times out:</p>
-<ul>
-<li>remaining connections are closed</li>
-<li>the workflow should still complete rather than hanging indefinitely</li>
-<li>treat repeated drain timeout as a signal to inspect long-lived streams, drain budget, and restart policy</li>
-</ul>
+<p>Before relying on rollback as your recovery path for a bad secret rotation, confirm the previous secret file content is still present and unchanged on disk.</p>
+<h2 id="failure-handling">Failure Handling</h2>
+<p>When a secret or cert rotation does not behave as expected, inspect in this order:</p>
+<ol>
+<li><strong><code>GET /admin/runtime</code></strong> — check <code>tls.listeners</code>, <code>tls.upstreams</code>, and <code>secrets.material</code> for the affected scope. Each material item reports <code>source_kind</code>, a sanitized <code>reference</code>, <code>fingerprint</code>, <code>last_loaded_at_unix_ms</code>, <code>last_reload_status</code>, and (for certificates) <code>expiry_not_after_unix_seconds</code>. None of these ever include raw secret bytes.</li>
+<li><strong><code>GET /admin/runtime/history</code></strong> — confirm whether the activation attempt succeeded, and read the <code>rejected_changes</code> detail if it did not. A rejected activation leaves the active generation unchanged.</li>
+<li><strong>Audit logs</strong> — look for these action values:</li>
+</ol>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Action</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cert_reload_applied</code></td>
+<td>listener cert reload succeeded</td>
+</tr>
+<tr>
+<td><code>secret_resolution_failed</code></td>
+<td>a secret reference failed to resolve during activation (missing file, bad permissions, malformed PEM, etc.)</td>
+</tr>
+<tr>
+<td><code>upstream_mtls_material_changed</code></td>
+<td>an activation changed upstream client cert/key or CA fingerprint</td>
+</tr>
+<tr>
+<td><code>upstream_mtls_material_invalid</code></td>
+<td>an activation was rejected because upstream TLS material was invalid</td>
+</tr>
+</tbody>
+</table></div>
+<ol>
+<li><strong>TLS and secret metrics</strong>:</li>
+</ol>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Metric</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>spooky_secret_reload_total{scope,result,reason}</code></td>
+<td>reload attempts by scope (<code>listeners</code>/<code>upstreams</code>) and outcome</td>
+</tr>
+<tr>
+<td><code>spooky_secret_resolve_total{provider,result,reason}</code></td>
+<td>resolution attempts by provider and outcome</td>
+</tr>
+<tr>
+<td><code>spooky_secret_last_success_unixtime{scope}</code></td>
+<td>staleness — how long since the last successful resolve for a scope</td>
+</tr>
+<tr>
+<td><code>spooky_upstream_tls_failure_total{upstream,backend,phase,reason}</code></td>
+<td>live TLS/mTLS handshake failures against a rotated or misconfigured identity, by request phase</td>
+</tr>
+<tr>
+<td><code>spooky_upstream_client_certificate_not_after_seconds{upstream}</code></td>
+<td>absolute expiry timestamp per upstream</td>
+</tr>
+<tr>
+<td><code>spooky_upstream_client_certificate_days_remaining{upstream}</code></td>
+<td>days-remaining gauge for alerting ahead of expiry</td>
+</tr>
+<tr>
+<td><code>spooky_control_plane_cert_reload_total{result,reason}</code></td>
+<td>listener cert reload outcomes</td>
+</tr>
+</tbody>
+</table></div>
+<p>None of the control-plane JSON, audit events, or metrics expose secret contents, private key bytes, or full provider URIs that could leak credentials — only sanitized scope, source kind, fingerprint, and timing/status metadata.</p>
 <h2 id="related-pages">Related Pages</h2>
 <ul>
-<li><a href="../../deployment/production/">Production Deployment</a></li>
-<li><a href="../production-readiness/">Production Readiness</a></li>
+<li><a href="../reload-and-drain/">Reload and Drain</a></li>
 <li><a href="../runbook/">Runbook</a></li>
-<li><a href="../secret-and-cert-rotation/">Secret and Certificate Rotation</a></li>
 <li><a href="../../reference/control-api-reference/">Control API Reference</a></li>
+<li><a href="../../configuration/tls/">TLS Configuration</a></li>
+<li><a href="../../reference/metrics-reference/">Metrics Reference</a></li>
 </ul>
   </div>
   
@@ -2010,90 +2051,66 @@
         
         
         
-        <a href="#core-rule"
+        <a href="#which-path-applies"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#core-rule');">
-            Core Rule
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#which-path-applies');">
+            Which Path Applies
         </a>
         
 
         
-        <a href="#preferred-runtime-change-workflow"
+        <a href="#secret-references"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#preferred-runtime-change-workflow');">
-            Preferred Runtime Change Workflow
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#secret-references');">
+            Secret References
         </a>
         
 
         
-        <a href="#what-activates-live"
+        <a href="#downstream-listener-certificate-rotation"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#what-activates-live');">
-            What Activates Live
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#downstream-listener-certificate-rotation');">
+            Downstream Listener Certificate Rotation
         </a>
         
 
         
-        <a href="#what-requires-restart"
+        <a href="#upstream-client-certificate-rotation-mtls"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#what-requires-restart');">
-            What Requires Restart
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#upstream-client-certificate-rotation-mtls');">
+            Upstream Client Certificate Rotation (mTLS)
         </a>
         
 
         
-        <a href="#legacy-runtime-reload-shortcut"
+        <a href="#upstream-ca-rotation"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#legacy-runtime-reload-shortcut');">
-            Legacy Runtime Reload Shortcut
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#upstream-ca-rotation');">
+            Upstream CA Rotation
         </a>
         
 
         
-        <a href="#certificate-reload"
+        <a href="#secret-file-replacement-safety"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#certificate-reload');">
-            Certificate Reload
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#secret-file-replacement-safety');">
+            Secret File Replacement Safety
         </a>
         
 
         
-        <a href="#rollback"
+        <a href="#rollback-expectations"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#rollback');">
-            Rollback
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#rollback-expectations');">
+            Rollback Expectations
         </a>
         
 
         
-        <a href="#drain-semantics"
+        <a href="#failure-handling"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#drain-semantics');">
-            Drain Semantics
-        </a>
-        
-
-        
-        <a href="#restart-workflow"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#restart-workflow');">
-            Restart Workflow
-        </a>
-        
-
-        
-        <a href="#what-operators-should-verify"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#what-operators-should-verify');">
-            What Operators Should Verify
-        </a>
-        
-
-        
-        <a href="#failure-expectations"
-            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
-            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#failure-expectations');">
-            Failure Expectations
+            data-active="false" data-depth="2" onClick="deferSetActiveTocLink('#failure-handling');">
+            Failure Handling
         </a>
         
 
