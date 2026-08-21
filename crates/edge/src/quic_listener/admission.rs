@@ -1,5 +1,15 @@
-#[allow(unused_imports)]
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
+#[cfg(test)]
+use std::{collections::VecDeque, sync::Mutex};
+use std::{
+    collections::{HashMap, HashSet},
+    convert::Infallible,
+    future::Future,
+    net::SocketAddr,
+    sync::{Arc, OnceLock, RwLock, Weak},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
+
+use base64::{Engine as _engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use boring::{
     bn::BigNum,
     ec::{EcGroup, EcKey},
@@ -28,16 +38,6 @@ use spooky_config::{
     runtime::{RuntimeConfig, RuntimeJwtAuth, RuntimeJwtVerificationKey, RuntimeUpstreamPolicy},
 };
 use spooky_lb::upstream_pool::UpstreamPool;
-#[cfg(test)]
-use std::{collections::VecDeque, sync::Mutex};
-use std::{
-    collections::{HashMap, HashSet},
-    convert::Infallible,
-    future::Future,
-    net::SocketAddr,
-    sync::{Arc, OnceLock, RwLock, Weak},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
 use subtle::ConstantTimeEq;
 use tokio::{
     runtime::RuntimeFlavor,
@@ -594,7 +594,7 @@ where
         return match handle.runtime_flavor() {
             RuntimeFlavor::MultiThread => Some(block_in_place(|| handle.block_on(future))),
             RuntimeFlavor::CurrentThread => None,
-            _ => None,
+            _engine => None,
         };
     }
 
