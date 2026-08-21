@@ -1,6 +1,6 @@
-## Contributing to Spooky
+## Contributing to Impulse
 
-Spooky is an HTTP/3 edge proxy in Rust. It terminates QUIC at the
+Impulse is an HTTP/3 edge proxy in Rust. It terminates QUIC at the
 edge and forwards to HTTP/2 backends.
 
 ### Setup

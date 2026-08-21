@@ -1,10 +1,10 @@
 # Overview
 
-This section is the fastest path to understanding Spooky, getting it running, and sending first traffic successfully.
+This section is the fastest path to understanding Impulse, getting it running, and sending first traffic successfully.
 
 Use this section when you need to answer:
 
-- what Spooky is
+- what Impulse is
 - how to install it
 - how to run it locally or in a container
 - what a minimum safe production posture looks like
@@ -17,13 +17,13 @@ Use this section when you need to answer:
 - Want the smallest production checklist: [Minimum Production](minimum-production.md)
 - Need exact config keys and defaults: [Configuration Reference](../configuration/reference.md)
 
-## What Spooky Is
+## What Impulse Is
 
-Spooky is an HTTP/3 edge runtime and load balancer. It terminates QUIC at the edge, accepts compatibility traffic for HTTP/1.1 and HTTP/2 clients, and forwards requests to existing upstream services through its canonical request, routing, policy, and transport pipeline.
+Impulse is an HTTP/3 edge runtime and load balancer. It terminates QUIC at the edge, accepts compatibility traffic for HTTP/1.1 and HTTP/2 clients, and forwards requests to existing upstream services through its canonical request, routing, policy, and transport pipeline.
 
-## What Spooky Does
+## What Impulse Does
 
-Spooky is built to:
+Impulse is built to:
 
 - terminate QUIC connections with TLS 1.3
 - convert HTTP/3 streams into upstream requests
@@ -33,7 +33,7 @@ Spooky is built to:
 ## Architecture
 
 ```
-HTTP/3 Client → QUIC/TLS → Spooky Edge → HTTP/2 → Backend Servers
+HTTP/3 Client → QUIC/TLS → Impulse Edge → HTTP/2 → Backend Servers
 ```
 
 **Core Components:**
@@ -102,7 +102,7 @@ make certs-selfsigned
 
 ## Configuration Example
 
-Spooky uses YAML configuration with validation at startup:
+Impulse uses YAML configuration with validation at startup:
 
 ```yaml
 version: 1
@@ -155,7 +155,7 @@ curl --http3-only -k \
 
 ## Project Status
 
-**Spooky is in beta.** Core features are implemented and functional, and the project is suitable for controlled production rollout. The project is still pre-GA, so expect continued hardening and targeted breaking changes where needed.
+**Impulse is in beta.** Core features are implemented and functional, and the project is suitable for controlled production rollout. The project is still pre-GA, so expect continued hardening and targeted breaking changes where needed.
 
 Currently working:
 
@@ -173,5 +173,5 @@ See [Release Maturity](../release-maturity.md) for beta scope and GA promotion c
 - [Configuration Reference](../configuration/reference.md) - exact configuration schema and defaults
 - [TLS Setup](../configuration/tls.md) - certificate generation and trust configuration
 - [Production Deployment](../deployment/production.md) - deployment and rollout guidance
-- [Operations Overview](../operations/overview.md) - where to go once you are ready to operate Spooky
+- [Operations Overview](../operations/overview.md) - where to go once you are ready to operate Impulse
 - [Troubleshooting](../troubleshooting/common-issues.md) - common failure signatures and checks

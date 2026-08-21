@@ -1,5 +1,5 @@
-site_name: Spooky
-site_description: HTTP/3 edge proxy and load balancer
+site_name: Impulse
+site_description: Impulse is an HTTP/3 edge proxy and load balancer
 site_url: https://supernova-labs-org.github.io/spooky/
 repo_url: https://github.com/Supernova-Labs-Org/spooky
 repo_name: Supernova-Labs-Org/spooky
@@ -81,7 +81,7 @@ nav:
       - How-To Overview: howto/README.md
       - Certificates How-To: howto/01-certificates.md
       - Configuration How-To: howto/02-configuration.md
-      - Run Spooky: howto/03-run.md
+      - Run Impulse: howto/03-run.md
       - Load Balancing Guide: user-guide/load-balancing.md
       - Changelog: changelog.md
   - Protocols:

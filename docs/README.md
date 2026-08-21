@@ -1,6 +1,6 @@
-Spooky is a modern edge runtime for high-trust APIs. This documentation set is organized so readers can quickly answer five questions:
+Impulse is a modern edge runtime for high-trust APIs. This documentation set is organized so readers can quickly answer five questions:
 
-- what Spooky is
+- what Impulse is
 - where to start
 - where to deploy and operate it
 - where to troubleshoot issues
@@ -13,7 +13,7 @@ Spooky is a modern edge runtime for high-trust APIs. This documentation set is o
 | Goal | Go to |
 | --- | --- |
 | Understand the product | [README](../README.md) and [Getting Started Overview](getting-started/overview.md) |
-| Install and run Spooky | [Getting Started](getting-started/overview.md) |
+| Install and run Impulse | [Getting Started](getting-started/overview.md) |
 | Prepare for deployment | [Operations Overview](operations/overview.md) and [Production Deployment](deployment/production.md) |
 | Troubleshoot issues | [Common Issues](troubleshooting/common-issues.md) and [Runbook](operations/runbook.md) |
 | Find exact supported behavior | [Reference Overview](reference/overview.md) |

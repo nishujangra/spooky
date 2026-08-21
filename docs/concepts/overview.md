@@ -1,6 +1,6 @@
 # Concepts Overview
 
-Use this section to understand what Spooky is, where it is strong today, and how its major runtime pieces fit together.
+Use this section to understand what Impulse is, where it is strong today, and how its major runtime pieces fit together.
 
 ## Start Here
 
