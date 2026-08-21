@@ -50,7 +50,7 @@
 //! | `PoolPoisoned` | `pool_poisoned` | yes |
 //!
 //! Health-failure *class* (distinct axis, control-API `health_reason` +
-//! `spooky_health_failures_total{reason}`): `5xx`, `timeout`, `transport`,
+//! `impulse_health_failures_total{reason}`): `5xx`, `timeout`, `transport`,
 //! `tls`, `circuit_open`. Refresh *classification* (distinct axis): `refreshed`,
 //! `unchanged`, `rejected_empty_answer`, `failed_active_preserved`.
 //!
@@ -121,7 +121,7 @@
 //! | `Unavailable` | `unavailable` |
 //! | `Error` | `error` |
 //!
-//! Overload cause ([`AdmissionOverloadCause`], the `spooky_overload_shed_by_reason_total{reason}`
+//! Overload cause ([`AdmissionOverloadCause`], the `impulse_overload_shed_by_reason_total{reason}`
 //! label): `brownout`, `adaptive_admission`, `route_cap`, `route_global_cap`,
 //! `global_inflight`, `upstream_inflight`, `backend_inflight`, `circuit_open`,
 //! `request_buffer_cap`, `response_prebuffer_cap`, `connection_cap`.
@@ -147,7 +147,7 @@
 //!   canonical `admission denied: …` / `upstream failure: …` schemas.
 //! - `Backend <addr> became healthy/unhealthy` → `backend health transition:
 //!   backend=<addr> health_reason=…`.
-//! - Metric series names (`spooky_*`) are unchanged; only label *values* are now
+//! - Metric series names (`impulse_*`) are unchanged; only label *values* are now
 //!   canonical enum slugs.
 
 use std::fmt;
@@ -617,10 +617,10 @@ pub struct MetricReasonLabels<'a> {
 //   - a RICHER SUBTYPE → mapped to the coarse canonical reason (the extra detail
 //     stays available as the local enum for debug/telemetry).
 // The QUIC-datapath terminal enums (edge-local) and the retry/hedge enums
-// (spooky_errors) are mapped here; `OverloadShedReason::canonical()` lives with
+// (impulse_errors) are mapped here; `OverloadShedReason::canonical()` lives with
 // that enum. These impls are the single source that keeps the surfaces aligned.
 
-use spooky_errors::{HedgePolicyDenialReason, RetryPolicyDenialReason, UpstreamRetryReason};
+use impulse_errors::{HedgePolicyDenialReason, RetryPolicyDenialReason, UpstreamRetryReason};
 
 use crate::runtime::connection::stream::{BackendFailureReason, RejectionReason, TimeoutReason};
 
@@ -1485,7 +1485,7 @@ mod tests {
 
         #[test]
         fn retry_and_hedge_denials_map_to_canonical_reasons() {
-            use spooky_errors::{
+            use impulse_errors::{
                 HedgePolicyDenialReason, RetryPolicyDenialReason, UpstreamRetryReason,
             };
             assert_eq!(
@@ -1510,7 +1510,7 @@ mod tests {
             );
             assert_eq!(
                 RetryDecisionReason::from(RetryPolicyDenialReason::AlternateBackendUnavailable(
-                    spooky_lb::alternate_backend::AlternateBackendFailureReason::NoHealthyBackends
+                    impulse_lb::alternate_backend::AlternateBackendFailureReason::NoHealthyBackends
                 )),
                 RetryDecisionReason::RetryPolicyDisabled
             );
@@ -1524,7 +1524,7 @@ mod tests {
             );
             assert_eq!(
                 HedgeDecisionReason::from(HedgePolicyDenialReason::AlternateBackendUnavailable(
-                    spooky_lb::alternate_backend::AlternateBackendFailureReason::NoHealthyBackends
+                    impulse_lb::alternate_backend::AlternateBackendFailureReason::NoHealthyBackends
                 )),
                 HedgeDecisionReason::AlternateBackendUnavailable
             );
@@ -1557,7 +1557,7 @@ mod tests {
 
         #[test]
         fn retry_and_outcome_mappings_stay_aligned_but_distinct_by_failure_class() {
-            use spooky_errors::{
+            use impulse_errors::{
                 RetryPolicyDenialReason, UpstreamRetryReason, UpstreamTerminalErrorKind,
             };
 

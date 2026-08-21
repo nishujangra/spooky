@@ -22,11 +22,11 @@ use tokio::net::TcpListener;
 
 mod support;
 
-use spooky_config::config::{
+use impulse_config::config::{
     Backend, ClientAuth, Config, ExternalAuth, ExternalAuthFailureMode, ExternalAuthRequestHeader,
     HealthCheck, Listen, LoadBalancing, Log, LogFormat, Security, Tls, UpstreamTls,
 };
-use spooky_edge::{
+use impulse_edge::{
     MAX_DATAGRAM_SIZE_BYTES, MAX_UDP_PAYLOAD_BYTES, QUIC_IDLE_TIMEOUT_MS, QUIC_INITIAL_MAX_DATA,
     QUIC_INITIAL_MAX_STREAMS_BIDI, QUIC_INITIAL_MAX_STREAMS_UNI, QUIC_INITIAL_STREAM_DATA,
     runtime::listener::QUICListener,
@@ -55,7 +55,7 @@ fn write_test_certs(dir: &TempDir) -> (String, String) {
 fn make_config(port: u32, cert: String, key: String, backend_address: String) -> Config {
     use std::collections::HashMap;
 
-    use spooky_config::config::{RouteMatch, Upstream};
+    use impulse_config::config::{RouteMatch, Upstream};
 
     let mut upstream = HashMap::new();
     upstream.insert(
@@ -115,9 +115,9 @@ fn make_config(port: u32, cert: String, key: String, backend_address: String) ->
             file: Default::default(),
             format: LogFormat::Plain,
         },
-        performance: spooky_config::config::Performance::default(),
-        observability: spooky_config::config::Observability::default(),
-        resilience: spooky_config::config::Resilience::default(),
+        performance: impulse_config::config::Performance::default(),
+        observability: impulse_config::config::Observability::default(),
+        resilience: impulse_config::config::Resilience::default(),
         security: Security::default(),
     }
 }
@@ -310,7 +310,7 @@ fn run_h3_client_request(
             path,
             headers,
             body,
-            user_agent: "spooky-test",
+            user_agent: "impulse-test",
         },
     )?;
     Ok(H3Response {
@@ -427,7 +427,7 @@ fn run_h3_client_multiple_requests(
                     quiche::h3::Header::new(b":scheme", b"https"),
                     quiche::h3::Header::new(b":authority", b"localhost"),
                     quiche::h3::Header::new(b":path", b"/"),
-                    quiche::h3::Header::new(b"user-agent", b"spooky-rotation-test"),
+                    quiche::h3::Header::new(b"user-agent", b"impulse-rotation-test"),
                 ];
                 h3.send_request(&mut conn, &req, true)
                     .map_err(|e| format!("send_request: {e:?}"))?;
@@ -598,7 +598,7 @@ fn make_config_with_rate_limit(
 ) -> Config {
     use std::collections::HashMap;
 
-    use spooky_config::config::{Performance, RouteMatch, Upstream};
+    use impulse_config::config::{Performance, RouteMatch, Upstream};
 
     let mut upstream = HashMap::new();
     upstream.insert(
@@ -663,8 +663,8 @@ fn make_config_with_rate_limit(
             new_connections_burst,
             ..Performance::default()
         },
-        observability: spooky_config::config::Observability::default(),
-        resilience: spooky_config::config::Resilience::default(),
+        observability: impulse_config::config::Observability::default(),
+        resilience: impulse_config::config::Resilience::default(),
         security: Security::default(),
     }
 }

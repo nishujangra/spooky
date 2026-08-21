@@ -9,7 +9,7 @@ use std::{
 
 use log::{debug, warn};
 use sha2::{Digest, Sha256};
-use spooky_config::{
+use impulse_config::{
     config::{
         DistributedQuotaPolicy as RawDistributedQuotaPolicy,
         DistributedQuotaSelector as RawDistributedQuotaSelector,
@@ -543,7 +543,7 @@ impl QuotaLocalFallbackPolicy {
         }
     }
 
-    fn from_raw(value: &spooky_config::config::QuotaLocalFallbackConfig) -> Self {
+    fn from_raw(value: &impulse_config::config::QuotaLocalFallbackConfig) -> Self {
         Self {
             key_prefix: value.key_prefix.trim().to_string(),
             max_entries: value.max_entries.max(1),
@@ -818,7 +818,7 @@ impl QuotaRuntime {
             enforcement: QuotaEnforcementMode::Enforce,
             backend_failure_policy: QuotaBackendFailurePolicy::FailClosed,
             backend: QuotaCounterBackend::InMemory {
-                key_prefix: "spooky:quota".to_string(),
+                key_prefix: "impulse:quota".to_string(),
             },
             local_fallback: None,
             policies: Vec::new(),
@@ -830,7 +830,7 @@ impl QuotaRuntime {
     }
 
     pub fn from_rate_limit_policies(
-        rate_limit_policy: &spooky_config::runtime::RuntimeRateLimitPolicy,
+        rate_limit_policy: &impulse_config::runtime::RuntimeRateLimitPolicy,
     ) -> Self {
         Self::from_runtime_policy_set(&rate_limit_policy.quota)
     }
@@ -2010,7 +2010,7 @@ fn append_key_component(output: &mut String, label: &str, value: &str) {
 mod tests {
     use std::{collections::HashMap, net::SocketAddr};
 
-    use spooky_config::{
+    use impulse_config::{
         config::{
             DistributedQuotaPolicy, DistributedQuotaSelector, DistributedQuotaSelectorSource,
             DistributedQuotaWindow, QuotaBackendFailurePolicy as RawQuotaBackendFailurePolicy,
@@ -2085,7 +2085,7 @@ mod tests {
             backend_failure_policy: RuntimeQuotaBackendFailurePolicy::FailOpen,
             backend: RuntimeQuotaCounterBackend::Redis {
                 url: "redis://127.0.0.1:6379/0".to_string(),
-                key_prefix: "spooky:quota".to_string(),
+                key_prefix: "impulse:quota".to_string(),
                 connect_timeout: Duration::from_millis(250),
                 command_timeout: Duration::from_millis(100),
                 max_inflight: 64,
@@ -2138,7 +2138,7 @@ mod tests {
                 enforcement: RawQuotaEnforcementMode::Enforce,
                 backend_failure_policy: RawQuotaBackendFailurePolicy::FailClosed,
                 backend: RawQuotaCounterBackend::InMemory {
-                    key_prefix: "spooky:quota".to_string(),
+                    key_prefix: "impulse:quota".to_string(),
                 },
                 local_fallback: None,
                 policies: vec![DistributedQuotaPolicy {
@@ -2245,7 +2245,7 @@ mod tests {
             },
         )) as SharedDistributedQuotaCounterBackend;
         let fallback = Arc::new(InMemoryDistributedQuotaCounterStore::bounded(
-            "spooky:quota:fallback",
+            "impulse:quota:fallback",
             16,
         ));
         let backend = DegradedQuotaCounterBackend::new(primary, "redis", fallback);
@@ -2284,7 +2284,7 @@ mod tests {
             },
         )) as SharedDistributedQuotaCounterBackend;
         let fallback = Arc::new(InMemoryDistributedQuotaCounterStore::bounded(
-            "spooky:quota:fallback",
+            "impulse:quota:fallback",
             16,
         ));
         let backend = DegradedQuotaCounterBackend::new(primary, "redis", fallback);
@@ -2313,7 +2313,7 @@ mod tests {
             enforcement,
             backend_failure_policy: RuntimeQuotaBackendFailurePolicy::FailClosed,
             backend: RuntimeQuotaCounterBackend::InMemory {
-                key_prefix: "spooky:quota:test".to_string(),
+                key_prefix: "impulse:quota:test".to_string(),
             },
             local_fallback: None,
             policies,
@@ -2369,7 +2369,7 @@ mod tests {
             RuntimeQuotaEnforcementMode::Enforce,
             vec![route_only_policy("broad", 100), tenant_policy("narrow", 2)],
         );
-        let backend = InMemoryDistributedQuotaCounterStore::new("spooky:quota:test");
+        let backend = InMemoryDistributedQuotaCounterStore::new("impulse:quota:test");
 
         let context = identity_context_with_headers(
             Some("api"),
@@ -2408,7 +2408,7 @@ mod tests {
             RuntimeQuotaEnforcementMode::Enforce,
             vec![route_only_policy("broad", 100), tenant_policy("narrow", 10)],
         );
-        let backend = InMemoryDistributedQuotaCounterStore::new("spooky:quota:test");
+        let backend = InMemoryDistributedQuotaCounterStore::new("impulse:quota:test");
 
         // No x-tenant-id header at all.
         let context = identity_context_with_headers(
@@ -2438,7 +2438,7 @@ mod tests {
             RuntimeQuotaEnforcementMode::Shadow,
             vec![tenant_policy("narrow", 1), route_only_policy("broad", 100)],
         );
-        let backend = InMemoryDistributedQuotaCounterStore::new("spooky:quota:test");
+        let backend = InMemoryDistributedQuotaCounterStore::new("impulse:quota:test");
 
         let context = identity_context_with_headers(
             Some("api"),
@@ -2821,7 +2821,7 @@ mod tests {
                     bucket_started_at_unix_ms: Some(1_700_000_000_000),
                     reset_at_unix_ms: Some(1_700_000_001_000),
                     storage_key: Some(
-                        "spooky:quota:qv1:12:tenant-quota:burst:1000:1700000000000:abc".to_string(),
+                        "impulse:quota:qv1:12:tenant-quota:burst:1000:1700000000000:abc".to_string(),
                     ),
                 }),
                 sustained: Some(QuotaWindowUsage {
@@ -2833,7 +2833,7 @@ mod tests {
                     bucket_started_at_unix_ms: Some(1_699_999_980_000),
                     reset_at_unix_ms: Some(1_700_000_040_000),
                     storage_key: Some(
-                        "spooky:quota:qv1:12:tenant-quota:sustained:60000:1699999980000:def"
+                        "impulse:quota:qv1:12:tenant-quota:sustained:60000:1699999980000:def"
                             .to_string(),
                     ),
                 }),

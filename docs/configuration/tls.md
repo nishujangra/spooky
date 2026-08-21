@@ -190,8 +190,8 @@ Paths can be absolute or relative:
 ```yaml
 # Absolute paths (recommended for production)
 tls:
-  cert: "/etc/spooky/certs/fullchain.pem"
-  key: "/etc/spooky/certs/privkey.pem"
+  cert: "/etc/impulse/certs/fullchain.pem"
+  key: "/etc/impulse/certs/privkey.pem"
 
 # Relative paths (relative to working directory)
 tls:
@@ -214,8 +214,8 @@ Configuration remains the same:
 
 ```yaml
 tls:
-  cert: "/etc/spooky/certs/multi-domain.crt"
-  key: "/etc/spooky/certs/multi-domain.key"
+  cert: "/etc/impulse/certs/multi-domain.crt"
+  key: "/etc/impulse/certs/multi-domain.key"
 ```
 
 ### Multi-Certificate SNI Configuration
@@ -228,15 +228,15 @@ listen:
   address: "0.0.0.0"
   port: 9889
   tls:
-    cert: "/etc/spooky/certs/default-fullchain.pem"
-    key: "/etc/spooky/certs/default-privkey.pem"
+    cert: "/etc/impulse/certs/default-fullchain.pem"
+    key: "/etc/impulse/certs/default-privkey.pem"
     certificates:
       - server_name: "api.example.com"
-        cert: "/etc/spooky/certs/api-fullchain.pem"
-        key: "/etc/spooky/certs/api-privkey.pem"
+        cert: "/etc/impulse/certs/api-fullchain.pem"
+        key: "/etc/impulse/certs/api-privkey.pem"
       - server_name: "www.example.com"
-        cert: "/etc/spooky/certs/www-fullchain.pem"
-        key: "/etc/spooky/certs/www-privkey.pem"
+        cert: "/etc/impulse/certs/www-fullchain.pem"
+        key: "/etc/impulse/certs/www-privkey.pem"
 ```
 
 Selection order:
@@ -266,24 +266,24 @@ Restrict access to certificate files:
 
 ```bash
 # Create dedicated certificate directory
-sudo mkdir -p /etc/spooky/certs
-sudo chown spooky:spooky /etc/spooky/certs
-sudo chmod 700 /etc/spooky/certs
+sudo mkdir -p /etc/impulse/certs
+sudo chown impulse:impulse /etc/impulse/certs
+sudo chmod 700 /etc/impulse/certs
 
 # Set certificate permissions
-sudo chmod 644 /etc/spooky/certs/server.crt
-sudo chmod 600 /etc/spooky/certs/server.key
+sudo chmod 644 /etc/impulse/certs/server.crt
+sudo chmod 600 /etc/impulse/certs/server.key
 
 # Verify permissions
-ls -l /etc/spooky/certs/
+ls -l /etc/impulse/certs/
 ```
 
 Expected output:
 
 ```
-drwx------ 2 spooky spooky 4096 Dec 15 10:00 .
--rw-r--r-- 1 spooky spooky 1234 Dec 15 10:00 server.crt
--rw------- 1 spooky spooky 1704 Dec 15 10:00 server.key
+drwx------ 2 impulse impulse 4096 Dec 15 10:00 .
+-rw-r--r-- 1 impulse impulse 1234 Dec 15 10:00 server.crt
+-rw------- 1 impulse impulse 1704 Dec 15 10:00 server.key
 ```
 
 Operational implications:
@@ -309,8 +309,8 @@ Operational implications:
    - Set up renewal automation for Let's Encrypt
    - Implement alerting for certificates expiring within 30 days
    - Scrape:
-     - `spooky_downstream_tls_certificate_not_after_seconds`
-     - `spooky_downstream_tls_certificate_days_remaining`
+     - `impulse_downstream_tls_certificate_not_after_seconds`
+     - `impulse_downstream_tls_certificate_days_remaining`
 
 ## Certificate Validation
 
@@ -364,11 +364,11 @@ Verify Impulse can load certificates:
 
 ```bash
 # Test configuration validity
-spooky --config config.yaml
+impulse --config config.yaml
 
 # Run in debug mode to see TLS initialization
 # Set log level in config.yaml (log.level) or via RUST_LOG=debug
-spooky --config config.yaml
+impulse --config config.yaml
 ```
 
 ## Certificate Rotation and Renewal
@@ -390,7 +390,7 @@ sudo certbot renew
 # Reload listener certificates for new handshakes
 curl -X POST \
   --http1.1 \
-  -H "Authorization: Bearer ${SPOOKY_CONTROL_API_TOKEN}" \
+  -H "Authorization: Bearer ${IMPULSE_CONTROL_API_TOKEN}" \
   https://127.0.0.1:9902/admin/runtime/reload-certs
 ```
 
@@ -400,21 +400,21 @@ For manually-managed certificates:
 
 ```bash
 # Backup current certificates
-sudo cp /etc/spooky/certs/server.crt /etc/spooky/certs/server.crt.backup
-sudo cp /etc/spooky/certs/server.key /etc/spooky/certs/server.key.backup
+sudo cp /etc/impulse/certs/server.crt /etc/impulse/certs/server.crt.backup
+sudo cp /etc/impulse/certs/server.key /etc/impulse/certs/server.key.backup
 
 # Install new certificates
-sudo cp new-server.crt /etc/spooky/certs/server.crt
-sudo cp new-server.key /etc/spooky/certs/server.key
+sudo cp new-server.crt /etc/impulse/certs/server.crt
+sudo cp new-server.key /etc/impulse/certs/server.key
 
 # Set permissions
-sudo chmod 644 /etc/spooky/certs/server.crt
-sudo chmod 600 /etc/spooky/certs/server.key
+sudo chmod 644 /etc/impulse/certs/server.crt
+sudo chmod 600 /etc/impulse/certs/server.key
 
 # Reload listener certificates for new handshakes
 curl -X POST \
   --http1.1 \
-  -H "Authorization: Bearer ${SPOOKY_CONTROL_API_TOKEN}" \
+  -H "Authorization: Bearer ${IMPULSE_CONTROL_API_TOKEN}" \
   https://127.0.0.1:9902/admin/runtime/reload-certs
 
 # Verify new certificates are loaded
@@ -432,11 +432,11 @@ Reload behavior:
 
 Impulse exposes downstream TLS observability through Prometheus:
 
-- `spooky_downstream_tls_handshake_failure_total{listener,reason}`
-- `spooky_downstream_tls_certificate_selection_total{listener,selection}`
-- `spooky_downstream_tls_alpn_total{listener,protocol}`
-- `spooky_downstream_tls_certificate_not_after_seconds{listener,server_name}`
-- `spooky_downstream_tls_certificate_days_remaining{listener,server_name}`
+- `impulse_downstream_tls_handshake_failure_total{listener,reason}`
+- `impulse_downstream_tls_certificate_selection_total{listener,selection}`
+- `impulse_downstream_tls_alpn_total{listener,protocol}`
+- `impulse_downstream_tls_certificate_not_after_seconds{listener,server_name}`
+- `impulse_downstream_tls_certificate_days_remaining{listener,server_name}`
 
 Important label values:
 
@@ -460,10 +460,10 @@ Check certificate expiration:
 
 ```bash
 # Check days until expiry
-openssl x509 -in /etc/spooky/certs/server.crt -noout -enddate
+openssl x509 -in /etc/impulse/certs/server.crt -noout -enddate
 
 # Calculate days remaining
-days_left=$(( ($(date -d "$(openssl x509 -in /etc/spooky/certs/server.crt -noout -enddate | cut -d= -f2)" +%s) - $(date +%s)) / 86400 ))
+days_left=$(( ($(date -d "$(openssl x509 -in /etc/impulse/certs/server.crt -noout -enddate | cut -d= -f2)" +%s) - $(date +%s)) / 86400 ))
 echo "Certificate expires in $days_left days"
 
 # Alert if less than 30 days
@@ -486,7 +486,7 @@ Solution:
 
 ```bash
 # Verify file exists
-ls -l /etc/spooky/certs/server.crt
+ls -l /etc/impulse/certs/server.crt
 
 # Check path in configuration
 cat config.yaml | grep -A2 tls
@@ -505,15 +505,15 @@ Solution:
 
 ```bash
 # Check file permissions
-ls -l /etc/spooky/certs/
+ls -l /etc/impulse/certs/
 
 # Fix permissions
-sudo chown spooky:spooky /etc/spooky/certs/server.{crt,key}
-sudo chmod 644 /etc/spooky/certs/server.crt
-sudo chmod 600 /etc/spooky/certs/server.key
+sudo chown impulse:impulse /etc/impulse/certs/server.{crt,key}
+sudo chmod 644 /etc/impulse/certs/server.crt
+sudo chmod 600 /etc/impulse/certs/server.key
 
-# Verify the spooky user can read files
-sudo -u spooky cat /etc/spooky/certs/server.crt > /dev/null
+# Verify the impulse user can read files
+sudo -u impulse cat /etc/impulse/certs/server.crt > /dev/null
 ```
 
 #### Invalid Certificate Format

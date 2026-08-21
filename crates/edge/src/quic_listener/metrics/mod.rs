@@ -9,8 +9,8 @@ use http_body_util::Full;
 use hyper::{Request, body::Incoming, server::conn::http1, service::service_fn};
 use hyper_util::rt::TokioIo;
 use log::{debug, error, info};
-use spooky_config::config::MetricsEndpoint;
-use spooky_errors::ProxyError;
+use impulse_config::config::MetricsEndpoint;
+use impulse_errors::ProxyError;
 
 use super::{
     QUICListener,

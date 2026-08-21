@@ -548,7 +548,7 @@ impl Default for LoadBalancing {
 pub struct Log {
     // whisper -> trace
     // haunt -> debug
-    // spooky -> info
+    // impulse -> info
     // scream -> warn
     // poltergeist -> error
     // silence -> off
@@ -590,7 +590,7 @@ impl Default for LogFile {
     fn default() -> Self {
         Self {
             enabled: false,
-            path: "/var/log/spooky/spooky.log".to_string(),
+            path: "/var/log/impulse/impulse.log".to_string(),
         }
     }
 }
@@ -1068,7 +1068,7 @@ impl QuotaPolicyConfig {
     }
 
     fn default_key_prefix() -> String {
-        "spooky:quota".to_string()
+        "impulse:quota".to_string()
     }
 
     fn default_connect_timeout_ms() -> u64 {
@@ -1084,7 +1084,7 @@ impl QuotaPolicyConfig {
     }
 
     fn default_local_fallback_key_prefix() -> String {
-        "spooky:quota:fallback".to_string()
+        "impulse:quota:fallback".to_string()
     }
 }
 
@@ -1767,7 +1767,7 @@ impl Default for Tracing {
     fn default() -> Self {
         Self {
             enabled: false,
-            service_name: "spooky".to_string(),
+            service_name: "impulse".to_string(),
             otlp_endpoint: None,
             sample_ratio: 1.0,
         }
@@ -1790,7 +1790,7 @@ impl Default for RoutingTransparency {
             enabled: false,
             include_reason: true,
             expose_header: false,
-            header_name: "x-spooky-route-decision".to_string(),
+            header_name: "x-impulse-route-decision".to_string(),
         }
     }
 }
@@ -2179,12 +2179,12 @@ security:
         assert_eq!(secret_ref.scheme(), Some("literal"));
 
         let file_provider: SecretProvider =
-            serde_yaml::from_str("kind: file\nbase_dir: /etc/spooky/secrets\n")
+            serde_yaml::from_str("kind: file\nbase_dir: /etc/impulse/secrets\n")
                 .expect("file secret provider should parse");
         assert_eq!(
             file_provider,
             SecretProvider::File {
-                base_dir: Some("/etc/spooky/secrets".to_string())
+                base_dir: Some("/etc/impulse/secrets".to_string())
             }
         );
     }
@@ -2194,7 +2194,7 @@ security:
         let jwt: JwtAuth = serde_yaml::from_str(
             r#"
 secret_ref:
-  ref: file:///etc/spooky/secrets/jwt-signing.key
+  ref: file:///etc/impulse/secrets/jwt-signing.key
 "#,
         )
         .expect("jwt secret ref should parse");
@@ -2203,7 +2203,7 @@ secret_ref:
             jwt.secret_ref
                 .as_ref()
                 .map(|secret_ref| secret_ref.reference.as_str()),
-            Some("file:///etc/spooky/secrets/jwt-signing.key")
+            Some("file:///etc/impulse/secrets/jwt-signing.key")
         );
 
         let control_api: ControlApi = serde_yaml::from_str(
@@ -2213,7 +2213,7 @@ auth_token_ref:
 auth:
   bearer_tokens:
     - token_ref:
-        ref: file:///etc/spooky/secrets/viewer-token
+        ref: file:///etc/impulse/secrets/viewer-token
       role: viewer
 "#,
         )
@@ -2233,7 +2233,7 @@ auth:
                 .token_ref
                 .as_ref()
                 .map(|secret_ref| secret_ref.reference.as_str()),
-            Some("file:///etc/spooky/secrets/viewer-token")
+            Some("file:///etc/impulse/secrets/viewer-token")
         );
     }
 
@@ -2252,7 +2252,7 @@ auth:
         assert!(quota.policies.is_empty());
         match quota.backend {
             QuotaCounterBackend::InMemory { key_prefix } => {
-                assert_eq!(key_prefix, "spooky:quota");
+                assert_eq!(key_prefix, "impulse:quota");
             }
             QuotaCounterBackend::Redis { .. } => {
                 panic!("default quota backend must be in_memory");
@@ -2269,13 +2269,13 @@ auth:
                 backend_failure_policy: QuotaBackendFailurePolicy::FailOpen,
                 backend: QuotaCounterBackend::Redis {
                     url: "redis://127.0.0.1:6379/0".to_string(),
-                    key_prefix: "spooky:quota".to_string(),
+                    key_prefix: "impulse:quota".to_string(),
                     connect_timeout_ms: 250,
                     command_timeout_ms: 100,
                     max_inflight: 128,
                 },
                 local_fallback: Some(QuotaLocalFallbackConfig {
-                    key_prefix: "spooky:quota:fallback".to_string(),
+                    key_prefix: "impulse:quota:fallback".to_string(),
                     max_entries: 512,
                 }),
                 policies: vec![DistributedQuotaPolicy {
@@ -2313,7 +2313,7 @@ auth:
             quota: QuotaPolicyConfig {
                 enabled: true,
                 local_fallback: Some(QuotaLocalFallbackConfig {
-                    key_prefix: "spooky:quota:fallback".to_string(),
+                    key_prefix: "impulse:quota:fallback".to_string(),
                     max_entries: 128,
                 }),
                 policies: vec![DistributedQuotaPolicy {
@@ -2349,13 +2349,13 @@ auth:
                 enabled: true,
                 backend: QuotaCounterBackend::Redis {
                     url: "redis://127.0.0.1:6379/0".to_string(),
-                    key_prefix: "spooky:quota".to_string(),
+                    key_prefix: "impulse:quota".to_string(),
                     connect_timeout_ms: 250,
                     command_timeout_ms: 100,
                     max_inflight: 128,
                 },
                 local_fallback: Some(QuotaLocalFallbackConfig {
-                    key_prefix: "spooky:quota:fallback".to_string(),
+                    key_prefix: "impulse:quota:fallback".to_string(),
                     max_entries: 0,
                 }),
                 policies: vec![DistributedQuotaPolicy {

@@ -9,7 +9,7 @@ Use the linked reference pages for canonical endpoint behavior, status codes, me
 Basic usage:
 
 ```bash
-spooky --config /etc/spooky/config.yaml
+impulse --config /etc/impulse/config.yaml
 ```
 
 Core options:

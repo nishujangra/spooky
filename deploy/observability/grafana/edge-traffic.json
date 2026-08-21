@@ -19,7 +19,7 @@
           "uid": "${datasource}"
         },
         "enable": true,
-        "expr": "sum(increase(spooky_runtime_activation_total{result=\"success\"}[1m])) > 0",
+        "expr": "sum(increase(impulse_runtime_activation_total{result=\"success\"}[1m])) > 0",
         "hide": false,
         "iconColor": "rgba(0, 191, 255, 1)",
         "name": "Runtime Activations",
@@ -34,7 +34,7 @@
           "uid": "${datasource}"
         },
         "enable": true,
-        "expr": "sum(increase(spooky_runtime_rollback_total{result=\"success\"}[1m])) > 0",
+        "expr": "sum(increase(impulse_runtime_rollback_total{result=\"success\"}[1m])) > 0",
         "hide": false,
         "iconColor": "rgba(255, 140, 0, 1)",
         "name": "Runtime Rollbacks",
@@ -100,7 +100,7 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:requests_by_upstream:rate5m{upstream=~\"${upstream:regex}\"})",
+          "expr": "sum(impulse:requests_by_upstream:rate5m{upstream=~\"${upstream:regex}\"})",
           "legendFormat": "request rate",
           "refId": "A"
         }
@@ -165,7 +165,7 @@
       },
       "targets": [
         {
-          "expr": "100 * (1 - (sum(rate(spooky_upstream_requests_total{status_class=\"5xx\",upstream=~\"${upstream:regex}\"}[30m])) / clamp_min(sum(rate(spooky_upstream_requests_total{upstream=~\"${upstream:regex}\"}[30m])), 0.000001)))",
+          "expr": "100 * (1 - (sum(rate(impulse_upstream_requests_total{status_class=\"5xx\",upstream=~\"${upstream:regex}\"}[30m])) / clamp_min(sum(rate(impulse_upstream_requests_total{upstream=~\"${upstream:regex}\"}[30m])), 0.000001)))",
           "legendFormat": "success rate",
           "refId": "A"
         }
@@ -230,7 +230,7 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(spooky_upstream_request_latency_ms_bucket{outcome=\"success\",upstream=~\"${upstream:regex}\"}[30m])))",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(impulse_upstream_request_latency_ms_bucket{outcome=\"success\",upstream=~\"${upstream:regex}\"}[30m])))",
           "legendFormat": "p50",
           "refId": "A"
         }
@@ -295,7 +295,7 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(spooky_upstream_request_latency_ms_bucket{outcome=\"success\",upstream=~\"${upstream:regex}\"}[30m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(impulse_upstream_request_latency_ms_bucket{outcome=\"success\",upstream=~\"${upstream:regex}\"}[30m])))",
           "legendFormat": "p95",
           "refId": "A"
         }
@@ -360,7 +360,7 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(spooky_upstream_request_latency_ms_bucket{outcome=\"success\",upstream=~\"${upstream:regex}\"}[30m])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(impulse_upstream_request_latency_ms_bucket{outcome=\"success\",upstream=~\"${upstream:regex}\"}[30m])))",
           "legendFormat": "p99",
           "refId": "A"
         }
@@ -417,7 +417,7 @@
       },
       "targets": [
         {
-          "expr": "max(spooky_runtime_active_generation)",
+          "expr": "max(impulse_runtime_active_generation)",
           "legendFormat": "active generation",
           "refId": "A"
         }
@@ -477,7 +477,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (upstream) (spooky:requests_by_upstream:rate5m{upstream=~\"${upstream:regex}\"})",
+          "expr": "sum by (upstream) (impulse:requests_by_upstream:rate5m{upstream=~\"${upstream:regex}\"})",
           "legendFormat": "{{upstream}}",
           "refId": "A"
         }
@@ -538,12 +538,12 @@
       },
       "targets": [
         {
-          "expr": "100 * (1 - (sum(rate(spooky_upstream_requests_total{status_class=\"5xx\",upstream=~\"${upstream:regex}\"}[30m])) / clamp_min(sum(rate(spooky_upstream_requests_total{upstream=~\"${upstream:regex}\"}[30m])), 0.000001)))",
+          "expr": "100 * (1 - (sum(rate(impulse_upstream_requests_total{status_class=\"5xx\",upstream=~\"${upstream:regex}\"}[30m])) / clamp_min(sum(rate(impulse_upstream_requests_total{upstream=~\"${upstream:regex}\"}[30m])), 0.000001)))",
           "legendFormat": "success rate",
           "refId": "A"
         },
         {
-          "expr": "100 * (sum(rate(spooky_upstream_requests_total{status_class=\"5xx\",upstream=~\"${upstream:regex}\"}[30m])) / clamp_min(sum(rate(spooky_upstream_requests_total{upstream=~\"${upstream:regex}\"}[30m])), 0.000001))",
+          "expr": "100 * (sum(rate(impulse_upstream_requests_total{status_class=\"5xx\",upstream=~\"${upstream:regex}\"}[30m])) / clamp_min(sum(rate(impulse_upstream_requests_total{upstream=~\"${upstream:regex}\"}[30m])), 0.000001))",
           "legendFormat": "server error rate",
           "refId": "B"
         }
@@ -603,7 +603,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (status_class) (rate(spooky_upstream_requests_total{upstream=~\"${upstream:regex}\"}[5m]))",
+          "expr": "sum by (status_class) (rate(impulse_upstream_requests_total{upstream=~\"${upstream:regex}\"}[5m]))",
           "legendFormat": "{{status_class}}",
           "refId": "A"
         }
@@ -663,7 +663,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (outcome) (rate(spooky_upstream_requests_total{upstream=~\"${upstream:regex}\"}[5m]))",
+          "expr": "sum by (outcome) (rate(impulse_upstream_requests_total{upstream=~\"${upstream:regex}\"}[5m]))",
           "legendFormat": "{{outcome}}",
           "refId": "A"
         }
@@ -723,17 +723,17 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.50, sum by (le) (rate(spooky_upstream_request_latency_ms_bucket{outcome=\"success\",upstream=~\"${upstream:regex}\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(impulse_upstream_request_latency_ms_bucket{outcome=\"success\",upstream=~\"${upstream:regex}\"}[$__rate_interval])))",
           "legendFormat": "p50",
           "refId": "A"
         },
         {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(spooky_upstream_request_latency_ms_bucket{outcome=\"success\",upstream=~\"${upstream:regex}\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(impulse_upstream_request_latency_ms_bucket{outcome=\"success\",upstream=~\"${upstream:regex}\"}[$__rate_interval])))",
           "legendFormat": "p95",
           "refId": "B"
         },
         {
-          "expr": "histogram_quantile(0.99, sum by (le) (rate(spooky_upstream_request_latency_ms_bucket{outcome=\"success\",upstream=~\"${upstream:regex}\"}[$__rate_interval])))",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(impulse_upstream_request_latency_ms_bucket{outcome=\"success\",upstream=~\"${upstream:regex}\"}[$__rate_interval])))",
           "legendFormat": "p99",
           "refId": "C"
         }
@@ -797,7 +797,7 @@
       },
       "targets": [
         {
-          "expr": "topk(10, 100 * sum by (upstream) (spooky:request_server_errors_by_upstream:rate5m) / clamp_min(sum by (upstream) (spooky:requests_by_upstream:rate5m), 0.000001))",
+          "expr": "topk(10, 100 * sum by (upstream) (impulse:request_server_errors_by_upstream:rate5m) / clamp_min(sum by (upstream) (impulse:requests_by_upstream:rate5m), 0.000001))",
           "legendFormat": "{{upstream}}",
           "refId": "A"
         }
@@ -861,7 +861,7 @@
       },
       "targets": [
         {
-          "expr": "topk(10, sum by (upstream, backend) (spooky:backend_errors_by_upstream_backend:rate5m{upstream=~\"${upstream:regex}\"}))",
+          "expr": "topk(10, sum by (upstream, backend) (impulse:backend_errors_by_upstream_backend:rate5m{upstream=~\"${upstream:regex}\"}))",
           "legendFormat": "{{upstream}} :: {{backend}}",
           "refId": "A"
         }
@@ -938,7 +938,7 @@
       },
       "targets": [
         {
-          "expr": "100 * sum(spooky:contract_reject_ratio:rate5m) or vector(0)",
+          "expr": "100 * sum(impulse:contract_reject_ratio:rate5m) or vector(0)",
           "legendFormat": "contract reject ratio",
           "refId": "A"
         }
@@ -1001,7 +1001,7 @@
       },
       "targets": [
         {
-          "expr": "topk(10, (1 - spooky:requests_by_upstream_success_ratio:rate5m{upstream=~\"${upstream:regex}\"}) * 100)",
+          "expr": "topk(10, (1 - impulse:requests_by_upstream_success_ratio:rate5m{upstream=~\"${upstream:regex}\"}) * 100)",
           "legendFormat": "{{upstream}}",
           "refId": "A"
         }
@@ -1013,7 +1013,7 @@
   "refresh": "30s",
   "schemaVersion": 39,
   "tags": [
-    "spooky",
+    "impulse",
     "observability",
     "edge",
     "traffic",
@@ -1052,7 +1052,7 @@
           "type": "prometheus",
           "uid": "${datasource}"
         },
-        "definition": "label_values(spooky_upstream_requests_total, upstream)",
+        "definition": "label_values(impulse_upstream_requests_total, upstream)",
         "hide": 0,
         "includeAll": true,
         "label": "Upstream",
@@ -1061,7 +1061,7 @@
         "options": [],
         "query": {
           "qryType": 1,
-          "query": "label_values(spooky_upstream_requests_total, upstream)",
+          "query": "label_values(impulse_upstream_requests_total, upstream)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 2,
@@ -1077,8 +1077,8 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "Spooky Edge Traffic and Latency",
-  "uid": "spooky-edge-traffic",
+  "title": "Impulse Edge Traffic and Latency",
+  "uid": "impulse-edge-traffic",
   "version": 2,
   "weekStart": ""
 }

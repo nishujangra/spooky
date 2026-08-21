@@ -12,7 +12,7 @@ Before starting Impulse you need:
 
 1. A valid config file (see [02-configuration.md](02-configuration.md))
 2. TLS certificates (see [01-certificates.md](01-certificates.md))
-3. The `spooky` binary — built from source or installed via package
+3. The `impulse` binary — built from source or installed via package
 
 ---
 
@@ -24,12 +24,12 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 
 # Clone and build
-git clone https://github.com/Supernova-Labs-Org/spooky.git
-cd spooky
+git clone https://github.com/Supernova-Labs-Org/impulse.git
+cd impulse
 cargo build --release
 
 # Binary is at
-./target/release/spooky
+./target/release/impulse
 ```
 
 ---
@@ -39,7 +39,7 @@ cargo build --release
 ### Basic start
 
 ```bash
-spooky --config /etc/spooky/config.yaml
+impulse --config /etc/impulse/config.yaml
 ```
 
 ### Validate by startup on a safe host or staging instance
@@ -62,17 +62,17 @@ log:
 ```
 
 ```bash
-spooky --config config/config.development.yaml
+impulse --config config/config.development.yaml
 ```
 
 ### Binding port 443 without root
 
 ```bash
 # Grant the binary permission to bind privileged ports
-sudo setcap cap_net_bind_service=+ep /usr/bin/spooky
+sudo setcap cap_net_bind_service=+ep /usr/bin/impulse
 
 # Now run as a regular user
-spooky --config /etc/spooky/config.yaml
+impulse --config /etc/impulse/config.yaml
 ```
 
 ### Binding port 443 as root with privilege drop
@@ -80,8 +80,8 @@ spooky --config /etc/spooky/config.yaml
 If Impulse starts as root and `security.privileges.enabled=true`, it drops to the configured user/group after binding the socket:
 
 ```bash
-sudo spooky --config /etc/spooky/config.yaml
-# Impulse binds port 443 as root, then drops to user 'spooky'
+sudo impulse --config /etc/impulse/config.yaml
+# Impulse binds port 443 as root, then drops to user 'impulse'
 ```
 
 ---
@@ -91,47 +91,47 @@ sudo spooky --config /etc/spooky/config.yaml
 ### Create the system user and directories
 
 ```bash
-sudo useradd --system --no-create-home --shell /usr/sbin/nologin spooky
-sudo mkdir -p /etc/spooky/certs /var/log/spooky
-sudo chown -R spooky:spooky /etc/spooky /var/log/spooky
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin impulse
+sudo mkdir -p /etc/impulse/certs /var/log/impulse
+sudo chown -R impulse:impulse /etc/impulse /var/log/impulse
 ```
 
 ### Install the binary
 
 ```bash
-sudo cp target/release/spooky /usr/bin/spooky
-sudo chmod 755 /usr/bin/spooky
+sudo cp target/release/impulse /usr/bin/impulse
+sudo chmod 755 /usr/bin/impulse
 
 # Grant port 443 binding if not running as root
-sudo setcap cap_net_bind_service=+ep /usr/bin/spooky
+sudo setcap cap_net_bind_service=+ep /usr/bin/impulse
 ```
 
 ### Copy your config and certificates
 
 ```bash
-sudo cp /path/to/your/config.yaml /etc/spooky/config.yaml
-sudo cp certs/fullchain.pem /etc/spooky/certs/fullchain.pem
-sudo cp certs/privkey.pem   /etc/spooky/certs/privkey.pem
-sudo chown spooky:spooky /etc/spooky/certs/*
-sudo chmod 640 /etc/spooky/certs/*
+sudo cp /path/to/your/config.yaml /etc/impulse/config.yaml
+sudo cp certs/fullchain.pem /etc/impulse/certs/fullchain.pem
+sudo cp certs/privkey.pem   /etc/impulse/certs/privkey.pem
+sudo chown impulse:impulse /etc/impulse/certs/*
+sudo chmod 640 /etc/impulse/certs/*
 ```
 
 ### Create the systemd unit file
 
-Create `/etc/systemd/system/spooky.service`:
+Create `/etc/systemd/system/impulse.service`:
 
 ```ini
 [Unit]
 Description=Impulse HTTP/3 Reverse Proxy
-Documentation=https://github.com/Supernova-Labs-Org/spooky
+Documentation=https://github.com/Supernova-Labs-Org/impulse
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=spooky
-Group=spooky
-ExecStart=/usr/bin/spooky --config /etc/spooky/config.yaml
+User=impulse
+Group=impulse
+ExecStart=/usr/bin/impulse --config /etc/impulse/config.yaml
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5s
@@ -140,32 +140,32 @@ LimitNOFILE=65536
 # Logging — journald captures stdout/stderr
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=spooky
+SyslogIdentifier=impulse
 
 # Security hardening
 NoNewPrivileges=yes
 ProtectSystem=strict
-ReadWritePaths=/var/log/spooky
-ReadOnlyPaths=/etc/spooky
+ReadWritePaths=/var/log/impulse
+ReadOnlyPaths=/etc/impulse
 
 [Install]
 WantedBy=multi-user.target
 ```
 
-> If you run Impulse as root to bind port 443 and rely on privilege drop, change `User=` and `Group=` to `root` and let `security.privileges` handle the drop. Otherwise use `AmbientCapabilities=CAP_NET_BIND_SERVICE` with the `spooky` user.
+> If you run Impulse as root to bind port 443 and rely on privilege drop, change `User=` and `Group=` to `root` and let `security.privileges` handle the drop. Otherwise use `AmbientCapabilities=CAP_NET_BIND_SERVICE` with the `impulse` user.
 
 ### Enable and start
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable spooky
-sudo systemctl start spooky
+sudo systemctl enable impulse
+sudo systemctl start impulse
 
 # Check status
-sudo systemctl status spooky
+sudo systemctl status impulse
 
 # Follow logs
-sudo journalctl -u spooky -f
+sudo journalctl -u impulse -f
 ```
 
 ### Graceful reload (after cert renewal)
@@ -173,7 +173,7 @@ sudo journalctl -u spooky -f
 ```bash
 # Prefer the staged Control API flow for runtime-managed config changes.
 # Use a full restart only when the change touches restart-required settings.
-sudo systemctl restart spooky
+sudo systemctl restart impulse
 ```
 
 ---
@@ -185,43 +185,43 @@ sudo systemctl restart spooky
 ```dockerfile
 FROM debian:bookworm-slim
 
-RUN useradd --system --no-create-home --shell /usr/sbin/nologin spooky
+RUN useradd --system --no-create-home --shell /usr/sbin/nologin impulse
 
-COPY target/release/spooky /usr/bin/spooky
-RUN chmod 755 /usr/bin/spooky
+COPY target/release/impulse /usr/bin/impulse
+RUN chmod 755 /usr/bin/impulse
 
-RUN mkdir -p /etc/spooky/certs /var/log/spooky \
-    && chown -R spooky:spooky /etc/spooky /var/log/spooky
+RUN mkdir -p /etc/impulse/certs /var/log/impulse \
+    && chown -R impulse:impulse /etc/impulse /var/log/impulse
 
-USER spooky
+USER impulse
 
 EXPOSE 9889/udp 9889/tcp
 
-ENTRYPOINT ["/usr/bin/spooky", "--config", "/etc/spooky/config.yaml"]
+ENTRYPOINT ["/usr/bin/impulse", "--config", "/etc/impulse/config.yaml"]
 ```
 
 ### docker-compose.yml
 
 ```yaml
 services:
-  spooky:
+  impulse:
     build: .
     ports:
       - "9889:9889/udp"
       - "9889:9889/tcp"
     volumes:
-      - ./config/config.reverse.yaml:/etc/spooky/config.yaml:ro
-      - ./certs:/etc/spooky/certs:ro
-      - spooky-logs:/var/log/spooky
+      - ./config/config.reverse.yaml:/etc/impulse/config.yaml:ro
+      - ./certs:/etc/impulse/certs:ro
+      - impulse-logs:/var/log/impulse
     restart: unless-stopped
 
 volumes:
-  spooky-logs:
+  impulse-logs:
 ```
 
 ```bash
 docker compose up -d
-docker compose logs -f spooky
+docker compose logs -f impulse
 ```
 
 ---
@@ -316,7 +316,7 @@ curl http://127.0.0.1:9901/metrics
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
 | `Failed to bind UDP socket: Permission denied` | Port < 1024 without root or CAP_NET_BIND_SERVICE | Use `sudo` or `setcap` |
-| `Cannot open listen.tls.cert` | Wrong path or permissions | Check path; `chown spooky:spooky /etc/spooky/certs/*` |
+| `Cannot open listen.tls.cert` | Wrong path or permissions | Check path; `chown impulse:impulse /etc/impulse/certs/*` |
 | `worker_threads > 1 requires reuseport=true` | Config mismatch | Add `reuseport: true` to performance |
 | Clients get `connection refused` on TCP | Bootstrap TLS listener failed to bind | Check logs for bootstrap bind error |
 | `curl: (35) OpenSSL SSL_connect` | Certificate mismatch or untrusted | See [01-certificates.md](01-certificates.md) |

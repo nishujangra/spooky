@@ -756,7 +756,7 @@ mod tests {
         let external_auth = ExternalAuth::Oidc {
             discovery_url: Some(" https://issuer.example/.well-known/openid-configuration ".into()),
             issuer_url: Some(" https://issuer.example ".into()),
-            client_id: "  spooky-edge  ".to_string(),
+            client_id: "  impulse-edge  ".to_string(),
             client_secret: Some("  secret-value  ".to_string()),
             client_secret_ref: None,
             audience: Some("  payments-api  ".to_string()),
@@ -780,7 +780,7 @@ mod tests {
                     "https://issuer.example/.well-known/openid-configuration".to_string(),
                 ),
                 issuer_url: Some("https://issuer.example".to_string()),
-                client_id: "spooky-edge".to_string(),
+                client_id: "impulse-edge".to_string(),
                 client_secret: Some("secret-value".to_string()),
                 audience: Some("payments-api".to_string()),
                 scopes: vec!["openid".to_string(), "profile".to_string()],

@@ -5,7 +5,7 @@ use std::{collections::HashMap, convert::Infallible, net::SocketAddr};
 use bytes::Bytes;
 use http_body_util::Full;
 use hyper::{Request, Response, body::Incoming};
-use spooky_config::config::{Backend, Config, Upstream, UpstreamTls};
+use impulse_config::config::{Backend, Config, Upstream, UpstreamTls};
 
 use super::request_path::{
     BootstrapRequestSpec, BootstrapResponse, H3RequestSpec, H3Response, QuicRequestPathHarness,
@@ -31,7 +31,7 @@ impl<'a> ParityRequestSpec<'a> {
             path,
             headers: &[],
             body: None,
-            user_agent: "spooky-bootstrap-quic-parity-test",
+            user_agent: "impulse-bootstrap-quic-parity-test",
             selected_response_headers: &[],
             capture_metrics_delta: false,
         }

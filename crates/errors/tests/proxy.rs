@@ -1,10 +1,10 @@
-use spooky_errors::{
+use impulse_errors::{
     PoolError, ProxyError, RetryPolicyDecision, RetryPolicyDenialReason, RetryPolicyFacts,
     UpstreamErrorClassification, UpstreamHealthFailureMapping, UpstreamProxyErrorKind,
     UpstreamRetryReason, UpstreamRetryability, UpstreamTerminalErrorKind, UpstreamTlsReason,
     classify_retryability, classify_upstream_proxy_error, evaluate_retry_policy, is_retryable,
 };
-use spooky_lb::alternate_backend::AlternateBackendFailureReason;
+use impulse_lb::alternate_backend::AlternateBackendFailureReason;
 
 #[test]
 fn pool_and_transport_errors_have_distinct_display_text() {
@@ -162,7 +162,7 @@ fn upstream_proxy_error_classification_marks_timeout_as_retryable_health_failure
     assert_eq!(
         classified.health_failure,
         Some(UpstreamHealthFailureMapping {
-            failure_reason: spooky_lb::health::HealthFailureReason::Timeout,
+            failure_reason: impulse_lb::health::HealthFailureReason::Timeout,
             metrics_reason: "timeout",
         })
     );
@@ -185,7 +185,7 @@ fn upstream_proxy_error_classification_covers_protocol_and_transport_cases() {
     assert_eq!(
         transport.health_failure,
         Some(UpstreamHealthFailureMapping {
-            failure_reason: spooky_lb::health::HealthFailureReason::Transport,
+            failure_reason: impulse_lb::health::HealthFailureReason::Transport,
             metrics_reason: "transport",
         })
     );

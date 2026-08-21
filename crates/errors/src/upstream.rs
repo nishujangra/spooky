@@ -2,7 +2,7 @@
 
 use std::error::Error as StdError;
 
-use spooky_lb::health::HealthFailureReason;
+use impulse_lb::health::HealthFailureReason;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct UpstreamErrorDetails {
@@ -228,7 +228,7 @@ impl UpstreamErrorClassification {
 mod tests {
     use std::{error::Error as StdError, fmt};
 
-    use spooky_lb::health::HealthFailureReason;
+    use impulse_lb::health::HealthFailureReason;
 
     use super::{
         UpstreamErrorCategory, UpstreamErrorClassification, UpstreamErrorDetails,

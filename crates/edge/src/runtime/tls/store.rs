@@ -4,7 +4,7 @@ use std::{
 };
 
 use rustls::ServerConfig as RustlsServerConfig;
-use spooky_errors::ProxyError;
+use impulse_errors::ProxyError;
 
 use crate::runtime::tls::inventory::ListenerTlsInventory;
 

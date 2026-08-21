@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use spooky_config::{
+use impulse_config::{
     config::{
         ExternalAuth, ExternalAuthFailureMode, JwtAuth, ScopedRateLimit, ScopedRateLimitScope,
     },
@@ -54,7 +54,7 @@ fn runtime_config_lowers_oidc_external_auth_metadata_into_canonical_contract() {
             client_id: "edge-gateway".to_string(),
             client_secret: Some("secret-1".to_string()),
             client_secret_ref: None,
-            audience: Some("spooky-api".to_string()),
+            audience: Some("impulse-api".to_string()),
             scopes: vec!["openid".to_string(), "profile".to_string()],
             request_headers: Vec::new(),
             response_header_allowlist: Vec::new(),
@@ -87,7 +87,7 @@ fn runtime_config_lowers_oidc_external_auth_metadata_into_canonical_contract() {
             assert_eq!(issuer_url.as_deref(), Some("https://issuer.example.com"));
             assert_eq!(client_id, "edge-gateway");
             assert_eq!(client_secret.as_deref(), Some("secret-1"));
-            assert_eq!(audience.as_deref(), Some("spooky-api"));
+            assert_eq!(audience.as_deref(), Some("impulse-api"));
             assert_eq!(scopes, &vec!["openid".to_string(), "profile".to_string()]);
             assert!(request_headers.is_empty());
             assert!(response_header_allowlist.is_empty());
@@ -104,7 +104,7 @@ fn runtime_config_normalizes_jwt_and_scoped_rate_limit_contracts() {
         upstream.auth.jwt = Some(JwtAuth {
             secret: "jwt-secret".to_string(),
             issuer: Some(" issuer-1 ".to_string()),
-            audience: Some(" spooky-api ".to_string()),
+            audience: Some(" impulse-api ".to_string()),
             clock_skew_secs: 45,
             ..JwtAuth::default()
         });
@@ -130,7 +130,7 @@ fn runtime_config_normalizes_jwt_and_scoped_rate_limit_contracts() {
         .expect("scoped rate limit");
 
     assert_eq!(jwt.issuer.as_deref(), Some("issuer-1"));
-    assert_eq!(jwt.audience.as_deref(), Some("spooky-api"));
+    assert_eq!(jwt.audience.as_deref(), Some("impulse-api"));
     assert_eq!(jwt.clock_skew, Duration::from_secs(45));
     assert_eq!(
         api.policy.upstream_auth.required_scopes,

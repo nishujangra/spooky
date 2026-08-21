@@ -1,4 +1,4 @@
-use spooky_edge::benchmark::route_lookup::RouteLookupBench;
+use impulse_edge::benchmark::route_lookup::RouteLookupBench;
 
 use crate::{benchmark::runner::run_case_aggregate, report::BenchCase};
 

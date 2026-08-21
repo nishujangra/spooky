@@ -1,12 +1,12 @@
 use std::fs;
 
-use spooky_utils::logger::{LoggerInitStatus, set_log_level, try_init_logger};
+use impulse_utils::logger::{LoggerInitStatus, set_log_level, try_init_logger};
 use tempfile::tempdir;
 
 #[test]
 fn raising_log_level_live_enables_new_debug_emission() {
     let dir = tempdir().expect("tempdir");
-    let log_path = dir.path().join("spooky.log");
+    let log_path = dir.path().join("impulse.log");
     let log_path_str = log_path.to_string_lossy().to_string();
 
     let init = try_init_logger("info", true, &log_path_str, false);

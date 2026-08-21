@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use spooky_config::config::Upstream;
+use impulse_config::config::Upstream;
 
 use crate::{
     benchmark::helpers::build_benchmark_upstream,

@@ -7,7 +7,7 @@ use std::{
 };
 
 use log::warn;
-use spooky_config::config::Watchdog as WatchdogConfig;
+use impulse_config::config::Watchdog as WatchdogConfig;
 
 use crate::watchdog::{config::WatchdogRuntimeConfig, time::now_millis};
 

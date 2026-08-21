@@ -5,8 +5,8 @@ use std::{
 };
 
 use log::{info, warn};
-use spooky_config::runtime::{ListenerRuntimeConfig, RuntimeConfig};
-use spooky_errors::ProxyError;
+use impulse_config::runtime::{ListenerRuntimeConfig, RuntimeConfig};
+use impulse_errors::ProxyError;
 
 use crate::runtime::{
     activation::{GenerationChangeEvent, GenerationHistoryEntry},
@@ -537,9 +537,9 @@ mod tests {
     };
 
     use rcgen::{Certificate, CertificateParams, SanType};
-    use spooky_config::{
+    use impulse_config::{
         config::{
-            Backend, ClientAuth, Config as SpookyConfigConfig, Listen, LoadBalancing, Log, LogFile,
+            Backend, ClientAuth, Config as ImpulseConfigConfig, Listen, LoadBalancing, Log, LogFile,
             LogFormat, Observability, Performance, Resilience, RouteMatch, Security, Tls, Upstream,
             UpstreamTls,
         },
@@ -569,7 +569,7 @@ mod tests {
         )
     }
 
-    fn test_config(cert: String, key: String, backend_addr: &str) -> SpookyConfigConfig {
+    fn test_config(cert: String, key: String, backend_addr: &str) -> ImpulseConfigConfig {
         let mut upstreams = HashMap::new();
         upstreams.insert(
             "api".to_string(),
@@ -595,7 +595,7 @@ mod tests {
             },
         );
 
-        SpookyConfigConfig {
+        ImpulseConfigConfig {
             version: 1,
             listen: Listen {
                 protocol: "http3".to_string(),
@@ -634,7 +634,7 @@ mod tests {
     fn runtime_bundle_from_config(
         generation: u64,
         config_path: &str,
-        config: &SpookyConfigConfig,
+        config: &ImpulseConfigConfig,
     ) -> RuntimeBundle {
         let runtime_config = RuntimeConfig::from_config(config).expect("runtime config");
         let mut bundle = QUICListener::build_runtime_bundle(
@@ -764,10 +764,10 @@ mod tests {
             let dir = tempdir().expect("tempdir");
             let (current_bundle, next_bundle) = runtime_bundle_pair(
                 dir.path(),
-                "spooky.yaml",
+                "impulse.yaml",
                 "http://127.0.0.1:7001",
                 2,
-                "spooky.yaml",
+                "impulse.yaml",
                 "http://127.0.0.1:7002",
             );
             let handle = RuntimeBundleHandle::new(current_bundle);
@@ -776,7 +776,7 @@ mod tests {
 
             let active = handle.current_view();
             assert_eq!(active.generation(), 2);
-            assert_eq!(active.startup().config_path, "spooky.yaml");
+            assert_eq!(active.startup().config_path, "impulse.yaml");
             assert_eq!(
                 active
                     .runtime_config()
@@ -897,10 +897,10 @@ mod tests {
             let dir = tempdir().expect("tempdir");
             let (current_bundle, next_bundle) = runtime_bundle_pair(
                 dir.path(),
-                "spooky.yaml",
+                "impulse.yaml",
                 "http://127.0.0.1:7001",
                 2,
-                "spooky.yaml",
+                "impulse.yaml",
                 "http://127.0.0.1:7002",
             );
 

@@ -89,15 +89,15 @@ brew install cmake pkg-config
 
 ```bash
 # Clone and build
-git clone https://github.com/Supernova-Labs-Org/spooky.git
-cd spooky
+git clone https://github.com/Supernova-Labs-Org/impulse.git
+cd impulse
 cargo build --release
 
 # Generate certificates
 make certs-selfsigned
 
 # Start proxy
-./target/release/spooky --config config/config.development.yaml
+./target/release/impulse --config config/config.development.yaml
 ```
 
 ## Configuration Example

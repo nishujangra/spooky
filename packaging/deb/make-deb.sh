@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
-# make-deb.sh — build a Debian .deb package for spooky
+# make-deb.sh — build a Debian .deb package for impulse
 #
 # Usage:
 #   ./make-deb.sh [--version <ver>] [--arch <arch>] [--skip-build] [--no-start]
@@ -24,7 +24,7 @@ cd "$REPO_ROOT"
 # ---- defaults --------------------------------------------------------------
 # Left EMPTY on purpose so the auto-detection below is reachable. Setting a
 # literal default here is what made version/arch detection dead code before.
-PKG_NAME="spooky"
+PKG_NAME="impulse"
 PKG_VERSION="0.5.1-beta"
 PKG_ARCH="amd64"
 SKIP_BUILD=0
@@ -157,18 +157,18 @@ fi
 mkdir -p \
   "$BUILD_DIR/DEBIAN" \
   "$BUILD_DIR/usr/bin" \
-  "$BUILD_DIR/etc/spooky/certs" \
-  "$BUILD_DIR/var/log/spooky" \
+  "$BUILD_DIR/etc/impulse/certs" \
+  "$BUILD_DIR/var/log/impulse" \
   "$BUILD_DIR/lib/systemd/system"
 
 # binary
 install -m 0755 "$BINARY_SRC" "$BUILD_DIR/usr/bin/${PKG_NAME}"
 
 # default config (marked as conffile so dpkg won't clobber on upgrade)
-install -m 0640 "packaging/deb/debian/config.yaml" "$BUILD_DIR/etc/spooky/config.yaml"
+install -m 0640 "packaging/deb/debian/config.yaml" "$BUILD_DIR/etc/impulse/config.yaml"
 
 # systemd unit
-install -m 0644 "packaging/deb/debian/spooky.service" "$BUILD_DIR/lib/systemd/system/spooky.service"
+install -m 0644 "packaging/deb/debian/impulse.service" "$BUILD_DIR/lib/systemd/system/impulse.service"
 
 INSTALLED_SIZE="$(du -ks "$BUILD_DIR" | cut -f1)"
 
@@ -182,7 +182,7 @@ Architecture: ${PKG_ARCH}
 Maintainer: Supernova Labs <noreply@supernova-labs.dev>
 Section: net
 Priority: optional
-Homepage: https://github.com/Supernova-Labs-Org/spooky
+Homepage: https://github.com/Supernova-Labs-Org/impulse
 Depends: libc6, adduser
 Installed-Size: ${INSTALLED_SIZE}
 Description: Impulse QUIC/HTTP3 reverse proxy and load balancer
@@ -192,7 +192,7 @@ EOF
 
 # ---- DEBIAN/conffiles ------------------------------------------------------
 cat > "$BUILD_DIR/DEBIAN/conffiles" <<EOF
-/etc/spooky/config.yaml
+/etc/impulse/config.yaml
 EOF
 
 # ---- DEBIAN/postinst -------------------------------------------------------
@@ -207,30 +207,30 @@ EOF
 cat >> "$BUILD_DIR/DEBIAN/postinst" <<'EOF'
 
 # create system user/group if missing
-if ! getent group spooky > /dev/null 2>&1; then
-  groupadd --system spooky
+if ! getent group impulse > /dev/null 2>&1; then
+  groupadd --system impulse
 fi
-if ! getent passwd spooky > /dev/null 2>&1; then
-  useradd --system --gid spooky --no-create-home \
-          --home-dir /etc/spooky --shell /usr/sbin/nologin \
-          --comment "Impulse reverse proxy" spooky
+if ! getent passwd impulse > /dev/null 2>&1; then
+  useradd --system --gid impulse --no-create-home \
+          --home-dir /etc/impulse --shell /usr/sbin/nologin \
+          --comment "Impulse reverse proxy" impulse
 fi
 
-# Ownership. Deliberately NOT recursive over /etc/spooky: operators place TLS
-# key material in /etc/spooky/certs and set its permissions themselves, and a
+# Ownership. Deliberately NOT recursive over /etc/impulse: operators place TLS
+# key material in /etc/impulse/certs and set its permissions themselves, and a
 # blanket chown -R on every upgrade would silently rewrite those.
-chown spooky:spooky /etc/spooky
-chmod 750 /etc/spooky
-chown spooky:spooky /etc/spooky/config.yaml
-chmod 640 /etc/spooky/config.yaml
+chown impulse:impulse /etc/impulse
+chmod 750 /etc/impulse
+chown impulse:impulse /etc/impulse/config.yaml
+chmod 640 /etc/impulse/config.yaml
 
 # The certs directory itself must be owned/traversable, but leave its contents
 # to the operator.
-chown spooky:spooky /etc/spooky/certs
-chmod 750 /etc/spooky/certs
+chown impulse:impulse /etc/impulse/certs
+chmod 750 /etc/impulse/certs
 
-chown -R spooky:spooky /var/log/spooky
-chmod 750 /var/log/spooky
+chown -R impulse:impulse /var/log/impulse
+chmod 750 /var/log/impulse
 
 # --- service activation ----------------------------------------------------
 # Detect systemd by checking for a real systemd PID 1, NOT via
@@ -246,24 +246,24 @@ if has_systemd; then
 
   # Enable unconditionally so the service survives reboot even when we choose
   # not to start it now.
-  systemctl enable spooky.service > /dev/null 2>&1 || true
+  systemctl enable impulse.service > /dev/null 2>&1 || true
 
   if [ "$AUTO_START" = "1" ]; then
     # A fresh install has no certs yet, so a start attempt is expected to fail.
     # Report it rather than hiding it behind `|| true`.
-    if ! systemctl restart spooky.service; then
+    if ! systemctl restart impulse.service; then
       echo "Impulse: service did not start." >&2
       echo "Impulse: this is expected on a fresh install until you provide" >&2
-      echo "Impulse:   /etc/spooky/certs/fullchain.pem" >&2
-      echo "Impulse:   /etc/spooky/certs/privkey.pem" >&2
-      echo "Impulse: and edit /etc/spooky/config.yaml, then:" >&2
-      echo "Impulse:   sudo systemctl restart spooky" >&2
-      echo "Impulse: check 'journalctl -u spooky -n 50' for the reason." >&2
+      echo "Impulse:   /etc/impulse/certs/fullchain.pem" >&2
+      echo "Impulse:   /etc/impulse/certs/privkey.pem" >&2
+      echo "Impulse: and edit /etc/impulse/config.yaml, then:" >&2
+      echo "Impulse:   sudo systemctl restart impulse" >&2
+      echo "Impulse: check 'journalctl -u impulse -n 50' for the reason." >&2
     fi
   else
     echo "Impulse: enabled but not started (--no-start build)."
-    echo "Impulse: provide certs in /etc/spooky/certs, edit /etc/spooky/config.yaml, then:"
-    echo "Impulse:   sudo systemctl start spooky"
+    echo "Impulse: provide certs in /etc/impulse/certs, edit /etc/impulse/config.yaml, then:"
+    echo "Impulse:   sudo systemctl start impulse"
   fi
 fi
 EOF
@@ -279,8 +279,8 @@ set -e
 # (postinst restarts the service on upgrade.)
 if [ "$1" = "remove" ] || [ "$1" = "purge" ] || [ "$1" = "deconfigure" ]; then
   if [ -d /run/systemd/system ] && command -v systemctl > /dev/null 2>&1; then
-    systemctl stop spooky.service 2>/dev/null || true
-    systemctl disable spooky.service 2>/dev/null || true
+    systemctl stop impulse.service 2>/dev/null || true
+    systemctl disable impulse.service 2>/dev/null || true
   fi
 fi
 EOF
@@ -293,27 +293,27 @@ set -e
 
 if [ "$1" = "purge" ]; then
   # Remove only what this package created. TLS key material in
-  # /etc/spooky/certs is operator-supplied and never installed by us, so
+  # /etc/impulse/certs is operator-supplied and never installed by us, so
   # destroying it on purge would be data loss well beyond our remit.
-  rm -f /etc/spooky/config.yaml
+  rm -f /etc/impulse/config.yaml
   # rmdir, not rm -rf: succeeds only when the operator left nothing behind.
-  rmdir /etc/spooky/certs 2>/dev/null || true
-  rmdir /etc/spooky       2>/dev/null || true
+  rmdir /etc/impulse/certs 2>/dev/null || true
+  rmdir /etc/impulse       2>/dev/null || true
 
-  if [ -d /etc/spooky ]; then
-    echo "Impulse: kept /etc/spooky — it still holds files this package did not install." >&2
+  if [ -d /etc/impulse ]; then
+    echo "Impulse: kept /etc/impulse — it still holds files this package did not install." >&2
   fi
 
-  rm -f /var/log/spooky/spooky.log
-  rmdir /var/log/spooky 2>/dev/null || true
+  rm -f /var/log/impulse/impulse.log
+  rmdir /var/log/impulse 2>/dev/null || true
 
   # Drop the service account only once nothing of ours remains.
-  if [ ! -d /etc/spooky ]; then
-    if getent passwd spooky > /dev/null 2>&1; then
-      userdel spooky 2>/dev/null || true
+  if [ ! -d /etc/impulse ]; then
+    if getent passwd impulse > /dev/null 2>&1; then
+      userdel impulse 2>/dev/null || true
     fi
-    if getent group spooky > /dev/null 2>&1; then
-      groupdel spooky 2>/dev/null || true
+    if getent group impulse > /dev/null 2>&1; then
+      groupdel impulse 2>/dev/null || true
     fi
   fi
 fi
@@ -338,9 +338,9 @@ echo "  sudo dpkg -i ${PKG_FULL}.deb"
 echo ""
 echo "After install:"
 echo "  1. place TLS certs (PKCS#8 key) at:"
-echo "       /etc/spooky/certs/fullchain.pem"
-echo "       /etc/spooky/certs/privkey.pem"
-echo "     and: sudo chown spooky:spooky /etc/spooky/certs/*.pem"
-echo "          sudo chmod 640 /etc/spooky/certs/privkey.pem"
-echo "  2. edit /etc/spooky/config.yaml (set a control-api token)"
-echo "  3. sudo systemctl restart spooky && journalctl -u spooky -n 50"
+echo "       /etc/impulse/certs/fullchain.pem"
+echo "       /etc/impulse/certs/privkey.pem"
+echo "     and: sudo chown impulse:impulse /etc/impulse/certs/*.pem"
+echo "          sudo chmod 640 /etc/impulse/certs/privkey.pem"
+echo "  2. edit /etc/impulse/config.yaml (set a control-api token)"
+echo "  3. sudo systemctl restart impulse && journalctl -u impulse -n 50"

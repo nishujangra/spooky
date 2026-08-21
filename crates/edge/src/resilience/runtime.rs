@@ -1,6 +1,6 @@
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
-use spooky_config::{
+use impulse_config::{
     config::Resilience as ResilienceConfig,
     runtime::{RuntimeAdmissionPolicy, RuntimeRateLimitPolicy},
 };
@@ -181,7 +181,7 @@ impl RuntimeResilience {
             &rate_limit_policy
                 .scoped_limits
                 .iter()
-                .map(|rule| spooky_config::config::ScopedRateLimit {
+                .map(|rule| impulse_config::config::ScopedRateLimit {
                     name: rule.name.clone(),
                     scope: rule.scope,
                     requests_per_sec: rule.requests_per_sec,

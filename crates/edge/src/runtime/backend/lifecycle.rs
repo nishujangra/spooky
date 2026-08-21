@@ -6,8 +6,8 @@ use std::{
 };
 
 use log::{debug, info, warn};
-use spooky_lb::{HealthTransition, upstream_pool::UpstreamPool};
-use spooky_transport::{SharedDnsResolver, UpstreamTransportPool};
+use impulse_lb::{HealthTransition, upstream_pool::UpstreamPool};
+use impulse_transport::{SharedDnsResolver, UpstreamTransportPool};
 
 use super::{
     event::{
@@ -406,7 +406,7 @@ pub(crate) fn apply_backend_request_feedback(
 pub(crate) fn evaluate_active_health_check(
     identity: BackendIdentity,
     outcome: BackendHealthObservationOutcome,
-    reason: Option<spooky_lb::health::HealthFailureReason>,
+    reason: Option<impulse_lb::health::HealthFailureReason>,
     base_interval_ms: u64,
     consecutive_failures: u32,
 ) -> ActiveHealthCheckEvaluation {
@@ -701,11 +701,11 @@ pub(crate) fn log_backend_dns_refresh(outcome: &BackendDnsRefreshApplication) {
 mod tests {
     use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
-    use spooky_config::{
+    use impulse_config::{
         config::{Backend, Config, HealthCheck, Listen, LoadBalancing, RouteMatch, Tls, Upstream},
         runtime::{RuntimeBackendTransportKind, RuntimeConfig},
     };
-    use spooky_transport::{SharedDnsResolver, UpstreamTransportPool};
+    use impulse_transport::{SharedDnsResolver, UpstreamTransportPool};
 
     use super::*;
     use crate::runtime::backend::event::{BackendHealthObservationOutcome, BackendRequestFeedback};
@@ -791,7 +791,7 @@ mod tests {
         UpstreamTransportPool::new_from_runtime_backends(
             [(backend_addr.to_string(), RuntimeBackendTransportKind::Http1)],
             HashMap::new(),
-            spooky_config::runtime::RuntimeBackendConnectionPolicy {
+            impulse_config::runtime::RuntimeBackendConnectionPolicy {
                 max_inflight: 32,
                 max_idle_per_backend: 8,
                 pool_idle_timeout: Duration::from_secs(30),
@@ -1309,7 +1309,7 @@ mod tests {
             let failure = evaluate_active_health_check(
                 BackendIdentity::new(placed_backend),
                 BackendHealthObservationOutcome::Failure,
-                Some(spooky_lb::health::HealthFailureReason::Transport),
+                Some(impulse_lb::health::HealthFailureReason::Transport),
                 100,
                 0,
             );
@@ -1369,7 +1369,7 @@ mod tests {
             let failure = evaluate_active_health_check(
                 BackendIdentity::new("127.0.0.1:8080"),
                 BackendHealthObservationOutcome::Failure,
-                Some(spooky_lb::health::HealthFailureReason::Transport),
+                Some(impulse_lb::health::HealthFailureReason::Transport),
                 100,
                 0,
             );
@@ -1431,7 +1431,7 @@ mod tests {
             let failure = evaluate_active_health_check(
                 BackendIdentity::new("127.0.0.1:8080"),
                 BackendHealthObservationOutcome::Failure,
-                Some(spooky_lb::health::HealthFailureReason::Transport),
+                Some(impulse_lb::health::HealthFailureReason::Transport),
                 100,
                 0,
             );
@@ -1496,7 +1496,7 @@ mod tests {
                 identity: BackendIdentity::new("127.0.0.1:8080"),
                 source: BackendHealthObservationSource::PassiveRequest,
                 outcome: BackendHealthObservationOutcome::Failure,
-                reason: Some(spooky_lb::health::HealthFailureReason::Timeout),
+                reason: Some(impulse_lb::health::HealthFailureReason::Timeout),
             };
 
             assert!(apply_backend_health_observation(Some(&pool), Some(0), &failure).is_none());
@@ -1533,7 +1533,7 @@ mod tests {
                 identity: BackendIdentity::new("127.0.0.1:8080"),
                 source: BackendHealthObservationSource::PassiveRequest,
                 outcome: BackendHealthObservationOutcome::Failure,
-                reason: Some(spooky_lb::health::HealthFailureReason::Transport),
+                reason: Some(impulse_lb::health::HealthFailureReason::Transport),
             };
             assert!(
                 coordinator
@@ -1574,7 +1574,7 @@ mod tests {
                 identity: BackendIdentity::new("127.0.0.1:8080"),
                 source: BackendHealthObservationSource::PassiveRequest,
                 outcome: BackendHealthObservationOutcome::Failure,
-                reason: Some(spooky_lb::health::HealthFailureReason::Transport),
+                reason: Some(impulse_lb::health::HealthFailureReason::Transport),
             };
             assert!(apply_backend_health_observation(Some(&pool), Some(0), &failure).is_none());
             assert!(apply_backend_health_observation(Some(&pool), Some(0), &failure).is_none());
@@ -1611,7 +1611,7 @@ mod tests {
                 BackendIdentity::new("127.0.0.1:8080"),
                 Duration::from_millis(10),
                 Some(503),
-                Some(spooky_lb::health::HealthFailureReason::HttpStatus5xx),
+                Some(impulse_lb::health::HealthFailureReason::HttpStatus5xx),
             );
             assert!(apply_backend_request_feedback(Some(&pool), Some(0), &feedback).is_none());
             assert!(apply_backend_request_feedback(Some(&pool), Some(0), &feedback).is_none());
@@ -1666,7 +1666,7 @@ mod tests {
                 BackendIdentity::new("127.0.0.1:8080"),
                 Duration::from_millis(100),
                 None,
-                Some(spooky_lb::health::HealthFailureReason::Timeout),
+                Some(impulse_lb::health::HealthFailureReason::Timeout),
             );
             assert!(
                 apply_backend_request_feedback(Some(&timeout_pool), Some(0), &timeout_feedback)
@@ -1688,7 +1688,7 @@ mod tests {
                 BackendIdentity::new("127.0.0.1:8080"),
                 Duration::from_millis(100),
                 None,
-                Some(spooky_lb::health::HealthFailureReason::Transport),
+                Some(impulse_lb::health::HealthFailureReason::Transport),
             );
             assert!(
                 apply_backend_request_feedback(Some(&transport_pool), Some(0), &transport_feedback)
@@ -1766,7 +1766,7 @@ mod tests {
                 BackendIdentity::new("127.0.0.1:8080"),
                 Duration::from_millis(10),
                 None,
-                Some(spooky_lb::health::HealthFailureReason::Timeout),
+                Some(impulse_lb::health::HealthFailureReason::Timeout),
             );
             assert!(apply_backend_request_feedback(Some(&pool), Some(0), &feedback).is_none());
             assert!(apply_backend_request_feedback(Some(&pool), Some(0), &feedback).is_none());
@@ -1813,7 +1813,7 @@ mod tests {
                     BackendIdentity::new("127.0.0.1:8080"),
                     Duration::from_millis(10),
                     Some(503),
-                    Some(spooky_lb::health::HealthFailureReason::HttpStatus5xx),
+                    Some(impulse_lb::health::HealthFailureReason::HttpStatus5xx),
                 ),
             );
             assert!(transition.is_none());
@@ -1825,7 +1825,7 @@ mod tests {
                     BackendIdentity::new("127.0.0.1:8080"),
                     Duration::from_millis(10),
                     Some(503),
-                    Some(spooky_lb::health::HealthFailureReason::HttpStatus5xx),
+                    Some(impulse_lb::health::HealthFailureReason::HttpStatus5xx),
                 ),
             );
             assert!(transition.is_none());
@@ -1837,7 +1837,7 @@ mod tests {
                     BackendIdentity::new("127.0.0.1:8080"),
                     Duration::from_millis(10),
                     Some(503),
-                    Some(spooky_lb::health::HealthFailureReason::HttpStatus5xx),
+                    Some(impulse_lb::health::HealthFailureReason::HttpStatus5xx),
                 ),
             );
             assert!(matches!(
@@ -1880,7 +1880,7 @@ mod tests {
                     BackendIdentity::new("127.0.0.1:8080"),
                     Duration::from_millis(10),
                     Some(503),
-                    Some(spooky_lb::health::HealthFailureReason::HttpStatus5xx),
+                    Some(impulse_lb::health::HealthFailureReason::HttpStatus5xx),
                 ),
             );
             assert!(transition.is_none());
@@ -1895,7 +1895,7 @@ mod tests {
             let failure = evaluate_active_health_check(
                 BackendIdentity::new("127.0.0.1:8080"),
                 BackendHealthObservationOutcome::Failure,
-                Some(spooky_lb::health::HealthFailureReason::Transport),
+                Some(impulse_lb::health::HealthFailureReason::Transport),
                 100,
                 0,
             );

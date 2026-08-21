@@ -9,8 +9,8 @@ use std::{
 
 use clap::Parser;
 use log::{error, info, warn};
-use spooky_config::{runtime::RuntimeConfig, validator::validate as validate_config};
-use spooky_edge::{
+use impulse_config::{runtime::RuntimeConfig, validator::validate as validate_config};
+use impulse_edge::{
     configure_async_runtime,
     runtime::{bundle::RuntimeBundleHandle, listener::QUICListener},
 };
@@ -37,7 +37,7 @@ struct Cli {
 pub(crate) fn main_entry() {
     let cli = Cli::parse();
 
-    const DEFAULT_CONFIG_PATH: &str = "/etc/spooky/config.yaml";
+    const DEFAULT_CONFIG_PATH: &str = "/etc/impulse/config.yaml";
     let config_path = match cli.config {
         Some(path) => path,
         None if Path::new(DEFAULT_CONFIG_PATH).exists() => DEFAULT_CONFIG_PATH.to_string(),
@@ -53,18 +53,18 @@ pub(crate) fn main_entry() {
         }
     };
 
-    let config_yaml = match spooky_config::loader::read_config(&config_path) {
+    let config_yaml = match impulse_config::loader::read_config(&config_path) {
         Ok(cfg) => cfg,
         Err(err_msg) => {
             fatal_startup_error(&format!("loading config failed: {}", err_msg), false, 1);
         }
     };
 
-    spooky_utils::logger::init::init_logger(
+    impulse_utils::logger::init::init_logger(
         &config_yaml.log.level,
         config_yaml.log.file.enabled,
         &config_yaml.log.file.path,
-        config_yaml.log.format == spooky_config::config::LogFormat::Json,
+        config_yaml.log.format == impulse_config::config::LogFormat::Json,
     );
     // NOTE: tracing is initialized inside the Tokio runtime (see `run`), not
     // here. The OTLP tonic exporter spawns a background task while building its
@@ -108,7 +108,7 @@ pub(crate) fn main_entry() {
     let runtime = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .worker_threads(control_plane_threads)
-        .thread_name("spooky-control-plane")
+        .thread_name("impulse-control-plane")
         .build()
     {
         Ok(runtime) => runtime,
@@ -135,14 +135,14 @@ pub(crate) fn main_entry() {
 
 async fn run(
     runtime_config: RuntimeConfig,
-    log_config: spooky_config::config::Log,
-    tracing_config: spooky_config::config::Tracing,
+    log_config: impulse_config::config::Log,
+    tracing_config: impulse_config::config::Tracing,
     uid: libc::uid_t,
     config_path: String,
 ) {
     // Must happen inside the runtime: the OTLP tonic exporter spawns a task on
     // the current reactor while building its channel.
-    spooky_utils::telemetry::init::init_tracing(
+    impulse_utils::telemetry::init::init_tracing(
         tracing_config.enabled,
         &tracing_config.service_name,
         tracing_config.otlp_endpoint.as_deref(),
@@ -259,10 +259,10 @@ async fn run(
     }
 
     if worker_failed {
-        spooky_utils::telemetry::init::shutdown_tracing();
+        impulse_utils::telemetry::init::shutdown_tracing();
         std::process::exit(1);
     }
-    spooky_utils::telemetry::init::shutdown_tracing();
+    impulse_utils::telemetry::init::shutdown_tracing();
     info!("Impulse shutdown complete");
 }
 #[cfg(unix)]

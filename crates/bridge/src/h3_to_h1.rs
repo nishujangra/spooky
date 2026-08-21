@@ -3,7 +3,7 @@ use std::convert::Infallible;
 use bytes::Bytes;
 use http::{Method, Request, Uri};
 use http_body_util::combinators::BoxBody;
-use spooky_errors::BridgeError;
+use impulse_errors::BridgeError;
 
 use crate::{
     request::{

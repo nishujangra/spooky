@@ -30,33 +30,33 @@ This page helps you install Impulse on a host and reach the point where you can 
 
 ### Debian Package (Recommended for Linux)
 
-Download and install the `.deb` from [GitHub Releases](https://github.com/Supernova-Labs-Org/spooky/releases):
+Download and install the `.deb` from [GitHub Releases](https://github.com/Supernova-Labs-Org/impulse/releases):
 
 ```bash
-wget https://github.com/Supernova-Labs-Org/spooky/releases/download/v0.5.1-beta/spooky_0.5.1-beta_amd64.deb
-sudo dpkg -i spooky_0.5.1-beta_amd64.deb
+wget https://github.com/Supernova-Labs-Org/impulse/releases/download/v0.5.1-beta/impulse_0.5.1-beta_amd64.deb
+sudo dpkg -i impulse_0.5.1-beta_amd64.deb
 ```
 
 The package installs:
-- Binary: `/usr/bin/spooky`
-- Default config: `/etc/spooky/config.yaml`
-- Certs directory: `/etc/spooky/certs/`
-- Log directory: `/var/log/spooky/`
-- Systemd unit: `/lib/systemd/system/spooky.service`
-- System user/group: `spooky`
+- Binary: `/usr/bin/impulse`
+- Default config: `/etc/impulse/config.yaml`
+- Certs directory: `/etc/impulse/certs/`
+- Log directory: `/var/log/impulse/`
+- Systemd unit: `/lib/systemd/system/impulse.service`
+- System user/group: `impulse`
 
-After install, place your TLS certificates (see [TLS Certificates](#tls-certificates) below), edit `/etc/spooky/config.yaml`, then start the service:
+After install, place your TLS certificates (see [TLS Certificates](#tls-certificates) below), edit `/etc/impulse/config.yaml`, then start the service:
 
 ```bash
-sudo systemctl restart spooky
-sudo systemctl status spooky
+sudo systemctl restart impulse
+sudo systemctl status impulse
 ```
 
 To build a `.deb` package from source in this repository:
 
 ```bash
 ./packaging/deb/make-deb.sh
-sudo dpkg -i spooky_0.1.1-beta_amd64.deb
+sudo dpkg -i impulse_0.1.1-beta_amd64.deb
 ```
 
 ### Build from Source
@@ -76,27 +76,27 @@ brew install cmake pkg-config
 
 **Clone and build:**
 ```bash
-git clone https://github.com/Supernova-Labs-Org/spooky.git
-cd spooky
+git clone https://github.com/Supernova-Labs-Org/impulse.git
+cd impulse
 cargo build --release
 ```
 
-The binary is generated at `target/release/spooky`.
+The binary is generated at `target/release/impulse`.
 
 **Run tests (optional):**
 ```bash
 cargo test
-cargo test -p spooky-edge --test lb_integration
+cargo test -p impulse-edge --test lb_integration
 ```
 
 **System-wide installation:**
 ```bash
-sudo install -m 755 target/release/spooky /usr/bin/spooky
+sudo install -m 755 target/release/impulse /usr/bin/impulse
 ```
 
 ## TLS Certificates
 
-Impulse requires TLS certificates to serve QUIC/HTTP3 traffic. The service runs as the `spooky` user, so certificates must be readable by that user.
+Impulse requires TLS certificates to serve QUIC/HTTP3 traffic. The service runs as the `impulse` user, so certificates must be readable by that user.
 
 ### Using Your Own Certificates
 
@@ -104,21 +104,21 @@ Copy your certificate and private key into the certs directory and set correct o
 
 ```bash
 # Copy certificates
-sudo cp /path/to/fullchain.pem /etc/spooky/certs/fullchain.pem
-sudo cp /path/to/privkey.pem   /etc/spooky/certs/privkey.pem
+sudo cp /path/to/fullchain.pem /etc/impulse/certs/fullchain.pem
+sudo cp /path/to/privkey.pem   /etc/impulse/certs/privkey.pem
 
-# Set ownership and permissions (root owns, spooky group can read)
-sudo chown root:spooky /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
-sudo chmod 640 /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
+# Set ownership and permissions (root owns, impulse group can read)
+sudo chown root:impulse /etc/impulse/certs/fullchain.pem /etc/impulse/certs/privkey.pem
+sudo chmod 640 /etc/impulse/certs/fullchain.pem /etc/impulse/certs/privkey.pem
 ```
 
-Then update `/etc/spooky/config.yaml` to point to these paths:
+Then update `/etc/impulse/config.yaml` to point to these paths:
 
 ```yaml
 listen:
   tls:
-    cert: "/etc/spooky/certs/fullchain.pem"
-    key:  "/etc/spooky/certs/privkey.pem"
+    cert: "/etc/impulse/certs/fullchain.pem"
+    key:  "/etc/impulse/certs/privkey.pem"
 ```
 
 ### Using the Repo's Development Certificates
@@ -126,20 +126,20 @@ listen:
 If you are building from source and want to use the included development certificates (located in `certs/` in the repo), copy them in the same way:
 
 ```bash
-sudo cp certs/proxy-fullchain.pem /etc/spooky/certs/fullchain.pem
-sudo cp certs/proxy-key-pkcs8.pem /etc/spooky/certs/privkey.pem
+sudo cp certs/proxy-fullchain.pem /etc/impulse/certs/fullchain.pem
+sudo cp certs/proxy-key-pkcs8.pem /etc/impulse/certs/privkey.pem
 
-sudo chown root:spooky /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
-sudo chmod 640 /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
+sudo chown root:impulse /etc/impulse/certs/fullchain.pem /etc/impulse/certs/privkey.pem
+sudo chmod 640 /etc/impulse/certs/fullchain.pem /etc/impulse/certs/privkey.pem
 ```
 
-Update `/etc/spooky/config.yaml`:
+Update `/etc/impulse/config.yaml`:
 
 ```yaml
 listen:
   tls:
-    cert: "/etc/spooky/certs/fullchain.pem"
-    key:  "/etc/spooky/certs/privkey.pem"
+    cert: "/etc/impulse/certs/fullchain.pem"
+    key:  "/etc/impulse/certs/privkey.pem"
 ```
 
 > **Note:** The development certificates are signed by the repo's test CA (`certs/ca-cert.pem`). Do not use them in production.
@@ -155,10 +155,10 @@ openssl req -x509 -newkey rsa:4096 -nodes \
   -days 365 \
   -subj "/CN=proxy.example.com"
 
-sudo mv /tmp/fullchain.pem /etc/spooky/certs/fullchain.pem
-sudo mv /tmp/privkey.pem   /etc/spooky/certs/privkey.pem
-sudo chown root:spooky /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
-sudo chmod 640 /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
+sudo mv /tmp/fullchain.pem /etc/impulse/certs/fullchain.pem
+sudo mv /tmp/privkey.pem   /etc/impulse/certs/privkey.pem
+sudo chown root:impulse /etc/impulse/certs/fullchain.pem /etc/impulse/certs/privkey.pem
+sudo chmod 640 /etc/impulse/certs/fullchain.pem /etc/impulse/certs/privkey.pem
 ```
 
 For production certificates, see [TLS Configuration](../configuration/tls.md).
@@ -171,35 +171,35 @@ If you installed from source or a tarball, set up the directories, user, and ser
 
 ```bash
 # Create directories
-sudo mkdir -p /etc/spooky/certs
-sudo mkdir -p /var/log/spooky
+sudo mkdir -p /etc/impulse/certs
+sudo mkdir -p /var/log/impulse
 
 # Create system user
-sudo groupadd --system spooky
-sudo useradd --system --gid spooky --no-create-home \
-     --home-dir /etc/spooky --shell /usr/sbin/nologin \
-     --comment "Impulse reverse proxy" spooky
+sudo groupadd --system impulse
+sudo useradd --system --gid impulse --no-create-home \
+     --home-dir /etc/impulse --shell /usr/sbin/nologin \
+     --comment "Impulse reverse proxy" impulse
 
 # Set ownership
-sudo chown -R spooky:spooky /etc/spooky /var/log/spooky
-sudo chmod 750 /etc/spooky /etc/spooky/certs /var/log/spooky
+sudo chown -R impulse:impulse /etc/impulse /var/log/impulse
+sudo chmod 750 /etc/impulse /etc/impulse/certs /var/log/impulse
 
 # Copy default config
-sudo install -m 0640 -o spooky -g spooky packaging/deb/debian/config.yaml /etc/spooky/config.yaml
+sudo install -m 0640 -o impulse -g impulse packaging/deb/debian/config.yaml /etc/impulse/config.yaml
 ```
 
 Then place TLS certificates as described above, and install the systemd unit:
 
 ```bash
-sudo install -m 0644 packaging/deb/debian/spooky.service /lib/systemd/system/spooky.service
+sudo install -m 0644 packaging/deb/debian/impulse.service /lib/systemd/system/impulse.service
 sudo systemctl daemon-reload
-sudo systemctl enable spooky.service
-sudo systemctl start spooky.service
+sudo systemctl enable impulse.service
+sudo systemctl start impulse.service
 ```
 
 ### Configuration File
 
-Edit `/etc/spooky/config.yaml` to match your environment. Minimal working example:
+Edit `/etc/impulse/config.yaml` to match your environment. Minimal working example:
 
 ```yaml
 version: 1
@@ -209,8 +209,8 @@ listen:
   address: "0.0.0.0"
   port: 9889
   tls:
-    cert: "/etc/spooky/certs/fullchain.pem"
-    key:  "/etc/spooky/certs/privkey.pem"
+    cert: "/etc/impulse/certs/fullchain.pem"
+    key:  "/etc/impulse/certs/privkey.pem"
 
 upstream:
   default:
@@ -235,7 +235,7 @@ log:
   format: json
   file:
     enabled: true
-    path: /var/log/spooky/spooky.log
+    path: /var/log/impulse/impulse.log
 ```
 
 See [Configuration Reference](../configuration/reference.md) for all options.
@@ -257,20 +257,20 @@ Recommended next pages:
 
 ### Log Rotation
 
-Configure log rotation for file-based logging. Create `/etc/logrotate.d/spooky`:
+Configure log rotation for file-based logging. Create `/etc/logrotate.d/impulse`:
 
 ```
-/var/log/spooky/*.log {
+/var/log/impulse/*.log {
     daily
     rotate 14
     compress
     delaycompress
     missingok
     notifempty
-    create 0640 spooky spooky
+    create 0640 impulse impulse
     sharedscripts
     postrotate
-        systemctl restart spooky.service >/dev/null 2>&1 || true
+        systemctl restart impulse.service >/dev/null 2>&1 || true
     endscript
 }
 ```
@@ -313,7 +313,7 @@ brew install cmake pkg-config rust
 1. Install Rust from [rustup.rs](https://rustup.rs/)
 2. Install Visual Studio Build Tools with C++ support from [Microsoft](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
 
-Binary location after build: `target\release\spooky.exe`
+Binary location after build: `target\release\impulse.exe`
 
 ## Docker Deployment
 
@@ -327,57 +327,57 @@ FROM debian:bookworm-slim
 RUN apt-get update && \
     apt-get install -y ca-certificates && \
     rm -rf /var/lib/apt/lists/*
-COPY --from=builder /app/target/release/spooky /usr/bin/spooky
+COPY --from=builder /app/target/release/impulse /usr/bin/impulse
 EXPOSE 9889/udp
-CMD ["spooky", "--config", "/etc/spooky/config.yaml"]
+CMD ["impulse", "--config", "/etc/impulse/config.yaml"]
 ```
 
 ```bash
 docker run -d \
-  --name spooky \
+  --name impulse \
   -p 9889:9889/udp \
-  -v /etc/spooky/config.yaml:/etc/spooky/config.yaml:ro \
-  -v /etc/spooky/certs:/etc/spooky/certs:ro \
-  spooky:latest
+  -v /etc/impulse/config.yaml:/etc/impulse/config.yaml:ro \
+  -v /etc/impulse/certs:/etc/impulse/certs:ro \
+  impulse:latest
 ```
 
 ## Verification
 
 ```bash
 # Check service status
-sudo systemctl status spooky
+sudo systemctl status impulse
 
 # Validate configuration (runs startup validation then exits)
-sudo -u spooky spooky --config /etc/spooky/config.yaml
+sudo -u impulse impulse --config /etc/impulse/config.yaml
 
 # View logs
-sudo journalctl -u spooky -f
+sudo journalctl -u impulse -f
 # or if file logging is enabled:
-sudo tail -f /var/log/spooky/spooky.log
+sudo tail -f /var/log/impulse/impulse.log
 ```
 
 ## Troubleshooting
 
-**`/etc/spooky/config.yaml` missing after `dpkg -i`:**
+**`/etc/impulse/config.yaml` missing after `dpkg -i`:**
 The package install may have been interrupted. Reinstall or manually restore the file:
 ```bash
-sudo dpkg -i spooky_0.1.1-beta_amd64.deb
+sudo dpkg -i impulse_0.1.1-beta_amd64.deb
 # or:
-sudo install -m 0640 -o spooky -g spooky packaging/deb/debian/config.yaml /etc/spooky/config.yaml
+sudo install -m 0640 -o impulse -g impulse packaging/deb/debian/config.yaml /etc/impulse/config.yaml
 ```
 
 **`Permission denied` on TLS key/cert:**
-The `spooky` user cannot read the certificate files. Fix ownership and permissions:
+The `impulse` user cannot read the certificate files. Fix ownership and permissions:
 ```bash
-sudo chown root:spooky /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
-sudo chmod 640 /etc/spooky/certs/fullchain.pem /etc/spooky/certs/privkey.pem
-sudo systemctl restart spooky
+sudo chown root:impulse /etc/impulse/certs/fullchain.pem /etc/impulse/certs/privkey.pem
+sudo chmod 640 /etc/impulse/certs/fullchain.pem /etc/impulse/certs/privkey.pem
+sudo systemctl restart impulse
 ```
 
 **`Permission denied` when binding to port < 1024:**
 Use a port > 1024, or grant the capability:
 ```bash
-sudo setcap CAP_NET_BIND_SERVICE=+eip /usr/bin/spooky
+sudo setcap CAP_NET_BIND_SERVICE=+eip /usr/bin/impulse
 ```
 
 **Build fails with linker errors:**
@@ -386,7 +386,7 @@ Ensure build tools are installed: `cmake`, `pkg-config`, C compiler. Update Rust
 **Certificate errors on startup:**
 Verify paths in config match actual file locations. Validate format:
 ```bash
-openssl x509 -in /etc/spooky/certs/fullchain.pem -text -noout
+openssl x509 -in /etc/impulse/certs/fullchain.pem -text -noout
 ```
 
 ## Next Steps

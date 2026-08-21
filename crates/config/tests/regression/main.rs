@@ -1,4 +1,4 @@
-//! Regression suite for `spooky_config::runtime::RuntimeConfig` lowering.
+//! Regression suite for `impulse_config::runtime::RuntimeConfig` lowering.
 //!
 //! These are public-API contract tests: they exercise `RuntimeConfig::from_config`
 //! and assert the runtime lowering preserves auth/TLS/policy contracts, normalizes

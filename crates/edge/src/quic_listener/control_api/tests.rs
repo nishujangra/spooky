@@ -4,9 +4,9 @@ use ::http::{Method, Request, header};
 use bytes::Bytes;
 use http_body_util::BodyExt;
 use log::LevelFilter;
-use spooky_config::{
+use impulse_config::{
     config::{
-        Backend, ClientAuth, Config as SpookyConfigConfig, ControlApiAuditSink,
+        Backend, ClientAuth, Config as ImpulseConfigConfig, ControlApiAuditSink,
         ControlApiBearerToken, ControlApiClientAuthMode, ControlApiRole, DistributedQuotaPolicy,
         DistributedQuotaSelector, DistributedQuotaSelectorSource, DistributedQuotaWindow,
         JwksStartupBehavior, JwtAlgorithm, JwtAuth, Listen, LoadBalancing, Log, LogFormat,
@@ -53,7 +53,7 @@ fn write_test_cert_for_name(dir: &Path, cert_name: &str, dns_name: &str) -> (Str
     )
 }
 
-fn test_config(cert: String, key: String) -> SpookyConfigConfig {
+fn test_config(cert: String, key: String) -> ImpulseConfigConfig {
     let mut upstreams = HashMap::new();
     upstreams.insert(
         "api".to_string(),
@@ -79,7 +79,7 @@ fn test_config(cert: String, key: String) -> SpookyConfigConfig {
         },
     );
 
-    SpookyConfigConfig {
+    ImpulseConfigConfig {
         version: 1,
         listen: Listen {
             protocol: "http3".to_string(),
@@ -108,13 +108,13 @@ fn test_config(cert: String, key: String) -> SpookyConfigConfig {
     }
 }
 
-fn runtime_bundle_from_config(config_path: &str, config: &SpookyConfigConfig) -> RuntimeBundle {
+fn runtime_bundle_from_config(config_path: &str, config: &ImpulseConfigConfig) -> RuntimeBundle {
     let runtime_config = RuntimeConfig::from_config(config).expect("runtime config");
     QUICListener::build_runtime_bundle(config_path.to_string(), config.log.clone(), &runtime_config)
         .expect("runtime bundle")
 }
 
-fn write_config_file(path: &Path, config: &SpookyConfigConfig) {
+fn write_config_file(path: &Path, config: &ImpulseConfigConfig) {
     let backend = config
         .upstream
         .get("api")
@@ -166,7 +166,7 @@ log:
 /// Renders only the JWT slice of `auth` that reload tests exercise. The wider
 /// config template is hand-written because `Config` is deserialize-only, so
 /// anything not emitted here is silently dropped on the round-trip through disk.
-fn render_test_auth_yaml(auth: &spooky_config::config::RouteAuth) -> String {
+fn render_test_auth_yaml(auth: &impulse_config::config::RouteAuth) -> String {
     let Some(jwt) = auth.jwt.as_ref() else {
         return String::new();
     };
@@ -219,8 +219,8 @@ fn render_test_auth_yaml(auth: &spooky_config::config::RouteAuth) -> String {
 }
 
 fn control_api_state_with_runtime_bundle(
-    startup: &SpookyConfigConfig,
-    reloaded: &SpookyConfigConfig,
+    startup: &ImpulseConfigConfig,
+    reloaded: &ImpulseConfigConfig,
 ) -> ControlApiState {
     let startup_bundle = runtime_bundle_from_config("startup.yaml", startup);
     let reloaded_bundle = runtime_bundle_from_config("reloaded.yaml", reloaded);
@@ -286,7 +286,7 @@ fn read_audit_events(path: &Path) -> Vec<serde_json::Value> {
 }
 
 fn audit_enabled_control_api_state(
-    config: SpookyConfigConfig,
+    config: ImpulseConfigConfig,
     config_path: &Path,
     audit_path: &Path,
 ) -> ControlApiState {
@@ -1098,7 +1098,7 @@ fn watchdog_restart_env_keeps_path_when_present() {
         Some(&OsString::from("/usr/bin:/bin"))
     );
     assert_eq!(
-        map.get(&OsString::from("SPOOKY_WATCHDOG_REASON")),
+        map.get(&OsString::from("IMPULSE_WATCHDOG_REASON")),
         Some(&OsString::from("timeout_spike"))
     );
 }
@@ -1110,7 +1110,7 @@ fn watchdog_restart_env_omits_path_when_missing() {
 
     assert!(!map.contains_key(&OsString::from("PATH")));
     assert_eq!(
-        map.get(&OsString::from("SPOOKY_WATCHDOG_REASON")),
+        map.get(&OsString::from("IMPULSE_WATCHDOG_REASON")),
         Some(&OsString::from("poll_stall"))
     );
 }
@@ -2122,7 +2122,7 @@ fn control_api_state_builds_runtime_security_policy_from_reloaded_config() {
     reloaded.observability.control_api.audit.enabled = true;
     reloaded.observability.control_api.audit.sink = ControlApiAuditSink::File;
     reloaded.observability.control_api.audit.file_path =
-        Some("/var/log/spooky-admin-audit.jsonl".to_string());
+        Some("/var/log/impulse-admin-audit.jsonl".to_string());
 
     let state = control_api_state_with_runtime_bundle(&startup, &reloaded);
     let security = state.current_security_policy();
@@ -2158,7 +2158,7 @@ fn control_api_state_builds_runtime_security_policy_from_reloaded_config() {
     assert_eq!(
         security.audit.sink,
         super::audit::ControlApiAdminAuditTarget::File(Some(
-            "/var/log/spooky-admin-audit.jsonl".to_string()
+            "/var/log/impulse-admin-audit.jsonl".to_string()
         ))
     );
 }
@@ -2747,7 +2747,7 @@ async fn control_api_runtime_snapshot_exposes_quota_policy_and_backend_status() 
     config.resilience.quota.backend_failure_policy = QuotaBackendFailurePolicy::FailOpen;
     config.resilience.quota.backend = QuotaCounterBackend::Redis {
         url: "://bad-redis-url".to_string(),
-        key_prefix: "spooky:test:quota".to_string(),
+        key_prefix: "impulse:test:quota".to_string(),
         connect_timeout_ms: 250,
         command_timeout_ms: 100,
         max_inflight: 8,
@@ -2892,7 +2892,7 @@ async fn control_api_runtime_snapshot_renders_composite_quota_selector_dimension
     config.observability.control_api.enabled = true;
     config.resilience.quota.enabled = true;
     config.resilience.quota.backend = QuotaCounterBackend::InMemory {
-        key_prefix: "spooky:test:quota".to_string(),
+        key_prefix: "impulse:test:quota".to_string(),
     };
     config.resilience.quota.policies = vec![DistributedQuotaPolicy {
         name: "tenant-client-contract".to_string(),
@@ -3543,7 +3543,7 @@ fn validate_startup_owned_reload_compatibility_rejects_control_plane_thread_chan
 
 #[test]
 fn apply_live_log_level_reload_updates_global_filter() {
-    spooky_utils::logger::set_log_level("info").expect("set initial level");
+    impulse_utils::logger::set_log_level("info").expect("set initial level");
 
     let changed = QUICListener::apply_live_log_level_reload("info", "haunt")
         .expect("apply live log level reload");

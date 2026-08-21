@@ -1,8 +1,8 @@
 use std::net::IpAddr;
 
 use http::HeaderValue;
-use spooky_config::config::{ForwardedHeaderPolicy, ForwardedHeaderPolicyMode};
-use spooky_errors::BridgeError;
+use impulse_config::config::{ForwardedHeaderPolicy, ForwardedHeaderPolicyMode};
+use impulse_errors::BridgeError;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ForwardedHeaderChains<'a> {
@@ -113,7 +113,7 @@ pub fn escape_forwarded_host(host: &str) -> String {
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-    use spooky_config::config::{ForwardedHeaderPolicy, ForwardedHeaderPolicyMode};
+    use impulse_config::config::{ForwardedHeaderPolicy, ForwardedHeaderPolicyMode};
 
     use super::{
         ForwardedHeaderChains, build_forwarded_header_values, escape_forwarded_host,

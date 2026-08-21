@@ -2,8 +2,8 @@
 
 use http::header::{CONTENT_LENGTH, HOST};
 use quiche::h3::Header;
-use spooky_bridge::request::{RequestBodyMode, RequestBuildInput, build_h2_request_for_target};
-use spooky_config::{
+use impulse_bridge::request::{RequestBodyMode, RequestBuildInput, build_h2_request_for_target};
+use impulse_config::{
     backend_endpoint::BackendEndpoint,
     config::{ForwardedHeaderPolicy, UpstreamHostPolicy},
 };
@@ -153,7 +153,7 @@ fn canonical_empty_body_inputs_do_not_emit_content_length_for_h1_or_h2() {
         client_addr: "203.0.113.20:7001".parse().expect("client"),
     };
 
-    let h1 = spooky_bridge::request::build_h1_request(
+    let h1 = impulse_bridge::request::build_h1_request(
         request_target(&endpoint, &host_policy, &forwarded_header_policy),
         request_input_with_body_mode("GET", "", &[], meta, RequestBodyMode::Empty),
     )

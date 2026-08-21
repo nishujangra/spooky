@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use spooky_config::{
+use impulse_config::{
     config::{Backend, Config, HealthCheck, Listen, LoadBalancing, RouteMatch, Tls, Upstream},
     runtime::{RuntimeConfig, RuntimeUpstream},
 };

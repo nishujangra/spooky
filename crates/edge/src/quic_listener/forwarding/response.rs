@@ -1,5 +1,5 @@
 use bytes::Bytes;
-use spooky_errors::{UpstreamProxyErrorKind, classify_upstream_proxy_error};
+use impulse_errors::{UpstreamProxyErrorKind, classify_upstream_proxy_error};
 use tokio::sync::mpsc::error::TryRecvError;
 
 use super::*;
@@ -173,7 +173,7 @@ impl QUICListener {
             .and_then(|v| v.to_str().ok())
             .and_then(|v| v.parse::<usize>().ok());
         let normalized_response = normalize_upstream_response(ResponseNormalizationInput {
-            upstream: spooky_bridge::response::UpstreamResponseView {
+            upstream: impulse_bridge::response::UpstreamResponseView {
                 status,
                 headers: &resp_headers,
                 trailers: None,
@@ -1464,14 +1464,14 @@ mod tests {
         let auth = AdmissionRejectionResponse {
             status: http::StatusCode::UNAUTHORIZED,
             body: b"auth denied\n",
-            www_authenticate: Some("Bearer realm=\"spooky\""),
+            www_authenticate: Some("Bearer realm=\"impulse\""),
             retry_after_seconds: None,
         };
         let auth_headers = admission_rejection_headers(&auth);
         assert_eq!(header_value(&auth_headers, b":status"), Some(&b"401"[..]));
         assert_eq!(
             header_value(&auth_headers, b"www-authenticate"),
-            Some(&b"Bearer realm=\"spooky\""[..])
+            Some(&b"Bearer realm=\"impulse\""[..])
         );
         assert_eq!(header_value(&auth_headers, b"retry-after"), None);
 

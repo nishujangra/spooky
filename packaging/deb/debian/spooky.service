@@ -1,6 +1,6 @@
 [Unit]
 Description=Impulse QUIC/HTTP3 Reverse Proxy
-Documentation=https://github.com/Supernova-Labs-Org/spooky
+Documentation=https://github.com/Supernova-Labs-Org/impulse
 After=network-online.target
 Wants=network-online.target
 
@@ -12,9 +12,9 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-User=spooky
-Group=spooky
-ExecStart=/usr/bin/spooky --config /etc/spooky/config.yaml
+User=impulse
+Group=impulse
+ExecStart=/usr/bin/impulse --config /etc/impulse/config.yaml
 
 # Restart=always, not on-failure: Impulse's own watchdog can decide to drain and
 # exit when it detects a wedged runtime, and that is a *clean* exit which
@@ -24,10 +24,10 @@ ExecStart=/usr/bin/spooky --config /etc/spooky/config.yaml
 Restart=always
 RestartSec=5s
 
-# Logs go to /var/log/spooky/spooky.log via config; also capture stderr to syslog
+# Logs go to /var/log/impulse/impulse.log via config; also capture stderr to syslog
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=spooky
+SyslogIdentifier=impulse
 
 # File descriptors. The default (often 1024) is far too low for a QUIC proxy:
 # max_active_connections plus per-backend HTTP/2 pools can each want thousands.
@@ -54,17 +54,17 @@ RestrictSUIDSGID=yes
 LockPersonality=yes
 MemoryDenyWriteExecute=no
 
-# Only the log directory needs to be writable. /etc/spooky stays read-only so a
+# Only the log directory needs to be writable. /etc/impulse stays read-only so a
 # compromised Impulse process cannot rewrite its own config (admin tokens, cert paths).
 # Note: this means the control API's cert *reload* works (it re-reads the files)
 # but nothing in-process can modify config on disk.
-ReadWritePaths=/var/log/spooky
+ReadWritePaths=/var/log/impulse
 
 # ---------------------------------------------------------------------------
 # NOTE on resilience.watchdog.restart_command in config.yaml:
 #
 # NoNewPrivileges=yes blocks setuid binaries, so a restart_command that shells
-# out to `sudo systemctl restart spooky` CANNOT work under this unit. It will
+# out to `sudo systemctl restart impulse` CANNOT work under this unit. It will
 # fail silently every time.
 #
 # With Restart=always set above, the correct configuration is an EMPTY

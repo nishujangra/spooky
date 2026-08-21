@@ -4,7 +4,7 @@ use http_body_util::Full;
 use hyper_rustls::HttpsConnectorBuilder;
 use hyper_util::client::legacy::{Client, connect::HttpConnector};
 use serde_json::Value;
-use spooky_config::runtime::RuntimeExternalAuth;
+use impulse_config::runtime::RuntimeExternalAuth;
 use tokio::task::AbortHandle;
 
 use super::*;
@@ -81,7 +81,7 @@ fn is_unsafe_forwarded_auth_request_header(name: &[u8]) -> bool {
 pub(super) fn append_auth_request_headers(
     builder: &mut http::request::Builder,
     pending_forward: &PendingForward,
-    configured_headers: &[spooky_config::runtime::RuntimeExternalAuthRequestHeader],
+    configured_headers: &[impulse_config::runtime::RuntimeExternalAuthRequestHeader],
 ) {
     for header in pending_forward.request_headers() {
         if header.name().starts_with(b":") || is_unsafe_forwarded_auth_request_header(header.name())
@@ -109,13 +109,13 @@ pub(super) fn append_auth_request_headers(
     if let Some(headers) = builder.headers_mut() {
         if let Ok(value) = http::header::HeaderValue::from_str(&pending_forward.method) {
             headers.insert(
-                http::header::HeaderName::from_static("x-spooky-original-method"),
+                http::header::HeaderName::from_static("x-impulse-original-method"),
                 value,
             );
         }
         if let Ok(value) = http::header::HeaderValue::from_str(&pending_forward.path) {
             headers.insert(
-                http::header::HeaderName::from_static("x-spooky-original-path"),
+                http::header::HeaderName::from_static("x-impulse-original-path"),
                 value,
             );
         }
@@ -123,19 +123,19 @@ pub(super) fn append_auth_request_headers(
             && let Ok(value) = http::header::HeaderValue::from_str(authority)
         {
             headers.insert(
-                http::header::HeaderName::from_static("x-spooky-original-authority"),
+                http::header::HeaderName::from_static("x-impulse-original-authority"),
                 value,
             );
         }
         if let Ok(value) = http::header::HeaderValue::from_str(&pending_forward.upstream_name) {
             headers.insert(
-                http::header::HeaderName::from_static("x-spooky-route-upstream"),
+                http::header::HeaderName::from_static("x-impulse-route-upstream"),
                 value,
             );
         }
         if let Ok(value) = http::header::HeaderValue::from_str(&pending_forward.backend_addr) {
             headers.insert(
-                http::header::HeaderName::from_static("x-spooky-backend-address"),
+                http::header::HeaderName::from_static("x-impulse-backend-address"),
                 value,
             );
         }
@@ -207,7 +207,7 @@ async fn run_external_auth_with_timeout(
 async fn run_http_external_auth(
     pending_forward: Arc<PendingForward>,
     endpoint: String,
-    request_headers: Vec<spooky_config::runtime::RuntimeExternalAuthRequestHeader>,
+    request_headers: Vec<impulse_config::runtime::RuntimeExternalAuthRequestHeader>,
     response_header_allowlist: Vec<String>,
     timeout: Duration,
 ) -> ExternalAuthResult {
@@ -260,7 +260,7 @@ async fn run_oidc_external_auth(
     client_secret: Option<String>,
     audience: Option<String>,
     scopes: Vec<String>,
-    request_headers: Vec<spooky_config::runtime::RuntimeExternalAuthRequestHeader>,
+    request_headers: Vec<impulse_config::runtime::RuntimeExternalAuthRequestHeader>,
     timeout: Duration,
 ) -> ExternalAuthResult {
     let token = match oidc_authorization_check(
@@ -579,7 +579,7 @@ impl QUICListener {
 
 #[cfg(test)]
 mod tests {
-    use spooky_config::runtime::{
+    use impulse_config::runtime::{
         RuntimeApiKeyAuth, RuntimeAuthPolicy, RuntimeExternalAuthFailureMode,
         RuntimeForwardedHeaderPolicy, RuntimeHostPolicy, RuntimeProtocolPolicy,
         RuntimeUpstreamPolicy,
@@ -643,7 +643,7 @@ mod tests {
         append_auth_request_headers(
             &mut builder,
             &pending_forward,
-            &[spooky_config::runtime::RuntimeExternalAuthRequestHeader {
+            &[impulse_config::runtime::RuntimeExternalAuthRequestHeader {
                 name: "x-role".to_string(),
                 value: "admin".to_string(),
             }],
@@ -671,19 +671,19 @@ mod tests {
         );
         assert_eq!(
             headers
-                .get("x-spooky-original-method")
+                .get("x-impulse-original-method")
                 .and_then(|value| value.to_str().ok()),
             Some("GET")
         );
         assert_eq!(
             headers
-                .get("x-spooky-original-path")
+                .get("x-impulse-original-path")
                 .and_then(|value| value.to_str().ok()),
             Some("/v1/chat")
         );
         assert_eq!(
             headers
-                .get("x-spooky-original-authority")
+                .get("x-impulse-original-authority")
                 .and_then(|value| value.to_str().ok()),
             Some("api.example.com")
         );

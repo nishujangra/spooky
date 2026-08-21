@@ -16,20 +16,20 @@ use bytes::Bytes;
 use http::{StatusCode, Uri};
 use http_body_util::Full;
 use hyper::{Request, Response, body::Incoming};
-use spooky_config::config::{Backend, Config, LoadBalancing, RouteMatch, Upstream};
-use spooky_edge::runtime::{
+use impulse_config::config::{Backend, Config, LoadBalancing, RouteMatch, Upstream};
+use impulse_edge::runtime::{
     backend::{
         event::{BackendLifecycleMutation, BackendRefreshOutcome, BackendRefreshResult},
         state::{BackendLifecycleInventorySnapshot, BackendLifecycleSnapshot},
     },
     bundle::RuntimeBundleHandle,
 };
-use spooky_lb::{
+use impulse_lb::{
     HealthTransition,
     health::HealthFailureReason,
     upstream_pool::{UpstreamBackendRuntimeState, UpstreamPoolMembershipSummary},
 };
-use spooky_transport::TransportClientRotation;
+use impulse_transport::TransportClientRotation;
 
 use super::{
     request_path::{H3RequestSpec, H3Response},
@@ -410,7 +410,7 @@ impl BackendLifecycleHarness {
         backend_addr: &str,
     ) -> Result<
         (
-            Arc<std::sync::RwLock<spooky_lb::upstream_pool::UpstreamPool>>,
+            Arc<std::sync::RwLock<impulse_lb::upstream_pool::UpstreamPool>>,
             Option<usize>,
         ),
         String,

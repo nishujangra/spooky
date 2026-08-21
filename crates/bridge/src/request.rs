@@ -9,11 +9,11 @@ use std::{convert::Infallible, net::SocketAddr};
 use bytes::Bytes;
 use http::{HeaderName, HeaderValue};
 use http_body_util::combinators::BoxBody;
-use spooky_config::{
+use impulse_config::{
     backend_endpoint::BackendEndpoint,
     config::{ForwardedHeaderPolicy, UpstreamHostPolicy},
 };
-use spooky_errors::BridgeError;
+use impulse_errors::BridgeError;
 
 use crate::{
     forwarded::{ForwardedHeaderChains, ForwardedHeaderValues, build_forwarded_header_values},

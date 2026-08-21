@@ -1,6 +1,6 @@
 //! Policy-combination and route-matcher rejection cases.
 
-use spooky_config::config::UpstreamHostPolicyMode;
+use impulse_config::config::UpstreamHostPolicyMode;
 
 use crate::common::{
     api_upstream_mut, assert_config_error_contains, duplicate_api_upstream,

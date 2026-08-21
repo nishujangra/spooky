@@ -1,11 +1,11 @@
 [package]
-name = "spooky"
+name = "impulse"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "spooky"
+name = "impulse"
 path = "src/main.rs"
 
 [dependencies]
@@ -21,6 +21,6 @@ hyper-util.workspace = true
 libc.workspace = true
 core_affinity.workspace = true
 
-spooky-config = { path = "../crates/config" }
-spooky-edge = { path = "../crates/edge" }
-spooky-utils = { path = "../crates/utils" }
+impulse-config = { path = "../crates/config" }
+impulse-edge = { path = "../crates/edge" }
+impulse-utils = { path = "../crates/utils" }

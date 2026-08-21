@@ -1,9 +1,9 @@
-use spooky_errors::{
+use impulse_errors::{
     HedgeOutcomeTelemetryReason, HedgePolicyDecision, HedgePolicyFacts, HedgePrimaryState,
     RetryPolicyDecision, RetryPolicyFacts, evaluate_hedge_policy, evaluate_retry_policy,
     is_idempotent_method,
 };
-use spooky_lb::alternate_backend::{
+use impulse_lb::alternate_backend::{
     AlternateBackendDecision, AlternateBackendFailureReason, choose_alternate_backend,
 };
 
@@ -125,7 +125,7 @@ impl ForwardingRetryHedgePolicy {
         let (alternate_backend_available, alternate_backend_failure) =
             alternate_backend_policy_state(alternate_backend);
         evaluate_retry_policy(RetryPolicyFacts {
-            retryability: spooky_errors::classify_retryability(primary_err),
+            retryability: impulse_errors::classify_retryability(primary_err),
             method_idempotent: self.method_idempotent,
             request_body_replayable: self.bodyless_mode,
             attempt_count: retry_count,

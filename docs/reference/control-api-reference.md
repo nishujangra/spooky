@@ -49,19 +49,19 @@ curl -k --http1.1 -X POST \
   -H "Authorization: Bearer <token>" \
   -H "content-type: application/json" \
   https://127.0.0.1:9902/admin/runtime/validate \
-  -d '{"config_path":"/etc/spooky/candidate.yaml","requested_by":"ops","reason":"preflight"}'
+  -d '{"config_path":"/etc/impulse/candidate.yaml","requested_by":"ops","reason":"preflight"}'
 
 curl -k --http1.1 -X POST \
   -H "Authorization: Bearer <token>" \
   -H "content-type: application/json" \
   https://127.0.0.1:9902/admin/runtime/preview \
-  -d '{"config_path":"/etc/spooky/candidate.yaml","requested_by":"ops","reason":"preview"}'
+  -d '{"config_path":"/etc/impulse/candidate.yaml","requested_by":"ops","reason":"preview"}'
 
 curl -k --http1.1 -X POST \
   -H "Authorization: Bearer <token>" \
   -H "content-type: application/json" \
   https://127.0.0.1:9902/admin/runtime/activate \
-  -d '{"config_path":"/etc/spooky/candidate.yaml","expected_generation":12,"requested_by":"ops","reason":"deploy"}'
+  -d '{"config_path":"/etc/impulse/candidate.yaml","expected_generation":12,"requested_by":"ops","reason":"deploy"}'
 ```
 
 ### Roll Back to a Retained Generation
@@ -182,7 +182,7 @@ observability:
     tls:
       client_auth:
         mode: optional
-        ca_file: "/etc/spooky/pki/admin-ca.pem"
+        ca_file: "/etc/impulse/pki/admin-ca.pem"
     auth:
       bearer_tokens:
         - token: "viewer-token"
@@ -204,7 +204,7 @@ observability:
     tls:
       client_auth:
         mode: required
-        ca_file: "/etc/spooky/pki/admin-ca.pem"
+        ca_file: "/etc/impulse/pki/admin-ca.pem"
     auth:
       bearer_tokens:
         - token: "operator-token"
@@ -335,7 +335,7 @@ Example:
 curl -k --http1.1 -X POST https://127.0.0.1:9902/admin/runtime/validate \
   -H "Authorization: Bearer <token>" \
   -H "content-type: application/json" \
-  -d '{"config_path":"/etc/spooky/candidate.yaml","requested_by":"ops","reason":"preflight"}'
+  -d '{"config_path":"/etc/impulse/candidate.yaml","requested_by":"ops","reason":"preflight"}'
 ```
 
 ### `POST /admin/runtime/preview`
@@ -384,7 +384,7 @@ Example:
 curl -k --http1.1 -X POST https://127.0.0.1:9902/admin/runtime/activate \
   -H "Authorization: Bearer <token>" \
   -H "content-type: application/json" \
-  -d '{"config_path":"/etc/spooky/candidate.yaml","expected_generation":12,"requested_by":"ops","reason":"deploy"}'
+  -d '{"config_path":"/etc/impulse/candidate.yaml","expected_generation":12,"requested_by":"ops","reason":"deploy"}'
 ```
 
 ### `POST /admin/runtime/rollback`
@@ -533,7 +533,7 @@ Activating an alternate config file:
 curl -k --http1.1 -X POST https://127.0.0.1:9902/admin/runtime/reload \
   -H "Authorization: Bearer <token>" \
   -H "content-type: application/json" \
-  -d '{"config_path": "/etc/spooky/canary.yaml"}'
+  -d '{"config_path": "/etc/impulse/canary.yaml"}'
 ```
 
 ### `POST /admin/runtime/reload-certs`

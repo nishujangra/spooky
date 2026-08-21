@@ -12,14 +12,14 @@ use bytes::Bytes;
 use http_body_util::{BodyExt, Empty, Full, combinators::BoxBody};
 use hyper::{Request, Response, body::Incoming, service::service_fn};
 use hyper_util::rt::{TokioExecutor, TokioIo};
+use impulse_config::runtime::RuntimeBackendTransportKind;
+use impulse_errors::{ProxyError, UpstreamTlsReason, classify_upstream_proxy_error};
+use impulse_transport::{SharedDnsResolver, TlsClientConfig, UpstreamTransportPool};
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType,
     ExtendedKeyUsagePurpose, IsCa, KeyUsagePurpose, SanType,
 };
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
-use spooky_config::runtime::RuntimeBackendTransportKind;
-use spooky_errors::{ProxyError, UpstreamTlsReason, classify_upstream_proxy_error};
-use spooky_transport::{SharedDnsResolver, TlsClientConfig, UpstreamTransportPool};
 use tempfile::{TempDir, tempdir};
 use tokio::net::TcpListener;
 use tokio_rustls::{
@@ -46,8 +46,8 @@ impl MtlsFixture {
     fn new() -> Self {
         let dir = tempdir().expect("tempdir");
 
-        let ca = build_ca("Spooky Test CA");
-        let wrong_ca = build_ca("Wrong Spooky Test CA");
+        let ca = build_ca("Impulse Test CA");
+        let wrong_ca = build_ca("Wrong Impulse Test CA");
 
         let server = write_identity(
             dir.path(),
@@ -176,8 +176,8 @@ fn write_identity(dir: &Path, name: &str, pem: (String, String)) -> PemIdentity 
     }
 }
 
-fn connection_policy() -> spooky_config::runtime::RuntimeBackendConnectionPolicy {
-    spooky_config::runtime::RuntimeBackendConnectionPolicy {
+fn connection_policy() -> impulse_config::runtime::RuntimeBackendConnectionPolicy {
+    impulse_config::runtime::RuntimeBackendConnectionPolicy {
         max_inflight: 8,
         max_idle_per_backend: 8,
         pool_idle_timeout: Duration::from_secs(5),

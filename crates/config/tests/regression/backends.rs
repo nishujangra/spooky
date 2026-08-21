@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use spooky_config::config::HealthCheck;
+use impulse_config::config::HealthCheck;
 
 use crate::common::{api_backend_mut, api_runtime_upstream, sample_runtime_config_with};
 

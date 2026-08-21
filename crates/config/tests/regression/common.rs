@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use spooky_config::{
+use impulse_config::{
     config::{
         Backend, ClientAuth, Config, ForwardedHeaderPolicy, ForwardedHeaderPolicyMode, Listen,
         LoadBalancing, Log, Observability, Performance, Resilience, RouteMatch, Security, Tls,

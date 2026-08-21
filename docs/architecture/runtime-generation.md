@@ -1,6 +1,6 @@
 # Runtime Generation Model
 
-This document explains how `spooky-edge` owns live runtime state, how reloads replace that state, and how workers and control-plane services are expected to read it.
+This document explains how `impulse-edge` owns live runtime state, how reloads replace that state, and how workers and control-plane services are expected to read it.
 
 ## Purpose
 

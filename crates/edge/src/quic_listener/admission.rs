@@ -33,11 +33,11 @@ use hyper_util::client::legacy::{Client, connect::HttpConnector};
 use quiche::h3::NameValue;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use spooky_config::{
+use impulse_config::{
     config::{JwksStartupBehavior, JwtAlgorithm},
     runtime::{RuntimeConfig, RuntimeJwtAuth, RuntimeJwtVerificationKey, RuntimeUpstreamPolicy},
 };
-use spooky_lb::upstream_pool::UpstreamPool;
+use impulse_lb::upstream_pool::UpstreamPool;
 use subtle::ConstantTimeEq;
 use tokio::{
     runtime::RuntimeFlavor,
@@ -1581,14 +1581,14 @@ impl QUICListener {
 
     pub(super) fn initialize_jwks_startup(
         config: &RuntimeConfig,
-    ) -> Result<(), spooky_errors::ProxyError> {
+    ) -> Result<(), impulse_errors::ProxyError> {
         Self::preflight_require_ready_jwks(config, "startup_preflight")
     }
 
     pub(crate) fn preflight_require_ready_jwks(
         config: &RuntimeConfig,
         trigger: &'static str,
-    ) -> Result<(), spooky_errors::ProxyError> {
+    ) -> Result<(), impulse_errors::ProxyError> {
         let sources = runtime_jwks_sources(config);
         if sources.is_empty() {
             return Ok(());
@@ -1653,11 +1653,11 @@ impl QUICListener {
         })
         .join()
         .map_err(|_| {
-            spooky_errors::ProxyError::Transport(
+            impulse_errors::ProxyError::Transport(
                 "jwks startup preflight thread panicked".to_string(),
             )
         })?
-        .map_err(spooky_errors::ProxyError::Transport)
+        .map_err(impulse_errors::ProxyError::Transport)
     }
 }
 
@@ -3207,7 +3207,7 @@ mod tests {
     };
     use bytes::Bytes;
     use http_body_util::Full;
-    use spooky_config::{
+    use impulse_config::{
         config::{
             Backend, Config, DistributedQuotaPolicy, DistributedQuotaSelector,
             DistributedQuotaSelectorSource, DistributedQuotaWindow, ForwardedHeaderPolicy,
@@ -3800,7 +3800,7 @@ mod tests {
     }
 
     mod post_auth_admission_execution {
-        use spooky_config::config::QuotaBackendFailurePolicy;
+        use impulse_config::config::QuotaBackendFailurePolicy;
 
         use super::*;
 
@@ -4077,7 +4077,7 @@ mod tests {
                     config.adaptive_admission.max_limit = Some(1);
                     config.quota.enabled = true;
                     config.quota.backend = QuotaCounterBackend::InMemory {
-                        key_prefix: "spooky:test:quota".to_string(),
+                        key_prefix: "impulse:test:quota".to_string(),
                     };
                     config.quota.policies = vec![DistributedQuotaPolicy {
                         name: "tenant-token-client-burst".to_string(),
@@ -4159,7 +4159,7 @@ mod tests {
                     config.quota.backend_failure_policy = QuotaBackendFailurePolicy::FailOpen;
                     config.quota.backend = QuotaCounterBackend::Redis {
                         url: "://bad-redis-url".to_string(),
-                        key_prefix: "spooky:test:quota".to_string(),
+                        key_prefix: "impulse:test:quota".to_string(),
                         connect_timeout_ms: 250,
                         command_timeout_ms: 100,
                         max_inflight: 8,
@@ -4227,7 +4227,7 @@ mod tests {
                     config.quota.backend_failure_policy = QuotaBackendFailurePolicy::FailClosed;
                     config.quota.backend = QuotaCounterBackend::Redis {
                         url: "://bad-redis-url".to_string(),
-                        key_prefix: "spooky:test:quota".to_string(),
+                        key_prefix: "impulse:test:quota".to_string(),
                         connect_timeout_ms: 250,
                         command_timeout_ms: 100,
                         max_inflight: 8,

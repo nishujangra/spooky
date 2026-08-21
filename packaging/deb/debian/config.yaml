@@ -5,8 +5,8 @@ listen:
   address: "0.0.0.0"
   port: 9889
   tls:
-    cert: "/etc/spooky/certs/fullchain.pem"
-    key: "/etc/spooky/certs/privkey.pem"
+    cert: "/etc/impulse/certs/fullchain.pem"
+    key: "/etc/impulse/certs/privkey.pem"
 
 upstream_tls:
   verify_certificates: true
@@ -35,13 +35,13 @@ log:
   format: json
   file:
     enabled: true
-    path: /var/log/spooky/spooky.log
+    path: /var/log/impulse/impulse.log
 
 security:
   privileges:
     enabled: true
-    user: "spooky"
-    group: "spooky"
+    user: "impulse"
+    group: "impulse"
 
 observability:
   metrics:

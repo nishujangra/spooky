@@ -15,10 +15,10 @@ use rcgen::{
     ExtendedKeyUsagePurpose, IsCa, KeyUsagePurpose, SanType,
 };
 use serial_test::serial;
-use spooky_config::config::{
+use impulse_config::config::{
     Backend, Config, LoadBalancing, RouteMatch, SecretRef, Upstream, UpstreamTls,
 };
-use spooky_edge::runtime::policy::{LifecycleTransitionResult, RuntimeLifecyclePhase};
+use impulse_edge::runtime::policy::{LifecycleTransitionResult, RuntimeLifecyclePhase};
 use tempfile::{TempDir, tempdir};
 
 mod support;
@@ -43,7 +43,7 @@ struct MtlsRuntimeMaterial {
 impl MtlsRuntimeMaterial {
     fn localhost() -> Self {
         let dir = tempdir().expect("tempdir");
-        let ca = build_ca("Spooky Runtime Swap CA");
+        let ca = build_ca("Impulse Runtime Swap CA");
         let (server_cert, server_key) = signed_cert(
             "localhost",
             &ca,
@@ -264,7 +264,7 @@ fn runtime_swap_harness_exposes_reload_control_plane_and_metrics_surfaces() {
 
     let metrics = harness.metrics_text().expect("metrics text");
     assert!(
-        metrics.contains("# HELP spooky_requests_total Total requests seen by spooky.\n"),
+        metrics.contains("# HELP impulse_requests_total Total requests seen by impulse.\n"),
         "metrics endpoint should expose prometheus request totals"
     );
 
@@ -656,7 +656,7 @@ fn startup_owned_log_sink_change_is_rejected_and_keeps_request_behavior() {
     harness
         .rewrite_config(|config| {
             config.log.file.enabled = true;
-            config.log.file.path = "/tmp/spooky-runtime-swap.log".to_string();
+            config.log.file.path = "/tmp/impulse-runtime-swap.log".to_string();
         })
         .expect("rewrite log sink shape");
 
@@ -894,7 +894,7 @@ fn metrics_endpoint_tracks_active_generation_route_label_and_path_after_reload()
 
     let startup_metrics = harness.metrics_text().expect("startup metrics text");
     assert!(
-        startup_metrics.contains("spooky_route_requests_total{route=\"api\"} 0\n"),
+        startup_metrics.contains("impulse_route_requests_total{route=\"api\"} 0\n"),
         "startup metrics should render the startup generation route label"
     );
     let old_path = "/metrics".to_string();
@@ -915,11 +915,11 @@ fn metrics_endpoint_tracks_active_generation_route_label_and_path_after_reload()
 
     let live_metrics = harness.metrics_text().expect("live metrics text");
     assert!(
-        live_metrics.contains("spooky_route_requests_total{route=\"api-reloaded\"} 0\n"),
+        live_metrics.contains("impulse_route_requests_total{route=\"api-reloaded\"} 0\n"),
         "reloaded metrics should render the active generation route label"
     );
     assert!(
-        !live_metrics.contains("spooky_route_requests_total{route=\"api\"}"),
+        !live_metrics.contains("impulse_route_requests_total{route=\"api\"}"),
         "reloaded metrics must not fall back to the startup metrics surface after reload"
     );
 

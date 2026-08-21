@@ -147,7 +147,7 @@ impl RuntimeQuotaCounterBackend {
 impl Default for RuntimeQuotaCounterBackend {
     fn default() -> Self {
         Self::InMemory {
-            key_prefix: "spooky:quota".to_string(),
+            key_prefix: "impulse:quota".to_string(),
         }
     }
 }
@@ -546,13 +546,13 @@ mod tests {
                 backend_failure_policy: QuotaBackendFailurePolicy::FailOpen,
                 backend: QuotaCounterBackend::Redis {
                     url: " redis://127.0.0.1:6379/0 ".to_string(),
-                    key_prefix: " spooky:quota ".to_string(),
+                    key_prefix: " impulse:quota ".to_string(),
                     connect_timeout_ms: 250,
                     command_timeout_ms: 100,
                     max_inflight: 128,
                 },
                 local_fallback: Some(QuotaLocalFallbackConfig {
-                    key_prefix: " spooky:quota:fallback ".to_string(),
+                    key_prefix: " impulse:quota:fallback ".to_string(),
                     max_entries: 256,
                 }),
                 policies: vec![valid_quota_policy()],
@@ -577,7 +577,7 @@ mod tests {
                 max_inflight,
             } => {
                 assert_eq!(url, "redis://127.0.0.1:6379/0");
-                assert_eq!(key_prefix, "spooky:quota");
+                assert_eq!(key_prefix, "impulse:quota");
                 assert_eq!(connect_timeout, Duration::from_millis(250));
                 assert_eq!(command_timeout, Duration::from_millis(100));
                 assert_eq!(max_inflight, 128);
@@ -587,7 +587,7 @@ mod tests {
         assert_eq!(
             runtime.local_fallback,
             Some(RuntimeQuotaLocalFallback {
-                key_prefix: "spooky:quota:fallback".to_string(),
+                key_prefix: "impulse:quota:fallback".to_string(),
                 max_entries: 256,
             })
         );
@@ -694,7 +694,7 @@ mod tests {
                 enabled: true,
                 backend: QuotaCounterBackend::Redis {
                     url: "redis://127.0.0.1:6379/0".to_string(),
-                    key_prefix: "spooky:quota".to_string(),
+                    key_prefix: "impulse:quota".to_string(),
                     connect_timeout_ms: 250,
                     command_timeout_ms: 0,
                     max_inflight: 128,
@@ -719,7 +719,7 @@ mod tests {
             quota: QuotaPolicyConfig {
                 enabled: true,
                 local_fallback: Some(QuotaLocalFallbackConfig {
-                    key_prefix: "spooky:quota:fallback".to_string(),
+                    key_prefix: "impulse:quota:fallback".to_string(),
                     max_entries: 128,
                 }),
                 policies: vec![valid_quota_policy()],
@@ -739,13 +739,13 @@ mod tests {
             enabled: true,
             backend: QuotaCounterBackend::Redis {
                 url: "redis://127.0.0.1:6379/0".to_string(),
-                key_prefix: "spooky:quota".to_string(),
+                key_prefix: "impulse:quota".to_string(),
                 connect_timeout_ms: 250,
                 command_timeout_ms: 100,
                 max_inflight: 128,
             },
             local_fallback: Some(QuotaLocalFallbackConfig {
-                key_prefix: "spooky:quota:fallback".to_string(),
+                key_prefix: "impulse:quota:fallback".to_string(),
                 max_entries: 0,
             }),
             policies: vec![valid_quota_policy()],

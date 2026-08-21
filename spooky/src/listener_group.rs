@@ -8,8 +8,8 @@ use std::{
 };
 
 use log::{error, info};
-use spooky_config::runtime::{ListenerRuntimeConfig, RuntimeConfig};
-use spooky_edge::{
+use impulse_config::runtime::{ListenerRuntimeConfig, RuntimeConfig};
+use impulse_edge::{
     ListenerWorkerGroupConfig, ListenerWorkerRuntimeState,
     runtime::{
         bundle::RuntimeBundleHandle, listener::QUICListener, shared_state::SharedRuntimeState,
@@ -334,7 +334,7 @@ fn group_signature_worker_count(group: &ListenerGroupRuntime) -> usize {
 mod tests {
     use std::{net::SocketAddr, sync::atomic::AtomicUsize};
 
-    use spooky_edge::{
+    use impulse_edge::{
         release_shard_queue_bytes, shard_index_for_peer, try_reserve_shard_queue_bytes,
     };
 

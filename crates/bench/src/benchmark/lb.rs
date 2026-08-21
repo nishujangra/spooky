@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
-use spooky_config::{
+use impulse_config::{
     config::{Backend, Config, HealthCheck, Listen, LoadBalancing, RouteMatch, Tls, Upstream},
     runtime::{RuntimeConfig, RuntimeUpstream},
 };
-use spooky_lb::upstream_pool::UpstreamPool;
+use impulse_lb::upstream_pool::UpstreamPool;
 
 use crate::{
     benchmark::{connection::fast_iterations, runner::run_case_aggregate},

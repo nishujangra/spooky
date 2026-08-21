@@ -3,10 +3,10 @@
 use http::header::HOST;
 use hyper::ext::Protocol;
 use quiche::h3::Header;
-use spooky_config::config::{
+use impulse_config::config::{
     ForwardedHeaderPolicy, ForwardedHeaderPolicyMode, UpstreamHostPolicy, UpstreamHostPolicyMode,
 };
-use spooky_errors::BridgeError;
+use impulse_errors::BridgeError;
 
 use crate::common::{
     RequestInputMeta, build_h1_and_h2_requests, build_h2_request_for_backend,

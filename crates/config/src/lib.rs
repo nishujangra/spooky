@@ -1,4 +1,4 @@
-//! Canonical configuration surface for Spooky.
+//! Canonical configuration surface for Impulse.
 //!
 //! This crate owns raw config parsing/validation plus the runtime-ready policy
 //! interpretation that downstream crates consume. Use:

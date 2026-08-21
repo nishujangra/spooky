@@ -8,7 +8,7 @@ OUT_MD="${OUT_MD:-bench/micro/latest.md}"
 
 mkdir -p "$(dirname "$OUT_JSON")"
 
-cargo run -q -p spooky-bench --release -- \
+cargo run -q -p impulse-bench --release -- \
   --suite micro \
   --profile "$PROFILE" \
   --manifest "$MANIFEST" \

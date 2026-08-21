@@ -4,7 +4,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use spooky_config::config::{ScopedRateLimit as ScopedRateLimitConfig, ScopedRateLimitScope};
+use impulse_config::config::{ScopedRateLimit as ScopedRateLimitConfig, ScopedRateLimitScope};
 
 use super::quota::{
     DistributedQuotaCounterBackend, QuotaBackendFailurePolicy, QuotaCounterBackend,
@@ -17,7 +17,7 @@ use super::quota::{
 
 const LEGACY_SCOPED_RATE_LIMIT_PROTOCOL_VERSION: &str = "legacy-scoped-token-bucket/v1";
 const LEGACY_SCOPED_BACKEND_KIND: &str = "legacy_scoped_rate_limit";
-const LEGACY_SCOPED_KEY_PREFIX: &str = "spooky:legacy-scoped-rate-limit";
+const LEGACY_SCOPED_KEY_PREFIX: &str = "impulse:legacy-scoped-rate-limit";
 
 struct ScopedRateLimitBucket {
     burst: f64,

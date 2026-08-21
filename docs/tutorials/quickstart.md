@@ -27,12 +27,12 @@ This quickstart uses:
 ## Step 1: Build
 
 ```bash
-git clone https://github.com/Supernova-Labs-Org/spooky.git
-cd spooky
+git clone https://github.com/Supernova-Labs-Org/impulse.git
+cd impulse
 cargo build --release
 ```
 
-The binary lands at `target/release/spooky`.
+The binary lands at `target/release/impulse`.
 
 ## Step 2: Generate a Certificate
 
@@ -59,9 +59,9 @@ Impulse supports:
 For the fastest local test, use a simple HTTP/1.1 backend:
 
 ```bash
-mkdir -p /tmp/spooky-demo
-printf 'hello from backend\n' > /tmp/spooky-demo/index.html
-cd /tmp/spooky-demo
+mkdir -p /tmp/impulse-demo
+printf 'hello from backend\n' > /tmp/impulse-demo/index.html
+cd /tmp/impulse-demo
 python3 -m http.server 8080
 ```
 
@@ -100,15 +100,15 @@ log:
 ## Step 5: Start Impulse
 
 ```bash
-./target/release/spooky --config config.yaml
+./target/release/impulse --config config.yaml
 ```
 
 You should see:
 
 ```
-INFO spooky: loading config path="config.yaml"
-INFO spooky: listening on 0.0.0.0:9889 protocol=http3
-INFO spooky: upstream ready upstream=default backends=1
+INFO impulse: loading config path="config.yaml"
+INFO impulse: listening on 0.0.0.0:9889 protocol=http3
+INFO impulse: upstream ready upstream=default backends=1
 ```
 
 ## Step 6: Verify HTTP/3

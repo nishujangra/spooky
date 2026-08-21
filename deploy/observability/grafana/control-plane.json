@@ -19,7 +19,7 @@
           "uid": "${datasource}"
         },
         "enable": true,
-        "expr": "sum(increase(spooky_runtime_activation_total{result=\"success\"}[1m])) > 0",
+        "expr": "sum(increase(impulse_runtime_activation_total{result=\"success\"}[1m])) > 0",
         "hide": false,
         "iconColor": "rgba(0, 191, 255, 1)",
         "name": "Runtime Activations",
@@ -34,7 +34,7 @@
           "uid": "${datasource}"
         },
         "enable": true,
-        "expr": "sum(increase(spooky_runtime_rollback_total{result=\"success\"}[1m])) > 0",
+        "expr": "sum(increase(impulse_runtime_rollback_total{result=\"success\"}[1m])) > 0",
         "hide": false,
         "iconColor": "rgba(255, 140, 0, 1)",
         "name": "Runtime Rollbacks",
@@ -49,7 +49,7 @@
           "uid": "${datasource}"
         },
         "enable": true,
-        "expr": "sum(increase(spooky_watchdog_degraded_windows[1m])) > 0",
+        "expr": "sum(increase(impulse_watchdog_degraded_windows[1m])) > 0",
         "hide": false,
         "iconColor": "rgba(255, 0, 0, 1)",
         "name": "Watchdog Degraded",
@@ -127,7 +127,7 @@
       },
       "targets": [
         {
-          "expr": "max(spooky_runtime_active_generation)",
+          "expr": "max(impulse_runtime_active_generation)",
           "legendFormat": "active generation",
           "refId": "A"
         }
@@ -183,7 +183,7 @@
       },
       "targets": [
         {
-          "expr": "max(spooky_runtime_history_depth)",
+          "expr": "max(impulse_runtime_history_depth)",
           "legendFormat": "history depth",
           "refId": "A"
         }
@@ -247,7 +247,7 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:control_plane_activity_events:rate5m)",
+          "expr": "sum(impulse:control_plane_activity_events:rate5m)",
           "legendFormat": "activity events",
           "refId": "A"
         }
@@ -311,7 +311,7 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:control_plane_error_events:rate5m)",
+          "expr": "sum(impulse:control_plane_error_events:rate5m)",
           "legendFormat": "error events",
           "refId": "A"
         }
@@ -370,22 +370,22 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:runtime_validation_attempts:rate5m)",
+          "expr": "sum(impulse:runtime_validation_attempts:rate5m)",
           "legendFormat": "validation attempts",
           "refId": "A"
         },
         {
-          "expr": "sum(spooky:runtime_preview_attempts:rate5m)",
+          "expr": "sum(impulse:runtime_preview_attempts:rate5m)",
           "legendFormat": "preview attempts",
           "refId": "B"
         },
         {
-          "expr": "sum by (result) (spooky:runtime_activation_outcomes_by_result_reason:rate5m)",
+          "expr": "sum by (result) (impulse:runtime_activation_outcomes_by_result_reason:rate5m)",
           "legendFormat": "activate {{result}}",
           "refId": "C"
         },
         {
-          "expr": "sum by (result) (spooky:runtime_rollback_outcomes_by_result_reason:rate5m)",
+          "expr": "sum by (result) (impulse:runtime_rollback_outcomes_by_result_reason:rate5m)",
           "legendFormat": "rollback {{result}}",
           "refId": "D"
         }
@@ -444,12 +444,12 @@
       },
       "targets": [
         {
-          "expr": "sum by (result, reason) (spooky:runtime_activation_outcomes_by_result_reason:rate5m)",
+          "expr": "sum by (result, reason) (impulse:runtime_activation_outcomes_by_result_reason:rate5m)",
           "legendFormat": "activate {{result}} / {{reason}}",
           "refId": "A"
         },
         {
-          "expr": "sum by (result, reason) (spooky:runtime_rollback_outcomes_by_result_reason:rate5m)",
+          "expr": "sum by (result, reason) (impulse:runtime_rollback_outcomes_by_result_reason:rate5m)",
           "legendFormat": "rollback {{result}} / {{reason}}",
           "refId": "B"
         }
@@ -521,7 +521,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (reason) (spooky:runtime_rejections_by_reason:rate5m)",
+          "expr": "sum by (reason) (impulse:runtime_rejections_by_reason:rate5m)",
           "legendFormat": "{{reason}}",
           "refId": "A"
         }
@@ -580,22 +580,22 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:watchdog_degraded_windows:rate5m)",
+          "expr": "sum(impulse:watchdog_degraded_windows:rate5m)",
           "legendFormat": "degraded windows",
           "refId": "A"
         },
         {
-          "expr": "sum(spooky:watchdog_restart_requests:rate5m)",
+          "expr": "sum(impulse:watchdog_restart_requests:rate5m)",
           "legendFormat": "restart requests",
           "refId": "B"
         },
         {
-          "expr": "sum(spooky:watchdog_restart_hooks:rate5m)",
+          "expr": "sum(impulse:watchdog_restart_hooks:rate5m)",
           "legendFormat": "restart hooks",
           "refId": "C"
         },
         {
-          "expr": "sum(spooky:runtime_panics:rate5m)",
+          "expr": "sum(impulse:runtime_panics:rate5m)",
           "legendFormat": "runtime panics",
           "refId": "D"
         }
@@ -654,27 +654,27 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:runtime_validation_attempts:rate5m)",
+          "expr": "sum(impulse:runtime_validation_attempts:rate5m)",
           "legendFormat": "validate",
           "refId": "A"
         },
         {
-          "expr": "sum(spooky:runtime_preview_attempts:rate5m)",
+          "expr": "sum(impulse:runtime_preview_attempts:rate5m)",
           "legendFormat": "preview",
           "refId": "B"
         },
         {
-          "expr": "sum without (result, reason) (spooky:runtime_activation_outcomes_by_result_reason:rate5m)",
+          "expr": "sum without (result, reason) (impulse:runtime_activation_outcomes_by_result_reason:rate5m)",
           "legendFormat": "activate outcomes",
           "refId": "C"
         },
         {
-          "expr": "sum without (result, reason) (spooky:runtime_rollback_outcomes_by_result_reason:rate5m)",
+          "expr": "sum without (result, reason) (impulse:runtime_rollback_outcomes_by_result_reason:rate5m)",
           "legendFormat": "rollback outcomes",
           "refId": "D"
         },
         {
-          "expr": "sum(spooky:watchdog_restart_requests:rate5m)",
+          "expr": "sum(impulse:watchdog_restart_requests:rate5m)",
           "legendFormat": "restart requests",
           "refId": "E"
         }
@@ -733,12 +733,12 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:control_api_connection_limit_drops:rate5m)",
+          "expr": "sum(impulse:control_api_connection_limit_drops:rate5m)",
           "legendFormat": "connection limit drops",
           "refId": "A"
         },
         {
-          "expr": "sum(spooky:control_plane_error_events:rate5m)",
+          "expr": "sum(impulse:control_plane_error_events:rate5m)",
           "legendFormat": "error events",
           "refId": "B"
         }
@@ -815,7 +815,7 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:runtime_change_events:rate5m) or vector(0)",
+          "expr": "sum(impulse:runtime_change_events:rate5m) or vector(0)",
           "legendFormat": "runtime change events",
           "refId": "A"
         }
@@ -874,12 +874,12 @@
       },
       "targets": [
         {
-          "expr": "sum by (result, reason) (spooky:runtime_activation_outcomes_by_result_reason:rate5m{result!=\"success\"})",
+          "expr": "sum by (result, reason) (impulse:runtime_activation_outcomes_by_result_reason:rate5m{result!=\"success\"})",
           "legendFormat": "activate {{result}} / {{reason}}",
           "refId": "A"
         },
         {
-          "expr": "sum by (result, reason) (spooky:runtime_rollback_outcomes_by_result_reason:rate5m{result!=\"success\"})",
+          "expr": "sum by (result, reason) (impulse:runtime_rollback_outcomes_by_result_reason:rate5m{result!=\"success\"})",
           "legendFormat": "rollback {{result}} / {{reason}}",
           "refId": "B"
         }
@@ -891,7 +891,7 @@
   "refresh": "30s",
   "schemaVersion": 39,
   "tags": [
-    "spooky",
+    "impulse",
     "observability",
     "control-plane",
     "admin-plane",
@@ -923,8 +923,8 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "Spooky Control-Plane Activity",
-  "uid": "spooky-control-plane",
+  "title": "Impulse Control-Plane Activity",
+  "uid": "impulse-control-plane",
   "version": 2,
   "weekStart": ""
 }

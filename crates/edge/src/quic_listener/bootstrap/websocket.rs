@@ -6,8 +6,8 @@ use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::{body::Incoming, client::conn::http1 as client_http1, upgrade, upgrade::OnUpgrade};
 use hyper_util::rt::TokioIo;
 use log::{debug, warn};
-use spooky_config::backend_endpoint::BackendScheme;
-use spooky_errors::ProxyError;
+use impulse_config::backend_endpoint::BackendScheme;
+use impulse_errors::ProxyError;
 
 use super::{
     dispatch::BootstrapDispatchInput,

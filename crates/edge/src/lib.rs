@@ -1,4 +1,4 @@
-//! Public API for the Spooky edge runtime.
+//! Public API for the Impulse edge runtime.
 //!
 //! The crate root exposes the small set of entrypoints that other crates should
 //! depend on directly. Listener orchestration, runtime wiring, and control-plane

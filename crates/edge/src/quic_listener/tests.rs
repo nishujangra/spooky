@@ -8,15 +8,15 @@ use std::{
 
 use http::{HeaderMap, HeaderValue, StatusCode};
 use rcgen::{Certificate, CertificateParams, SanType};
-use spooky_config::{
+use impulse_config::{
     config::{
-        Backend, ClientAuth, Config as SpookyConfigConfig, Listen, LoadBalancing, Log,
+        Backend, ClientAuth, Config as ImpulseConfigConfig, Listen, LoadBalancing, Log,
         Observability, Performance, Resilience, RouteMatch, Security, Tls, TlsCertificate,
         Upstream, UpstreamTls,
     },
     runtime::{ListenerRuntimeConfig, RuntimeConfig},
 };
-use spooky_errors::{
+use impulse_errors::{
     UpstreamErrorCategory, UpstreamErrorClassification, UpstreamTlsReason,
     classify_upstream_error_detail,
 };
@@ -95,7 +95,7 @@ fn test_upstream_with(lb_type: &str, lb_key: Option<&str>, method: Option<&str>)
 }
 
 fn runtime_config_with_upstreams(upstreams: HashMap<String, Upstream>) -> RuntimeConfig {
-    RuntimeConfig::from_config(&SpookyConfigConfig {
+    RuntimeConfig::from_config(&ImpulseConfigConfig {
         version: 1,
         listen: Listen {
             protocol: "http1".to_string(),
@@ -142,10 +142,10 @@ fn tls_test_config(
     cert: String,
     key: String,
     certificates: Vec<TlsCertificate>,
-) -> SpookyConfigConfig {
+) -> ImpulseConfigConfig {
     let mut upstreams = HashMap::new();
     upstreams.insert("api".to_string(), test_upstream("round-robin"));
-    SpookyConfigConfig {
+    ImpulseConfigConfig {
         version: 1,
         listen: Listen {
             protocol: "http3".to_string(),
@@ -174,14 +174,14 @@ fn tls_test_config(
     }
 }
 
-fn tls_test_listener_config(config: &SpookyConfigConfig) -> ListenerRuntimeConfig {
+fn tls_test_listener_config(config: &ImpulseConfigConfig) -> ListenerRuntimeConfig {
     RuntimeConfig::from_config(config)
         .expect("runtime config")
         .primary_listener_runtime_config()
         .expect("listener runtime config")
 }
 
-fn dns_resolution_test_config(cert: String, key: String) -> SpookyConfigConfig {
+fn dns_resolution_test_config(cert: String, key: String) -> ImpulseConfigConfig {
     let mut upstreams = HashMap::new();
     upstreams.insert(
         "api".to_string(),
@@ -216,7 +216,7 @@ fn dns_resolution_test_config(cert: String, key: String) -> SpookyConfigConfig {
         },
     );
 
-    SpookyConfigConfig {
+    ImpulseConfigConfig {
         version: 1,
         listen: Listen {
             protocol: "http3".to_string(),
@@ -642,7 +642,7 @@ fn quic_listener_syncs_drain_timeout_and_connection_rate_limiter_after_reload() 
         .expect("listener runtime config");
     let socket = match super::QUICListener::bind_socket(&listener_config, false) {
         Ok(socket) => socket,
-        Err(spooky_errors::ProxyError::Transport(message))
+        Err(impulse_errors::ProxyError::Transport(message))
             if message.contains("Operation not permitted") =>
         {
             return;
@@ -710,7 +710,7 @@ fn start_draining_is_idempotent_and_drain_completes_when_idle() {
         .expect("listener runtime config");
     let socket = match super::QUICListener::bind_socket(&listener_config, false) {
         Ok(socket) => socket,
-        Err(spooky_errors::ProxyError::Transport(message))
+        Err(impulse_errors::ProxyError::Transport(message))
             if message.contains("Operation not permitted") =>
         {
             return;
@@ -766,7 +766,7 @@ fn watchdog_restart_transitions_listener_into_draining_and_counts_worker_drain_o
         .expect("listener runtime config");
     let socket = match super::QUICListener::bind_socket(&listener_config, false) {
         Ok(socket) => socket,
-        Err(spooky_errors::ProxyError::Transport(message))
+        Err(impulse_errors::ProxyError::Transport(message))
             if message.contains("Operation not permitted") =>
         {
             return;
@@ -989,7 +989,7 @@ fn build_shared_state_separates_backend_identity_from_resolution_state() {
 
 type TestRoutingContext = (
     HashMap<String, Arc<RwLock<super::UpstreamPool>>>,
-    HashMap<String, spooky_config::runtime::RuntimeUpstreamPolicy>,
+    HashMap<String, impulse_config::runtime::RuntimeUpstreamPolicy>,
     super::RouteIndex,
     Arc<RwLock<super::UpstreamPool>>,
 );
@@ -2501,7 +2501,7 @@ fn abort_stream_awaiting_upstream_cancels_oneshot() {
 
     // Sending on the now-orphaned sender should return Err (closed).
     let send_result = result_tx.send(crate::runtime::connection::response::UpstreamResult {
-        forward: Err(spooky_errors::ProxyError::Transport("test".into())),
+        forward: Err(impulse_errors::ProxyError::Transport("test".into())),
         policy: crate::runtime::connection::response::ForwardingPolicyTelemetry::default(),
     });
     assert!(

@@ -111,8 +111,8 @@ Purpose:
 
 Dashboard:
 
-- title: `Spooky Edge Traffic and Latency`
-- uid: `spooky-edge-traffic`
+- title: `Impulse Edge Traffic and Latency`
+- uid: `impulse-edge-traffic`
 
 Open this first for:
 
@@ -145,8 +145,8 @@ Operator intent:
 
 Dashboard:
 
-- title: `Spooky Admission, Overload, Quota, and Auth`
-- uid: `spooky-admission-overload`
+- title: `Impulse Admission, Overload, Quota, and Auth`
+- uid: `impulse-admission-overload`
 
 Open this when:
 
@@ -181,8 +181,8 @@ Operator intent:
 
 Dashboard:
 
-- title: `Spooky Backend Health and DNS Lifecycle`
-- uid: `spooky-backend-health`
+- title: `Impulse Backend Health and DNS Lifecycle`
+- uid: `impulse-backend-health`
 
 Open this when:
 
@@ -216,8 +216,8 @@ Operator intent:
 
 Dashboard:
 
-- title: `Spooky Retries and Hedges`
-- uid: `spooky-retries-hedges`
+- title: `Impulse Retries and Hedges`
+- uid: `impulse-retries-hedges`
 
 Open this when:
 
@@ -249,8 +249,8 @@ Operator intent:
 
 Dashboard:
 
-- title: `Spooky TLS Certificates and Handshakes`
-- uid: `spooky-tls-certificates`
+- title: `Impulse TLS Certificates and Handshakes`
+- uid: `impulse-tls-certificates`
 
 Open this when:
 
@@ -281,8 +281,8 @@ Operator intent:
 
 Dashboard:
 
-- title: `Spooky Control-Plane Activity`
-- uid: `spooky-control-plane`
+- title: `Impulse Control-Plane Activity`
+- uid: `impulse-control-plane`
 
 Open this when:
 
@@ -354,37 +354,37 @@ The alert package has two severities:
 
 | Alert | Meaning | First dashboard | Runbook |
 | --- | --- | --- | --- |
-| `SpookyAvailabilityBurnRatePage` | 5xx availability budget is burning in fast and sustained windows | `edge-traffic.json` | `docs/operations/runbook.md#scenario-rising-503-rate` |
-| `SpookyP99LatencyBurnPage` | p99 latency is materially above the packaged objective in fast and sustained windows | `edge-traffic.json` | `docs/operations/runbook.md#scenario-backend-timeout-surge` |
-| `SpookyBackendTimeoutSurgePage` | backend timeout ratio is high enough to threaten user-visible reliability | `backend-health.json` | `docs/operations/runbook.md#scenario-backend-timeout-surge` |
-| `SpookyTlsCertificateExpiryCritical` | at least one downstream certificate has fewer than 7 days remaining | `tls-certificates.json` | `docs/operations/runbook.md#scenario-cert-rotation` |
-| `SpookyWatchdogDegraded` | watchdog degraded windows are being recorded continuously | `control-plane.json` | `docs/operations/runbook.md#scenario-control-api-or-metrics-endpoint-unavailable` |
-| `SpookyRuntimePanicObserved` | runtime panic counters are non-zero in the recent window | `control-plane.json` | `docs/operations/runbook.md#after-any-incident` |
-| `SpookyControlPlaneUnavailable` | packaged control-plane recording-rule series are absent | `control-plane.json` | `docs/operations/runbook.md#scenario-control-api-or-metrics-endpoint-unavailable` |
+| `ImpulseAvailabilityBurnRatePage` | 5xx availability budget is burning in fast and sustained windows | `edge-traffic.json` | `docs/operations/runbook.md#scenario-rising-503-rate` |
+| `ImpulseP99LatencyBurnPage` | p99 latency is materially above the packaged objective in fast and sustained windows | `edge-traffic.json` | `docs/operations/runbook.md#scenario-backend-timeout-surge` |
+| `ImpulseBackendTimeoutSurgePage` | backend timeout ratio is high enough to threaten user-visible reliability | `backend-health.json` | `docs/operations/runbook.md#scenario-backend-timeout-surge` |
+| `ImpulseTlsCertificateExpiryCritical` | at least one downstream certificate has fewer than 7 days remaining | `tls-certificates.json` | `docs/operations/runbook.md#scenario-cert-rotation` |
+| `ImpulseWatchdogDegraded` | watchdog degraded windows are being recorded continuously | `control-plane.json` | `docs/operations/runbook.md#scenario-control-api-or-metrics-endpoint-unavailable` |
+| `ImpulseRuntimePanicObserved` | runtime panic counters are non-zero in the recent window | `control-plane.json` | `docs/operations/runbook.md#after-any-incident` |
+| `ImpulseControlPlaneUnavailable` | packaged control-plane recording-rule series are absent | `control-plane.json` | `docs/operations/runbook.md#scenario-control-api-or-metrics-endpoint-unavailable` |
 
 ### Ticket alerts
 
 | Alert | Meaning | First dashboard | Runbook |
 | --- | --- | --- | --- |
-| `SpookyRetryGrowth` | retry ratio is rising and may be amplifying backend trouble | `retries-hedges.json` | `docs/operations/runbook.md#scenario-backend-timeout-surge` |
-| `SpookyHedgeGrowth` | hedge activity is becoming routine rather than exceptional | `retries-hedges.json` | `docs/operations/runbook.md#scenario-backend-timeout-surge` |
-| `SpookyBackendDnsRefreshFailures` | DNS refresh failures and ratio indicate stale or unstable backend resolution | `backend-health.json` | `docs/operations/runbook.md#scenario-backend-timeout-surge` |
-| `SpookyBrownoutActiveTooLong` | brownout is staying active beyond the tolerated window | `admission-overload.json` | `docs/operations/runbook.md#scenario-brownout-or-overload-triggering` |
-| `SpookyQuotaBackendDegraded` | the distributed quota backend is timing out, unavailable, or otherwise degraded | `admission-overload.json` | `docs/operations/distributed-quota.md` |
-| `SpookyTlsHandshakeFailuresRising` | downstream handshake failures are rising above normal background levels | `tls-certificates.json` | `docs/operations/runbook.md#scenario-handshake-failures-or-client-connection-failures` |
+| `ImpulseRetryGrowth` | retry ratio is rising and may be amplifying backend trouble | `retries-hedges.json` | `docs/operations/runbook.md#scenario-backend-timeout-surge` |
+| `ImpulseHedgeGrowth` | hedge activity is becoming routine rather than exceptional | `retries-hedges.json` | `docs/operations/runbook.md#scenario-backend-timeout-surge` |
+| `ImpulseBackendDnsRefreshFailures` | DNS refresh failures and ratio indicate stale or unstable backend resolution | `backend-health.json` | `docs/operations/runbook.md#scenario-backend-timeout-surge` |
+| `ImpulseBrownoutActiveTooLong` | brownout is staying active beyond the tolerated window | `admission-overload.json` | `docs/operations/runbook.md#scenario-brownout-or-overload-triggering` |
+| `ImpulseQuotaBackendDegraded` | the distributed quota backend is timing out, unavailable, or otherwise degraded | `admission-overload.json` | `docs/operations/distributed-quota.md` |
+| `ImpulseTlsHandshakeFailuresRising` | downstream handshake failures are rising above normal background levels | `tls-certificates.json` | `docs/operations/runbook.md#scenario-handshake-failures-or-client-connection-failures` |
 
 ## SLO Interpretation
 
 The SLO package is defined in `deploy/observability/slo/`. Use the packaged
-`spooky:slo_*` series for reporting rather than rebuilding numerator and
+`impulse:slo_*` series for reporting rather than rebuilding numerator and
 denominator logic in Grafana.
 
 ### Availability
 
 Primary series:
 
-- `spooky:slo_availability_ratio:30m`
-- `spooky:slo_request_server_error_ratio:rate30m`
+- `impulse:slo_availability_ratio:30m`
+- `impulse:slo_request_server_error_ratio:rate30m`
 
 Interpretation:
 
@@ -396,9 +396,9 @@ Interpretation:
 
 Primary series:
 
-- `spooky:slo_request_latency_ms:p50_30m`
-- `spooky:slo_request_latency_ms:p95_30m`
-- `spooky:slo_request_latency_ms:p99_30m`
+- `impulse:slo_request_latency_ms:p50_30m`
+- `impulse:slo_request_latency_ms:p95_30m`
+- `impulse:slo_request_latency_ms:p99_30m`
 
 Interpretation:
 
@@ -410,7 +410,7 @@ Interpretation:
 
 Primary series:
 
-- `spooky:slo_overload_shed_ratio:30m`
+- `impulse:slo_overload_shed_ratio:30m`
 
 Interpretation:
 
@@ -422,7 +422,7 @@ Interpretation:
 
 Primary series:
 
-- `spooky:slo_backend_timeout_ratio:30m`
+- `impulse:slo_backend_timeout_ratio:30m`
 
 Interpretation:
 
@@ -434,7 +434,7 @@ Interpretation:
 
 Primary series:
 
-- `spooky:slo_auth_denial_ratio:30m`
+- `impulse:slo_auth_denial_ratio:30m`
 
 Interpretation:
 
@@ -445,7 +445,7 @@ Interpretation:
 
 Primary series:
 
-- `spooky:slo_quota_denial_ratio:30m`
+- `impulse:slo_quota_denial_ratio:30m`
 
 Interpretation:
 
@@ -587,7 +587,7 @@ Typical sequence:
 ### Prometheus rollout order
 
 1. Load `deploy/observability/prometheus/recording-rules.yaml`.
-2. Confirm the `spooky:*` recording-rule series are present.
+2. Confirm the `impulse:*` recording-rule series are present.
 3. Load `deploy/observability/prometheus/alerts.yaml`.
 4. Validate that every alert evaluates against recording rules rather than missing raw series.
 5. Only then import or refresh dashboards.

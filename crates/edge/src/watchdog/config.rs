@@ -1,4 +1,4 @@
-use spooky_config::{config::Watchdog as WatchdogConfig, runtime::RuntimeWatchdogPolicy};
+use impulse_config::{config::Watchdog as WatchdogConfig, runtime::RuntimeWatchdogPolicy};
 
 #[derive(Debug, Clone)]
 pub struct WatchdogRuntimeConfig {

@@ -12,10 +12,10 @@ use hyper::{
     Request,
     body::{Bytes, Incoming},
 };
-use spooky_config::runtime::{
+use impulse_config::runtime::{
     RuntimeBackendConnectionPolicy, RuntimeBackendTransportKind, RuntimeUpstream,
 };
-use spooky_errors::{PoolError, ProxyError};
+use impulse_errors::{PoolError, ProxyError};
 
 use crate::{
     client_rotation::BackendClientRotation,
@@ -278,7 +278,7 @@ mod tests {
 
     use http_body_util::{BodyExt, Empty, combinators::BoxBody};
     use hyper::{Request, body::Bytes};
-    use spooky_config::{
+    use impulse_config::{
         config::{
             Backend, ClientAuth, Config, ForwardedHeaderPolicy, ForwardedHeaderPolicyMode, Listen,
             LoadBalancing, Log, Observability, Performance, Resilience, RouteMatch, Security, Tls,
@@ -286,7 +286,7 @@ mod tests {
         },
         runtime::{RuntimeBackendConnectionPolicy, RuntimeBackendTransportKind, RuntimeConfig},
     };
-    use spooky_errors::{PoolError, ProxyError};
+    use impulse_errors::{PoolError, ProxyError};
 
     use super::{BackendTransportEntry, UpstreamTransportPool};
     use crate::h2_client::SharedDnsResolver;

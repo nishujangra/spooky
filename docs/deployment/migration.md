@@ -29,7 +29,7 @@ Impulse needs two listen addresses: UDP 9889 for QUIC/HTTP/3 connections, and TC
 The following is a complete working config for Pattern A, assuming your existing proxy listens on `127.0.0.1:443`:
 
 ```yaml
-# /etc/spooky/config.yaml — Pattern A: Impulse as HTTP/3 ingress in front of NGINX/Envoy
+# /etc/impulse/config.yaml — Pattern A: Impulse as HTTP/3 ingress in front of NGINX/Envoy
 
 # A single `listen` block defines the QUIC/HTTP-3 listener. Impulse automatically starts a
 # TCP+TLS bootstrap listener on the SAME address/port for HTTP/1.1 and HTTP/2 clients and
@@ -39,8 +39,8 @@ listen:
   address: "0.0.0.0"        # host only — NOT combined with the port
   port: 9889
   tls:
-    cert: /etc/spooky/tls/fullchain.pem
-    key: /etc/spooky/tls/privkey.pem
+    cert: /etc/impulse/tls/fullchain.pem
+    key: /etc/impulse/tls/privkey.pem
 
 # `upstream` is a MAP keyed by pool name (not a `upstreams:` list, and no `name:` field).
 # The route match lives inside the pool entry — there is no top-level `routes:` list.
@@ -119,7 +119,7 @@ When all routes are on Impulse and you have at least one full week of clean metr
 The key principle is that every request must have a destination. Model your existing proxy as a named upstream pool and use it as the catch-all for anything not yet migrated.
 
 ```yaml
-# /etc/spooky/config.yaml — Pattern B: incremental route migration
+# /etc/impulse/config.yaml — Pattern B: incremental route migration
 
 # Single QUIC/HTTP-3 listener; the TCP bootstrap listener is started automatically on the
 # same address/port (see Pattern A note above).
@@ -128,8 +128,8 @@ listen:
   address: "0.0.0.0"
   port: 9889
   tls:
-    cert: /etc/spooky/tls/fullchain.pem
-    key: /etc/spooky/tls/privkey.pem
+    cert: /etc/impulse/tls/fullchain.pem
+    key: /etc/impulse/tls/privkey.pem
 
 # `upstream` is a map keyed by pool name. Routing is expressed by each pool's own `route:`
 # block; there is no separate top-level `routes:` list. Longest-prefix wins, so a pool with
@@ -220,7 +220,7 @@ Before starting any migration, verify that your old proxy's binary, config files
 **Step 2: Stop Impulse.**
 
 ```bash
-systemctl stop spooky
+systemctl stop impulse
 ```
 
 This immediately stops Impulse from accepting new connections. In-flight QUIC connections will close when they hit the configured QUIC idle timeout. TCP connections that were in progress will be dropped.

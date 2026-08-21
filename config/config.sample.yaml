@@ -12,7 +12,7 @@ version: 1
 #   providers:
 #     local_filesystem:
 #       kind: file
-#       base_dir: "/etc/spooky/secrets"
+#       base_dir: "/etc/impulse/secrets"
 
 listen:
     protocol: http3
@@ -87,9 +87,9 @@ upstream:
     #   # Upstream mTLS: client certificate and key, provided as a plaintext path
     #   # or as a file-backed secret reference (mutually exclusive per field).
     #   client_certificate_ref:
-    #     ref: "file:///etc/spooky/secrets/upstream/payments-client.crt"
+    #     ref: "file:///etc/impulse/secrets/upstream/payments-client.crt"
     #   client_key_ref:
-    #     ref: "file:///etc/spooky/secrets/upstream/payments-client.key"
+    #     ref: "file:///etc/impulse/secrets/upstream/payments-client.key"
 
     backends:
       - id: "backend1"
@@ -129,7 +129,7 @@ log:
     format: plain  # plain | json
     file:
         enabled: true
-        path: /var/log/spooky/spooky.log
+        path: /var/log/impulse/impulse.log
 
 performance:
     worker_threads: 1
@@ -191,7 +191,7 @@ observability:
         tls:
             client_auth:
                 mode: optional
-                ca_file: "/etc/spooky/pki/admin-ca.pem"
+                ca_file: "/etc/impulse/pki/admin-ca.pem"
         auth:
             bearer_tokens:
                 - token: "replace-with-viewer-token"
@@ -216,7 +216,7 @@ observability:
         connection_timeout_ms: 30000
     tracing:
         enabled: false
-        service_name: "spooky"
+        service_name: "impulse"
         otlp_endpoint: null # e.g. "http://127.0.0.1:4317"
         sample_ratio: 1.0
 

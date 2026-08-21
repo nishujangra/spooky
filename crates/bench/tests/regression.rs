@@ -1,4 +1,4 @@
-use spooky_bench::{
+use impulse_bench::{
     manifest::GateMetric,
     regression::{RegressionSeverity, classify_regression},
 };

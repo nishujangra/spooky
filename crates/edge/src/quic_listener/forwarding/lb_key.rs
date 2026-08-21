@@ -1,4 +1,4 @@
-use spooky_config::runtime::{RuntimeLoadBalancingStrategy, RuntimeRequestKeySpec};
+use impulse_config::runtime::{RuntimeLoadBalancingStrategy, RuntimeRequestKeySpec};
 
 use super::*;
 use crate::resilience::quota::{
@@ -307,7 +307,7 @@ impl QUICListener {
 mod tests {
     use std::{collections::HashMap, net::SocketAddr};
 
-    use spooky_config::runtime::{RuntimeLoadBalancingStrategy, RuntimeRequestKeySpec};
+    use impulse_config::runtime::{RuntimeLoadBalancingStrategy, RuntimeRequestKeySpec};
 
     use super::{LbKeyRequestParts, LbKeySource, QUICListener, ResolvedLbKey};
 

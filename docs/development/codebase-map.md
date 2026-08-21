@@ -6,7 +6,7 @@ This page maps the repository by crate and by major responsibility so contributo
 
 | Path | Responsibility |
 | --- | --- |
-| `spooky/` | Binary entrypoint, process bootstrap, worker orchestration, privilege-drop helpers |
+| `impulse/` | Binary entrypoint, process bootstrap, worker orchestration, privilege-drop helpers |
 | `crates/config/` | YAML schema, defaults, loader, runtime normalization, validation |
 | `crates/edge/` | Main edge runtime: QUIC/H3 ingress, routing, resilience, streaming, metrics, control-plane hooks |
 | `crates/bridge/` | H3-to-H2 request adaptation and forwarding-header policy |

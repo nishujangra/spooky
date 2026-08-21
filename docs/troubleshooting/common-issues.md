@@ -73,7 +73,7 @@ Canonical references for the checks above:
 ### Relevant Logs, Metrics, and Endpoints
 
 - endpoints: `/health`, `/ready`, `/admin/runtime`, `/admin/runtime/history`
-- metrics: `spooky_runtime_activation_total`, `spooky_runtime_rejections_total`, `spooky_runtime_active_generation`, `spooky_runtime_history_depth`
+- metrics: `impulse_runtime_activation_total`, `impulse_runtime_rejections_total`, `impulse_runtime_active_generation`, `impulse_runtime_history_depth`
 - logs: startup logs, bind failures, TLS load failures, runtime activation failures
 - audit: validate, preview, activate, rollback attempts and outcomes
 
@@ -102,9 +102,9 @@ Canonical references for the checks above:
 3. inspect `GET /admin/runtime/history` if a recent activation may have changed route precedence
 4. inspect request logs for route resolution, selected upstream, and selected backend
 5. inspect:
-   - `spooky_upstream_requests_total`
-   - `spooky_backend_requests_total`
-   - `spooky_policy_denied`
+   - `impulse_upstream_requests_total`
+   - `impulse_backend_requests_total`
+   - `impulse_policy_denied`
 
 ### Fix Steps
 
@@ -116,7 +116,7 @@ Canonical references for the checks above:
 ### Relevant Logs, Metrics, and Endpoints
 
 - endpoints: `/admin/runtime`, `/admin/runtime/history`
-- metrics: `spooky_upstream_requests_total`, `spooky_backend_requests_total`, `spooky_route_latency_ms_p50`, `spooky_route_latency_ms_p95`, `spooky_route_latency_ms_p99`
+- metrics: `impulse_upstream_requests_total`, `impulse_backend_requests_total`, `impulse_route_latency_ms_p50`, `impulse_route_latency_ms_p95`, `impulse_route_latency_ms_p99`
 - logs: route-resolution logs, selected upstream/backend logs, policy-denial logs
 
 ## Clients Receive `429` or Other Contract-Style Denials
@@ -137,13 +137,13 @@ Canonical references for the checks above:
 ### Verification Steps
 
 1. inspect:
-   - `spooky_request_rate_limited`
-   - `spooky_quota_policy_outcomes_total`
-   - `spooky_quota_backend_health_total`
+   - `impulse_request_rate_limited`
+   - `impulse_quota_policy_outcomes_total`
+   - `impulse_quota_backend_health_total`
 2. separate the decision types:
-   - scoped rate limiting uses `spooky_request_rate_limited`
-   - quota decisions use `spooky_quota_policy_outcomes_total`
-   - overload uses `spooky_overload_shed_by_reason_total`
+   - scoped rate limiting uses `impulse_request_rate_limited`
+   - quota decisions use `impulse_quota_policy_outcomes_total`
+   - overload uses `impulse_overload_shed_by_reason_total`
 3. inspect `GET /admin/runtime` for configured quota policies, backend mode, and quota backend health summary
 4. inspect request logs for matched policy, selector dimensions, decision, and reason
 5. confirm whether the denial reason is expected for the caller:
@@ -163,7 +163,7 @@ Canonical references for the checks above:
 ### Relevant Logs, Metrics, and Endpoints
 
 - endpoints: `/admin/runtime`
-- metrics: `spooky_request_rate_limited`, `spooky_quota_policy_outcomes_total`, `spooky_quota_backend_health_total`
+- metrics: `impulse_request_rate_limited`, `impulse_quota_policy_outcomes_total`, `impulse_quota_backend_health_total`
 - logs: admission logs with matched quota policy, decision, deny reason, selector dimensions, backend mode
 
 ## Clients Receive `503` During Pressure
@@ -184,11 +184,11 @@ Canonical references for the checks above:
 ### Verification Steps
 
 1. inspect:
-   - `spooky_overload_shed`
-   - `spooky_overload_shed_by_reason_total`
-   - `spooky_brownout_active`
-   - `spooky_backend_timeouts`
-   - `spooky_circuit_breaker_rejected_total`
+   - `impulse_overload_shed`
+   - `impulse_overload_shed_by_reason_total`
+   - `impulse_brownout_active`
+   - `impulse_backend_timeouts`
+   - `impulse_circuit_breaker_rejected_total`
 2. inspect `GET /admin/runtime` for current backend and watchdog summaries
 3. confirm whether `503` is paired with rising backend timeout and error pressure
 4. inspect logs for overload reason, circuit-open decisions, and adaptive admission behavior
@@ -205,7 +205,7 @@ Canonical references for the checks above:
 ### Relevant Logs, Metrics, and Endpoints
 
 - endpoints: `/admin/runtime`
-- metrics: `spooky_overload_shed`, `spooky_overload_shed_by_reason_total`, `spooky_brownout_active`, `spooky_circuit_breaker_rejected_total`, `spooky_backend_timeouts`, `spooky_backend_errors`
+- metrics: `impulse_overload_shed`, `impulse_overload_shed_by_reason_total`, `impulse_brownout_active`, `impulse_circuit_breaker_rejected_total`, `impulse_backend_timeouts`, `impulse_backend_errors`
 - logs: overload decisions, brownout transitions, circuit-open rejects, backend timeout spikes
 
 ## Backend Failures or Timeouts Are Rising
@@ -227,19 +227,19 @@ Canonical references for the checks above:
 ### Verification Steps
 
 1. inspect:
-   - `spooky_backend_timeouts`
-   - `spooky_backend_errors`
-   - `spooky_backend_requests_total`
-   - `spooky_upstream_requests_total`
-   - `spooky_retry_attempts_total`
-   - `spooky_retry_denied_total`
-   - `spooky_hedge_triggered_total`
-2. inspect passive health reasons in `spooky_health_failures_total`
+   - `impulse_backend_timeouts`
+   - `impulse_backend_errors`
+   - `impulse_backend_requests_total`
+   - `impulse_upstream_requests_total`
+   - `impulse_retry_attempts_total`
+   - `impulse_retry_denied_total`
+   - `impulse_hedge_triggered_total`
+2. inspect passive health reasons in `impulse_health_failures_total`
 3. inspect DNS and rotation metrics if failures started after a backend-address change:
-   - `spooky_backend_dns_refresh_success_total`
-   - `spooky_backend_dns_refresh_failure_total`
-   - `spooky_backend_dns_address_set_changes_total`
-   - `spooky_backend_client_rotations_total`
+   - `impulse_backend_dns_refresh_success_total`
+   - `impulse_backend_dns_refresh_failure_total`
+   - `impulse_backend_dns_address_set_changes_total`
+   - `impulse_backend_client_rotations_total`
 4. inspect `GET /admin/runtime` for backend health summary and backend inventory
 5. compare backend-specific failures instead of looking only at total request failure rate
 
@@ -254,7 +254,7 @@ Canonical references for the checks above:
 ### Relevant Logs, Metrics, and Endpoints
 
 - endpoints: `/admin/runtime`
-- metrics: `spooky_backend_timeouts`, `spooky_backend_errors`, `spooky_backend_requests_total`, `spooky_upstream_requests_total`, `spooky_retry_attempts_total`, `spooky_retry_denied_total`, `spooky_hedge_triggered_total`, `spooky_hedge_won_total`, `spooky_hedge_wasted_total`, `spooky_health_failures_total`
+- metrics: `impulse_backend_timeouts`, `impulse_backend_errors`, `impulse_backend_requests_total`, `impulse_upstream_requests_total`, `impulse_retry_attempts_total`, `impulse_retry_denied_total`, `impulse_hedge_triggered_total`, `impulse_hedge_won_total`, `impulse_hedge_wasted_total`, `impulse_health_failures_total`
 - logs: backend transport failures, timeout errors, retry reasons, hedge activity, DNS refresh and rotation logs
 
 ## All Backends Look Unhealthy
@@ -277,10 +277,10 @@ Canonical references for the checks above:
 
 1. inspect `GET /admin/runtime` for backend health summary
 2. inspect:
-   - `spooky_health_checks_total`
-   - `spooky_health_checks_success`
-   - `spooky_health_checks_failure`
-   - `spooky_health_failures_total`
+   - `impulse_health_checks_total`
+   - `impulse_health_checks_success`
+   - `impulse_health_checks_failure`
+   - `impulse_health_failures_total`
 3. confirm the configured backend health endpoint and timeout match the real backend behavior
 4. test the backend health endpoint directly from the same network where Impulse runs
 5. inspect logs for health transitions and repeated passive-failure reasons
@@ -295,7 +295,7 @@ Canonical references for the checks above:
 ### Relevant Logs, Metrics, and Endpoints
 
 - endpoints: `/admin/runtime`
-- metrics: `spooky_health_checks_total`, `spooky_health_checks_success`, `spooky_health_checks_failure`, `spooky_health_failures_total`
+- metrics: `impulse_health_checks_total`, `impulse_health_checks_success`, `impulse_health_checks_failure`, `impulse_health_failures_total`
 - logs: backend health transitions, health-check timeouts, passive health failures
 
 ## TLS Handshakes Are Failing
@@ -317,13 +317,13 @@ Canonical references for the checks above:
 ### Verification Steps
 
 1. inspect downstream TLS metrics:
-   - `spooky_downstream_tls_handshake_success_total`
-   - `spooky_downstream_tls_handshake_failure_total`
-   - `spooky_downstream_tls_certificate_selection_total`
-   - `spooky_downstream_tls_alpn_total`
-   - `spooky_downstream_tls_certificate_days_remaining`
+   - `impulse_downstream_tls_handshake_success_total`
+   - `impulse_downstream_tls_handshake_failure_total`
+   - `impulse_downstream_tls_certificate_selection_total`
+   - `impulse_downstream_tls_alpn_total`
+   - `impulse_downstream_tls_certificate_days_remaining`
 2. inspect upstream TLS metrics:
-   - `spooky_upstream_tls_failure_total`
+   - `impulse_upstream_tls_failure_total`
 3. inspect listener and backend TLS configuration in the active runtime
 4. inspect logs for handshake-failure reason, certificate-selection result, and SNI context
 5. verify certificate expiration and client compatibility outside the data path if needed
@@ -339,7 +339,7 @@ Canonical references for the checks above:
 ### Relevant Logs, Metrics, and Endpoints
 
 - endpoints: `/admin/runtime`
-- metrics: `spooky_downstream_tls_handshake_success_total`, `spooky_downstream_tls_handshake_failure_total`, `spooky_downstream_tls_certificate_selection_total`, `spooky_downstream_tls_alpn_total`, `spooky_downstream_tls_certificate_not_after_seconds`, `spooky_downstream_tls_certificate_days_remaining`, `spooky_upstream_tls_failure_total`
+- metrics: `impulse_downstream_tls_handshake_success_total`, `impulse_downstream_tls_handshake_failure_total`, `impulse_downstream_tls_certificate_selection_total`, `impulse_downstream_tls_alpn_total`, `impulse_downstream_tls_certificate_not_after_seconds`, `impulse_downstream_tls_certificate_days_remaining`, `impulse_upstream_tls_failure_total`
 - logs: downstream handshake failures, certificate-selection anomalies, upstream TLS failure logs
 
 ## Control API Calls Fail or Runtime Changes Do Not Apply
@@ -365,12 +365,12 @@ Canonical references for the checks above:
 2. confirm the request is using the correct path and admin credentials
 3. inspect `GET /admin/runtime` and `GET /admin/runtime/history`
 4. inspect:
-   - `spooky_runtime_validation_attempts_total`
-   - `spooky_runtime_preview_attempts_total`
-   - `spooky_runtime_activation_total`
-   - `spooky_runtime_rollback_total`
-   - `spooky_runtime_rejections_total`
-   - `spooky_control_api_connection_limit_drops`
+   - `impulse_runtime_validation_attempts_total`
+   - `impulse_runtime_preview_attempts_total`
+   - `impulse_runtime_activation_total`
+   - `impulse_runtime_rollback_total`
+   - `impulse_runtime_rejections_total`
+   - `impulse_control_api_connection_limit_drops`
 5. inspect audit events for actor, action, result, reason, and failure class
 6. inspect logs for authn failure, authz failure, mTLS failure, or generation-activation failure
 
@@ -385,7 +385,7 @@ Canonical references for the checks above:
 ### Relevant Logs, Metrics, and Endpoints
 
 - endpoints: `/admin/runtime`, `/admin/runtime/history`, `/admin/runtime/history/{generation}`, `/admin/runtime/validate`, `/admin/runtime/preview`, `/admin/runtime/activate`, `/admin/runtime/rollback`
-- metrics: `spooky_runtime_validation_attempts_total`, `spooky_runtime_preview_attempts_total`, `spooky_runtime_activation_total`, `spooky_runtime_rollback_total`, `spooky_runtime_rejections_total`, `spooky_control_api_connection_limit_drops`
+- metrics: `impulse_runtime_validation_attempts_total`, `impulse_runtime_preview_attempts_total`, `impulse_runtime_activation_total`, `impulse_runtime_rollback_total`, `impulse_runtime_rejections_total`, `impulse_control_api_connection_limit_drops`
 - logs: control-plane authn/authz failures, mTLS handshake failures, runtime activation/rollback logs
 - audit: actor, action, target generation, result, reason, failure class
 

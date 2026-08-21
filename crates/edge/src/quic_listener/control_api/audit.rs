@@ -2,10 +2,10 @@ use std::{fs::OpenOptions, io::Write, sync::atomic::Ordering};
 
 use log::{error, info, warn};
 use serde::Serialize;
-use spooky_config::config::{
+use impulse_config::config::{
     ControlApi as ControlApiConfig, ControlApiAuditFormat, ControlApiAuditSink,
 };
-use spooky_utils::logger::CONTROL_API_AUDIT_LOG_TARGET;
+use impulse_utils::logger::CONTROL_API_AUDIT_LOG_TARGET;
 
 use super::{
     admin_auth::ControlApiRoute,
@@ -574,7 +574,7 @@ mod tests {
             target: AdminAuditTarget {
                 route: Some("/admin/runtime/reload".to_string()),
                 resource: Some("control_api".to_string()),
-                config_path: Some("/etc/spooky/config.yaml".to_string()),
+                config_path: Some("/etc/impulse/config.yaml".to_string()),
             },
             generation: AdminAuditGeneration {
                 active_generation: Some(7),
@@ -610,7 +610,7 @@ mod tests {
                 "target": {
                     "route": "/admin/runtime/reload",
                     "resource": "control_api",
-                    "config_path": "/etc/spooky/config.yaml"
+                    "config_path": "/etc/impulse/config.yaml"
                 },
                 "generation": {
                     "active_generation": 7,

@@ -365,7 +365,7 @@ mod tests {
     #[test]
     fn in_memory_backend_supports_atomic_multi_window_evaluation() {
         let now_ms = Arc::new(AtomicU64::new(10_250));
-        let store = InMemoryDistributedQuotaCounterStore::with_time_source("spooky:quota", {
+        let store = InMemoryDistributedQuotaCounterStore::with_time_source("impulse:quota", {
             let now_ms = Arc::clone(&now_ms);
             move || now_ms.load(Ordering::Relaxed)
         });
@@ -450,10 +450,10 @@ mod tests {
     #[test]
     fn in_memory_backend_uses_explicit_local_protocol_keys() {
         let request = sample_request();
-        let windows = build_window_specs("spooky:quota", &request, 10_250);
+        let windows = build_window_specs("impulse:quota", &request, 10_250);
 
         assert_eq!(windows.len(), 2);
-        assert!(windows[0].storage_key.starts_with("spooky:quota:qmem1:"));
+        assert!(windows[0].storage_key.starts_with("impulse:quota:qmem1:"));
         assert!(windows[0].storage_key.contains(":burst:1000:10000:"));
         assert!(windows[1].storage_key.contains(":sustained:60000:0:"));
         assert_eq!(windows[0].ttl_ms, 1_750);
@@ -461,7 +461,7 @@ mod tests {
 
     #[test]
     fn bounded_in_memory_backend_rejects_capacity_exhaustion() {
-        let store = InMemoryDistributedQuotaCounterStore::bounded("spooky:quota:fallback", 2);
+        let store = InMemoryDistributedQuotaCounterStore::bounded("impulse:quota:fallback", 2);
 
         let first = store
             .evaluate_request(sample_request())
@@ -501,7 +501,7 @@ mod tests {
     fn in_memory_backend_enforces_sustained_window_after_burst_resets() {
         let now_ms = Arc::new(AtomicU64::new(10_250));
         let store =
-            InMemoryDistributedQuotaCounterStore::with_time_source("spooky:quota:sustained", {
+            InMemoryDistributedQuotaCounterStore::with_time_source("impulse:quota:sustained", {
                 let now_ms = Arc::clone(&now_ms);
                 move || now_ms.load(Ordering::Relaxed)
             });

@@ -77,7 +77,7 @@ Impulse is a modern edge runtime for high-trust APIs. This documentation set is 
 
 | Document | What you'll find |
 |---|---|
-| [Contributing Guide](https://github.com/Supernova-Labs-Org/spooky/blob/master/CONTRIBUTING.md) | Dev setup, build commands, test matrix, PR conventions |
+| [Contributing Guide](https://github.com/Supernova-Labs-Org/impulse/blob/master/CONTRIBUTING.md) | Dev setup, build commands, test matrix, PR conventions |
 | [Development Overview](development/overview.md) | Contributor-oriented guide to working in the repo |
 | [Testing Strategy](development/testing-strategy.md) | Contract, regression, and parity test expectations |
 | [Benchmarking](development/benchmarking.md) | Benchmark crate, micro/macro suites, and regression-gate workflow |

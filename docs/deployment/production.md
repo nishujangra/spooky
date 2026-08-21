@@ -37,23 +37,23 @@ Recommended baseline:
 
 ```bash
 sudo useradd --system --shell /usr/sbin/nologin \
-  --home-dir /var/lib/spooky --create-home spooky
+  --home-dir /var/lib/impulse --create-home impulse
 
-sudo mkdir -p /etc/spooky/certs /var/lib/spooky /var/log/spooky
+sudo mkdir -p /etc/impulse/certs /var/lib/impulse /var/log/impulse
 
-sudo chown root:spooky /etc/spooky
-sudo chmod 750 /etc/spooky
+sudo chown root:impulse /etc/impulse
+sudo chmod 750 /etc/impulse
 
-sudo chown root:spooky /etc/spooky/certs
-sudo chmod 750 /etc/spooky/certs
+sudo chown root:impulse /etc/impulse/certs
+sudo chmod 750 /etc/impulse/certs
 
-sudo chown spooky:spooky /var/lib/spooky /var/log/spooky
-sudo chmod 750 /var/lib/spooky /var/log/spooky
+sudo chown impulse:impulse /var/lib/impulse /var/log/impulse
+sudo chmod 750 /var/lib/impulse /var/log/impulse
 ```
 
 Recommended permissions:
 
-- config files: readable by `root` and the `spooky` group
+- config files: readable by `root` and the `impulse` group
 - private keys: readable only by the minimum required service identities
 - writable paths: limited to runtime state and optional local logs
 
@@ -62,7 +62,7 @@ Recommended permissions:
 Install a release binary or a verified internal build into a stable path such as:
 
 ```bash
-sudo install -m 755 -o root -g root spooky /usr/local/bin/spooky
+sudo install -m 755 -o root -g root impulse /usr/local/bin/impulse
 ```
 
 Keep:
@@ -86,7 +86,7 @@ Use [Host Tuning](../operations/host-tuning.md) for the tuning model and `script
 Example `sysctl` baseline:
 
 ```bash
-# /etc/sysctl.d/99-spooky.conf
+# /etc/sysctl.d/99-impulse.conf
 net.core.rmem_max = 67108864
 net.core.wmem_max = 67108864
 net.core.rmem_default = 16777216
@@ -108,11 +108,11 @@ sysctl fs.file-max
 Recommended service-account limits:
 
 ```bash
-# /etc/security/limits.d/spooky.conf
-spooky soft nofile 1048576
-spooky hard nofile 1048576
-spooky soft nproc 16384
-spooky hard nproc 16384
+# /etc/security/limits.d/impulse.conf
+impulse soft nofile 1048576
+impulse hard nofile 1048576
+impulse soft nproc 16384
+impulse hard nproc 16384
 ```
 
 Also reflect the same intent in your `systemd` unit.
@@ -143,10 +143,10 @@ Use a documented certificate lifecycle with:
 Before replacing a certificate, verify:
 
 ```bash
-openssl x509 -noout -dates -in /etc/spooky/certs/fullchain.pem
-openssl x509 -noout -text -in /etc/spooky/certs/fullchain.pem | grep -A1 "Subject Alternative Name"
-openssl rsa -noout -modulus -in /etc/spooky/certs/privkey.pem | openssl md5
-openssl x509 -noout -modulus -in /etc/spooky/certs/fullchain.pem | openssl md5
+openssl x509 -noout -dates -in /etc/impulse/certs/fullchain.pem
+openssl x509 -noout -text -in /etc/impulse/certs/fullchain.pem | grep -A1 "Subject Alternative Name"
+openssl rsa -noout -modulus -in /etc/impulse/certs/privkey.pem | openssl md5
+openssl x509 -noout -modulus -in /etc/impulse/certs/fullchain.pem | openssl md5
 ```
 
 For cert-only updates, prefer:
@@ -166,15 +166,15 @@ Use `systemd` as a supervised service layer and keep change management in your r
 ```ini
 [Unit]
 Description=Impulse edge runtime
-Documentation=https://github.com/Supernova-Labs-Org/spooky
+Documentation=https://github.com/Supernova-Labs-Org/impulse
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-User=spooky
-Group=spooky
-ExecStart=/usr/local/bin/spooky --config /etc/spooky/config.yaml
+User=impulse
+Group=impulse
+ExecStart=/usr/local/bin/impulse --config /etc/impulse/config.yaml
 Restart=always
 RestartSec=5s
 LimitNOFILE=1048576
@@ -184,7 +184,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/lib/spooky /var/log/spooky
+ReadWritePaths=/var/lib/impulse /var/log/impulse
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=true
 RestrictRealtime=true
@@ -192,7 +192,7 @@ RestrictSUIDSGID=true
 LockPersonality=true
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=spooky
+SyslogIdentifier=impulse
 
 [Install]
 WantedBy=multi-user.target
@@ -240,19 +240,19 @@ Use:
 curl -k --http1.1 -X POST \
   -H "Authorization: Bearer <operator-token>" \
   -H "content-type: application/json" \
-  -d '{"config_path":"/etc/spooky/config.yaml","requested_by":"ops","reason":"route change"}' \
+  -d '{"config_path":"/etc/impulse/config.yaml","requested_by":"ops","reason":"route change"}' \
   https://127.0.0.1:9902/admin/runtime/validate
 
 curl -k --http1.1 -X POST \
   -H "Authorization: Bearer <operator-token>" \
   -H "content-type: application/json" \
-  -d '{"config_path":"/etc/spooky/config.yaml","requested_by":"ops","reason":"route change"}' \
+  -d '{"config_path":"/etc/impulse/config.yaml","requested_by":"ops","reason":"route change"}' \
   https://127.0.0.1:9902/admin/runtime/preview
 
 curl -k --http1.1 -X POST \
   -H "Authorization: Bearer <operator-token>" \
   -H "content-type: application/json" \
-  -d '{"config_path":"/etc/spooky/config.yaml","expected_generation":12,"requested_by":"ops","reason":"route change"}' \
+  -d '{"config_path":"/etc/impulse/config.yaml","expected_generation":12,"requested_by":"ops","reason":"route change"}' \
   https://127.0.0.1:9902/admin/runtime/activate
 ```
 

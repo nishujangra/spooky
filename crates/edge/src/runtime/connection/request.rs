@@ -6,8 +6,8 @@ use std::{
 };
 
 use bytes::Bytes;
-use spooky_config::config::{ForwardedHeaderPolicy, UpstreamHostPolicy};
-use spooky_lb::upstream_pool::UpstreamPool;
+use impulse_config::config::{ForwardedHeaderPolicy, UpstreamHostPolicy};
+use impulse_lb::upstream_pool::UpstreamPool;
 use tokio::sync::{mpsc, oneshot};
 use tracing::Span;
 

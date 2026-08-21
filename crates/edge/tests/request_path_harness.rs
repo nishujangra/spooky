@@ -18,7 +18,7 @@ use rcgen::{
     ExtendedKeyUsagePurpose, IsCa, KeyUsagePurpose, SanType,
 };
 use serial_test::serial;
-use spooky_config::config::{
+use impulse_config::config::{
     ApiKeyAuth, ExternalAuth, ExternalAuthFailureMode, ExternalAuthRequestHeader, RouteAuth,
     ScopedRateLimit, ScopedRateLimitScope, SecretRef, UpstreamTls,
 };
@@ -46,7 +46,7 @@ struct MtlsTestMaterial {
 impl MtlsTestMaterial {
     fn localhost() -> Self {
         let dir = tempdir().expect("tempdir");
-        let ca = build_ca("Spooky Edge Test CA");
+        let ca = build_ca("Impulse Edge Test CA");
         let (server_cert, server_key) = signed_cert(
             "localhost",
             &ca,
@@ -150,7 +150,7 @@ fn start_single_backend_listener(
     path: &str,
     backend_id: &str,
     backend_addr: String,
-    configure: impl FnOnce(&mut spooky_config::config::Config),
+    configure: impl FnOnce(&mut impulse_config::config::Config),
 ) -> std::net::SocketAddr {
     let mut upstreams = HashMap::new();
     upstreams.insert(
@@ -175,7 +175,7 @@ fn configure_http_external_auth(
     timeout_ms: u64,
     failure_mode: ExternalAuthFailureMode,
     response_header_allowlist: Vec<String>,
-) -> spooky_config::config::Config {
+) -> impulse_config::config::Config {
     let mut upstream = make_upstream(
         "/auth",
         vec![make_backend("auth-backend", backend_address)],
@@ -203,7 +203,7 @@ fn single_route_upstreams(
     backend_id: &str,
     backend_address: String,
     tls: Option<UpstreamTls>,
-) -> HashMap<String, spooky_config::config::Upstream> {
+) -> HashMap<String, impulse_config::config::Upstream> {
     let mut upstreams = HashMap::new();
     upstreams.insert(
         "api".to_string(),
@@ -372,7 +372,7 @@ fn quic_to_h1_success_path_normalizes_headers_and_keeps_get_bodyless() {
                 ("x-secret", "strip-me"),
             ],
             body: None,
-            user_agent: "spooky-success-h1",
+            user_agent: "impulse-success-h1",
         })
         .expect("h3 request");
 
@@ -388,7 +388,7 @@ fn quic_to_h1_success_path_normalizes_headers_and_keeps_get_bodyless() {
     assert_eq!(response_line(&body, "xff="), "127.0.0.1");
     assert_eq!(response_line(&body, "xfp="), "https");
     assert_eq!(response_line(&body, "xfh="), "public.example.com");
-    assert_eq!(response_line(&body, "user_agent="), "spooky-success-h1");
+    assert_eq!(response_line(&body, "user_agent="), "impulse-success-h1");
     assert_eq!(response_line(&body, "content_length="), "<missing>");
     assert_eq!(response_line(&body, "body_len="), "0");
     assert_eq!(response_line(&body, "has_connection="), "false");
@@ -514,7 +514,7 @@ fn quic_to_h2_success_path_normalizes_headers_and_keeps_get_bodyless() {
                 ("x-secret", "strip-me"),
             ],
             body: None,
-            user_agent: "spooky-success-h2",
+            user_agent: "impulse-success-h2",
         })
         .expect("h3 request");
 
@@ -530,7 +530,7 @@ fn quic_to_h2_success_path_normalizes_headers_and_keeps_get_bodyless() {
     assert_eq!(response_line(&body, "xff="), "127.0.0.1");
     assert_eq!(response_line(&body, "xfp="), "https");
     assert_eq!(response_line(&body, "xfh="), "public.example.com");
-    assert_eq!(response_line(&body, "user_agent="), "spooky-success-h2");
+    assert_eq!(response_line(&body, "user_agent="), "impulse-success-h2");
     assert_eq!(response_line(&body, "content_length="), "<missing>");
     assert_eq!(response_line(&body, "body_len="), "0");
     assert_eq!(response_line(&body, "has_connection="), "false");
@@ -630,7 +630,7 @@ fn quic_to_h2_upstream_mtls_requires_client_certificate() {
             || metrics_delta(
                 &before_metrics,
                 &after_metrics,
-                "spooky_request_outcome_total{outcome=\"failure\",reason=\"backend_tls_failed\"} ",
+                "impulse_request_outcome_total{outcome=\"failure\",reason=\"backend_tls_failed\"} ",
             ) > 0;
         if observed_client_auth_rejection || attempt == MAX_ATTEMPTS - 1 {
             break;
@@ -943,7 +943,7 @@ fn quic_request_path_external_auth_allow_injects_headers_before_forwarding() {
             assert_eq!(req.method(), hyper::Method::GET);
             assert_eq!(
                 req.headers()
-                    .get("x-spooky-original-method")
+                    .get("x-impulse-original-method")
                     .and_then(|value| value.to_str().ok()),
                 Some("GET")
             );
@@ -1060,7 +1060,7 @@ fn quic_request_path_external_auth_challenge_preserves_www_authenticate() {
         Ok::<_, std::convert::Infallible>(
             Response::builder()
                 .status(hyper::StatusCode::UNAUTHORIZED)
-                .header("www-authenticate", "Bearer realm=\"spooky\"")
+                .header("www-authenticate", "Bearer realm=\"impulse\"")
                 .header("x-auth-reason", "expired")
                 .body(Full::new(Bytes::from_static(b"token expired")))
                 .expect("auth challenge response"),
@@ -1084,7 +1084,7 @@ fn quic_request_path_external_auth_challenge_preserves_www_authenticate() {
     response.assert_status(401);
     assert_eq!(
         response.header("www-authenticate"),
-        Some("Bearer realm=\"spooky\"")
+        Some("Bearer realm=\"impulse\"")
     );
     assert_eq!(response.header("x-auth-reason"), Some("expired"));
     assert!(response.body_text().contains("token expired"));
@@ -1441,8 +1441,8 @@ fn quic_request_path_request_body_at_cap_is_accepted() {
         |_| {},
     );
 
-    let chunk1 = vec![0u8; spooky_edge::MAX_REQUEST_BODY_BYTES / 2];
-    let chunk2 = vec![0u8; spooky_edge::MAX_REQUEST_BODY_BYTES - chunk1.len()];
+    let chunk1 = vec![0u8; impulse_edge::MAX_REQUEST_BODY_BYTES / 2];
+    let chunk2 = vec![0u8; impulse_edge::MAX_REQUEST_BODY_BYTES - chunk1.len()];
     let expected_len = chunk1.len() + chunk2.len();
 
     let (response, got_reset) = run_two_chunk_post_to(
@@ -1488,7 +1488,7 @@ fn quic_request_path_slow_request_body_cap_breach_stays_on_413_path() {
         vec![0u8; 600],
         vec![0u8; 600],
         Duration::from_millis(120),
-        Duration::from_secs(spooky_edge::REQUEST_TIMEOUT_SECS + 12),
+        Duration::from_secs(impulse_edge::REQUEST_TIMEOUT_SECS + 12),
     )
     .expect("slow over-cap request should complete");
 
@@ -1553,8 +1553,8 @@ fn quic_request_path_concurrent_large_body_pressure_is_bounded() {
         let barrier = Arc::clone(&barrier);
         handles.push(thread::spawn(move || {
             barrier.wait();
-            let chunk1 = vec![0u8; (spooky_edge::MAX_REQUEST_BODY_BYTES - 8 * 1024) / 2];
-            let chunk2 = vec![0u8; (spooky_edge::MAX_REQUEST_BODY_BYTES - 8 * 1024) - chunk1.len()];
+            let chunk1 = vec![0u8; (impulse_edge::MAX_REQUEST_BODY_BYTES - 8 * 1024) / 2];
+            let chunk2 = vec![0u8; (impulse_edge::MAX_REQUEST_BODY_BYTES - 8 * 1024) - chunk1.len()];
             run_two_chunk_post_to(
                 listen_addr,
                 "localhost",
@@ -1809,18 +1809,18 @@ fn quic_request_path_success_outcome_records_success_bucket() {
         .metrics_text()
         .expect("metrics snapshot after request");
     assert!(
-        metrics_delta(&before, &after, "spooky_requests_success ") > 0,
+        metrics_delta(&before, &after, "impulse_requests_success ") > 0,
         "success request should increment success counter"
     );
     assert_eq!(
-        metrics_delta(&before, &after, "spooky_requests_failure "),
+        metrics_delta(&before, &after, "impulse_requests_failure "),
         0
     );
     assert!(
         metrics_delta(
             &before,
             &after,
-            "spooky_route_requests_total{route=\"api\"} "
+            "impulse_route_requests_total{route=\"api\"} "
         ) > 0,
         "success request should increment route request counter"
     );
@@ -1828,7 +1828,7 @@ fn quic_request_path_success_outcome_records_success_bucket() {
         metrics_delta(
             &before,
             &after,
-            "spooky_route_success_total{route=\"api\"} "
+            "impulse_route_success_total{route=\"api\"} "
         ) > 0,
         "success request should increment route success counter"
     );
@@ -1836,7 +1836,7 @@ fn quic_request_path_success_outcome_records_success_bucket() {
         metrics_delta(
             &before,
             &after,
-            "spooky_route_failure_total{route=\"api\"} "
+            "impulse_route_failure_total{route=\"api\"} "
         ),
         0
     );
@@ -1844,7 +1844,7 @@ fn quic_request_path_success_outcome_records_success_bucket() {
         metrics_delta(
             &before,
             &after,
-            "spooky_route_timeout_total{route=\"api\"} "
+            "impulse_route_timeout_total{route=\"api\"} "
         ),
         0
     );
@@ -1892,18 +1892,18 @@ fn quic_request_path_timeout_outcome_records_timeout_bucket() {
         .metrics_text()
         .expect("metrics snapshot after request");
     assert!(
-        metrics_delta(&before, &after, "spooky_backend_timeouts ") > 0,
+        metrics_delta(&before, &after, "impulse_backend_timeouts ") > 0,
         "timeout request should increment backend timeout counter"
     );
     assert!(
-        metrics_delta(&before, &after, "spooky_requests_failure ") > 0,
+        metrics_delta(&before, &after, "impulse_requests_failure ") > 0,
         "timeout request should increment failure counter"
     );
     assert!(
         metrics_delta(
             &before,
             &after,
-            "spooky_route_timeout_total{route=\"api\"} "
+            "impulse_route_timeout_total{route=\"api\"} "
         ) > 0,
         "timeout request should increment timeout bucket"
     );
@@ -1911,7 +1911,7 @@ fn quic_request_path_timeout_outcome_records_timeout_bucket() {
         metrics_delta(
             &before,
             &after,
-            "spooky_route_success_total{route=\"api\"} "
+            "impulse_route_success_total{route=\"api\"} "
         ),
         0
     );
@@ -1958,18 +1958,18 @@ fn quic_request_path_failure_outcome_records_failure_bucket() {
         .metrics_text()
         .expect("metrics snapshot after request");
     assert!(
-        metrics_delta(&before, &after, "spooky_backend_errors ") > 0,
+        metrics_delta(&before, &after, "impulse_backend_errors ") > 0,
         "upstream failure should increment backend error counter"
     );
     assert!(
-        metrics_delta(&before, &after, "spooky_requests_failure ") > 0,
+        metrics_delta(&before, &after, "impulse_requests_failure ") > 0,
         "upstream failure should increment failure counter"
     );
     assert!(
         metrics_delta(
             &before,
             &after,
-            "spooky_route_failure_total{route=\"api\"} "
+            "impulse_route_failure_total{route=\"api\"} "
         ) > 0,
         "upstream failure should increment failure bucket"
     );
@@ -1977,7 +1977,7 @@ fn quic_request_path_failure_outcome_records_failure_bucket() {
         metrics_delta(
             &before,
             &after,
-            "spooky_route_timeout_total{route=\"api\"} "
+            "impulse_route_timeout_total{route=\"api\"} "
         ),
         0
     );
@@ -1985,7 +1985,7 @@ fn quic_request_path_failure_outcome_records_failure_bucket() {
         metrics_delta(
             &before,
             &after,
-            "spooky_route_overload_shed_total{route=\"api\"} "
+            "impulse_route_overload_shed_total{route=\"api\"} "
         ),
         0
     );
@@ -2044,30 +2044,30 @@ fn quic_request_path_rate_limit_outcome_records_rate_limited_bucket() {
         .metrics_text()
         .expect("metrics snapshot after requests");
     assert!(
-        metrics_delta(&before, &after, "spooky_request_rate_limited ") > 0,
+        metrics_delta(&before, &after, "impulse_request_rate_limited ") > 0,
         "rate-limited request should increment rate-limit counter"
     );
     assert!(
         metrics_delta(
             &before,
             &after,
-            "spooky_route_rate_limited_total{route=\"api\"} "
+            "impulse_route_rate_limited_total{route=\"api\"} "
         ) > 0,
         "rate-limited request should increment route rate-limit bucket"
     );
     assert!(
-        metrics_delta(&before, &after, "spooky_requests_success ") > 0,
+        metrics_delta(&before, &after, "impulse_requests_success ") > 0,
         "admitted request should increment success counter"
     );
     assert!(
-        metrics_delta(&before, &after, "spooky_requests_failure ") > 0,
+        metrics_delta(&before, &after, "impulse_requests_failure ") > 0,
         "rate-limited request should increment failure counter"
     );
     assert_eq!(
         metrics_delta(
             &before,
             &after,
-            "spooky_route_overload_shed_total{route=\"api\"} "
+            "impulse_route_overload_shed_total{route=\"api\"} "
         ),
         0
     );
@@ -2154,23 +2154,23 @@ fn quic_request_path_overload_outcome_records_overload_bucket() {
         metrics_delta(
             &before,
             &after,
-            "spooky_route_overload_shed_total{route=\"api\"} "
+            "impulse_route_overload_shed_total{route=\"api\"} "
         ) > 0,
         "overload request should increment route overload bucket"
     );
     assert!(
-        metrics_delta(&before, &after, "spooky_requests_success ") > 0,
+        metrics_delta(&before, &after, "impulse_requests_success ") > 0,
         "one admitted request should increment success counter"
     );
     assert!(
-        metrics_delta(&before, &after, "spooky_requests_failure ") > 0,
+        metrics_delta(&before, &after, "impulse_requests_failure ") > 0,
         "one shed request should increment failure counter"
     );
     assert_eq!(
         metrics_delta(
             &before,
             &after,
-            "spooky_route_rate_limited_total{route=\"api\"} "
+            "impulse_route_rate_limited_total{route=\"api\"} "
         ),
         0
     );

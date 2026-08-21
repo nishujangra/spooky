@@ -57,7 +57,7 @@ flowchart TB
     client_h3["HTTP/3 clients"]
     client_bootstrap["HTTP/1.1 and HTTP/2 clients"]
 
-    subgraph spooky["Impulse edge runtime"]
+    subgraph impulse["Impulse edge runtime"]
         ingress["Ingress
         HTTP/3 over QUIC
         bootstrap HTTP/1.1 and HTTP/2
@@ -97,7 +97,7 @@ flowchart TB
     execution --> transport
     transport --> backends
     execution --> observability
-    control -. reads and updates runtime state .-> spooky
+    control -. reads and updates runtime state .-> impulse
 ```
 
 ### Plane Comparison
@@ -251,7 +251,7 @@ Shared state is managed carefully:
 
 The data plane is **multi-worker**, not a single primary-thread loop:
 - One UDP socket is bound per worker via `SO_REUSEPORT`, and one OS thread is spawned per socket
-  (`spooky-data-plane-{idx}`); worker count comes from `performance.worker_threads`.
+  (`impulse-data-plane-{idx}`); worker count comes from `performance.worker_threads`.
 - Each worker can be further sub-sharded into `performance.packet_shards_per_worker` packet-shard
   threads, fed via bounded `mpsc` channels. Packets are hashed by peer address so a given peer
   always lands on the same shard/connection state.

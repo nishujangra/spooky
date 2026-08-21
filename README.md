@@ -86,7 +86,7 @@ Impulse is a strong fit for:
 ```bash
 cargo build --release
 make certs-selfsigned
-./target/release/spooky --config config/config.development.yaml
+./target/release/impulse --config config/config.development.yaml
 ```
 
 Then test the edge with an HTTP/3 request:

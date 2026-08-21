@@ -9,11 +9,11 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use spooky_errors::{
+use impulse_errors::{
     HedgeOutcomeTelemetryReason, HedgeTriggerTelemetryReason, RetryAttemptTelemetryReason,
     RetryPolicyDenialReason,
 };
-use spooky_lb::health::HealthFailureReason;
+use impulse_lb::health::HealthFailureReason;
 
 use crate::{
     observability::{QuotaBackendHealthReason, QuotaPolicyDecision, QuotaPolicyReason},
@@ -174,7 +174,7 @@ pub(crate) struct BackendConnectAttemptKey {
     pub(crate) resolved_addr: String,
 }
 
-/// Upper bound on the number of distinct `spooky_backend_connect_attempt_total`
+/// Upper bound on the number of distinct `impulse_backend_connect_attempt_total`
 /// series (obs Phase 2, step 7). `resolved_addr`/`hostname` are otherwise
 /// unbounded across DNS rotation and multi-A records; once this many distinct
 /// keys exist, further keys collapse into a single stable overflow series so
@@ -286,7 +286,7 @@ pub(crate) struct DownstreamTlsCertExpiryKey {
 const LATENCY_BUCKETS_MS: [u64; 14] = [
     1, 5, 10, 25, 50, 100, 250, 500, 1_000, 2_000, 5_000, 10_000, 30_000, 60_000,
 ];
-const ROUTE_LATENCY_SAMPLE_EVERY_ENV: &str = "SPOOKY_ROUTE_LATENCY_SAMPLE_EVERY";
+const ROUTE_LATENCY_SAMPLE_EVERY_ENV: &str = "IMPULSE_ROUTE_LATENCY_SAMPLE_EVERY";
 
 #[derive(Default, Clone)]
 struct RouteStats {
@@ -453,7 +453,7 @@ pub enum OverloadShedReason {
 
 impl OverloadShedReason {
     /// Bridge to the canonical overload cause (obs Phase 2, step 5). The
-    /// `reason=` label emitted for `spooky_overload_shed_by_reason_total` is the
+    /// `reason=` label emitted for `impulse_overload_shed_by_reason_total` is the
     /// canonical [`crate::observability::AdmissionOverloadCause::slug`]; this makes
     /// the label vocabulary come from the canonical enum rather than the ad hoc
     /// string literals in `prometheus.rs`.
@@ -1996,24 +1996,25 @@ mod tests {
         let rendered = metrics.render_prometheus();
 
         assert!(
-            rendered.contains("spooky_jwt_validation_failures_total{reason=\"issuer_mismatch\"} 1")
+            rendered
+                .contains("impulse_jwt_validation_failures_total{reason=\"issuer_mismatch\"} 1")
         );
-        assert!(rendered.contains("spooky_jwt_algorithm_rejections_total{algorithm=\"RS256\"} 1"));
+        assert!(rendered.contains("impulse_jwt_algorithm_rejections_total{algorithm=\"RS256\"} 1"));
         assert!(
-            rendered.contains("spooky_jwks_unknown_kid_total{jwks_source_id=\"jwks:example\"} 1")
+            rendered.contains("impulse_jwks_unknown_kid_total{jwks_source_id=\"jwks:example\"} 1")
         );
         assert!(
             rendered
-                .contains("spooky_jwks_refresh_success_total{jwks_source_id=\"jwks:example\"} 1")
+                .contains("impulse_jwks_refresh_success_total{jwks_source_id=\"jwks:example\"} 1")
         );
         assert!(
             rendered
-                .contains("spooky_jwks_refresh_failure_total{jwks_source_id=\"jwks:example\"} 1")
+                .contains("impulse_jwks_refresh_failure_total{jwks_source_id=\"jwks:example\"} 1")
         );
         assert!(rendered.contains(
-            "spooky_jwks_state{jwks_source_id=\"jwks:example\",state=\"refresh_failed_retained\"} 1"
+            "impulse_jwks_state{jwks_source_id=\"jwks:example\",state=\"refresh_failed_retained\"} 1"
         ));
-        assert!(rendered.contains("spooky_jwks_active_keys{jwks_source_id=\"jwks:example\"} 2"));
+        assert!(rendered.contains("impulse_jwks_active_keys{jwks_source_id=\"jwks:example\"} 2"));
     }
 
     #[test]
@@ -2032,13 +2033,13 @@ mod tests {
         let rendered = metrics.render_prometheus();
 
         assert!(rendered.contains(
-            "spooky_quota_policy_outcomes_total{policy=\"tenant-write-quota\",decision=\"denied\",reason=\"burst_quota_exhausted\",selector_dimensions=\"route+tenant+token\",backend_mode=\"redis\"} 1"
+            "impulse_quota_policy_outcomes_total{policy=\"tenant-write-quota\",decision=\"denied\",reason=\"burst_quota_exhausted\",selector_dimensions=\"route+tenant+token\",backend_mode=\"redis\"} 1"
         ));
         assert!(rendered.contains(
-            "spooky_quota_backend_health_total{backend_mode=\"redis\",reason=\"available\"} 1"
+            "impulse_quota_backend_health_total{backend_mode=\"redis\",reason=\"available\"} 1"
         ));
         assert!(rendered.contains(
-            "spooky_quota_backend_health_total{backend_mode=\"redis\",reason=\"timeout\"} 1"
+            "impulse_quota_backend_health_total{backend_mode=\"redis\",reason=\"timeout\"} 1"
         ));
     }
 
@@ -2060,10 +2061,10 @@ mod tests {
         let rendered = metrics.render_prometheus();
 
         assert!(rendered.contains(
-            "spooky_quota_policy_outcomes_total{policy=\"tenant-write-quota\",decision=\"allowed\",reason=\"allowed\",selector_dimensions=\"route+tenant+client\",backend_mode=\"redis_local_fallback_backend_timeout\"} 1"
+            "impulse_quota_policy_outcomes_total{policy=\"tenant-write-quota\",decision=\"allowed\",reason=\"allowed\",selector_dimensions=\"route+tenant+client\",backend_mode=\"redis_local_fallback_backend_timeout\"} 1"
         ));
         assert!(rendered.contains(
-            "spooky_quota_backend_health_total{backend_mode=\"redis_local_fallback_backend_timeout\",reason=\"timeout\"} 1"
+            "impulse_quota_backend_health_total{backend_mode=\"redis_local_fallback_backend_timeout\",reason=\"timeout\"} 1"
         ));
     }
 
@@ -2086,27 +2087,27 @@ mod tests {
         let rendered = metrics.render_prometheus();
 
         assert!(rendered.contains(
-            "spooky_secret_reload_total{scope=\"listeners\",result=\"success\",reason=\"cert_reload_applied\"} 1"
+            "impulse_secret_reload_total{scope=\"listeners\",result=\"success\",reason=\"cert_reload_applied\"} 1"
         ));
         assert!(rendered.contains(
-            "spooky_secret_resolve_total{provider=\"file\",result=\"success\",reason=\"resolved\"} 1"
+            "impulse_secret_resolve_total{provider=\"file\",result=\"success\",reason=\"resolved\"} 1"
         ));
         assert!(rendered.contains(
-            "spooky_secret_resolve_total{provider=\"file\",result=\"failed\",reason=\"file_not_found\"} 1"
+            "impulse_secret_resolve_total{provider=\"file\",result=\"failed\",reason=\"file_not_found\"} 1"
         ));
         assert!(
             rendered
-                .contains("spooky_secret_last_success_unixtime{scope=\"upstreams\"} 1700000123")
+                .contains("impulse_secret_last_success_unixtime{scope=\"upstreams\"} 1700000123")
         );
         assert!(rendered.contains(
-            "spooky_upstream_tls_failure_total{upstream=\"payments\",backend=\"10.0.0.5:443\",phase=\"data_plane\",reason=\"client_auth_rejected\"} 1"
+            "impulse_upstream_tls_failure_total{upstream=\"payments\",backend=\"10.0.0.5:443\",phase=\"data_plane\",reason=\"client_auth_rejected\"} 1"
         ));
-        assert!(!rendered.contains("spooky_upstream_mtls_handshake_failure_total"));
+        assert!(!rendered.contains("impulse_upstream_mtls_handshake_failure_total"));
         assert!(rendered.contains(
-            "spooky_upstream_client_certificate_not_after_seconds{upstream=\"payments\"} 1800000000"
+            "impulse_upstream_client_certificate_not_after_seconds{upstream=\"payments\"} 1800000000"
         ));
         assert!(rendered.contains(
-            "spooky_control_plane_cert_reload_total{result=\"success\",reason=\"cert_reload_applied\"} 1"
+            "impulse_control_plane_cert_reload_total{result=\"success\",reason=\"cert_reload_applied\"} 1"
         ));
     }
 }

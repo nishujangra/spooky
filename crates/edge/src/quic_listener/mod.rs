@@ -35,13 +35,13 @@ use rustls::{
 use rustls_pki_types::pem::PemObject;
 use serde_json::json;
 #[cfg(test)]
-use spooky_bridge::response::should_strip_response_header;
-use spooky_bridge::response::{
+use impulse_bridge::response::should_strip_response_header;
+use impulse_bridge::response::{
     ResponseBodyMode, ResponseBodyPolicy, ResponseNormalizationInput,
     ResponseNormalizationProtocol, ResponseProtocolConstraints, normalize_response_trailers,
     normalize_upstream_response,
 };
-use spooky_config::{
+use impulse_config::{
     backend_endpoint::{BackendEndpoint, BackendScheme},
     config::ClientAuth,
     runtime::{
@@ -49,9 +49,9 @@ use spooky_config::{
         RuntimeUpstreamPolicy,
     },
 };
-use spooky_errors::{PoolError, ProxyError};
-use spooky_lb::{health::HealthFailureReason, upstream_pool::UpstreamPool};
-use spooky_transport::{SharedDnsResolver, UpstreamTransportPool};
+use impulse_errors::{PoolError, ProxyError};
+use impulse_lb::{health::HealthFailureReason, upstream_pool::UpstreamPool};
+use impulse_transport::{SharedDnsResolver, UpstreamTransportPool};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     sync::{Semaphore, mpsc, mpsc::error::TrySendError, oneshot},

@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use spooky_config::{
+use impulse_config::{
     config::{
         CURRENT_CONFIG_VERSION, ControlApi, ExternalAuthFailureMode, ForwardedHeaderPolicyMode,
         LoadBalancing, MetricsEndpoint, Performance, Resilience, RoutingTransparency, Tracing,
@@ -242,7 +242,7 @@ upstream:
     );
 
     match config.upstream["api"].auth.external_auth.as_ref() {
-        Some(spooky_config::config::ExternalAuth::Http {
+        Some(impulse_config::config::ExternalAuth::Http {
             timeout_ms,
             failure_mode,
             request_headers,

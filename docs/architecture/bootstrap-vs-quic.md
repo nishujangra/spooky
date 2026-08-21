@@ -1,6 +1,6 @@
 # Bootstrap vs QUIC
 
-This document explains the two ingress paths in `spooky-edge` and the intended boundary between them.
+This document explains the two ingress paths in `impulse-edge` and the intended boundary between them.
 
 ## Short Version
 

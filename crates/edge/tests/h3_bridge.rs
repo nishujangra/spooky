@@ -43,14 +43,14 @@ use tokio_rustls::{
 
 mod support;
 
-use spooky_config::{
+use impulse_config::{
     config::{
         Backend, ClientAuth, Config, HealthCheck, Listen, LoadBalancing, Log, LogFormat,
         RouteMatch, Security, Tls, TlsCertificate, Upstream, UpstreamTls,
     },
     runtime::RuntimeConfig,
 };
-use spooky_edge::{
+use impulse_edge::{
     BACKEND_TIMEOUT_SECS, MAX_DATAGRAM_SIZE_BYTES, MAX_STREAMS_PER_CONNECTION,
     MAX_UDP_PAYLOAD_BYTES, QUIC_IDLE_TIMEOUT_MS, QUIC_INITIAL_MAX_DATA,
     QUIC_INITIAL_MAX_STREAMS_BIDI, QUIC_INITIAL_MAX_STREAMS_UNI, QUIC_INITIAL_STREAM_DATA,
@@ -219,9 +219,9 @@ fn make_config_with_upstreams(
             file: Default::default(),
             format: LogFormat::Plain,
         },
-        performance: spooky_config::config::Performance::default(),
-        observability: spooky_config::config::Observability::default(),
-        resilience: spooky_config::config::Resilience::default(),
+        performance: impulse_config::config::Performance::default(),
+        observability: impulse_config::config::Observability::default(),
+        resilience: impulse_config::config::Resilience::default(),
         security: Security::default(),
     }
 }
@@ -401,7 +401,7 @@ fn run_h3_client_chunked_post(
                     quiche::h3::Header::new(b":scheme", b"https"),
                     quiche::h3::Header::new(b":authority", b"localhost"),
                     quiche::h3::Header::new(b":path", path.as_bytes()),
-                    quiche::h3::Header::new(b"user-agent", b"spooky-pressure-test"),
+                    quiche::h3::Header::new(b"user-agent", b"impulse-pressure-test"),
                     quiche::h3::Header::new(b"content-length", content_length.as_bytes()),
                 ];
                 let sid = h3c
@@ -586,7 +586,7 @@ fn run_h3_client_collect_trailers(
                     quiche::h3::Header::new(b":scheme", b"https"),
                     quiche::h3::Header::new(b":authority", b"localhost"),
                     quiche::h3::Header::new(b":path", path.as_bytes()),
-                    quiche::h3::Header::new(b"user-agent", b"spooky-regression-test"),
+                    quiche::h3::Header::new(b"user-agent", b"impulse-regression-test"),
                 ];
                 let stream_id = h3c
                     .send_request(&mut conn, &req, true)
@@ -1296,7 +1296,7 @@ fn run_h3_client_with_tls(
                     quiche::h3::Header::new(b":scheme", b"https"),
                     quiche::h3::Header::new(b":authority", options.authority.as_bytes()),
                     quiche::h3::Header::new(b":path", options.path.as_bytes()),
-                    quiche::h3::Header::new(b"user-agent", b"spooky-tls-integration"),
+                    quiche::h3::Header::new(b"user-agent", b"impulse-tls-integration"),
                 ];
                 h3.send_request(&mut conn, &req, true)
                     .map_err(|e| format!("send_request: {e:?}"))?;
@@ -1779,7 +1779,7 @@ fn run_h3_client_concurrent_get(
                         quiche::h3::Header::new(b":scheme", b"https"),
                         quiche::h3::Header::new(b":authority", b"localhost"),
                         quiche::h3::Header::new(b":path", path.as_bytes()),
-                        quiche::h3::Header::new(b"user-agent", b"spooky-regression-test"),
+                        quiche::h3::Header::new(b"user-agent", b"impulse-regression-test"),
                     ];
                     let stream_id = h3
                         .send_request(&mut conn, &req, true)
@@ -2460,17 +2460,17 @@ fn metrics_endpoint_exposes_route_slo_metrics() {
         ))
         .expect("metrics endpoint should become reachable");
     assert!(
-        metrics.contains("spooky_requests_total"),
+        metrics.contains("impulse_requests_total"),
         "unexpected metrics payload: {metrics}"
     );
-    assert!(metrics.contains("spooky_route_requests_total{route=\"test_pool\"}"));
-    assert!(metrics.contains("spooky_route_latency_ms_p50{route=\"test_pool\"}"));
-    assert!(metrics.contains("spooky_route_latency_ms_p95{route=\"test_pool\"}"));
-    assert!(metrics.contains("spooky_route_latency_ms_p99{route=\"test_pool\"}"));
-    assert!(metrics.contains("spooky_overload_shed_by_reason_total"));
-    assert!(metrics.contains("spooky_active_connections"));
-    assert!(metrics.contains("spooky_connection_cap_rejects"));
-    assert!(metrics.contains("spooky_hedge_triggered_total"));
+    assert!(metrics.contains("impulse_route_requests_total{route=\"test_pool\"}"));
+    assert!(metrics.contains("impulse_route_latency_ms_p50{route=\"test_pool\"}"));
+    assert!(metrics.contains("impulse_route_latency_ms_p95{route=\"test_pool\"}"));
+    assert!(metrics.contains("impulse_route_latency_ms_p99{route=\"test_pool\"}"));
+    assert!(metrics.contains("impulse_overload_shed_by_reason_total"));
+    assert!(metrics.contains("impulse_active_connections"));
+    assert!(metrics.contains("impulse_connection_cap_rejects"));
+    assert!(metrics.contains("impulse_hedge_triggered_total"));
 }
 
 #[test]
@@ -2646,8 +2646,8 @@ fn upstream_api_key_auth_rejects_missing_key_and_allows_valid_key() {
     let backend_addr = rt.block_on(start_h2_backend_with_regression_routes());
     let mut config = make_config(0, backend_addr.to_string(), cert, key);
     config.upstream.get_mut("test_pool").expect("upstream").auth =
-        spooky_config::config::RouteAuth {
-            api_key: Some(spooky_config::config::ApiKeyAuth {
+        impulse_config::config::RouteAuth {
+            api_key: Some(impulse_config::config::ApiKeyAuth {
                 header_name: "x-api-key".to_string(),
                 keys: vec!["edge-key".to_string()],
             }),
@@ -2668,7 +2668,7 @@ fn upstream_api_key_auth_rejects_missing_key_and_allows_valid_key() {
             quiche::h3::Header::new(b":scheme", b"https"),
             quiche::h3::Header::new(b":authority", b"localhost"),
             quiche::h3::Header::new(b":path", b"/fast"),
-            quiche::h3::Header::new(b"user-agent", b"spooky-auth-test"),
+            quiche::h3::Header::new(b"user-agent", b"impulse-auth-test"),
         ],
         true,
         Duration::from_secs(REQUEST_TIMEOUT_SECS + 4),
@@ -2693,7 +2693,7 @@ fn upstream_api_key_auth_rejects_missing_key_and_allows_valid_key() {
             quiche::h3::Header::new(b":scheme", b"https"),
             quiche::h3::Header::new(b":authority", b"localhost"),
             quiche::h3::Header::new(b":path", b"/fast"),
-            quiche::h3::Header::new(b"user-agent", b"spooky-auth-test"),
+            quiche::h3::Header::new(b"user-agent", b"impulse-auth-test"),
             quiche::h3::Header::new(b"x-api-key", b"edge-key"),
         ],
         true,
@@ -2716,14 +2716,14 @@ fn upstream_jwt_auth_rejects_missing_token_and_allows_valid_token() {
     let backend_addr = rt.block_on(start_h2_backend_with_regression_routes());
     let mut config = make_config(0, backend_addr.to_string(), cert, key);
     config.upstream.get_mut("test_pool").expect("upstream").auth =
-        spooky_config::config::RouteAuth {
+        impulse_config::config::RouteAuth {
             api_key: None,
-            jwt: Some(spooky_config::config::JwtAuth {
+            jwt: Some(impulse_config::config::JwtAuth {
                 secret: "jwt-secret".to_string(),
                 issuer: Some("issuer-1".to_string()),
                 audience: Some("aud-1".to_string()),
                 clock_skew_secs: 30,
-                ..spooky_config::config::JwtAuth::default()
+                ..impulse_config::config::JwtAuth::default()
             }),
             external_auth: None,
             required_scopes: vec!["read:fast".to_string()],
@@ -2741,7 +2741,7 @@ fn upstream_jwt_auth_rejects_missing_token_and_allows_valid_token() {
             quiche::h3::Header::new(b":scheme", b"https"),
             quiche::h3::Header::new(b":authority", b"localhost"),
             quiche::h3::Header::new(b":path", b"/fast"),
-            quiche::h3::Header::new(b"user-agent", b"spooky-jwt-test"),
+            quiche::h3::Header::new(b"user-agent", b"impulse-jwt-test"),
         ],
         true,
         Duration::from_secs(REQUEST_TIMEOUT_SECS + 4),
@@ -2773,7 +2773,7 @@ fn upstream_jwt_auth_rejects_missing_token_and_allows_valid_token() {
             quiche::h3::Header::new(b":scheme", b"https"),
             quiche::h3::Header::new(b":authority", b"localhost"),
             quiche::h3::Header::new(b":path", b"/fast"),
-            quiche::h3::Header::new(b"user-agent", b"spooky-jwt-test"),
+            quiche::h3::Header::new(b"user-agent", b"impulse-jwt-test"),
             quiche::h3::Header::new(b"authorization", authorization.as_bytes()),
         ],
         true,
@@ -3244,7 +3244,7 @@ fn response_body_cap_returns_503_on_declared_length_breach() {
                     quiche::h3::Header::new(b":scheme", b"https"),
                     quiche::h3::Header::new(b":authority", b"localhost"),
                     quiche::h3::Header::new(b":path", b"/"),
-                    quiche::h3::Header::new(b"user-agent", b"spooky-cap-test"),
+                    quiche::h3::Header::new(b"user-agent", b"impulse-cap-test"),
                 ];
                 h3c.send_request(&mut conn, &req, true).unwrap();
                 req_sent = true;
@@ -3432,7 +3432,7 @@ fn response_body_cap_returns_503_on_unknown_length_breach() {
                     quiche::h3::Header::new(b":scheme", b"https"),
                     quiche::h3::Header::new(b":authority", b"localhost"),
                     quiche::h3::Header::new(b":path", b"/"),
-                    quiche::h3::Header::new(b"user-agent", b"spooky-cap-test"),
+                    quiche::h3::Header::new(b"user-agent", b"impulse-cap-test"),
                 ];
                 h3c.send_request(&mut conn, &req, true).unwrap();
                 req_sent = true;

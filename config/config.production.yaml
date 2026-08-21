@@ -5,8 +5,8 @@ listen:
   address: "0.0.0.0"
   port: 9889
   tls:
-    cert: "/etc/spooky/certs/fullchain.pem"
-    key: "/etc/spooky/certs/privkey.pem"
+    cert: "/etc/impulse/certs/fullchain.pem"
+    key: "/etc/impulse/certs/privkey.pem"
 
 # listeners: optional multi-listener block; overrides the top-level listen block when set.
 # Use this to bind multiple independent listeners with separate TLS identities.
@@ -15,14 +15,14 @@ listen:
 #     address: "0.0.0.0"
 #     port: 9889
 #     tls:
-#       cert: "/etc/spooky/certs/public-fullchain.pem"
-#       key: "/etc/spooky/certs/public-privkey.pem"
+#       cert: "/etc/impulse/certs/public-fullchain.pem"
+#       key: "/etc/impulse/certs/public-privkey.pem"
 #   - protocol: http3
 #     address: "10.0.0.1"
 #     port: 9890
 #     tls:
-#       cert: "/etc/spooky/certs/internal-fullchain.pem"
-#       key: "/etc/spooky/certs/internal-privkey.pem"
+#       cert: "/etc/impulse/certs/internal-fullchain.pem"
+#       key: "/etc/impulse/certs/internal-privkey.pem"
 
 # secrets: file-backed secret provider used by *_ref fields below (JWT secret_ref,
 # OIDC client_secret_ref, control-plane auth_token_ref, upstream mTLS cert/key refs).
@@ -33,7 +33,7 @@ secrets:
   providers:
     local_filesystem:
       kind: file
-      base_dir: "/etc/spooky/secrets"
+      base_dir: "/etc/impulse/secrets"
 
 upstream_tls:
   verify_certificates: true
@@ -55,9 +55,9 @@ upstream:
     #   verify_certificates: true
     #   strict_sni: true
     #   client_certificate_ref:
-    #     ref: "file:///etc/spooky/secrets/upstream/default-client.crt"
+    #     ref: "file:///etc/impulse/secrets/upstream/default-client.crt"
     #   client_key_ref:
-    #     ref: "file:///etc/spooky/secrets/upstream/default-client.key"
+    #     ref: "file:///etc/impulse/secrets/upstream/default-client.key"
     backends:
       - id: "backend1"
         address: "backend.internal.example:8443" # verified HTTPS by default (no scheme needed)
@@ -84,12 +84,12 @@ observability:
     tls:
       client_auth:
         mode: required
-        ca_file: "/etc/spooky/pki/admin-ca.pem"
+        ca_file: "/etc/impulse/pki/admin-ca.pem"
     auth:
       # Prefer file-backed refs over inline bearer tokens in production.
       # bearer_tokens:
       #   - token_ref:
-      #       ref: "file:///etc/spooky/secrets/control-api/operator-token"
+      #       ref: "file:///etc/impulse/secrets/control-api/operator-token"
       #     role: operator
       #     actor_id: "ops-automation"
       bearer_tokens:
@@ -120,5 +120,5 @@ observability:
 security:
   privileges:
     enabled: true
-    user: "spooky"
-    group: "spooky"
+    user: "impulse"
+    group: "impulse"

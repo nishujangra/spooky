@@ -8,11 +8,11 @@ use tempfile::{TempDir, tempdir};
 
 mod support;
 
-use spooky_config::config::{
+use impulse_config::config::{
     Backend, ClientAuth, Config, HealthCheck, Listen, LoadBalancing, Log, LogFormat, RouteMatch,
     Security, Tls, Upstream, UpstreamTls,
 };
-use spooky_edge::runtime::listener::QUICListener;
+use impulse_edge::runtime::listener::QUICListener;
 use support::{net::local_listener_bind_available, request_path as request_support};
 
 fn write_test_certs(dir: &TempDir) -> (String, String) {
@@ -105,9 +105,9 @@ fn make_config(
             file: Default::default(),
             format: LogFormat::Plain,
         },
-        performance: spooky_config::config::Performance::default(),
-        observability: spooky_config::config::Observability::default(),
-        resilience: spooky_config::config::Resilience::default(),
+        performance: impulse_config::config::Performance::default(),
+        observability: impulse_config::config::Observability::default(),
+        resilience: impulse_config::config::Resilience::default(),
         security: Security::default(),
     }
 }

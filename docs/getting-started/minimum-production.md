@@ -8,10 +8,10 @@ It is not a full hardening guide — that is [Production Deployment](../deployme
 
 ## Minimum Production Config
 
-The config below is a realistic starting point for a single-host deployment. Copy it to `/etc/spooky/config.yaml` and edit the addresses and certificate paths to match your environment.
+The config below is a realistic starting point for a single-host deployment. Copy it to `/etc/impulse/config.yaml` and edit the addresses and certificate paths to match your environment.
 
 ```yaml
-# /etc/spooky/config.yaml
+# /etc/impulse/config.yaml
 version: 1
 
 listen:
@@ -19,8 +19,8 @@ listen:
   address: "0.0.0.0"
   port: 443                          # Requires CAP_NET_BIND_SERVICE or root at start
   tls:
-    cert: "/etc/spooky/certs/fullchain.pem"   # Full chain, not just the leaf
-    key:  "/etc/spooky/certs/privkey.pem"     # PKCS#8 PEM; mode 640, owner root:spooky
+    cert: "/etc/impulse/certs/fullchain.pem"   # Full chain, not just the leaf
+    key:  "/etc/impulse/certs/privkey.pem"     # PKCS#8 PEM; mode 640, owner root:impulse
 
 upstream:
   # API pool — more-specific prefix wins over the default "/" below
@@ -76,8 +76,8 @@ log:
 security:
   privileges:
     enabled: true
-    user: "spooky"                   # Drop to unprivileged user immediately after binding port 443
-    group: "spooky"
+    user: "impulse"                   # Drop to unprivileged user immediately after binding port 443
+    group: "impulse"
 
 observability:
   control_api:
@@ -108,19 +108,19 @@ observability:
 **UDP receive buffer — required tuning.** QUIC delivers all traffic over UDP. The kernel's default UDP receive buffer (typically 212 KB) causes packet drops under any real load. Set it before starting Impulse:
 
 ```bash
-# /etc/sysctl.d/99-spooky.conf
+# /etc/sysctl.d/99-impulse.conf
 net.core.rmem_max = 67108864    # 64 MiB — maximum socket receive buffer size
 net.core.rmem_default = 16777216  # 16 MiB — default for new sockets
 ```
 
-Apply immediately with `sudo sysctl -p /etc/sysctl.d/99-spooky.conf`. Without this, the kernel silently drops UDP packets when bursts arrive faster than Impulse reads them, producing unexplained connection timeouts.
+Apply immediately with `sudo sysctl -p /etc/sysctl.d/99-impulse.conf`. Without this, the kernel silently drops UDP packets when bursts arrive faster than Impulse reads them, producing unexplained connection timeouts.
 
 Set ulimits for the service account:
 
 ```
-# /etc/security/limits.d/spooky.conf
-spooky soft nofile 1048576
-spooky hard nofile 1048576
+# /etc/security/limits.d/impulse.conf
+impulse soft nofile 1048576
+impulse hard nofile 1048576
 ```
 
 ---
@@ -131,15 +131,15 @@ Work through this list top-to-bottom before pointing DNS or a load balancer at t
 
 1. **TLS certificate is from a trusted CA, not self-signed.**
    Browsers and HTTP/3 clients reject self-signed certificates without manual trust store configuration, making this a hard requirement for public traffic.
-   _Verify:_ `openssl x509 -noout -issuer -in /etc/spooky/certs/fullchain.pem` — the issuer should be your CA, not the subject itself.
+   _Verify:_ `openssl x509 -noout -issuer -in /etc/impulse/certs/fullchain.pem` — the issuer should be your CA, not the subject itself.
 
-2. **Certificate file ownership is `root:spooky`, mode `640` for the key.**
-   The `spooky` service user needs to read the key at startup; `640` gives it read access without making the key world-readable.
-   _Verify:_ `ls -l /etc/spooky/certs/` — expect `-rw-r----- root spooky fullchain.pem` and `-rw-r----- root spooky privkey.pem`.
+2. **Certificate file ownership is `root:impulse`, mode `640` for the key.**
+   The `impulse` service user needs to read the key at startup; `640` gives it read access without making the key world-readable.
+   _Verify:_ `ls -l /etc/impulse/certs/` — expect `-rw-r----- root impulse fullchain.pem` and `-rw-r----- root impulse privkey.pem`.
 
 3. **Config passes startup validation.**
    Impulse validates its config before accepting connections. A config error will cause the service to exit immediately, but you want to confirm this before systemd is involved.
-   _Verify:_ `sudo -u spooky /usr/local/bin/spooky --config /etc/spooky/config.yaml` — the process should start and begin logging without printing a fatal error. Stop it with Ctrl-C once you see the listening message.
+   _Verify:_ `sudo -u impulse /usr/local/bin/impulse --config /etc/impulse/config.yaml` — the process should start and begin logging without printing a fatal error. Stop it with Ctrl-C once you see the listening message.
 
 4. **At least one health check endpoint is verified to return 2xx.**
    Impulse removes backends that fail health checks; if every backend in a pool is unhealthy at startup, all requests to that pool return 503 immediately.
@@ -147,11 +147,11 @@ Work through this list top-to-bottom before pointing DNS or a load balancer at t
 
 5. **Control API is bound to loopback only (`127.0.0.1`) unless you have a strong administrative network boundary.**
    The control API supports bearer-token authentication, but it is still a privileged admin surface and should not be treated like a public endpoint.
-   _Verify:_ Confirm `observability.control_api.address` is `127.0.0.1` in `/etc/spooky/config.yaml`, then after start: `ss -tlnp | grep 9902` — the local address column should show `127.0.0.1:9902`.
+   _Verify:_ Confirm `observability.control_api.address` is `127.0.0.1` in `/etc/impulse/config.yaml`, then after start: `ss -tlnp | grep 9902` — the local address column should show `127.0.0.1:9902`.
 
 6. **Metrics endpoint is reachable from your monitoring system.**
    You cannot respond to incidents you cannot observe. Verify the scrape works before traffic arrives, not after something breaks.
-   _Verify:_ From your Prometheus host (or monitoring agent): `curl -sf http://<spooky-host>:9090/metrics | head -5` — expect Prometheus text format output.
+   _Verify:_ From your Prometheus host (or monitoring agent): `curl -sf http://<impulse-host>:9090/metrics | head -5` — expect Prometheus text format output.
 
 7. **Rollback plan documented: previous binary and config saved, procedure tested.**
    Impulse supports generation-based validation, preview, activation, and rollback for runtime-managed changes, but you still need a tested rollback path for binary upgrades and restart-required settings.
@@ -164,22 +164,22 @@ Work through this list top-to-bottom before pointing DNS or a load balancer at t
 Install the following systemd unit, then use the three commands below to confirm a healthy start.
 
 ```ini
-# /etc/systemd/system/spooky.service
+# /etc/systemd/system/impulse.service
 [Unit]
 Description=Impulse HTTP/3 Edge Proxy
-Documentation=https://github.com/Supernova-Labs-Org/spooky
+Documentation=https://github.com/Supernova-Labs-Org/impulse
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/spooky --config /etc/spooky/config.yaml
+ExecStart=/usr/local/bin/impulse --config /etc/impulse/config.yaml
 Restart=on-failure
 RestartSec=5s
 StartLimitBurst=3
 StartLimitIntervalSec=60s
 
-# Resource limits — must match /etc/security/limits.d/spooky.conf
+# Resource limits — must match /etc/security/limits.d/impulse.conf
 LimitNOFILE=1048576
 
 # Systemd sandbox — reduce blast radius if the process is compromised
@@ -187,7 +187,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
 ProtectHome=true
-ReadWritePaths=/var/log/spooky
+ReadWritePaths=/var/log/impulse
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=true
 SystemCallArchitectures=native
@@ -196,7 +196,7 @@ SystemCallFilter=@system-service
 # Log to journald
 StandardOutput=journal
 StandardError=journal
-SyslogIdentifier=spooky
+SyslogIdentifier=impulse
 
 [Install]
 WantedBy=multi-user.target
@@ -204,31 +204,31 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now spooky.service
+sudo systemctl enable --now impulse.service
 ```
 
 After starting, run these three checks in order:
 
 ```bash
 # 1. Confirm the unit reached 'active (running)' and did not immediately exit
-sudo systemctl status spooky.service
+sudo systemctl status impulse.service
 
 # 2. Confirm no fatal errors in the first few seconds of startup
-sudo journalctl -u spooky.service -n 50 --no-pager
+sudo journalctl -u impulse.service -n 50 --no-pager
 
 # 3. Confirm Impulse is reachable and at least one backend is healthy
 curl -skf --http1.1 https://127.0.0.1:9902/health
 ```
 
-The control API `/health` endpoint returns HTTP 200 when the process is up. It does not verify backend health — use the metrics endpoint (`spooky_health_checks_success`) for that.
+The control API `/health` endpoint returns HTTP 200 when the process is up. It does not verify backend health — use the metrics endpoint (`impulse_health_checks_success`) for that.
 
 ---
 
 ## First Scaling Steps
 
-**When to add backends.** CPU saturation is rarely the first bottleneck in a QUIC proxy. Watch `spooky_overload_shed_by_reason_total{reason="backend_inflight"}` in your metrics — sustained shedding on that label means backends are saturated before Impulse is. Add backends to the pool when that counter climbs, not when Impulse's CPU rises.
+**When to add backends.** CPU saturation is rarely the first bottleneck in a QUIC proxy. Watch `impulse_overload_shed_by_reason_total{reason="backend_inflight"}` in your metrics — sustained shedding on that label means backends are saturated before Impulse is. Add backends to the pool when that counter climbs, not when Impulse's CPU rises.
 
-**How to add a backend today.** Dynamic backend registration is not a per-object Control API feature. To add a backend, update `/etc/spooky/config.yaml`, then use the staged runtime flow when the change is runtime-managed:
+**How to add a backend today.** Dynamic backend registration is not a per-object Control API feature. To add a backend, update `/etc/impulse/config.yaml`, then use the staged runtime flow when the change is runtime-managed:
 
 ```bash
 curl -k --http1.1 -X POST https://127.0.0.1:9902/admin/runtime/validate \

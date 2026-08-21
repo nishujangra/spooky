@@ -2,7 +2,7 @@ use std::{collections::VecDeque, sync::Arc, time::Instant};
 
 use bytes::Bytes;
 use http::StatusCode;
-use spooky_errors::ProxyError;
+use impulse_errors::ProxyError;
 use tokio::{
     sync::{OwnedSemaphorePermit, mpsc, oneshot},
     task::AbortHandle,

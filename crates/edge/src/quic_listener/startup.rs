@@ -7,10 +7,10 @@ use std::{
 
 use log::{debug, info, warn};
 use socket2::{Domain, Protocol, Socket, Type};
-use spooky_config::runtime::{ListenerRuntimeConfig, RuntimeBackendAddressKind, RuntimeConfig};
-use spooky_errors::ProxyError;
-use spooky_lb::upstream_pool::UpstreamPool;
-use spooky_transport::{ConnectObservation, ConnectObserver, UpstreamTransportPool};
+use impulse_config::runtime::{ListenerRuntimeConfig, RuntimeBackendAddressKind, RuntimeConfig};
+use impulse_errors::ProxyError;
+use impulse_lb::upstream_pool::UpstreamPool;
+use impulse_transport::{ConnectObservation, ConnectObserver, UpstreamTransportPool};
 use tokio::sync::Semaphore;
 
 use crate::{
@@ -66,7 +66,7 @@ impl QUICListener {
         }
     }
 
-    pub fn new(config: spooky_config::config::Config) -> Result<Self, ProxyError> {
+    pub fn new(config: impulse_config::config::Config) -> Result<Self, ProxyError> {
         let prepared = Self::prepare_listener_startup(config)?;
         Self::new_with_socket_and_shared_state(
             prepared.listener_config,
@@ -76,7 +76,7 @@ impl QUICListener {
     }
 
     fn prepare_listener_startup(
-        config: spooky_config::config::Config,
+        config: impulse_config::config::Config,
     ) -> Result<PreparedListenerStartup, ProxyError> {
         let runtime_config = RuntimeConfig::from_config(&config)
             .map_err(|err| ProxyError::Transport(err.to_string()))?;
@@ -392,7 +392,7 @@ impl QUICListener {
 
     pub fn build_runtime_bundle(
         config_path: String,
-        log_config: spooky_config::config::Log,
+        log_config: impulse_config::config::Log,
         runtime_config: &RuntimeConfig,
     ) -> Result<RuntimeBundle, ProxyError> {
         let shared_state = Arc::new(Self::build_shared_state(runtime_config)?);

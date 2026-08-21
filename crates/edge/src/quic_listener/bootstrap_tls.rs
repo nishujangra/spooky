@@ -1,7 +1,7 @@
 use std::sync::{Arc, atomic::AtomicBool};
 
-use spooky_config::runtime::ListenerRuntimeConfig;
-use spooky_errors::ProxyError;
+use impulse_config::runtime::ListenerRuntimeConfig;
+use impulse_errors::ProxyError;
 
 use super::bootstrap::spawn_bootstrap_tls_listener;
 use crate::runtime::{bundle::RuntimeBundleHandle, shared_state::SharedRuntimeState};

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use spooky_config::{
+use impulse_config::{
     config::Upstream,
     runtime::{RuntimeRouteHostPattern, RuntimeUpstream},
 };
@@ -354,7 +354,7 @@ impl From<ConfiguredHostPattern> for RuntimeRouteHostPattern {
 mod tests {
     use std::collections::HashMap;
 
-    use spooky_config::config::{Backend, LoadBalancing, RouteMatch, Upstream};
+    use impulse_config::config::{Backend, LoadBalancing, RouteMatch, Upstream};
 
     use crate::routing::{decision::RouteDecisionReason, index::RouteIndex};
 

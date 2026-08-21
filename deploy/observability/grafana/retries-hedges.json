@@ -19,7 +19,7 @@
           "uid": "${datasource}"
         },
         "enable": true,
-        "expr": "sum(increase(spooky_runtime_activation_total{result=\"success\"}[1m])) > 0",
+        "expr": "sum(increase(impulse_runtime_activation_total{result=\"success\"}[1m])) > 0",
         "hide": false,
         "iconColor": "rgba(0, 191, 255, 1)",
         "name": "Runtime Activations",
@@ -34,7 +34,7 @@
           "uid": "${datasource}"
         },
         "enable": true,
-        "expr": "sum(increase(spooky_runtime_rollback_total{result=\"success\"}[1m])) > 0",
+        "expr": "sum(increase(impulse_runtime_rollback_total{result=\"success\"}[1m])) > 0",
         "hide": false,
         "iconColor": "rgba(255, 140, 0, 1)",
         "name": "Runtime Rollbacks",
@@ -120,7 +120,7 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:retry_attempts:rate5m)",
+          "expr": "sum(impulse:retry_attempts:rate5m)",
           "legendFormat": "retry attempts",
           "refId": "A"
         }
@@ -184,7 +184,7 @@
       },
       "targets": [
         {
-          "expr": "100 * sum(spooky:retry_attempt_ratio:rate5m)",
+          "expr": "100 * sum(impulse:retry_attempt_ratio:rate5m)",
           "legendFormat": "retry ratio",
           "refId": "A"
         }
@@ -248,7 +248,7 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:hedge_triggered:rate5m)",
+          "expr": "sum(impulse:hedge_triggered:rate5m)",
           "legendFormat": "hedge triggers",
           "refId": "A"
         }
@@ -312,7 +312,7 @@
       },
       "targets": [
         {
-          "expr": "100 * sum(spooky:hedge_waste_ratio:rate5m)",
+          "expr": "100 * sum(impulse:hedge_waste_ratio:rate5m)",
           "legendFormat": "hedge waste ratio",
           "refId": "A"
         }
@@ -371,7 +371,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (reason) (spooky:retry_attempts_by_reason:rate5m)",
+          "expr": "sum by (reason) (impulse:retry_attempts_by_reason:rate5m)",
           "legendFormat": "{{reason}}",
           "refId": "A"
         }
@@ -430,7 +430,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (reason) (spooky:retry_denied_by_reason:rate5m)",
+          "expr": "sum by (reason) (impulse:retry_denied_by_reason:rate5m)",
           "legendFormat": "{{reason}}",
           "refId": "A"
         }
@@ -489,17 +489,17 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:retry_attempts:rate5m)",
+          "expr": "sum(impulse:retry_attempts:rate5m)",
           "legendFormat": "retry attempts",
           "refId": "A"
         },
         {
-          "expr": "sum(spooky:backend_timeouts:rate5m)",
+          "expr": "sum(impulse:backend_timeouts:rate5m)",
           "legendFormat": "backend timeouts",
           "refId": "B"
         },
         {
-          "expr": "sum(spooky:backend_errors:rate5m)",
+          "expr": "sum(impulse:backend_errors:rate5m)",
           "legendFormat": "backend errors",
           "refId": "C"
         }
@@ -571,22 +571,22 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:hedge_triggered:rate5m)",
+          "expr": "sum(impulse:hedge_triggered:rate5m)",
           "legendFormat": "triggered",
           "refId": "A"
         },
         {
-          "expr": "sum(spooky:hedge_won:rate5m)",
+          "expr": "sum(impulse:hedge_won:rate5m)",
           "legendFormat": "won",
           "refId": "B"
         },
         {
-          "expr": "sum(spooky:hedge_wasted:rate5m)",
+          "expr": "sum(impulse:hedge_wasted:rate5m)",
           "legendFormat": "wasted",
           "refId": "C"
         },
         {
-          "expr": "sum(spooky:hedge_primary_won_after_trigger:rate5m)",
+          "expr": "sum(impulse:hedge_primary_won_after_trigger:rate5m)",
           "legendFormat": "primary won after trigger",
           "refId": "D"
         }
@@ -645,17 +645,17 @@
       },
       "targets": [
         {
-          "expr": "100 * sum(spooky:hedge_win_ratio:rate5m)",
+          "expr": "100 * sum(impulse:hedge_win_ratio:rate5m)",
           "legendFormat": "win ratio",
           "refId": "A"
         },
         {
-          "expr": "100 * sum(spooky:hedge_waste_ratio:rate5m)",
+          "expr": "100 * sum(impulse:hedge_waste_ratio:rate5m)",
           "legendFormat": "waste ratio",
           "refId": "B"
         },
         {
-          "expr": "100 * (sum(spooky:hedge_primary_won_after_trigger:rate5m) / clamp_min(sum(spooky:hedge_triggered:rate5m), 0.000001))",
+          "expr": "100 * (sum(impulse:hedge_primary_won_after_trigger:rate5m) / clamp_min(sum(impulse:hedge_triggered:rate5m), 0.000001))",
           "legendFormat": "primary won after trigger ratio",
           "refId": "C"
         }
@@ -719,7 +719,7 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:hedge_primary_late_avg_ms:5m)",
+          "expr": "sum(impulse:hedge_primary_late_avg_ms:5m)",
           "legendFormat": "avg late ms",
           "refId": "A"
         }
@@ -778,7 +778,7 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:hedge_primary_late_samples:rate5m)",
+          "expr": "sum(impulse:hedge_primary_late_samples:rate5m)",
           "legendFormat": "late samples",
           "refId": "A"
         }
@@ -855,7 +855,7 @@
       },
       "targets": [
         {
-          "expr": "100 * sum(spooky:retry_denial_ratio:rate5m) or vector(0)",
+          "expr": "100 * sum(impulse:retry_denial_ratio:rate5m) or vector(0)",
           "legendFormat": "retry denial ratio",
           "refId": "A"
         }
@@ -914,22 +914,22 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:retry_attempts:rate5m)",
+          "expr": "sum(impulse:retry_attempts:rate5m)",
           "legendFormat": "retry attempts",
           "refId": "A"
         },
         {
-          "expr": "sum(spooky:retry_denials:rate5m)",
+          "expr": "sum(impulse:retry_denials:rate5m)",
           "legendFormat": "retry denials",
           "refId": "B"
         },
         {
-          "expr": "sum(spooky:hedge_triggered:rate5m)",
+          "expr": "sum(impulse:hedge_triggered:rate5m)",
           "legendFormat": "hedge triggered",
           "refId": "C"
         },
         {
-          "expr": "sum(spooky:hedge_wasted:rate5m)",
+          "expr": "sum(impulse:hedge_wasted:rate5m)",
           "legendFormat": "hedge wasted",
           "refId": "D"
         }
@@ -941,7 +941,7 @@
   "refresh": "30s",
   "schemaVersion": 39,
   "tags": [
-    "spooky",
+    "impulse",
     "observability",
     "retries",
     "hedges",
@@ -973,8 +973,8 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "Spooky Retries and Hedges",
-  "uid": "spooky-retries-hedges",
+  "title": "Impulse Retries and Hedges",
+  "uid": "impulse-retries-hedges",
   "version": 2,
   "weekStart": ""
 }

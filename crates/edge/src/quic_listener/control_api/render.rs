@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use bytes::Bytes;
 use http_body_util::Full;
 use serde::Serialize;
-use spooky_config::{config::SecretProvider, runtime::RuntimeJwtAuth};
-use spooky_lb::health::HealthFailureReason;
+use impulse_config::{config::SecretProvider, runtime::RuntimeJwtAuth};
+use impulse_lb::health::HealthFailureReason;
 
 use super::{state::ControlApiState, *};
 use crate::{
@@ -31,7 +31,7 @@ const RECENT_ADMIN_ACTION_LIMIT: usize = 5;
 
 /// Map a backend health-failure reason to the canonical control-plane token.
 ///
-/// These are the same tokens as the `spooky_health_failures_total{reason=…}`
+/// These are the same tokens as the `impulse_health_failures_total{reason=…}`
 /// metric label (obs Phase 4), so control-plane JSON and metrics name the failure
 /// the same way.
 fn health_failure_reason_label(reason: HealthFailureReason) -> &'static str {
@@ -329,7 +329,7 @@ struct ControlApiBackendLifecyclePayload {
     backend: String,
     health: &'static str,
     /// Canonical health-failure reason when the backend is unhealthy and a
-    /// reason is known. Uses the same tokens as `spooky_health_failures_total`'s
+    /// reason is known. Uses the same tokens as `impulse_health_failures_total`'s
     /// `reason=` label (obs Phase 4), so operators do not translate between the
     /// control-plane JSON and the metric. Omitted when healthy / reason unknown.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1282,11 +1282,11 @@ fn jwt_provider_mode(jwt: &RuntimeJwtAuth) -> &'static str {
     }
 }
 
-fn jwt_algorithm_name(algorithm: spooky_config::config::JwtAlgorithm) -> &'static str {
+fn jwt_algorithm_name(algorithm: impulse_config::config::JwtAlgorithm) -> &'static str {
     match algorithm {
-        spooky_config::config::JwtAlgorithm::Hs256 => "HS256",
-        spooky_config::config::JwtAlgorithm::Rs256 => "RS256",
-        spooky_config::config::JwtAlgorithm::Es256 => "ES256",
+        impulse_config::config::JwtAlgorithm::Hs256 => "HS256",
+        impulse_config::config::JwtAlgorithm::Rs256 => "RS256",
+        impulse_config::config::JwtAlgorithm::Es256 => "ES256",
     }
 }
 
@@ -1385,7 +1385,7 @@ mod tests {
         #[test]
         fn control_plane_health_reason_tokens_match_metric_reason_labels() {
             // obs Phase 4: control-plane `health_reason` must use the same tokens as
-            // the `spooky_health_failures_total{reason=…}` metric label so operators
+            // the `impulse_health_failures_total{reason=…}` metric label so operators
             // don't translate between surfaces.
             assert_health_reason_token(HealthFailureReason::HttpStatus5xx, "5xx");
             assert_health_reason_token(HealthFailureReason::Timeout, "timeout");

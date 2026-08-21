@@ -8,15 +8,15 @@ mod support;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use bytes::Bytes;
-use spooky_config::{
+use impulse_config::{
     config::{
         ClientAuth, Config, Listen, LoadBalancing, Log, Observability, Performance, Resilience,
         RouteMatch, Security, Tls, Upstream, UpstreamTls,
     },
     runtime::{RuntimeBackendTransportKind, RuntimeConfig},
 };
-use spooky_errors::{PoolError, ProxyError};
-use spooky_transport::{SharedDnsResolver, UpstreamTransportPool};
+use impulse_errors::{PoolError, ProxyError};
+use impulse_transport::{SharedDnsResolver, UpstreamTransportPool};
 
 use crate::support::{
     ConcurrencyTracker, TransportTestProtocol, build_pool, build_pool_with_policy,
@@ -78,7 +78,7 @@ fn transport_test_config(http_backend: &str, https_backend: &str) -> Config {
                     path_prefix: Some("/".to_string()),
                     method: None,
                 },
-                backends: vec![spooky_config::config::Backend {
+                backends: vec![impulse_config::config::Backend {
                     id: format!("{name}-1"),
                     address: backend.to_string(),
                     weight: 100,
@@ -355,7 +355,7 @@ async fn transport_facade_maps_execution_timeouts_to_proxy_timeout_across_protoc
         Err(err) => panic!("failed to start h2 timeout server: {err}"),
     };
 
-    let timeout_policy = spooky_config::runtime::RuntimeBackendConnectionPolicy {
+    let timeout_policy = impulse_config::runtime::RuntimeBackendConnectionPolicy {
         execution_timeout: Duration::from_millis(5),
         ..connection_policy(4)
     };

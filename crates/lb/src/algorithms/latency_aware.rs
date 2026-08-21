@@ -61,7 +61,7 @@ impl Default for LatencyAware {
 mod tests {
     use std::time::Duration;
 
-    use spooky_config::config::{Backend, HealthCheck};
+    use impulse_config::config::{Backend, HealthCheck};
 
     use super::LatencyAware;
     use crate::{backend::BackendState, backend_pool::BackendPool};

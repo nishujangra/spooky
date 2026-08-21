@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use spooky_config::config::HealthCheck;
+use impulse_config::config::HealthCheck;
 
 use crate::{
     backend::BackendState,
@@ -280,7 +280,7 @@ impl BackendPool {
 mod tests {
     use std::time::{Duration, Instant};
 
-    use spooky_config::config::{Backend, HealthCheck};
+    use impulse_config::config::{Backend, HealthCheck};
 
     use super::BackendPool;
     use crate::{

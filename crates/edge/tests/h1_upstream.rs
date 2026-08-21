@@ -5,11 +5,11 @@ use http_body_util::Full;
 use hyper::{Request, Response, body::Incoming};
 use rcgen::{Certificate, CertificateParams, SanType};
 use serial_test::serial;
-use spooky_config::{
+use impulse_config::{
     config::{Backend, Config, Upstream, UpstreamTls},
     validator::validate,
 };
-use spooky_edge::runtime::listener::QUICListener;
+use impulse_edge::runtime::listener::QUICListener;
 use tempfile::{TempDir, tempdir};
 
 mod support;

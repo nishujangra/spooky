@@ -1,8 +1,8 @@
 site_name: Impulse
 site_description: Impulse is an HTTP/3 edge proxy and load balancer
-site_url: https://supernova-labs-org.github.io/spooky/
-repo_url: https://github.com/Supernova-Labs-Org/spooky
-repo_name: Supernova-Labs-Org/spooky
+site_url: https://supernova-labs-org.github.io/impulse/
+repo_url: https://github.com/Supernova-Labs-Org/impulse
+repo_name: Supernova-Labs-Org/impulse
 edit_uri: edit/master/docs/
 
 docs_dir: docs
@@ -92,7 +92,7 @@ nav:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/Supernova-Labs-Org/spooky
+      link: https://github.com/Supernova-Labs-Org/impulse
   version:
     provider: mike
 

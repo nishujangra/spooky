@@ -183,7 +183,7 @@ pub(super) fn validate_request_headers(
         }
     };
 
-    let websocket_tunnel = spooky_bridge::websocket::h3_websocket_tunnel_requested(&method, list);
+    let websocket_tunnel = impulse_bridge::websocket::h3_websocket_tunnel_requested(&method, list);
     if protocol.is_some() && !websocket_tunnel {
         return Err((
             http::StatusCode::BAD_REQUEST,
@@ -618,7 +618,7 @@ pub(super) fn generated_span_id(request_id: u64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use spooky_config::config::Resilience;
+    use impulse_config::config::Resilience;
 
     use super::*;
 

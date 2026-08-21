@@ -14,7 +14,7 @@ use bytes::Bytes;
 use http_body_util::Full;
 use hyper::{Request, Response, body::Incoming};
 use serial_test::serial;
-use spooky_config::config::{
+use impulse_config::config::{
     ApiKeyAuth, ExternalAuth, ExternalAuthFailureMode, ExternalAuthRequestHeader, JwtAlgorithm,
     JwtAuth, JwtVerificationKey, LoadBalancing, RouteAuth, RouteMatch, ScopedRateLimit,
     ScopedRateLimitScope, Upstream,
@@ -193,7 +193,7 @@ fn bootstrap_and_quic_route_resolution_choose_the_same_route_and_backend_result(
             path,
             headers: &[],
             body: None,
-            user_agent: "spooky-bootstrap-quic-parity-test",
+            user_agent: "impulse-bootstrap-quic-parity-test",
             selected_response_headers: &["x-backend"],
             capture_metrics_delta: false,
         };
@@ -303,7 +303,7 @@ fn bootstrap_and_quic_local_api_key_auth_decisions_match() {
         path: "/protected",
         headers: &[],
         body: None,
-        user_agent: "spooky-bootstrap-quic-parity-test",
+        user_agent: "impulse-bootstrap-quic-parity-test",
         selected_response_headers: &["www-authenticate"],
         capture_metrics_delta: false,
     };
@@ -401,7 +401,7 @@ fn bootstrap_and_quic_rs256_jwt_auth_decisions_match() {
         path: "/jwt-rs256",
         headers: &[],
         body: None,
-        user_agent: "spooky-bootstrap-quic-parity-test",
+        user_agent: "impulse-bootstrap-quic-parity-test",
         selected_response_headers: &["www-authenticate"],
         capture_metrics_delta: false,
     };
@@ -480,7 +480,7 @@ fn bootstrap_and_quic_local_jwt_auth_decisions_match() {
         path: "/jwt",
         headers: &[],
         body: None,
-        user_agent: "spooky-bootstrap-quic-parity-test",
+        user_agent: "impulse-bootstrap-quic-parity-test",
         selected_response_headers: &["www-authenticate"],
         capture_metrics_delta: false,
     };
@@ -560,7 +560,7 @@ fn bootstrap_and_quic_external_auth_decisions_match() {
             name: "challenge",
             auth_status: 401,
             auth_headers: &[
-                ("www-authenticate", "Bearer realm=\"spooky\""),
+                ("www-authenticate", "Bearer realm=\"impulse\""),
                 ("x-auth-reason", "expired"),
             ],
             auth_body: b"token expired",
@@ -568,7 +568,7 @@ fn bootstrap_and_quic_external_auth_decisions_match() {
             expected_status: 401,
             expected_body: b"token expired",
             expected_headers: &[
-                ("www-authenticate", "Bearer realm=\"spooky\""),
+                ("www-authenticate", "Bearer realm=\"impulse\""),
                 ("x-auth-reason", "expired"),
             ],
         },
@@ -632,7 +632,7 @@ fn bootstrap_and_quic_external_auth_decisions_match() {
             path: "/auth",
             headers: &[],
             body: None,
-            user_agent: "spooky-bootstrap-quic-parity-test",
+            user_agent: "impulse-bootstrap-quic-parity-test",
             selected_response_headers: &["www-authenticate", "x-auth-reason", "location"],
             capture_metrics_delta: false,
         };
@@ -774,7 +774,7 @@ fn bootstrap_and_quic_response_normalization_strip_same_hop_headers() {
         path: "/normalize-hop",
         headers: &[],
         body: None,
-        user_agent: "spooky-bootstrap-quic-parity-test",
+        user_agent: "impulse-bootstrap-quic-parity-test",
         selected_response_headers: &[
             "cache-control",
             "connection",
@@ -865,7 +865,7 @@ fn bootstrap_and_quic_response_normalization_head_bodyless_contract_matches() {
         path: "/head",
         headers: &[],
         body: None,
-        user_agent: "spooky-bootstrap-quic-parity-test",
+        user_agent: "impulse-bootstrap-quic-parity-test",
         selected_response_headers: &["content-length", "content-type"],
         capture_metrics_delta: false,
     };
@@ -917,7 +917,7 @@ fn bootstrap_and_quic_response_normalization_no_content_contract_matches() {
         path: "/no-content",
         headers: &[],
         body: None,
-        user_agent: "spooky-bootstrap-quic-parity-test",
+        user_agent: "impulse-bootstrap-quic-parity-test",
         selected_response_headers: &["content-length", "content-type"],
         capture_metrics_delta: false,
     };
@@ -1289,7 +1289,7 @@ fn bootstrap_and_quic_outcome_recording_success_bucket_matches() {
         path: "/metrics-success",
         headers: &[],
         body: None,
-        user_agent: "spooky-bootstrap-quic-parity-test",
+        user_agent: "impulse-bootstrap-quic-parity-test",
         selected_response_headers: &[],
         capture_metrics_delta: true,
     };
@@ -1347,7 +1347,7 @@ fn bootstrap_and_quic_outcome_recording_failure_bucket_matches() {
         path: "/metrics-failure",
         headers: &[],
         body: None,
-        user_agent: "spooky-bootstrap-quic-parity-test",
+        user_agent: "impulse-bootstrap-quic-parity-test",
         selected_response_headers: &[],
         capture_metrics_delta: true,
     };
@@ -1406,7 +1406,7 @@ fn bootstrap_and_quic_outcome_recording_timeout_bucket_matches() {
         path: "/metrics-timeout",
         headers: &[],
         body: None,
-        user_agent: "spooky-bootstrap-quic-parity-test",
+        user_agent: "impulse-bootstrap-quic-parity-test",
         selected_response_headers: &[],
         capture_metrics_delta: true,
     };
@@ -1497,7 +1497,7 @@ fn routed_upstream(
     path_prefix: &str,
     method: Option<&str>,
     lb_type: &str,
-    backends: Vec<spooky_config::config::Backend>,
+    backends: Vec<impulse_config::config::Backend>,
 ) -> Upstream {
     let mut upstream = make_upstream(path_prefix, backends, None, lb_type);
     upstream.load_balancing = LoadBalancing {
@@ -1514,7 +1514,7 @@ fn routed_upstream(
 
 fn auth_protected_upstream(
     path_prefix: &str,
-    backends: Vec<spooky_config::config::Backend>,
+    backends: Vec<impulse_config::config::Backend>,
     auth: RouteAuth,
 ) -> Upstream {
     let mut upstream = make_upstream(path_prefix, backends, None, "round-robin");
@@ -1548,7 +1548,7 @@ fn configure_http_external_auth(
     timeout_ms: u64,
     failure_mode: ExternalAuthFailureMode,
     response_header_allowlist: Vec<String>,
-) -> spooky_config::config::Config {
+) -> impulse_config::config::Config {
     let mut upstream = make_upstream(
         "/auth",
         vec![make_backend("auth-backend", backend_address)],
@@ -1681,32 +1681,32 @@ impl OutcomeRecordingDelta {
 
     fn from_texts(before: &str, after: &str, route: &str) -> Self {
         Self {
-            requests_success: metrics_delta(before, after, "spooky_requests_success "),
-            requests_failure: metrics_delta(before, after, "spooky_requests_failure "),
+            requests_success: metrics_delta(before, after, "impulse_requests_success "),
+            requests_failure: metrics_delta(before, after, "impulse_requests_failure "),
             route_success: metrics_delta(
                 before,
                 after,
-                &format!("spooky_route_success_total{{route=\"{route}\"}} "),
+                &format!("impulse_route_success_total{{route=\"{route}\"}} "),
             ),
             route_failure: metrics_delta(
                 before,
                 after,
-                &format!("spooky_route_failure_total{{route=\"{route}\"}} "),
+                &format!("impulse_route_failure_total{{route=\"{route}\"}} "),
             ),
             route_timeout: metrics_delta(
                 before,
                 after,
-                &format!("spooky_route_timeout_total{{route=\"{route}\"}} "),
+                &format!("impulse_route_timeout_total{{route=\"{route}\"}} "),
             ),
             route_overload_shed: metrics_delta(
                 before,
                 after,
-                &format!("spooky_route_overload_shed_total{{route=\"{route}\"}} "),
+                &format!("impulse_route_overload_shed_total{{route=\"{route}\"}} "),
             ),
             route_rate_limited: metrics_delta(
                 before,
                 after,
-                &format!("spooky_route_rate_limited_total{{route=\"{route}\"}} "),
+                &format!("impulse_route_rate_limited_total{{route=\"{route}\"}} "),
             ),
         }
     }
@@ -1830,7 +1830,7 @@ fn run_scoped_rate_limit_scenario(ingress: IngressKind) -> RejectionObservation 
             path: "/limited",
             headers: &[],
             body: None,
-            user_agent: "spooky-bootstrap-quic-parity-test",
+            user_agent: "impulse-bootstrap-quic-parity-test",
             selected_response_headers: &[],
             capture_metrics_delta: false,
         },
@@ -1847,7 +1847,7 @@ fn run_scoped_rate_limit_scenario(ingress: IngressKind) -> RejectionObservation 
             path: "/limited",
             headers: &[],
             body: None,
-            user_agent: "spooky-bootstrap-quic-parity-test",
+            user_agent: "impulse-bootstrap-quic-parity-test",
             selected_response_headers: &["retry-after", "www-authenticate"],
             capture_metrics_delta: false,
         },
@@ -1922,7 +1922,7 @@ fn run_overload_shed_scenario(ingress: IngressKind) -> RejectionObservation {
             path: "/slow",
             headers: &[],
             body: None,
-            user_agent: "spooky-bootstrap-quic-parity-test",
+            user_agent: "impulse-bootstrap-quic-parity-test",
             selected_response_headers: &["retry-after", "www-authenticate"],
             capture_metrics_delta: false,
         },
@@ -1975,7 +1975,7 @@ fn bootstrap_websocket_upgrade_is_an_explicit_quic_parity_boundary() {
                 ("sec-websocket-version", "13"),
             ],
             body: None,
-            user_agent: "spooky-bootstrap-quic-parity-test",
+            user_agent: "impulse-bootstrap-quic-parity-test",
         },
     )
     .expect("quic websocket request");
@@ -2061,7 +2061,7 @@ fn run_rate_limit_outcome_recording_scenario(ingress: IngressKind) -> OutcomeRec
             path: "/metrics-rate-limit",
             headers: &[],
             body: None,
-            user_agent: "spooky-bootstrap-quic-parity-test",
+            user_agent: "impulse-bootstrap-quic-parity-test",
             selected_response_headers: &[],
             capture_metrics_delta: true,
         },
@@ -2078,7 +2078,7 @@ fn run_rate_limit_outcome_recording_scenario(ingress: IngressKind) -> OutcomeRec
             path: "/metrics-rate-limit",
             headers: &[],
             body: None,
-            user_agent: "spooky-bootstrap-quic-parity-test",
+            user_agent: "impulse-bootstrap-quic-parity-test",
             selected_response_headers: &["retry-after"],
             capture_metrics_delta: true,
         },
@@ -2164,7 +2164,7 @@ fn run_overload_outcome_recording_scenario(
             path: "/metrics-overload",
             headers: &[],
             body: None,
-            user_agent: "spooky-bootstrap-quic-parity-test",
+            user_agent: "impulse-bootstrap-quic-parity-test",
             selected_response_headers: &["retry-after"],
             capture_metrics_delta: false,
         },

@@ -1,8 +1,8 @@
 use std::{collections::HashMap, time::Duration};
 
 use quiche::h3::NameValue;
-use spooky_config::runtime::{RuntimeExternalAuth, RuntimeExternalAuthFailureMode};
-use spooky_errors::ProxyError;
+use impulse_config::runtime::{RuntimeExternalAuth, RuntimeExternalAuthFailureMode};
+use impulse_errors::ProxyError;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExternalAuthFailureDisposition {
@@ -988,7 +988,7 @@ mod tests {
             let mut challenge_headers = http::HeaderMap::new();
             challenge_headers.insert(
                 http::header::WWW_AUTHENTICATE,
-                http::HeaderValue::from_static("Bearer realm=\"spooky\""),
+                http::HeaderValue::from_static("Bearer realm=\"impulse\""),
             );
             challenge_headers.insert("x-auth-reason", http::HeaderValue::from_static("expired"));
             let challenge = map_http_external_auth_response(
@@ -1034,7 +1034,7 @@ mod tests {
             );
             headers.insert(
                 http::header::WWW_AUTHENTICATE,
-                http::HeaderValue::from_static("Bearer realm=\"spooky\""),
+                http::HeaderValue::from_static("Bearer realm=\"impulse\""),
             );
 
             let allow = map_http_external_auth_response(
@@ -1109,7 +1109,7 @@ mod tests {
                             "https://login.example.com/".to_string(),
                         ),
                     ],
-                    www_authenticate: "Bearer realm=\"spooky\"".to_string(),
+                    www_authenticate: "Bearer realm=\"impulse\"".to_string(),
                     body: b"challenge\n".to_vec(),
                 })
             );
@@ -1361,7 +1361,7 @@ mod tests {
                     ExternalAuthChallengeResponse {
                         status: http::StatusCode::UNAUTHORIZED,
                         headers: vec![("x-auth-reason".to_string(), "expired".to_string())],
-                        www_authenticate: "Bearer realm=\"spooky\"".to_string(),
+                        www_authenticate: "Bearer realm=\"impulse\"".to_string(),
                         body: b"challenge\n".to_vec(),
                     },
                 )),
@@ -1463,7 +1463,7 @@ mod tests {
                     ExternalAuthChallengeResponse {
                         status: http::StatusCode::UNAUTHORIZED,
                         headers: vec![("x-auth-reason".to_string(), "expired".to_string())],
-                        www_authenticate: "Bearer realm=\"spooky\"".to_string(),
+                        www_authenticate: "Bearer realm=\"impulse\"".to_string(),
                         body: b"challenge\n".to_vec(),
                     },
                 )),

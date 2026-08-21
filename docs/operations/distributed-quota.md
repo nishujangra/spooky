@@ -77,7 +77,7 @@ resilience:
     backend:
       kind: redis
       url: "redis://redis-quota.service.consul:6379/0"
-      key_prefix: "spooky:quota:prod"
+      key_prefix: "impulse:quota:prod"
       connect_timeout_ms: 250
       command_timeout_ms: 100
       max_inflight: 1024
@@ -110,12 +110,12 @@ resilience:
     backend:
       kind: redis
       url: "redis://redis-quota.service.consul:6379/0"
-      key_prefix: "spooky:quota:prod"
+      key_prefix: "impulse:quota:prod"
       connect_timeout_ms: 250
       command_timeout_ms: 100
       max_inflight: 1024
     local_fallback:
-      key_prefix: "spooky:quota:fallback:prod"
+      key_prefix: "impulse:quota:fallback:prod"
       max_entries: 50000
     policies:
       - name: "tenant-token-client-contract"
@@ -149,7 +149,7 @@ resilience:
     backend:
       kind: redis
       url: "redis://redis-quota.service.consul:6379/0"
-      key_prefix: "spooky:quota:shadow"
+      key_prefix: "impulse:quota:shadow"
       connect_timeout_ms: 250
       command_timeout_ms: 100
       max_inflight: 512
@@ -198,12 +198,12 @@ resilience:
     backend:
       kind: redis
       url: "redis://10.20.30.40:6379/0"
-      key_prefix: "spooky:quota:prod:cluster-a"
+      key_prefix: "impulse:quota:prod:cluster-a"
       connect_timeout_ms: 200
       command_timeout_ms: 75
       max_inflight: 2048
     local_fallback:
-      key_prefix: "spooky:quota:fallback:prod:cluster-a"
+      key_prefix: "impulse:quota:fallback:prod:cluster-a"
       max_entries: 100000
     policies:
       - name: "default-api-contract"
@@ -371,8 +371,8 @@ Interpret them as:
 
 Primary quota metric families:
 
-- `spooky_quota_policy_outcomes_total{policy,decision,reason,selector_dimensions,backend_mode}`
-- `spooky_quota_backend_health_total{backend_mode,reason}`
+- `impulse_quota_policy_outcomes_total{policy,decision,reason,selector_dimensions,backend_mode}`
+- `impulse_quota_backend_health_total{backend_mode,reason}`
 
 Read them this way:
 

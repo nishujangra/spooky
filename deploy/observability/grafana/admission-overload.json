@@ -19,7 +19,7 @@
           "uid": "${datasource}"
         },
         "enable": true,
-        "expr": "sum(increase(spooky_runtime_activation_total{result=\"success\"}[1m])) > 0",
+        "expr": "sum(increase(impulse_runtime_activation_total{result=\"success\"}[1m])) > 0",
         "hide": false,
         "iconColor": "rgba(0, 191, 255, 1)",
         "name": "Runtime Activations",
@@ -34,7 +34,7 @@
           "uid": "${datasource}"
         },
         "enable": true,
-        "expr": "sum(increase(spooky_runtime_rollback_total{result=\"success\"}[1m])) > 0",
+        "expr": "sum(increase(impulse_runtime_rollback_total{result=\"success\"}[1m])) > 0",
         "hide": false,
         "iconColor": "rgba(255, 140, 0, 1)",
         "name": "Runtime Rollbacks",
@@ -49,7 +49,7 @@
           "uid": "${datasource}"
         },
         "enable": true,
-        "expr": "changes(spooky_brownout_active[1m]) > 0",
+        "expr": "changes(impulse_brownout_active[1m]) > 0",
         "hide": false,
         "iconColor": "rgba(255, 99, 71, 1)",
         "name": "Brownout State Changes",
@@ -64,7 +64,7 @@
           "uid": "${datasource}"
         },
         "enable": true,
-        "expr": "sum(increase(spooky_quota_backend_health_total{reason!=\"available\"}[1m])) > 0",
+        "expr": "sum(increase(impulse_quota_backend_health_total{reason!=\"available\"}[1m])) > 0",
         "hide": false,
         "iconColor": "rgba(255, 191, 0, 1)",
         "name": "Quota Backend Degraded",
@@ -159,7 +159,7 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:brownout_active)",
+          "expr": "sum(impulse:brownout_active)",
           "legendFormat": "brownout",
           "refId": "A"
         }
@@ -224,7 +224,7 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:overload_shed:rate5m)",
+          "expr": "sum(impulse:overload_shed:rate5m)",
           "legendFormat": "shed",
           "refId": "A"
         }
@@ -289,7 +289,7 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:circuit_breaker_rejected:rate5m)",
+          "expr": "sum(impulse:circuit_breaker_rejected:rate5m)",
           "legendFormat": "circuit rejects",
           "refId": "A"
         }
@@ -354,7 +354,7 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:request_rate_limited:rate5m)",
+          "expr": "sum(impulse:request_rate_limited:rate5m)",
           "legendFormat": "scoped limits",
           "refId": "A"
         }
@@ -414,7 +414,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (reason) (spooky:overload_shed_by_reason:rate5m)",
+          "expr": "sum by (reason) (impulse:overload_shed_by_reason:rate5m)",
           "legendFormat": "{{reason}}",
           "refId": "A"
         }
@@ -474,12 +474,12 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:overload_shed_by_reason:rate5m{reason=\"adaptive_admission\"})",
+          "expr": "sum(impulse:overload_shed_by_reason:rate5m{reason=\"adaptive_admission\"})",
           "legendFormat": "adaptive admission shed",
           "refId": "A"
         },
         {
-          "expr": "sum by (scope) (spooky:inflight_wait_admit_by_scope:rate5m)",
+          "expr": "sum by (scope) (impulse:inflight_wait_admit_by_scope:rate5m)",
           "legendFormat": "micro-wait {{scope}}",
           "refId": "B"
         }
@@ -552,7 +552,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (decision) (spooky:quota_outcomes_by_decision:rate5m{decision=~\"allowed|denied|failed_open|failed_closed\"})",
+          "expr": "sum by (decision) (impulse:quota_outcomes_by_decision:rate5m{decision=~\"allowed|denied|failed_open|failed_closed\"})",
           "legendFormat": "{{decision}}",
           "refId": "A"
         }
@@ -612,7 +612,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (backend_mode, reason) (spooky:quota_backend_health_events_by_mode_reason:rate5m{backend_mode=~\"${quota_backend_mode:regex}\"})",
+          "expr": "sum by (backend_mode, reason) (impulse:quota_backend_health_events_by_mode_reason:rate5m{backend_mode=~\"${quota_backend_mode:regex}\"})",
           "legendFormat": "{{backend_mode}} :: {{reason}}",
           "refId": "A"
         }
@@ -676,7 +676,7 @@
       },
       "targets": [
         {
-          "expr": "topk(12, sum by (policy, reason) (spooky:quota_denials_by_policy_reason_backend_mode:rate5m{policy=~\"${quota_policy:regex}\",backend_mode=~\"${quota_backend_mode:regex}\"}))",
+          "expr": "topk(12, sum by (policy, reason) (impulse:quota_denials_by_policy_reason_backend_mode:rate5m{policy=~\"${quota_policy:regex}\",backend_mode=~\"${quota_backend_mode:regex}\"}))",
           "legendFormat": "{{policy}} :: {{reason}}",
           "refId": "A"
         }
@@ -749,12 +749,12 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:auth_denials:rate5m)",
+          "expr": "sum(impulse:auth_denials:rate5m)",
           "legendFormat": "auth denied",
           "refId": "A"
         },
         {
-          "expr": "sum(spooky:external_auth_unavailable:rate5m)",
+          "expr": "sum(impulse:external_auth_unavailable:rate5m)",
           "legendFormat": "auth unavailable",
           "refId": "B"
         }
@@ -814,22 +814,22 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:external_auth_denials:rate5m)",
+          "expr": "sum(impulse:external_auth_denials:rate5m)",
           "legendFormat": "external auth denied",
           "refId": "A"
         },
         {
-          "expr": "sum(spooky:jwt_auth_denials:rate5m)",
+          "expr": "sum(impulse:jwt_auth_denials:rate5m)",
           "legendFormat": "jwt denied",
           "refId": "B"
         },
         {
-          "expr": "sum(spooky:external_auth_timeout:rate5m)",
+          "expr": "sum(impulse:external_auth_timeout:rate5m)",
           "legendFormat": "external auth timeout",
           "refId": "C"
         },
         {
-          "expr": "sum(spooky:external_auth_error:rate5m)",
+          "expr": "sum(impulse:external_auth_error:rate5m)",
           "legendFormat": "external auth error",
           "refId": "D"
         }
@@ -906,7 +906,7 @@
       },
       "targets": [
         {
-          "expr": "100 * sum(spooky:contract_reject_ratio:rate5m) or vector(0)",
+          "expr": "100 * sum(impulse:contract_reject_ratio:rate5m) or vector(0)",
           "legendFormat": "contract reject ratio",
           "refId": "A"
         }
@@ -965,17 +965,17 @@
       },
       "targets": [
         {
-          "expr": "sum(spooky:auth_denials:rate5m)",
+          "expr": "sum(impulse:auth_denials:rate5m)",
           "legendFormat": "auth denied",
           "refId": "A"
         },
         {
-          "expr": "sum(spooky:request_rate_limited:rate5m)",
+          "expr": "sum(impulse:request_rate_limited:rate5m)",
           "legendFormat": "scoped rate limited",
           "refId": "B"
         },
         {
-          "expr": "sum(spooky:quota_denials:rate5m)",
+          "expr": "sum(impulse:quota_denials:rate5m)",
           "legendFormat": "quota denied",
           "refId": "C"
         }
@@ -1034,7 +1034,7 @@
       },
       "targets": [
         {
-          "expr": "sum by (policy, decision) (spooky:quota_outcomes_by_policy_decision:rate5m{policy=~\"${quota_policy:regex}\"})",
+          "expr": "sum by (policy, decision) (impulse:quota_outcomes_by_policy_decision:rate5m{policy=~\"${quota_policy:regex}\"})",
           "legendFormat": "{{policy}} :: {{decision}}",
           "refId": "A"
         }
@@ -1046,7 +1046,7 @@
   "refresh": "30s",
   "schemaVersion": 39,
   "tags": [
-    "spooky",
+    "impulse",
     "observability",
     "admission",
     "overload",
@@ -1086,7 +1086,7 @@
           "type": "prometheus",
           "uid": "${datasource}"
         },
-        "definition": "label_values(spooky_quota_policy_outcomes_total, policy)",
+        "definition": "label_values(impulse_quota_policy_outcomes_total, policy)",
         "hide": 0,
         "includeAll": true,
         "label": "Quota Policy",
@@ -1095,7 +1095,7 @@
         "options": [],
         "query": {
           "qryType": 1,
-          "query": "label_values(spooky_quota_policy_outcomes_total, policy)",
+          "query": "label_values(impulse_quota_policy_outcomes_total, policy)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 2,
@@ -1118,7 +1118,7 @@
           "type": "prometheus",
           "uid": "${datasource}"
         },
-        "definition": "label_values(spooky_quota_backend_health_total, backend_mode)",
+        "definition": "label_values(impulse_quota_backend_health_total, backend_mode)",
         "hide": 0,
         "includeAll": true,
         "label": "Quota Backend Mode",
@@ -1127,7 +1127,7 @@
         "options": [],
         "query": {
           "qryType": 1,
-          "query": "label_values(spooky_quota_backend_health_total, backend_mode)",
+          "query": "label_values(impulse_quota_backend_health_total, backend_mode)",
           "refId": "PrometheusVariableQueryEditor-VariableQuery"
         },
         "refresh": 2,
@@ -1143,8 +1143,8 @@
   },
   "timepicker": {},
   "timezone": "",
-  "title": "Spooky Admission, Overload, Quota, and Auth",
-  "uid": "spooky-admission-overload",
+  "title": "Impulse Admission, Overload, Quota, and Auth",
+  "uid": "impulse-admission-overload",
   "version": 2,
   "weekStart": ""
 }

@@ -3,7 +3,7 @@
 This directory contains the initial Docker packaging layout for Impulse.
 
 ## Files
-- `Dockerfile`: production-style multi-stage build for Impulse (`spooky` binary + slim runtime image).
+- `Dockerfile`: production-style multi-stage build for Impulse (`impulse` binary + slim runtime image).
 - `Dockerfile.dev`: development build image for local iteration.
 - `config.docker.yaml`: container-friendly config (binds to `0.0.0.0`, exposes metrics/control API).
 - `docker-compose.yml`: local validation stack for the packaged image.
@@ -11,7 +11,7 @@ This directory contains the initial Docker packaging layout for Impulse.
 - `scripts/smoke-test.sh`: helper to run a startup + health + metrics smoke test.
 
 ## Build
-From `spooky/` root:
+From `impulse/` root:
 
 ```bash
 ./packaging/docker/scripts/build-image.sh
@@ -20,30 +20,30 @@ From `spooky/` root:
 Custom tag:
 
 ```bash
-./packaging/docker/scripts/build-image.sh spooky:my-tag
+./packaging/docker/scripts/build-image.sh impulse:my-tag
 ```
 
 ## Run (Single Container)
-From `spooky/` root:
+From `impulse/` root:
 
 ```bash
 docker run --rm \
-  --name spooky-packaging \
+  --name impulse-packaging \
   -p 9889:9889/udp \
   -p 9889:9889/tcp \
   -p 9901:9901 \
   -p 9902:9902 \
-  -v "$(pwd)/packaging/docker/config.docker.yaml:/etc/spooky/config.yaml:ro" \
-  -v "$(pwd)/certs:/etc/spooky/certs:ro" \
-  spooky:packaging
+  -v "$(pwd)/packaging/docker/config.docker.yaml:/etc/impulse/config.yaml:ro" \
+  -v "$(pwd)/certs:/etc/impulse/certs:ro" \
+  impulse:packaging
 ```
 
 ## Run (Compose)
-From `spooky/` root:
+From `impulse/` root:
 
 ```bash
 docker compose -f packaging/docker/docker-compose.yml up -d --build
-docker compose -f packaging/docker/docker-compose.yml logs -f spooky
+docker compose -f packaging/docker/docker-compose.yml logs -f impulse
 ```
 
 Stop:
@@ -53,7 +53,7 @@ docker compose -f packaging/docker/docker-compose.yml down
 ```
 
 ## Smoke Test
-From `spooky/` root:
+From `impulse/` root:
 
 ```bash
 ./packaging/docker/scripts/smoke-test.sh

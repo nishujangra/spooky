@@ -4,8 +4,8 @@ mod support;
 
 use std::{sync::Arc, time::Duration};
 
-use spooky_errors::{PoolError, ProxyError};
-use spooky_transport::SharedDnsResolver;
+use impulse_errors::{PoolError, ProxyError};
+use impulse_transport::SharedDnsResolver;
 
 use crate::support::{
     ConcurrencyTracker, TransportTestProtocol, build_single_backend_pool, loopback_bind_restricted,

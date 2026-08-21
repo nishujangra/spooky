@@ -25,12 +25,12 @@ use quiche::h3::NameValue;
 use rand::RngCore;
 use rcgen::{Certificate, CertificateParams, SanType};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
-use spooky_config::{
+use impulse_config::{
     config::{Backend, Config, LoadBalancing, RouteMatch, Upstream, UpstreamTls},
     runtime::RuntimeConfig,
     validator::validate,
 };
-use spooky_edge::{
+use impulse_edge::{
     MAX_DATAGRAM_SIZE_BYTES, MAX_UDP_PAYLOAD_BYTES, Metrics, QUIC_IDLE_TIMEOUT_MS,
     QUIC_INITIAL_MAX_DATA, QUIC_INITIAL_MAX_STREAMS_BIDI, QUIC_INITIAL_MAX_STREAMS_UNI,
     QUIC_INITIAL_STREAM_DATA, REQUEST_TIMEOUT_SECS, UDP_READ_TIMEOUT_MS,
@@ -419,7 +419,7 @@ impl<'a> H3RequestSpec<'a> {
             path,
             headers: &[],
             body: None,
-            user_agent: "spooky-request-path-test",
+            user_agent: "impulse-request-path-test",
         }
     }
 }
@@ -485,7 +485,7 @@ impl<'a> BootstrapRequestSpec<'a> {
             path,
             headers: &[],
             body: None,
-            user_agent: "spooky-request-path-test",
+            user_agent: "impulse-request-path-test",
         }
     }
 }
@@ -528,7 +528,7 @@ pub fn run_h3_get_to(
             path,
             headers,
             body: None,
-            user_agent: "spooky-test",
+            user_agent: "impulse-test",
         },
     )
 }
@@ -728,7 +728,7 @@ async fn run_two_chunk_bootstrap_h2_post_to(
                 .map_err(|err| format!("uri build: {err}"))?,
         )
         .header("host", authority)
-        .header("user-agent", "spooky-request-path-test")
+        .header("user-agent", "impulse-request-path-test")
         .header("content-length", (chunk1.len() + chunk2.len()).to_string())
         .body(
             TwoChunkDelayedBody::new(
@@ -1028,7 +1028,7 @@ pub fn run_two_chunk_post_to_with_response_timeout(
                     quiche::h3::Header::new(b":scheme", b"https"),
                     quiche::h3::Header::new(b":authority", authority.as_bytes()),
                     quiche::h3::Header::new(b":path", path.as_bytes()),
-                    quiche::h3::Header::new(b"user-agent", b"spooky-request-path-test"),
+                    quiche::h3::Header::new(b"user-agent", b"impulse-request-path-test"),
                     quiche::h3::Header::new(b"content-length", content_length.as_bytes()),
                 ];
                 stream_id = Some(

@@ -1,7 +1,7 @@
 //! Upstream TLS lowering: effective-TLS resolution and validation.
 
 use rcgen::{Certificate, CertificateParams, SanType};
-use spooky_config::{
+use impulse_config::{
     config::{ForwardedHeaderPolicyMode, SecretRef, UpstreamHostPolicyMode, UpstreamTls},
     runtime::RuntimeBackendTransportKind,
 };

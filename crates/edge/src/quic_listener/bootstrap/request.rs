@@ -9,16 +9,16 @@ use http::{HeaderMap, Request, Response, StatusCode};
 use http_body_util::{BodyExt, combinators::BoxBody};
 use hyper::body::Incoming;
 use log::warn;
-use spooky_bridge::request::{
+use impulse_bridge::request::{
     RequestBuildInput, RequestBuildPolicies, RequestBuildTarget, RequestForwardedContext,
     RequestTraceContext, build_h1_request, build_h2_request_for_target,
 };
-use spooky_config::{
+use impulse_config::{
     backend_endpoint::{BackendEndpoint, BackendScheme},
     runtime::RuntimeUpstreamPolicy,
 };
-use spooky_errors::{BridgeError, ProxyError};
-use spooky_lb::upstream_pool::UpstreamPool;
+use impulse_errors::{BridgeError, ProxyError};
+use impulse_lb::upstream_pool::UpstreamPool;
 
 use super::{
     super::{
@@ -753,7 +753,7 @@ mod tests {
     use std::{collections::BTreeMap, sync::Arc};
 
     use quiche::h3::NameValue;
-    use spooky_config::{
+    use impulse_config::{
         config::{ForwardedHeaderPolicy, ForwardedHeaderPolicyMode},
         runtime::{RuntimeAuthPolicy, RuntimeForwardedHeaderPolicy, RuntimeHostPolicy},
     };

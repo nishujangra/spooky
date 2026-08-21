@@ -106,10 +106,10 @@ Use this quick map before diving into field tables:
 Impulse uses YAML configuration loaded with:
 
 ```bash
-spooky --config /path/to/config.yaml
+impulse --config /path/to/config.yaml
 ```
 
-If `--config` is omitted, Impulse attempts `/etc/spooky/config.yaml`.
+If `--config` is omitted, Impulse attempts `/etc/impulse/config.yaml`.
 
 ## Canonical Top-Level Shape
 
@@ -121,8 +121,8 @@ listen:
   address: "0.0.0.0"
   port: 9889
   tls:
-    cert: "/etc/spooky/certs/fullchain.pem"
-    key: "/etc/spooky/certs/privkey.pem"
+    cert: "/etc/impulse/certs/fullchain.pem"
+    key: "/etc/impulse/certs/privkey.pem"
 
 upstream_tls:
   verify_certificates: true
@@ -181,8 +181,8 @@ listen:
   address: "0.0.0.0"
   port: 9889
   tls:
-    cert: "/etc/spooky/certs/fullchain.pem"
-    key: "/etc/spooky/certs/privkey.pem"
+    cert: "/etc/impulse/certs/fullchain.pem"
+    key: "/etc/impulse/certs/privkey.pem"
 
 upstream:
   app:
@@ -220,7 +220,7 @@ upstream:
 upstream_tls:
   verify_certificates: true
   strict_sni: true
-  ca_file: "/etc/spooky/pki/internal-ca.pem"
+  ca_file: "/etc/impulse/pki/internal-ca.pem"
 
 upstream:
   internal_api:
@@ -584,13 +584,13 @@ Operational notes:
 - If SNI is missing or unmatched, Impulse serves the default identity rather than rejecting the handshake.
 - `listen.tls.certificates[].server_name` must be covered by the mapped certificate SANs or startup fails.
 - Impulse exports downstream certificate expiry gauges:
-  - `spooky_downstream_tls_certificate_not_after_seconds`
-  - `spooky_downstream_tls_certificate_days_remaining`
+  - `impulse_downstream_tls_certificate_not_after_seconds`
+  - `impulse_downstream_tls_certificate_days_remaining`
 - Certificate reload affects new QUIC and bootstrap TLS handshakes only. Existing connections continue with the TLS session they already negotiated.
 - Downstream TLS metrics also include:
-  - `spooky_downstream_tls_handshake_failure_total{listener,reason}`
-  - `spooky_downstream_tls_certificate_selection_total{listener,selection}`
-  - `spooky_downstream_tls_alpn_total{listener,protocol}`
+  - `impulse_downstream_tls_handshake_failure_total{listener,reason}`
+  - `impulse_downstream_tls_certificate_selection_total{listener,selection}`
+  - `impulse_downstream_tls_alpn_total{listener,protocol}`
 - Important `reason` labels are:
   - `missing_client_cert`
   - `invalid_client_cert`
@@ -608,8 +608,8 @@ listen:
   address: "0.0.0.0"
   port: 9889
   tls:
-    cert: "/etc/spooky/certs/server.crt"
-    key: "/etc/spooky/certs/server.key"
+    cert: "/etc/impulse/certs/server.crt"
+    key: "/etc/impulse/certs/server.key"
 
 # Localhost-only development
 listen:
@@ -626,15 +626,15 @@ listen:
   address: "0.0.0.0"
   port: 9889
   tls:
-    cert: "/etc/spooky/certs/default.crt"
-    key: "/etc/spooky/certs/default.key"
+    cert: "/etc/impulse/certs/default.crt"
+    key: "/etc/impulse/certs/default.key"
     certificates:
       - server_name: "api.example.com"
-        cert: "/etc/spooky/certs/api.crt"
-        key: "/etc/spooky/certs/api.key"
+        cert: "/etc/impulse/certs/api.crt"
+        key: "/etc/impulse/certs/api.key"
       - server_name: "www.example.com"
-        cert: "/etc/spooky/certs/www.crt"
-        key: "/etc/spooky/certs/www.key"
+        cert: "/etc/impulse/certs/www.crt"
+        key: "/etc/impulse/certs/www.key"
 ```
 
 ### Multi-Listener Configuration
@@ -655,8 +655,8 @@ listen:
   address: "0.0.0.0"
   port: 9889
   tls:
-    cert: "/etc/spooky/certs/fullchain.pem"
-    key: "/etc/spooky/certs/privkey.pem"
+    cert: "/etc/impulse/certs/fullchain.pem"
+    key: "/etc/impulse/certs/privkey.pem"
 
 # Multi-listener — independent public and internal listeners
 listeners:
@@ -664,14 +664,14 @@ listeners:
     address: "0.0.0.0"
     port: 9889
     tls:
-      cert: "/etc/spooky/certs/public-fullchain.pem"
-      key: "/etc/spooky/certs/public-privkey.pem"
+      cert: "/etc/impulse/certs/public-fullchain.pem"
+      key: "/etc/impulse/certs/public-privkey.pem"
   - protocol: http3
     address: "10.0.0.1"
     port: 9890
     tls:
-      cert: "/etc/spooky/certs/internal-fullchain.pem"
-      key: "/etc/spooky/certs/internal-privkey.pem"
+      cert: "/etc/impulse/certs/internal-fullchain.pem"
+      key: "/etc/impulse/certs/internal-privkey.pem"
 ```
 
 Each listener entry shares the same upstream routing table — route matching, load balancing, and health checks are global across all listeners.
@@ -954,7 +954,7 @@ Controls how `X-Forwarded-For` and related forwarding headers are set on upstrea
 | `append` | Appends the client IP to the existing `X-Forwarded-For` chain |
 | `preserve` | Passes the inbound `X-Forwarded-For` chain through unchanged without adding the client IP |
 
-Use `append` in multi-hop deployments where the full client IP chain must be preserved. Use `overwrite` (default) when spooky is the first edge and inbound forwarded headers should not be trusted.
+Use `append` in multi-hop deployments where the full client IP chain must be preserved. Use `overwrite` (default) when impulse is the first edge and inbound forwarded headers should not be trusted.
 
 #### Examples
 
@@ -1039,7 +1039,7 @@ upstream:
     tls:
       verify_certificates: true
       strict_sni: true
-      ca_file: "/etc/spooky/certs/internal-ca.pem"
+      ca_file: "/etc/impulse/certs/internal-ca.pem"
     route:
       path_prefix: "/internal"
     backends: [...]
@@ -1185,7 +1185,7 @@ Controls logging output, verbosity, and destination.
 | `level` | string | No | `info` | Log level |
 | `format` | string | No | `plain` | Output format: `plain` (human-readable) or `json` (structured) |
 | `file.enabled` | bool | No | `false` | Write logs to a file instead of stderr |
-| `file.path` | string | No | `/var/log/spooky/spooky.log` | Log file path (used when `file.enabled` is `true`) |
+| `file.path` | string | No | `/var/log/impulse/impulse.log` | Log file path (used when `file.enabled` is `true`) |
 
 ### Log Levels
 
@@ -1194,7 +1194,7 @@ Log levels in order of increasing verbosity:
 - `silence`: No logging output
 - `poltergeist`: Error messages only
 - `scream`: Warnings and errors
-- `spooky`: Informational messages, warnings, and errors
+- `impulse`: Informational messages, warnings, and errors
 - `haunt`: Debug information
 - `whisper`: Trace-level debugging
 
@@ -1203,7 +1203,7 @@ Standard log level mapping:
 - `silence` = off
 - `poltergeist` = error
 - `scream` = warn
-- `spooky` = info
+- `impulse` = info
 - `haunt` = debug
 - `whisper` = trace
 
@@ -1221,7 +1221,7 @@ log:
   format: plain
   file:
     enabled: true
-    path: /var/log/spooky/spooky.log
+    path: /var/log/impulse/impulse.log
 
 # Structured JSON logs (recommended for log pipelines)
 log:
@@ -1239,7 +1239,7 @@ log:
   format: json
   file:
     enabled: true
-    path: /tmp/spooky-trace.log
+    path: /tmp/impulse-trace.log
 ```
 
 ### Operational Implications
@@ -1412,7 +1412,7 @@ Brownout is a load-shedding mode that activates when the proxy is near capacity.
 1. After each request is routed, Impulse samples the current global in-flight percent (active requests ÷ global limit × 100).
 2. If the sample reaches `trigger_inflight_percent`, brownout activates.
 3. Brownout stays active until the sample falls to or below `recover_inflight_percent`. The gap between the two thresholds is **hysteresis** — it prevents rapid oscillation when load is right at the boundary.
-4. While active, `spooky_brownout_active` gauge is `1` and `spooky_overload_shed_by_reason_total{reason="brownout"}` increments for every shed request.
+4. While active, `impulse_brownout_active` gauge is `1` and `impulse_overload_shed_by_reason_total{reason="brownout"}` increments for every shed request.
 
 **Choosing `core_routes`**
 
@@ -1435,16 +1435,16 @@ If brownout is active and shedding load, adaptive admission will also begin to r
 
 **Alerting**
 
-Alert on `spooky_brownout_active == 1` for more than a brief window — sustained brownout means backends are under-provisioned or a downstream dependency is slow:
+Alert on `impulse_brownout_active == 1` for more than a brief window — sustained brownout means backends are under-provisioned or a downstream dependency is slow:
 
 ```yaml
-- alert: SpookyBrownoutActive
-  expr: spooky_brownout_active == 1
+- alert: ImpulseBrownoutActive
+  expr: impulse_brownout_active == 1
   for: 30s
   labels:
     severity: warning
   annotations:
-    summary: "Spooky brownout active on {{ $labels.instance }}"
+    summary: "Impulse brownout active on {{ $labels.instance }}"
     description: "Non-core routes are being shed. Check backend latency and inflight metrics."
 ```
 
@@ -1606,7 +1606,7 @@ If `observability.control_api.address` is non-loopback, `observability.control_a
 | `enabled` | boolean | No | `false` | Emit route-decision transparency logs |
 | `include_reason` | boolean | No | `true` | Include deterministic tie-break reason in route-decision logs |
 | `expose_header` | boolean | No | `false` | Reserved toggle for downstream route-decision response headers |
-| `header_name` | string | No | `"x-spooky-route-decision"` | Reserved header name; must be non-empty when `expose_header=true` |
+| `header_name` | string | No | `"x-impulse-route-decision"` | Reserved header name; must be non-empty when `expose_header=true` |
 
 ### Watchdog Restart Hook
 
@@ -1658,7 +1658,7 @@ Impulse validates configuration at startup and reports errors before attempting 
 Validate configuration without starting the server:
 
 ```bash
-spooky --config <path>
+impulse --config <path>
 ```
 
 The command exits with status 0 if configuration is valid, or prints detailed error messages and exits with non-zero status if invalid.

@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use spooky_config::runtime::{
+use impulse_config::runtime::{
     RuntimeAlternateBackendPolicy, RuntimeLoadBalancingPolicy, RuntimeLoadBalancingStrategy,
     RuntimeRequestKeySpec, RuntimeUpstream,
 };
@@ -177,7 +177,7 @@ impl UpstreamPool {
 
 #[cfg(test)]
 mod tests {
-    use spooky_config::runtime::{RuntimeLoadBalancingStrategy, RuntimeRequestKeySpec};
+    use impulse_config::runtime::{RuntimeLoadBalancingStrategy, RuntimeRequestKeySpec};
 
     use super::UpstreamPool;
     use crate::test_support::runtime_upstream_from_addresses;
