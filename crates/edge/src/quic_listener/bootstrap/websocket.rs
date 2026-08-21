@@ -5,9 +5,9 @@ use http::{Request, Response, StatusCode, Uri, response::Builder as ResponseBuil
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
 use hyper::{body::Incoming, client::conn::http1 as client_http1, upgrade, upgrade::OnUpgrade};
 use hyper_util::rt::TokioIo;
-use log::{debug, warn};
 use impulse_config::backend_endpoint::BackendScheme;
 use impulse_errors::ProxyError;
+use log::{debug, warn};
 
 use super::{
     dispatch::BootstrapDispatchInput,

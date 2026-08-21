@@ -1,12 +1,12 @@
 //! Canonical request-builder input contracts shared across h1 and h2 outputs.
 
 use http::header::{CONTENT_LENGTH, HOST};
-use quiche::h3::Header;
 use impulse_bridge::request::{RequestBodyMode, RequestBuildInput, build_h2_request_for_target};
 use impulse_config::{
     backend_endpoint::BackendEndpoint,
     config::{ForwardedHeaderPolicy, UpstreamHostPolicy},
 };
+use quiche::h3::Header;
 
 use crate::common::{
     RequestInputMeta, build_h1_and_h2_requests, request_input_with_body_mode, request_target,

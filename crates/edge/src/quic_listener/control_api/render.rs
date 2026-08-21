@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use http_body_util::Full;
-use serde::Serialize;
 use impulse_config::{config::SecretProvider, runtime::RuntimeJwtAuth};
 use impulse_lb::health::HealthFailureReason;
+use serde::Serialize;
 
 use super::{state::ControlApiState, *};
 use crate::{

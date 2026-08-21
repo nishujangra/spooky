@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
-use log::error;
 use impulse_config::runtime::RuntimeConfig;
 use impulse_errors::ProxyError;
+use log::error;
 
 use super::{
     QUICListener, runtime_handle,

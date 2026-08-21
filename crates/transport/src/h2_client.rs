@@ -23,6 +23,7 @@ use hyper_util::{
     },
     rt::TokioIo,
 };
+use impulse_config::runtime::{RuntimeBackendTlsPolicy, RuntimeUpstream};
 use log::warn;
 use rustls::{
     ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme,
@@ -30,7 +31,6 @@ use rustls::{
     pki_types::{CertificateDer, PrivateKeyDer, ServerName, UnixTime},
 };
 use rustls_pki_types::pem::PemObject;
-use impulse_config::runtime::{RuntimeBackendTlsPolicy, RuntimeUpstream};
 use tower_service::Service;
 
 /// TLS client policy applied to HTTP/2 backend connections.

@@ -3,7 +3,6 @@ use std::{collections::HashMap, ffi::OsString, path::Path, sync::Arc};
 use ::http::{Method, Request, header};
 use bytes::Bytes;
 use http_body_util::BodyExt;
-use log::LevelFilter;
 use impulse_config::{
     config::{
         Backend, ClientAuth, Config as ImpulseConfigConfig, ControlApiAuditSink,
@@ -15,6 +14,7 @@ use impulse_config::{
     },
     runtime::{RuntimeConfig, RuntimeJwtVerificationKey},
 };
+use log::LevelFilter;
 use tempfile::tempdir;
 
 use super::{state::ControlApiState, *};

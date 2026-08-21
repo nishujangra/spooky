@@ -413,7 +413,8 @@ fn quic_tls_metrics_capture_selection_and_failures() {
         ))
         .expect("metrics endpoint should become reachable");
     assert!(
-        metrics.contains("impulse_downstream_tls_certificate_selection_total{listener=\"127.0.0.1:")
+        metrics
+            .contains("impulse_downstream_tls_certificate_selection_total{listener=\"127.0.0.1:")
     );
     assert!(metrics.contains("selection=\"exact_sni\""));
     assert!(metrics.contains("selection=\"fallback_unmatched_sni\""));

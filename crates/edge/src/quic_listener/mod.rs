@@ -23,17 +23,6 @@ use http::{Request, Response, StatusCode};
 use http_body_util::{BodyExt, combinators::BoxBody};
 use hyper::{body::Incoming, client::conn::http1 as client_http1, upgrade};
 use hyper_util::rt::TokioIo;
-use log::{debug, error, info, warn};
-use quiche::{Config, h3::NameValue};
-use rand::RngCore;
-use rustls::{
-    RootCertStore, ServerConfig as RustlsServerConfig,
-    pki_types::{CertificateDer, PrivateKeyDer},
-    server::{ClientHello, ResolvesServerCert, ResolvesServerCertUsingSni, WebPkiClientVerifier},
-    sign::CertifiedKey,
-};
-use rustls_pki_types::pem::PemObject;
-use serde_json::json;
 #[cfg(test)]
 use impulse_bridge::response::should_strip_response_header;
 use impulse_bridge::response::{
@@ -52,6 +41,17 @@ use impulse_config::{
 use impulse_errors::{PoolError, ProxyError};
 use impulse_lb::{health::HealthFailureReason, upstream_pool::UpstreamPool};
 use impulse_transport::{SharedDnsResolver, UpstreamTransportPool};
+use log::{debug, error, info, warn};
+use quiche::{Config, h3::NameValue};
+use rand::RngCore;
+use rustls::{
+    RootCertStore, ServerConfig as RustlsServerConfig,
+    pki_types::{CertificateDer, PrivateKeyDer},
+    server::{ClientHello, ResolvesServerCert, ResolvesServerCertUsingSni, WebPkiClientVerifier},
+    sign::CertifiedKey,
+};
+use rustls_pki_types::pem::PemObject;
+use serde_json::json;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     sync::{Semaphore, mpsc, mpsc::error::TrySendError, oneshot},

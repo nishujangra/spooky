@@ -13,15 +13,15 @@ use std::{
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
 use hyper::{Response, body::Incoming};
+use impulse_config::config::{
+    ApiKeyAuth, ExternalAuth, ExternalAuthFailureMode, ExternalAuthRequestHeader, RouteAuth,
+    ScopedRateLimit, ScopedRateLimitScope, SecretRef, UpstreamTls,
+};
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType,
     ExtendedKeyUsagePurpose, IsCa, KeyUsagePurpose, SanType,
 };
 use serial_test::serial;
-use impulse_config::config::{
-    ApiKeyAuth, ExternalAuth, ExternalAuthFailureMode, ExternalAuthRequestHeader, RouteAuth,
-    ScopedRateLimit, ScopedRateLimitScope, SecretRef, UpstreamTls,
-};
 use tempfile::{TempDir, tempdir};
 
 mod support;
@@ -1554,7 +1554,8 @@ fn quic_request_path_concurrent_large_body_pressure_is_bounded() {
         handles.push(thread::spawn(move || {
             barrier.wait();
             let chunk1 = vec![0u8; (impulse_edge::MAX_REQUEST_BODY_BYTES - 8 * 1024) / 2];
-            let chunk2 = vec![0u8; (impulse_edge::MAX_REQUEST_BODY_BYTES - 8 * 1024) - chunk1.len()];
+            let chunk2 =
+                vec![0u8; (impulse_edge::MAX_REQUEST_BODY_BYTES - 8 * 1024) - chunk1.len()];
             run_two_chunk_post_to(
                 listen_addr,
                 "localhost",

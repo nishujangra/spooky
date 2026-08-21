@@ -7,7 +7,6 @@ use std::{
 };
 
 use http::{HeaderMap, HeaderValue, StatusCode};
-use rcgen::{Certificate, CertificateParams, SanType};
 use impulse_config::{
     config::{
         Backend, ClientAuth, Config as ImpulseConfigConfig, Listen, LoadBalancing, Log,
@@ -20,6 +19,7 @@ use impulse_errors::{
     UpstreamErrorCategory, UpstreamErrorClassification, UpstreamTlsReason,
     classify_upstream_error_detail,
 };
+use rcgen::{Certificate, CertificateParams, SanType};
 use tempfile::tempdir;
 
 use super::{

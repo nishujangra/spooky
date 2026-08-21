@@ -30,14 +30,14 @@ use hyper::{
 };
 use hyper_rustls::HttpsConnectorBuilder;
 use hyper_util::client::legacy::{Client, connect::HttpConnector};
-use quiche::h3::NameValue;
-use serde_json::Value;
-use sha2::{Digest, Sha256};
 use impulse_config::{
     config::{JwksStartupBehavior, JwtAlgorithm},
     runtime::{RuntimeConfig, RuntimeJwtAuth, RuntimeJwtVerificationKey, RuntimeUpstreamPolicy},
 };
 use impulse_lb::upstream_pool::UpstreamPool;
+use quiche::h3::NameValue;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use tokio::{
     runtime::RuntimeFlavor,

@@ -7,8 +7,6 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use log::{debug, warn};
-use sha2::{Digest, Sha256};
 use impulse_config::{
     config::{
         DistributedQuotaPolicy as RawDistributedQuotaPolicy,
@@ -30,6 +28,8 @@ use impulse_config::{
         RuntimeQuotaWindow as ConfigRuntimeQuotaWindow, RuntimeRequestKeySpec,
     },
 };
+use log::{debug, warn};
+use sha2::{Digest, Sha256};
 
 use crate::{
     Metrics,
@@ -2821,7 +2821,8 @@ mod tests {
                     bucket_started_at_unix_ms: Some(1_700_000_000_000),
                     reset_at_unix_ms: Some(1_700_000_001_000),
                     storage_key: Some(
-                        "impulse:quota:qv1:12:tenant-quota:burst:1000:1700000000000:abc".to_string(),
+                        "impulse:quota:qv1:12:tenant-quota:burst:1000:1700000000000:abc"
+                            .to_string(),
                     ),
                 }),
                 sustained: Some(QuotaWindowUsage {

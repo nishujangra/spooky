@@ -2,11 +2,11 @@
 
 use std::time::Duration;
 
-use rcgen::{Certificate, CertificateParams, SanType};
 use impulse_config::{
     config::{Listen, LogFormat, SecretRef, Tls, UpstreamTls},
     runtime::RuntimeListenerSource,
 };
+use rcgen::{Certificate, CertificateParams, SanType};
 use tempfile::tempdir;
 
 use crate::common::{

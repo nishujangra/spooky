@@ -4,9 +4,9 @@ use std::{
     time::Duration,
 };
 
-use log::{info, warn};
 use impulse_config::runtime::{ListenerRuntimeConfig, RuntimeConfig};
 use impulse_errors::ProxyError;
+use log::{info, warn};
 
 use crate::runtime::{
     activation::{GenerationChangeEvent, GenerationHistoryEntry},
@@ -536,15 +536,15 @@ mod tests {
         time::Duration,
     };
 
-    use rcgen::{Certificate, CertificateParams, SanType};
     use impulse_config::{
         config::{
-            Backend, ClientAuth, Config as ImpulseConfigConfig, Listen, LoadBalancing, Log, LogFile,
-            LogFormat, Observability, Performance, Resilience, RouteMatch, Security, Tls, Upstream,
-            UpstreamTls,
+            Backend, ClientAuth, Config as ImpulseConfigConfig, Listen, LoadBalancing, Log,
+            LogFile, LogFormat, Observability, Performance, Resilience, RouteMatch, Security, Tls,
+            Upstream, UpstreamTls,
         },
         runtime::RuntimeConfig,
     };
+    use rcgen::{Certificate, CertificateParams, SanType};
     use tempfile::tempdir;
     use tokio::sync::oneshot;
 

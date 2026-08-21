@@ -1252,8 +1252,6 @@ mod tests {
         sign::Signer,
     };
     use hmac::{Hmac, Mac};
-    use serde_json::Value;
-    use sha2::Sha256;
     use impulse_config::{
         config::{JwtAlgorithm, ScopedRateLimit, ScopedRateLimitScope},
         runtime::{
@@ -1261,6 +1259,8 @@ mod tests {
             RuntimeUpstreamPolicy,
         },
     };
+    use serde_json::Value;
+    use sha2::Sha256;
 
     use super::{auth::append_auth_request_headers, *};
     use crate::runtime::connection::auth::PendingHeaderMutation;

@@ -8,9 +8,9 @@
 
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
 use impulse_config::{loader::read_config, runtime::RuntimeConfig};
 use impulse_errors::ProxyError;
+use serde::{Deserialize, Serialize};
 
 use crate::runtime::{
     bundle::{

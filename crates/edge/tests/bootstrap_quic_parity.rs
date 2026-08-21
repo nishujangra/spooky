@@ -13,12 +13,12 @@ use std::{
 use bytes::Bytes;
 use http_body_util::Full;
 use hyper::{Request, Response, body::Incoming};
-use serial_test::serial;
 use impulse_config::config::{
     ApiKeyAuth, ExternalAuth, ExternalAuthFailureMode, ExternalAuthRequestHeader, JwtAlgorithm,
     JwtAuth, JwtVerificationKey, LoadBalancing, RouteAuth, RouteMatch, ScopedRateLimit,
     ScopedRateLimitScope, Upstream,
 };
+use serial_test::serial;
 
 mod support;
 

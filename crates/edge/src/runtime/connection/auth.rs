@@ -1,8 +1,8 @@
 use std::{collections::HashMap, time::Duration};
 
-use quiche::h3::NameValue;
 use impulse_config::runtime::{RuntimeExternalAuth, RuntimeExternalAuthFailureMode};
 use impulse_errors::ProxyError;
+use quiche::h3::NameValue;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ExternalAuthFailureDisposition {

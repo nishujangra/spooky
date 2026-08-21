@@ -3,8 +3,8 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use rustls::ServerConfig as RustlsServerConfig;
 use impulse_errors::ProxyError;
+use rustls::ServerConfig as RustlsServerConfig;
 
 use crate::runtime::tls::inventory::ListenerTlsInventory;
 

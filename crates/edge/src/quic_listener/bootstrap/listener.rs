@@ -15,9 +15,9 @@ use hyper::{
     service::service_fn,
 };
 use hyper_util::rt::TokioIo;
-use log::{debug, error, info, warn};
 use impulse_config::runtime::ListenerRuntimeConfig;
 use impulse_errors::ProxyError;
+use log::{debug, error, info, warn};
 
 use super::{
     context::{BootstrapDispatchCtx, BootstrapRequestCtx, BootstrapRuntimeCtx},

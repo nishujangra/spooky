@@ -4,11 +4,11 @@ use std::{
 };
 
 use http::StatusCode;
-use log::{error, info};
 use impulse_errors::{
     ClassifiedUpstreamProxyError, PoolError, ProxyError, UpstreamErrorCategory, UpstreamTlsReason,
 };
 use impulse_lb::{HealthTransition, health::HealthFailureReason, upstream_pool::UpstreamPool};
+use log::{error, info};
 
 use crate::{
     Metrics, OverloadShedReason, RouteOutcome,

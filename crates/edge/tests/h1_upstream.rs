@@ -3,13 +3,13 @@ use std::{collections::HashMap, convert::Infallible, net::SocketAddr, time::Dura
 use bytes::Bytes;
 use http_body_util::Full;
 use hyper::{Request, Response, body::Incoming};
-use rcgen::{Certificate, CertificateParams, SanType};
-use serial_test::serial;
 use impulse_config::{
     config::{Backend, Config, Upstream, UpstreamTls},
     validator::validate,
 };
 use impulse_edge::runtime::listener::QUICListener;
+use rcgen::{Certificate, CertificateParams, SanType};
+use serial_test::serial;
 use tempfile::{TempDir, tempdir};
 
 mod support;

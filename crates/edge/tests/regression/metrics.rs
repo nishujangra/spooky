@@ -122,7 +122,9 @@ fn metrics_render_includes_overload_reasons_and_hedge_counters() {
 
     let output = metrics.render_prometheus();
     assert!(output.contains("impulse_overload_shed_by_reason_total{reason=\"global_inflight\"} 1"));
-    assert!(output.contains("impulse_overload_shed_by_reason_total{reason=\"backend_inflight\"} 1"));
+    assert!(
+        output.contains("impulse_overload_shed_by_reason_total{reason=\"backend_inflight\"} 1")
+    );
     assert!(output.contains("impulse_overload_shed_by_reason_total{reason=\"circuit_open\"} 1"));
     assert!(output.contains("impulse_active_connections 7"));
     assert!(output.contains("impulse_connection_cap_rejects 1"));
@@ -413,7 +415,9 @@ fn metrics_render_includes_backend_dns_refresh_telemetry() {
         output
             .contains("impulse_backend_dns_resolved_addresses{backend=\"backend.internal:443\"} 2")
     );
-    assert!(output.contains("impulse_backend_client_rotations{backend=\"backend.internal:443\"} 1"));
+    assert!(
+        output.contains("impulse_backend_client_rotations{backend=\"backend.internal:443\"} 1")
+    );
     assert!(output.contains(
         "impulse_backend_connect_attempt_total{backend=\"backend.internal:443\",hostname=\"backend.internal\",resolved_addr=\"10.0.0.10:443\"} 1"
     ));

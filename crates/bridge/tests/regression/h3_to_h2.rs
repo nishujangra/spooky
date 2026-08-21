@@ -2,11 +2,11 @@
 
 use http::header::HOST;
 use hyper::ext::Protocol;
-use quiche::h3::Header;
 use impulse_config::config::{
     ForwardedHeaderPolicy, ForwardedHeaderPolicyMode, UpstreamHostPolicy, UpstreamHostPolicyMode,
 };
 use impulse_errors::BridgeError;
+use quiche::h3::Header;
 
 use crate::common::{
     RequestInputMeta, build_h1_and_h2_requests, build_h2_request_for_backend,

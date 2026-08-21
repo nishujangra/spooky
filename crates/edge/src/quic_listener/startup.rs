@@ -5,12 +5,12 @@ use std::{
     time::Duration,
 };
 
-use log::{debug, info, warn};
-use socket2::{Domain, Protocol, Socket, Type};
 use impulse_config::runtime::{ListenerRuntimeConfig, RuntimeBackendAddressKind, RuntimeConfig};
 use impulse_errors::ProxyError;
 use impulse_lb::upstream_pool::UpstreamPool;
 use impulse_transport::{ConnectObservation, ConnectObserver, UpstreamTransportPool};
+use log::{debug, info, warn};
+use socket2::{Domain, Protocol, Socket, Type};
 use tokio::sync::Semaphore;
 
 use crate::{

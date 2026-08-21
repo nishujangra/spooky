@@ -5,9 +5,9 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use log::{debug, info, warn};
 use impulse_lb::{HealthTransition, upstream_pool::UpstreamPool};
 use impulse_transport::{SharedDnsResolver, UpstreamTransportPool};
+use log::{debug, info, warn};
 
 use super::{
     event::{

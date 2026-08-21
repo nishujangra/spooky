@@ -8,12 +8,12 @@ use std::{
 };
 
 use clap::Parser;
-use log::{error, info, warn};
 use impulse_config::{runtime::RuntimeConfig, validator::validate as validate_config};
 use impulse_edge::{
     configure_async_runtime,
     runtime::{bundle::RuntimeBundleHandle, listener::QUICListener},
 };
+use log::{error, info, warn};
 
 use crate::{
     listener_group::{

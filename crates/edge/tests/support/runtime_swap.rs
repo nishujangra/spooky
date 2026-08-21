@@ -15,8 +15,6 @@ use http::{Method, StatusCode};
 use http_body_util::{BodyExt, Empty, Full};
 use hyper::{Request, Response, body::Incoming, client::conn::http1};
 use hyper_util::rt::TokioIo;
-use rustls_pki_types::{CertificateDer, pem::PemObject};
-use serde_json::Value as JsonValue;
 use impulse_config::{
     config::{Config, ControlApi, MetricsEndpoint, Observability, SecretRef, Upstream},
     runtime::RuntimeConfig,
@@ -31,6 +29,8 @@ use impulse_edge::{
         policy::{LifecycleTransitionResult, RuntimeLifecyclePhase},
     },
 };
+use rustls_pki_types::{CertificateDer, pem::PemObject};
+use serde_json::Value as JsonValue;
 use tempfile::{TempDir, tempdir};
 use tokio::net::TcpStream;
 use tokio_rustls::{

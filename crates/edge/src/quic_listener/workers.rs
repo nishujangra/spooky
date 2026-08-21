@@ -9,8 +9,8 @@ use std::{
     time::Duration,
 };
 
-use log::{error, warn};
 use impulse_config::runtime::ListenerRuntimeConfig;
+use log::{error, warn};
 
 use crate::{
     constants::MAX_DATAGRAM_SIZE_BYTES,

@@ -1,11 +1,11 @@
 use std::{fs::OpenOptions, io::Write, sync::atomic::Ordering};
 
-use log::{error, info, warn};
-use serde::Serialize;
 use impulse_config::config::{
     ControlApi as ControlApiConfig, ControlApiAuditFormat, ControlApiAuditSink,
 };
 use impulse_utils::logger::CONTROL_API_AUDIT_LOG_TARGET;
+use log::{error, info, warn};
+use serde::Serialize;
 
 use super::{
     admin_auth::ControlApiRoute,

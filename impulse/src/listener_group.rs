@@ -7,7 +7,6 @@ use std::{
     thread,
 };
 
-use log::{error, info};
 use impulse_config::runtime::{ListenerRuntimeConfig, RuntimeConfig};
 use impulse_edge::{
     ListenerWorkerGroupConfig, ListenerWorkerRuntimeState,
@@ -16,6 +15,7 @@ use impulse_edge::{
     },
     spawn_listener_worker_group,
 };
+use log::{error, info};
 
 use crate::runtime_guard;
 

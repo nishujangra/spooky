@@ -1,6 +1,5 @@
 //! Secret-reference parsing and validation compatibility coverage.
 
-use rcgen::{Certificate, CertificateParams, SanType};
 use impulse_config::{
     config::{
         ExternalAuth, ExternalAuthFailureMode, JwtAuth, SecretProvider, SecretRef, UpstreamTls,
@@ -8,6 +7,7 @@ use impulse_config::{
     runtime::RuntimeExternalAuth,
     validator::validate,
 };
+use rcgen::{Certificate, CertificateParams, SanType};
 use tempfile::tempdir;
 
 use crate::common::{

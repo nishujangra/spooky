@@ -4,8 +4,6 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-use log::LevelFilter;
-use serde_json::json;
 use impulse_utils::logger::{
     CONTROL_API_AUDIT_LOG_TARGET,
     errors::{build_create_log_dir_error, build_open_log_file_error},
@@ -13,6 +11,8 @@ use impulse_utils::logger::{
     init::{LoggerInitStatus, try_init_logger},
     set_log_level,
 };
+use log::LevelFilter;
+use serde_json::json;
 
 fn logger_test_guard() -> std::sync::MutexGuard<'static, ()> {
     static TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();

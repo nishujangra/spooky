@@ -21,10 +21,6 @@ use hyper::{
     service::service_fn,
 };
 use hyper_util::rt::{TokioExecutor, TokioIo};
-use quiche::h3::NameValue;
-use rand::RngCore;
-use rcgen::{Certificate, CertificateParams, SanType};
-use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use impulse_config::{
     config::{Backend, Config, LoadBalancing, RouteMatch, Upstream, UpstreamTls},
     runtime::RuntimeConfig,
@@ -36,6 +32,10 @@ use impulse_edge::{
     QUIC_INITIAL_STREAM_DATA, REQUEST_TIMEOUT_SECS, UDP_READ_TIMEOUT_MS,
     runtime::listener::QUICListener,
 };
+use quiche::h3::NameValue;
+use rand::RngCore;
+use rcgen::{Certificate, CertificateParams, SanType};
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use tempfile::{TempDir, tempdir};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},

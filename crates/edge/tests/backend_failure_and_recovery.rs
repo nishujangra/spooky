@@ -13,9 +13,9 @@ use std::{
 use bytes::Bytes;
 use http_body_util::Full;
 use hyper::{Response, body::Incoming};
-use serial_test::serial;
 use impulse_config::config::{Backend, HealthCheck, LoadBalancing, RouteMatch, Upstream};
 use impulse_edge::runtime::backend::{event::BackendRefreshOutcome, state::BackendHealthState};
+use serial_test::serial;
 
 mod support;
 
