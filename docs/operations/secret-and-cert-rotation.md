@@ -73,7 +73,7 @@ This does not rebuild the runtime generation, mutate route/policy state, or affe
 
 3. Confirm the generation changed: `GET /admin/runtime/history` shows a new `entries` record, and its diff includes a `backend_policies` domain entry with `secret_material_changed: true`.
 4. Confirm the connection pool rebuilt rather than mutated in place — a client identity change always produces a new pool instance for that backend, never a live in-place swap.
-5. Confirm upstream mTLS handshakes succeed against the rotated identity, and `spooky_upstream_mtls_handshake_failure_total` is not climbing for that upstream/backend pair.
+5. Confirm upstream mTLS handshakes succeed against the rotated identity, and `spooky_upstream_tls_failure_total` is not climbing for that upstream/backend pair.
 
 **Same-path rotation is detected.** If the file at the same `file://` reference path changes content, activation recomputes the fingerprint and the diff still reports `secret_material_changed: true` even though the reference string itself did not change — you do not need to introduce a new reference to force detection.
 
@@ -135,7 +135,7 @@ When a secret or cert rotation does not behave as expected, inspect in this orde
    | `spooky_secret_reload_total{scope,result,reason}` | reload attempts by scope (`listeners`/`upstreams`) and outcome |
    | `spooky_secret_resolve_total{provider,result,reason}` | resolution attempts by provider and outcome |
    | `spooky_secret_last_success_unixtime{scope}` | staleness — how long since the last successful resolve for a scope |
-   | `spooky_upstream_mtls_handshake_failure_total{upstream,backend,reason}` | live handshake failures against a rotated or misconfigured identity |
+   | `spooky_upstream_tls_failure_total{upstream,backend,phase,reason}` | live TLS/mTLS handshake failures against a rotated or misconfigured identity, by request phase |
    | `spooky_upstream_client_certificate_not_after_seconds{upstream}` | absolute expiry timestamp per upstream |
    | `spooky_upstream_client_certificate_days_remaining{upstream}` | days-remaining gauge for alerting ahead of expiry |
    | `spooky_control_plane_cert_reload_total{result,reason}` | listener cert reload outcomes |
