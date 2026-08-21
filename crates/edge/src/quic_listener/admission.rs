@@ -1,14 +1,4 @@
-#[cfg(test)]
-use std::{collections::VecDeque, sync::Mutex};
-use std::{
-    collections::{HashMap, HashSet},
-    convert::Infallible,
-    future::Future,
-    net::SocketAddr,
-    sync::{Arc, OnceLock, RwLock, Weak},
-    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
-};
-
+#[allow(unused_imports)]
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use boring::{
     bn::BigNum,
@@ -38,6 +28,16 @@ use spooky_config::{
     runtime::{RuntimeConfig, RuntimeJwtAuth, RuntimeJwtVerificationKey, RuntimeUpstreamPolicy},
 };
 use spooky_lb::upstream_pool::UpstreamPool;
+#[cfg(test)]
+use std::{collections::VecDeque, sync::Mutex};
+use std::{
+    collections::{HashMap, HashSet},
+    convert::Infallible,
+    future::Future,
+    net::SocketAddr,
+    sync::{Arc, OnceLock, RwLock, Weak},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
+};
 use subtle::ConstantTimeEq;
 use tokio::{
     runtime::RuntimeFlavor,
