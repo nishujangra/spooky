@@ -178,7 +178,7 @@ Matches requests to `api.example.com/v2/*`.
 backends:
   - id: "backend1"              # Unique identifier
     address: "127.0.0.1:8080"   # Backend address (IP:port)
-    weight: 100                 # Relative weight for load balancing
+    weight: 100                 # Relative traffic share for supported algorithms
     health_check:
       path: "/health"           # Health check endpoint
       interval: 5000            # Check interval (milliseconds)
@@ -187,6 +187,8 @@ backends:
       success_threshold: 2      # Consecutive successes before marking healthy
       cooldown_ms: 5000         # Cooldown period after marking unhealthy
 ```
+
+`weight` is honored by `consistent-hash`, `sticky-cid`, `round-robin`, and `random`. `least-connections` and `latency-aware` are intentionally non-weighted and reject any backend weight other than the default `100`.
 
 ### Health Check Configuration
 
