@@ -33,8 +33,8 @@ This page helps you install Impulse on a host and reach the point where you can 
 Download and install the `.deb` from [GitHub Releases](https://github.com/Supernova-Labs-Org/impulse/releases):
 
 ```bash
-wget https://github.com/Supernova-Labs-Org/impulse/releases/download/v0.5.1-beta/impulse_0.5.1-beta_amd64.deb
-sudo dpkg -i impulse_0.5.1-beta_amd64.deb
+wget https://github.com/Supernova-Labs-Org/impulse/releases/download/v0.6.0-beta/impulse_0.6.0-beta_amd64.deb
+sudo dpkg -i impulse_0.6.0-beta_amd64.deb
 ```
 
 The package installs:
