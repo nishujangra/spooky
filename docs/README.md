@@ -99,7 +99,7 @@ Impulse is a modern edge runtime for high-trust APIs. This documentation set is 
 
 | Field | Value |
 |---|---|
-| Version | v0.5.1-beta |
+| Version | v0.6.0-beta |
 | Maturity | Beta |
 | License | GPLv3 |
 

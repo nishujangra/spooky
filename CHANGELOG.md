@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0-beta] - 2026-08-22
+
+### Added
+
+- Secret references for sensitive config fields — a new top-level `secrets:` block declares providers (`kind: file`, `base_dir`), and any secret-bearing field gains a `*_ref` sibling accepting `literal:<value>` or `file://<path>` (relative paths resolve against the provider's `base_dir`). Resolved secrets are tracked with a source kind, SHA-256 fingerprint, byte length, and load timestamp; plaintext values are never logged, and control-API/audit output only ever exposes the fingerprint or a sanitized reference.
+- Upstream mTLS — per-upstream `tls.client_certificate` / `tls.client_certificate_ref` and `tls.client_key` / `tls.client_key_ref` let Impulse present a client certificate to backends, alongside the existing `verify_certificates`, `strict_sni`, `ca_file`, and `ca_dir` options. Client certificate expiry (`not_after`) is parsed and tracked at runtime.
+- Secret and certificate lifecycle observability: Prometheus metrics `impulse_secret_reload_total`, `impulse_secret_resolve_total`, `impulse_secret_last_success_unixtime`, `impulse_upstream_client_certificate_not_after_seconds` / `..._days_remaining`, and `impulse_control_plane_cert_reload_total`; a `secrets` block and per-upstream TLS material (fingerprint, expiry, sanitized reference) in the control-API runtime snapshot; and new audit event types `UpstreamMtlsMaterialChanged` / `UpstreamMtlsMaterialInvalid`.
+- New validation rules: a secret-bearing field and its `*_ref` sibling are mutually exclusive (`ConflictingSources`); mTLS client certificate and key must be configured as a complete pair; unsupported reference schemes, missing files, empty secrets, and malformed PEM material are rejected at config load with descriptive errors.
+
+### Changed
+
+- Project rebranded from Spooky to **Impulse** across the codebase, packaging (Debian package, Docker images, systemd unit), documentation, configuration samples, and scripts. Binaries, config paths (`/etc/impulse/`), log paths (`/var/log/impulse/`), and the systemd unit (`impulse.service`) now use the `impulse` name. This is a naming change only — no behavioral changes accompany the rename itself.
+
+### Compatibility
+
+- Fully additive and backward compatible. Existing plaintext secret fields (`secret`, `client_secret`, `auth_token`, `client_certificate`/`client_key` as file paths) continue to work unchanged; the `secrets:` block and all `*_ref` fields are optional. No config migration is required for the secrets/mTLS work.
+- The Spooky → Impulse rename changes binary name, default install paths, and systemd unit name. Existing deployments upgrading from a `spooky`-named install should review packaging paths before rolling out; this release does not ship an automated migration.
+
 ## [0.5.1-beta] - 2026-08-14
 
 ### Added
