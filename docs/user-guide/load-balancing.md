@@ -301,7 +301,7 @@ upstream:
 
 ## Backend Weighting
 
-Consistent hashing and sticky-CID respect backend weights (sticky-CID wraps consistent hashing and uses the same weighted hash ring). Round-robin, random, least-connections, and latency-aware currently ignore weights.
+Consistent hashing, sticky-CID, round-robin, and random respect backend weights. Least-connections and latency-aware are intentionally non-weighted for now: they do not accept custom backend weights, and validation rejects any value other than the default `100`.
 
 ### Weight Configuration
 
@@ -332,10 +332,10 @@ backends:
 **Weight Behavior**:
 - **Consistent Hash**: Number of virtual nodes = replicas × weight (64 replicas per weight unit)
 - **Sticky CID**: Honors weight (wraps consistent hashing, same weighted ring)
-- **Round Robin**: Weight values are currently ignored
-- **Random**: Weight values are currently ignored
-- **Least Connections**: Weight values are currently ignored
-- **Latency Aware**: Weight values are currently ignored
+- **Round Robin**: Honors weight with a deterministic weighted schedule across healthy backends
+- **Random**: Honors weight with weighted random sampling across healthy backends
+- **Least Connections**: Intentionally non-weighted; custom weights are rejected and only the default `100` is valid
+- **Latency Aware**: Intentionally non-weighted; custom weights are rejected and only the default `100` is valid
 - **Minimum**: Weight values must be between 1 and 1000; invalid values are rejected during validation
 
 ## Health Checking
