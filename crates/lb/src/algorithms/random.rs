@@ -31,17 +31,6 @@ impl Random {
     }
 
     pub fn pick_readonly(&self, pool: &BackendPool) -> Option<usize> {
-        let total_weight = self.refresh_weighted_members(pool)?;
-
-        let draw = LB_RANDOM_RNG.with(|state| {
-            let mut rng = state.borrow_mut();
-            rng.gen_range(0..total_weight)
-        });
-
-        self.pick_from_draw(draw)
-    }
-
-    fn refresh_weighted_members(&self, pool: &BackendPool) -> Option<u64> {
         if pool.healthy.is_empty() {
             return None;
         }
@@ -55,7 +44,7 @@ impl Random {
             if weighted_members.membership_epoch == Some(membership_epoch)
                 && weighted_members.total_weight > 0
             {
-                return Some(weighted_members.total_weight);
+                return Self::pick_from_members(&weighted_members);
             }
         }
 
@@ -69,14 +58,19 @@ impl Random {
             *weighted_members = build_weighted_members(pool, membership_epoch);
         }
 
-        (weighted_members.total_weight > 0).then_some(weighted_members.total_weight)
+        Self::pick_from_members(&weighted_members)
     }
 
-    fn pick_from_draw(&self, draw: u64) -> Option<usize> {
-        let weighted_members = self
-            .weighted_members
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    fn pick_from_members(weighted_members: &WeightedHealthyMembers) -> Option<usize> {
+        if weighted_members.total_weight == 0 {
+            return None;
+        }
+
+        let draw = LB_RANDOM_RNG.with(|state| {
+            let mut rng = state.borrow_mut();
+            rng.gen_range(0..weighted_members.total_weight)
+        });
+
         let index = weighted_members
             .cumulative
             .partition_point(|(cumulative_weight, _)| *cumulative_weight <= draw);

@@ -27,29 +27,17 @@ impl RoundRobin {
     }
 
     pub fn pick(&mut self, pool: &BackendPool) -> Option<usize> {
-        let schedule_len = self.refresh_schedule(pool)?;
-        let sequence_pos = self.next % schedule_len;
+        let sequence_pos = self.next;
         self.next = self.next.wrapping_add(1);
-        self.schedule
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .sequence
-            .get(sequence_pos)
-            .copied()
+        self.pick_at(pool, sequence_pos)
     }
 
     pub fn pick_readonly(&self, pool: &BackendPool) -> Option<usize> {
-        let schedule_len = self.refresh_schedule(pool)?;
-        let next = self.next_read.fetch_add(1, Ordering::Relaxed);
-        self.schedule
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .sequence
-            .get(next % schedule_len)
-            .copied()
+        let sequence_pos = self.next_read.fetch_add(1, Ordering::Relaxed);
+        self.pick_at(pool, sequence_pos)
     }
 
-    fn refresh_schedule(&self, pool: &BackendPool) -> Option<usize> {
+    fn pick_at(&self, pool: &BackendPool, sequence_pos: usize) -> Option<usize> {
         if pool.healthy.is_empty() {
             return None;
         }
@@ -62,7 +50,10 @@ impl RoundRobin {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             if schedule.membership_epoch == Some(membership_epoch) && !schedule.sequence.is_empty()
             {
-                return Some(schedule.sequence.len());
+                return schedule
+                    .sequence
+                    .get(sequence_pos % schedule.sequence.len())
+                    .copied();
             }
         }
 
@@ -75,7 +66,13 @@ impl RoundRobin {
             schedule.sequence = build_weighted_sequence(pool);
         }
 
-        (!schedule.sequence.is_empty()).then_some(schedule.sequence.len())
+        if schedule.sequence.is_empty() {
+            return None;
+        }
+        schedule
+            .sequence
+            .get(sequence_pos % schedule.sequence.len())
+            .copied()
     }
 }
 
