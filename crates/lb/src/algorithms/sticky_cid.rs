@@ -55,4 +55,23 @@ mod tests {
         let second = lb.pick("cid:abc123", &pool);
         assert_eq!(first, second);
     }
+
+    #[test]
+    fn sticky_cid_keeps_weighted_ring_membership() {
+        let mut pool = BackendPool::new_from_states(vec![
+            create_backend_state("10.0.0.1:1", 100),
+            create_backend_state("10.0.0.2:1", 200),
+        ]);
+
+        let mut lb = StickyCid::new(16);
+        let _ = lb.pick("cid:alpha", &pool);
+        assert_eq!(lb.inner.ring.len(), (16 * (100 + 200)) as usize);
+
+        pool.mark_failure(1);
+        pool.mark_failure(1);
+        pool.mark_failure(1);
+
+        let _ = lb.pick("cid:beta", &pool);
+        assert_eq!(lb.inner.ring.len(), (16 * 100) as usize);
+    }
 }
