@@ -1920,9 +1920,14 @@ fn summarize_routes_upstreams(bundle: &RuntimeBundle) -> String {
         .iter()
         .map(|(name, upstream)| {
             format!(
-                "{}:{}:{}:{:?}:{:?}:{:?}:{}:{:?}",
+                "{}:{}:{}:{}:{:?}:{:?}:{:?}:{}:{:?}",
                 name,
                 upstream.load_balancing.strategy.canonical_name(),
+                upstream
+                    .load_balancing
+                    .strategy
+                    .backend_weight_policy()
+                    .weighting_label(),
                 upstream
                     .load_balancing
                     .strategy

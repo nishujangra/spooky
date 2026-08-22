@@ -16,6 +16,14 @@ impl RuntimeBackendWeightPolicy {
             Self::Unsupported => "unsupported",
         }
     }
+
+    pub fn weighting_label(self) -> &'static str {
+        match self {
+            Self::Honored => "weighted",
+            Self::RejectedAsInvalid => "unweighted",
+            Self::Unsupported => "unsupported",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -324,6 +332,18 @@ mod tests {
         );
         assert_eq!(
             RuntimeBackendWeightPolicy::Unsupported.canonical_label(),
+            "unsupported"
+        );
+        assert_eq!(
+            RuntimeBackendWeightPolicy::Honored.weighting_label(),
+            "weighted"
+        );
+        assert_eq!(
+            RuntimeBackendWeightPolicy::RejectedAsInvalid.weighting_label(),
+            "unweighted"
+        );
+        assert_eq!(
+            RuntimeBackendWeightPolicy::Unsupported.weighting_label(),
             "unsupported"
         );
     }
