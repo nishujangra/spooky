@@ -60,7 +60,8 @@ impl RoundRobin {
                 .schedule
                 .read()
                 .expect("round-robin schedule lock poisoned");
-            if schedule.membership_epoch == Some(membership_epoch) && !schedule.sequence.is_empty() {
+            if schedule.membership_epoch == Some(membership_epoch) && !schedule.sequence.is_empty()
+            {
                 return Some(schedule.sequence.len());
             }
         }

@@ -68,10 +68,9 @@ impl RuntimeLoadBalancingStrategy {
 
     pub fn backend_weight_policy(self) -> RuntimeBackendWeightPolicy {
         match self {
-            Self::RoundRobin
-            | Self::ConsistentHash
-            | Self::Random
-            | Self::StickyCid => RuntimeBackendWeightPolicy::Honored,
+            Self::RoundRobin | Self::ConsistentHash | Self::Random | Self::StickyCid => {
+                RuntimeBackendWeightPolicy::Honored
+            }
             Self::LeastConnections | Self::LatencyAware => {
                 RuntimeBackendWeightPolicy::RejectedAsInvalid
             }

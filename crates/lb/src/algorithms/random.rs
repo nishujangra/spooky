@@ -1,7 +1,4 @@
-use std::{
-    cell::RefCell,
-    sync::RwLock,
-};
+use std::{cell::RefCell, sync::RwLock};
 
 use rand::{Rng, SeedableRng, rngs::StdRng};
 
@@ -83,7 +80,10 @@ impl Random {
         let index = weighted_members
             .cumulative
             .partition_point(|(cumulative_weight, _)| *cumulative_weight <= draw);
-        weighted_members.cumulative.get(index).map(|(_, backend)| *backend)
+        weighted_members
+            .cumulative
+            .get(index)
+            .map(|(_, backend)| *backend)
     }
 }
 
@@ -173,7 +173,9 @@ mod tests {
         pool.mark_failure(0);
 
         let random = Random::new();
-        let picks: Vec<usize> = (0..64).filter_map(|_| random.pick_readonly(&pool)).collect();
+        let picks: Vec<usize> = (0..64)
+            .filter_map(|_| random.pick_readonly(&pool))
+            .collect();
         assert!(picks.iter().all(|pick| *pick == 1));
     }
 

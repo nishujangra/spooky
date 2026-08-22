@@ -1482,7 +1482,8 @@ fn validate_inner(config: &Config) -> bool {
             );
             return false;
         }
-        let lb_strategy = RuntimeLoadBalancingStrategy::from_lb_type(&upstream.load_balancing.lb_type);
+        let lb_strategy =
+            RuntimeLoadBalancingStrategy::from_lb_type(&upstream.load_balancing.lb_type);
 
         if let Some(api_key) = upstream.auth.api_key.as_ref() {
             let header_name = api_key.header_name.trim();

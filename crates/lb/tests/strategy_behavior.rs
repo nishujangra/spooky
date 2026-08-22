@@ -154,7 +154,9 @@ fn sticky_cid_remains_sticky_with_weighted_membership_at_pool_boundary() {
     ))
     .expect("sticky-cid pool");
 
-    let first = pool.pick_without_begin("cid:tenant-42").expect("first sticky pick");
+    let first = pool
+        .pick_without_begin("cid:tenant-42")
+        .expect("first sticky pick");
     let repeated: Vec<_> = (0..8)
         .map(|_| {
             pool.pick_without_begin("cid:tenant-42")

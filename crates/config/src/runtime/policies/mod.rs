@@ -28,8 +28,8 @@ pub use self::{
         RuntimeBackendHealthCheck, RuntimeBackendTlsPolicy,
     },
     lb::{
-        RuntimeAlternateBackendPolicy, RuntimeBackendWeightPolicy,
-        RuntimeLoadBalancingPolicy, RuntimeLoadBalancingStrategy, RuntimeRequestKeySpec,
+        RuntimeAlternateBackendPolicy, RuntimeBackendWeightPolicy, RuntimeLoadBalancingPolicy,
+        RuntimeLoadBalancingStrategy, RuntimeRequestKeySpec,
     },
     quota::{
         RuntimeQuotaBackendFailurePolicy, RuntimeQuotaCounterBackend, RuntimeQuotaEnforcementMode,
