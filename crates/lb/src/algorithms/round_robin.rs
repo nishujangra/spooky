@@ -32,7 +32,7 @@ impl RoundRobin {
         self.next = self.next.wrapping_add(1);
         self.schedule
             .read()
-            .expect("round-robin schedule lock poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .sequence
             .get(sequence_pos)
             .copied()
@@ -43,7 +43,7 @@ impl RoundRobin {
         let next = self.next_read.fetch_add(1, Ordering::Relaxed);
         self.schedule
             .read()
-            .expect("round-robin schedule lock poisoned")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .sequence
             .get(next % schedule_len)
             .copied()
@@ -59,7 +59,7 @@ impl RoundRobin {
             let schedule = self
                 .schedule
                 .read()
-                .expect("round-robin schedule lock poisoned");
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if schedule.membership_epoch == Some(membership_epoch) && !schedule.sequence.is_empty()
             {
                 return Some(schedule.sequence.len());
@@ -69,7 +69,7 @@ impl RoundRobin {
         let mut schedule = self
             .schedule
             .write()
-            .expect("round-robin schedule lock poisoned");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if schedule.membership_epoch != Some(membership_epoch) || schedule.sequence.is_empty() {
             schedule.membership_epoch = Some(membership_epoch);
             schedule.sequence = build_weighted_sequence(pool);

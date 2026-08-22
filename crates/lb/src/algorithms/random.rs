@@ -51,7 +51,7 @@ impl Random {
             let weighted_members = self
                 .weighted_members
                 .read()
-                .expect("random weighted-members lock poisoned");
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if weighted_members.membership_epoch == Some(membership_epoch)
                 && weighted_members.total_weight > 0
             {
@@ -62,7 +62,7 @@ impl Random {
         let mut weighted_members = self
             .weighted_members
             .write()
-            .expect("random weighted-members lock poisoned");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if weighted_members.membership_epoch != Some(membership_epoch)
             || weighted_members.total_weight == 0
         {
@@ -76,7 +76,7 @@ impl Random {
         let weighted_members = self
             .weighted_members
             .read()
-            .expect("random weighted-members lock poisoned");
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let index = weighted_members
             .cumulative
             .partition_point(|(cumulative_weight, _)| *cumulative_weight <= draw);
@@ -208,13 +208,13 @@ mod tests {
         let cache_after_pick = random
             .weighted_members
             .read()
-            .expect("weighted members")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .total_weight;
         let _ = random.pick_readonly(&pool);
         let cache_after_readonly = random
             .weighted_members
             .read()
-            .expect("weighted members")
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .total_weight;
 
         assert_eq!(cache_after_pick, 600);
