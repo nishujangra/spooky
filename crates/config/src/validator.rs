@@ -10,6 +10,7 @@ use crate::{
         ExternalAuth, JwtVerificationKey, Listen, SUPPORTED_CONFIG_VERSIONS, ScopedRateLimitScope,
         SecretProvider, SecretRef, UpstreamHostPolicyMode, UpstreamTls,
     },
+    runtime::RuntimeLoadBalancingStrategy,
 };
 
 #[path = "validator/helpers.rs"]
@@ -1481,6 +1482,7 @@ fn validate_inner(config: &Config) -> bool {
             );
             return false;
         }
+        let lb_strategy = RuntimeLoadBalancingStrategy::from_lb_type(&upstream.load_balancing.lb_type);
 
         if let Some(api_key) = upstream.auth.api_key.as_ref() {
             let header_name = api_key.header_name.trim();
@@ -2032,6 +2034,17 @@ fn validate_inner(config: &Config) -> bool {
                     backend.id,
                     upstream_name,
                     backend.weight
+                );
+                return false;
+            }
+
+            if lb_strategy.rejects_custom_backend_weight() && backend.weight != 100 {
+                validation_error!(
+                    "Backend '{}' in upstream '{}' uses weight {} but load balancing type '{}' does not support custom backend weights; use the default weight 100",
+                    backend.id,
+                    upstream_name,
+                    backend.weight,
+                    lb_strategy.canonical_name()
                 );
                 return false;
             }

@@ -336,7 +336,7 @@ backends:
 - **Random**: Weight values are currently ignored
 - **Least Connections**: Weight values are currently ignored
 - **Latency Aware**: Weight values are currently ignored
-- **Minimum**: Weight values below 1 are clamped to 1
+- **Minimum**: Weight values must be between 1 and 1000; invalid values are rejected during validation
 
 ## Health Checking
 

@@ -1274,6 +1274,34 @@ fn validate_returns_actionable_error_message() {
 }
 
 #[test]
+fn rejects_custom_backend_weight_for_least_connections() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    let upstream = cfg.upstream.get_mut("test_upstream").expect("upstream");
+    upstream.load_balancing.lb_type = "least-connections".to_string();
+    upstream.backends[0].weight = 200;
+
+    let err = validate(&cfg).expect_err("custom weight for least-connections must fail");
+    assert_eq!(
+        err.message,
+        "Backend 'backend-1' in upstream 'test_upstream' uses weight 200 but load balancing type 'least-connections' does not support custom backend weights; use the default weight 100"
+    );
+}
+
+#[test]
+fn allows_default_backend_weight_for_latency_aware() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    let upstream = cfg.upstream.get_mut("test_upstream").expect("upstream");
+    upstream.load_balancing.lb_type = "latency-aware".to_string();
+    upstream.backends[0].weight = 100;
+
+    assert!(validate(&cfg).is_ok());
+}
+
+#[test]
 fn rejects_host_policy_host_when_mode_is_not_rewrite() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_certs(dir.path());
