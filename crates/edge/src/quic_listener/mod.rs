@@ -133,7 +133,9 @@ pub(crate) use connection::purge_connection_routes;
 #[cfg(test)]
 use connection::resolve_primary_from_radix_prefix;
 pub(crate) use connection::{ConnectionRoutes, sweep_closed_connections};
-use forwarding::{ForwardingExecutionCtx, ForwardingSharedCtx, StreamProgressConfig};
+use forwarding::{
+    ForwardingExecutionCtx, ForwardingSharedCtx, H3RequestHandlingConfig, StreamProgressConfig,
+};
 #[cfg(test)]
 use health_check::classify_active_health_check_response;
 pub(in crate::quic_listener) use protocol::{
@@ -316,8 +318,6 @@ impl QUICListener {
             return;
         }
 
-        let transport_pool = self.transport_pool.clone();
-
         // First, try to find existing connection by DCID
         let Some((mut connection, current_primary)) = self.acquire_connection_for_packet(
             peer,
@@ -395,49 +395,12 @@ impl QUICListener {
                 .close(true, 0x01A0, b"client certificate required");
         }
 
-        if !connection.quic.is_closed()
-            && (connection.quic.is_established() || connection.quic.is_in_early_data())
-            && let Err(e) = Self::handle_h3(
-                &mut connection,
-                Arc::clone(&transport_pool),
-                Arc::clone(&self.backend_endpoints),
-                Arc::clone(&self.upstream_policies),
-                &self.upstream_pools,
-                &self.upstream_inflight,
-                Arc::clone(&self.global_inflight),
-                self.backend_timeout,
-                self.backend_body_idle_timeout,
-                self.backend_body_total_timeout,
-                self.backend_total_request_timeout,
-                &self.routing_index,
-                Arc::clone(&self.metrics),
-                &self.resilience,
-                self.max_request_body_bytes,
-                self.max_response_body_bytes,
-                self.request_buffer_global_cap_bytes,
-                self.unknown_length_response_prebuffer_bytes,
-                self.client_body_idle_timeout,
-                self.inflight_acquire_wait,
-                self.config.observability.tracing.enabled,
-                self.config.observability.routing.enabled,
-                self.config.observability.routing.include_reason,
-                self.config.listen.listen.port,
-                self.max_streams_per_connection,
-            )
-        {
-            error!("HTTP/3 handling failed: {:?}", e);
-            let _ = connection
-                .quic
-                .close(true, 0x1, b"http3 protocol handling error");
-        }
-
-        let mut send_buf = [0u8; MAX_DATAGRAM_SIZE_BYTES];
-
         let shared_ctx = ForwardingSharedCtx {
             metrics: Arc::clone(&self.metrics),
             resilience: &self.resilience,
             routing_index: &self.routing_index,
             upstream_pools: &self.upstream_pools,
+            upstream_policies: self.upstream_policies.as_ref(),
         };
         let exec_ctx = ForwardingExecutionCtx {
             transport_pool: Arc::clone(&self.transport_pool),
@@ -455,6 +418,33 @@ impl QUICListener {
             client_body_idle_timeout: self.client_body_idle_timeout,
             listen_port: self.config.listen.listen.port,
         };
+        let request_config = H3RequestHandlingConfig::new(
+            self.config.observability.routing.enabled,
+            self.config.observability.routing.include_reason,
+            self.backend_total_request_timeout,
+            self.max_request_body_bytes,
+            self.request_buffer_global_cap_bytes,
+            self.config.observability.tracing.enabled,
+            self.max_streams_per_connection,
+        );
+
+        if !connection.quic.is_closed()
+            && (connection.quic.is_established() || connection.quic.is_in_early_data())
+            && let Err(e) = Self::handle_h3(
+                &mut connection,
+                &shared_ctx,
+                &exec_ctx,
+                &progress_config,
+                &request_config,
+            )
+        {
+            error!("HTTP/3 handling failed: {:?}", e);
+            let _ = connection
+                .quic
+                .close(true, 0x1, b"http3 protocol handling error");
+        }
+
+        let mut send_buf = [0u8; MAX_DATAGRAM_SIZE_BYTES];
 
         if !connection.quic.is_closed() {
             Self::advance_connection_streams(
@@ -494,6 +484,7 @@ impl QUICListener {
             resilience: &self.resilience,
             routing_index: &self.routing_index,
             upstream_pools: &self.upstream_pools,
+            upstream_policies: self.upstream_policies.as_ref(),
         };
         let exec_ctx = ForwardingExecutionCtx {
             transport_pool: Arc::clone(&self.transport_pool),

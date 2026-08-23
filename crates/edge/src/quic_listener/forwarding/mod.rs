@@ -13,11 +13,15 @@ use http_body_util::Full;
 use impulse_config::config::ScopedRateLimitScope;
 use impulse_errors::ClassifiedUpstreamProxyError;
 
-use self::prepare::{RequestFinalizationConfig, StartedRequestEnvelope};
+use self::prepare::{RequestFinalizationConfig, RequestRoutingInput, StartedRequestEnvelope};
 #[cfg(test)]
 pub(in crate::quic_listener) use self::resolve::TargetResolutionRequest as TestTargetResolutionRequest;
 pub(in crate::quic_listener) use self::{
-    auth::evaluate_pending_forward_external_auth, resolve::BootstrapTargetResolutionInput,
+    auth::evaluate_pending_forward_external_auth,
+    resolve::{
+        BootstrapTargetResolutionInput, ResolutionContext, ResolutionObservation,
+        TargetResolutionRequest,
+    },
 };
 use super::*;
 use crate::runtime::connection::{
@@ -65,6 +69,7 @@ pub(in crate::quic_listener) struct ForwardingSharedCtx<'a> {
     pub(in crate::quic_listener) resilience: &'a RuntimeResilience,
     pub(in crate::quic_listener) routing_index: &'a RouteIndex,
     pub(in crate::quic_listener) upstream_pools: &'a HashMap<String, Arc<RwLock<UpstreamPool>>>,
+    pub(in crate::quic_listener) upstream_policies: &'a HashMap<String, RuntimeUpstreamPolicy>,
 }
 
 pub(in crate::quic_listener) struct ForwardingExecutionCtx<'a> {
@@ -83,6 +88,38 @@ pub(in crate::quic_listener) struct StreamProgressConfig {
     pub(in crate::quic_listener) unknown_length_response_prebuffer_bytes: usize,
     pub(in crate::quic_listener) client_body_idle_timeout: Duration,
     pub(in crate::quic_listener) listen_port: u16,
+}
+
+pub(in crate::quic_listener) struct H3RequestHandlingConfig {
+    request_finalization: RequestFinalizationConfig,
+    pub(in crate::quic_listener) max_request_body_bytes: usize,
+    pub(in crate::quic_listener) request_buffer_global_cap_bytes: usize,
+    pub(in crate::quic_listener) tracing_enabled: bool,
+    pub(in crate::quic_listener) max_streams_per_connection: usize,
+}
+
+impl H3RequestHandlingConfig {
+    pub(in crate::quic_listener) fn new(
+        routing_transparency_enabled: bool,
+        routing_transparency_include_reason: bool,
+        backend_total_request_timeout: Duration,
+        max_request_body_bytes: usize,
+        request_buffer_global_cap_bytes: usize,
+        tracing_enabled: bool,
+        max_streams_per_connection: usize,
+    ) -> Self {
+        Self {
+            request_finalization: RequestFinalizationConfig {
+                routing_transparency_enabled,
+                routing_transparency_include_reason,
+                backend_total_request_timeout,
+            },
+            max_request_body_bytes,
+            request_buffer_global_cap_bytes,
+            tracing_enabled,
+            max_streams_per_connection,
+        }
+    }
 }
 
 impl QUICListener {
@@ -595,7 +632,6 @@ impl QUICListener {
         Ok(true)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn flush_send(
         socket: &UdpSocket,
         send_buf: &mut [u8],
@@ -628,35 +664,25 @@ impl QUICListener {
 }
 
 impl QUICListener {
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn handle_h3(
         connection: &mut QuicConnection,
-        transport_pool: Arc<UpstreamTransportPool>,
-        backend_endpoints: Arc<HashMap<String, BackendEndpoint>>,
-        upstream_policies: Arc<HashMap<String, RuntimeUpstreamPolicy>>,
-        upstream_pools: &HashMap<String, Arc<RwLock<UpstreamPool>>>,
-        upstream_inflight: &HashMap<String, Arc<Semaphore>>,
-        global_inflight: Arc<Semaphore>,
-        backend_timeout: Duration,
-        backend_body_idle_timeout: Duration,
-        backend_body_total_timeout: Duration,
-        backend_total_request_timeout: Duration,
-        routing_index: &RouteIndex,
-        metrics: Arc<Metrics>,
-        resilience: &RuntimeResilience,
-        max_request_body_bytes: usize,
-        max_response_body_bytes: usize,
-        request_buffer_global_cap_bytes: usize,
-        unknown_length_response_prebuffer_bytes: usize,
-        client_body_idle_timeout: Duration,
-        inflight_acquire_wait: Duration,
-        tracing_enabled: bool,
-        routing_transparency_enabled: bool,
-        routing_transparency_include_reason: bool,
-        listen_port: u16,
-        max_streams_per_connection: usize,
+        shared_ctx: &ForwardingSharedCtx<'_>,
+        exec_ctx: &ForwardingExecutionCtx<'_>,
+        progress_config: &StreamProgressConfig,
+        request_config: &H3RequestHandlingConfig,
     ) -> Result<(), quiche::h3::Error> {
         let mut body_buf = [0u8; MAX_DATAGRAM_SIZE_BYTES];
+        let metrics = shared_ctx.metrics.as_ref();
+        let resilience = shared_ctx.resilience;
+        let request_finalization = &request_config.request_finalization;
+        let routing_transparency_enabled = request_finalization.routing_transparency_enabled;
+        let routing_transparency_include_reason =
+            request_finalization.routing_transparency_include_reason;
+        let backend_total_request_timeout = request_finalization.backend_total_request_timeout;
+        let tracing_enabled = request_config.tracing_enabled;
+        let max_request_body_bytes = request_config.max_request_body_bytes;
+        let request_buffer_global_cap_bytes = request_config.request_buffer_global_cap_bytes;
+        let max_streams_per_connection = request_config.max_streams_per_connection;
 
         if connection.h3.is_none() {
             connection.h3 = Some(quiche::h3::Connection::with_transport(
@@ -668,28 +694,6 @@ impl QUICListener {
         let h3 = match connection.h3.as_mut() {
             Some(h3) => h3,
             None => return Ok(()),
-        };
-        let shared_ctx = ForwardingSharedCtx {
-            metrics: Arc::clone(&metrics),
-            resilience,
-            routing_index,
-            upstream_pools,
-        };
-        let exec_ctx = ForwardingExecutionCtx {
-            transport_pool: Arc::clone(&transport_pool),
-            backend_endpoints: Arc::clone(&backend_endpoints),
-            upstream_inflight,
-            global_inflight: Arc::clone(&global_inflight),
-            backend_timeout,
-            inflight_acquire_wait,
-        };
-        let progress_config = StreamProgressConfig {
-            backend_body_idle_timeout,
-            backend_body_total_timeout,
-            max_response_body_bytes,
-            unknown_length_response_prebuffer_bytes,
-            client_body_idle_timeout,
-            listen_port,
         };
 
         loop {
@@ -703,7 +707,7 @@ impl QUICListener {
                                 metrics.inc_policy_denied();
                             }
                             let _ = observe_proxy_error_outcome(
-                                &metrics,
+                                metrics,
                                 RouteOutcomeTarget::UNROUTED,
                                 None,
                                 Duration::from_millis(0),
@@ -744,7 +748,7 @@ impl QUICListener {
                             metrics.inc_early_data_rejected();
                             metrics.inc_policy_denied();
                             let _ = observe_proxy_error_outcome(
-                                &metrics,
+                                metrics,
                                 RouteOutcomeTarget::UNROUTED,
                                 None,
                                 request_start.elapsed(),
@@ -794,22 +798,22 @@ impl QUICListener {
                         stream_id,
                         h3,
                         &mut connection.quic,
-                        connection.peer_address,
-                        &quic_trace_id,
-                        request_start,
-                        &method,
-                        &path,
-                        authority.as_deref(),
-                        content_length,
-                        tunnel_mode,
-                        &list,
-                        sticky_cid_key.as_str(),
-                        tracing_enabled,
-                        routing_index,
-                        &upstream_policies,
-                        upstream_pools,
-                        &metrics,
-                        resilience,
+                        RequestRoutingInput {
+                            peer_address: connection.peer_address,
+                            sticky_cid_key: sticky_cid_key.as_str(),
+                            intake: self::prepare::IntakeRequestDescriptor {
+                                quic_trace_id: &quic_trace_id,
+                                request_start,
+                                method: &method,
+                                path: &path,
+                                authority: authority.as_deref(),
+                                headers: &list,
+                                content_length,
+                                tunnel_mode,
+                                tracing_enabled,
+                            },
+                        },
+                        shared_ctx,
                     )? {
                         Some(pre_auth) => pre_auth,
                         None => continue,
@@ -819,7 +823,7 @@ impl QUICListener {
                         h3,
                         &mut connection.quic,
                         request_start,
-                        &metrics,
+                        metrics,
                         pre_auth,
                         RequestFinalizationConfig {
                             routing_transparency_enabled,
@@ -843,8 +847,8 @@ impl QUICListener {
                                 req,
                                 h3,
                                 &mut connection.quic,
-                                &exec_ctx,
-                                &shared_ctx,
+                                exec_ctx,
+                                shared_ctx,
                             )?
                         } else {
                             false
@@ -856,7 +860,7 @@ impl QUICListener {
                                 terminalize_stream(
                                     req,
                                     TerminalReason::Cancelled(CancellationReason::OperatorAbort),
-                                    &metrics,
+                                    metrics,
                                 );
                             }
                             connection.streams.remove(&stream_id);
@@ -931,7 +935,7 @@ impl QUICListener {
                                                 if let Err(err) = Self::enqueue_request_chunk(
                                                     req,
                                                     chunk,
-                                                    &metrics,
+                                                    metrics,
                                                     max_request_body_bytes,
                                                     request_buffer_global_cap_bytes,
                                                 ) {
@@ -976,7 +980,7 @@ impl QUICListener {
                             }
                             if let Some((route_label, elapsed)) = reject_body_for_bodyless {
                                 let _ = observe_proxy_error_outcome(
-                                    &metrics,
+                                    metrics,
                                     RouteOutcomeTarget {
                                         route: &route_label,
                                     },
@@ -999,7 +1003,7 @@ impl QUICListener {
                                         TerminalReason::Rejected(
                                             RejectionReason::RequestBodyNotAllowed,
                                         ),
-                                        &metrics,
+                                        metrics,
                                     );
                                 }
                                 connection.streams.remove(&stream_id);
@@ -1008,7 +1012,7 @@ impl QUICListener {
                             }
                             if let Some((route_label, elapsed)) = payload_too_large {
                                 let _ = observe_proxy_error_outcome(
-                                    &metrics,
+                                    metrics,
                                     RouteOutcomeTarget {
                                         route: &route_label,
                                     },
@@ -1031,7 +1035,7 @@ impl QUICListener {
                                         TerminalReason::Rejected(
                                             RejectionReason::RequestBodyTooLarge,
                                         ),
-                                        &metrics,
+                                        metrics,
                                     );
                                 }
                                 connection.streams.remove(&stream_id);
@@ -1042,7 +1046,7 @@ impl QUICListener {
                                 && let Some(req) = connection.streams.get(&stream_id)
                             {
                                 let _ = observe_proxy_error_outcome(
-                                    &metrics,
+                                    metrics,
                                     RouteOutcomeTarget {
                                         route: req.upstream_name.as_deref().unwrap_or("unrouted"),
                                     },
@@ -1079,7 +1083,7 @@ impl QUICListener {
                                     terminalize_stream(
                                         req,
                                         TerminalReason::Rejected(RejectionReason::Overloaded),
-                                        &metrics,
+                                        metrics,
                                     );
                                 }
                                 connection.streams.remove(&stream_id);
@@ -1097,7 +1101,7 @@ impl QUICListener {
                             );
                             if let Some(req) = connection.streams.get(&stream_id) {
                                 let _ = observe_proxy_error_outcome(
-                                    &metrics,
+                                    metrics,
                                     RouteOutcomeTarget {
                                         route: req.upstream_name.as_deref().unwrap_or("unrouted"),
                                     },
@@ -1125,7 +1129,7 @@ impl QUICListener {
                                 terminalize_stream(
                                     req,
                                     TerminalReason::Rejected(RejectionReason::ValidationFailed),
-                                    &metrics,
+                                    metrics,
                                 );
                             }
                             connection.streams.remove(&stream_id);
@@ -1143,7 +1147,7 @@ impl QUICListener {
                 Ok((stream_id, quiche::h3::Event::Finished)) => {
                     if let Some(req) = connection.streams.get_mut(&stream_id) {
                         req.transition_request_body_finished();
-                        let _ = Self::flush_request_buffer(req, &metrics);
+                        let _ = Self::flush_request_buffer(req, metrics);
                         // Upstream polling and response dispatch are handled entirely
                         // by advance_streams_non_blocking, called unconditionally below.
                     }
@@ -1153,7 +1157,7 @@ impl QUICListener {
                         let phase = terminalize_stream(
                             req,
                             TerminalReason::Cancelled(CancellationReason::ClientReset),
-                            &metrics,
+                            metrics,
                         );
                         debug!(
                             "stream {} reset by client (error_code={}, phase={:?}): resources released",
@@ -1173,9 +1177,9 @@ impl QUICListener {
             &mut connection.streams,
             &mut connection.quic,
             h3,
-            &exec_ctx,
-            &shared_ctx,
-            &progress_config,
+            exec_ctx,
+            shared_ctx,
+            progress_config,
         )?;
 
         Ok(())
@@ -1197,12 +1201,14 @@ impl QUICListener {
                 Self::resolve_lb_key(
                     "",
                     Some(rule.key_spec().unwrap_or("peer_ip")),
-                    method,
-                    path,
-                    authority,
-                    None,
-                    Some(client_addr),
-                    header_lookup,
+                    self::lb_key::LbKeyRequestParts::new(
+                        method,
+                        path,
+                        authority,
+                        None,
+                        Some(client_addr),
+                        header_lookup,
+                    ),
                 )
                 .value,
             ),
@@ -1210,12 +1216,14 @@ impl QUICListener {
                 Self::resolve_lb_key(
                     "",
                     Some(key_spec),
-                    method,
-                    path,
-                    authority,
-                    None,
-                    Some(client_addr),
-                    header_lookup,
+                    self::lb_key::LbKeyRequestParts::new(
+                        method,
+                        path,
+                        authority,
+                        None,
+                        Some(client_addr),
+                        header_lookup,
+                    ),
                 )
                 .value
             }),
@@ -1223,12 +1231,14 @@ impl QUICListener {
                 Self::resolve_lb_key(
                     "",
                     Some(rule.key_spec().unwrap_or("bearer_token")),
-                    method,
-                    path,
-                    authority,
-                    None,
-                    Some(client_addr),
-                    header_lookup,
+                    self::lb_key::LbKeyRequestParts::new(
+                        method,
+                        path,
+                        authority,
+                        None,
+                        Some(client_addr),
+                        header_lookup,
+                    ),
                 )
                 .value,
             ),
@@ -2357,6 +2367,24 @@ mod tests {
         ));
     }
 
+    fn lb_key_request_parts<'a>(
+        method: &'a str,
+        path: &'a str,
+        authority: Option<&'a str>,
+        cid_key: Option<&'a str>,
+        client_addr: Option<SocketAddr>,
+        header_lookup: Option<&'a LbHeaderLookup<'a>>,
+    ) -> super::lb_key::LbKeyRequestParts<'a> {
+        super::lb_key::LbKeyRequestParts::new(
+            method,
+            path,
+            authority,
+            cid_key,
+            client_addr,
+            header_lookup,
+        )
+    }
+
     #[test]
     fn resolve_lb_key_supports_peer_ip_and_bearer_token() {
         let headers = [("authorization".to_string(), "Bearer token-1".to_string())]
@@ -2369,12 +2397,14 @@ mod tests {
             QUICListener::resolve_lb_key(
                 "",
                 Some("peer_ip"),
-                "GET",
-                "/",
-                Some("api.example.com"),
-                None,
-                Some(client_addr),
-                Some(&lookup),
+                lb_key_request_parts(
+                    "GET",
+                    "/",
+                    Some("api.example.com"),
+                    None,
+                    Some(client_addr),
+                    Some(&lookup),
+                ),
             )
             .value,
             "203.0.113.9"
@@ -2383,12 +2413,14 @@ mod tests {
             QUICListener::resolve_lb_key(
                 "",
                 Some("bearer_token"),
-                "GET",
-                "/",
-                Some("api.example.com"),
-                None,
-                Some(client_addr),
-                Some(&lookup),
+                lb_key_request_parts(
+                    "GET",
+                    "/",
+                    Some("api.example.com"),
+                    None,
+                    Some(client_addr),
+                    Some(&lookup),
+                ),
             )
             .value,
             "token-1"
@@ -2411,12 +2443,14 @@ mod tests {
             let resolved = QUICListener::resolve_lb_key(
                 "",
                 Some(spec),
-                "POST",
-                "/api/items?tenant=acme",
-                Some("api.example.com"),
-                Some("cid-123"),
-                Some(client_addr),
-                Some(&lookup),
+                lb_key_request_parts(
+                    "POST",
+                    "/api/items?tenant=acme",
+                    Some("api.example.com"),
+                    Some("cid-123"),
+                    Some(client_addr),
+                    Some(&lookup),
+                ),
             );
             assert_eq!(resolved.value, expected);
             assert!(matches!(
@@ -2441,12 +2475,14 @@ mod tests {
         let sticky = QUICListener::resolve_lb_key(
             "sticky-cid",
             Some("header:x-user-id"),
-            "GET",
-            "/resource",
-            Some("api.example.com"),
-            Some("cid-123"),
-            None,
-            None,
+            lb_key_request_parts(
+                "GET",
+                "/resource",
+                Some("api.example.com"),
+                Some("cid-123"),
+                None,
+                None,
+            ),
         );
         assert_eq!(sticky.value, "cid-123");
         assert!(matches!(
@@ -2457,12 +2493,14 @@ mod tests {
         let authority_default = QUICListener::resolve_lb_key(
             "",
             Some("header:x-user-id"),
-            "GET",
-            "/resource",
-            Some("api.example.com"),
-            None,
-            None,
-            None,
+            lb_key_request_parts(
+                "GET",
+                "/resource",
+                Some("api.example.com"),
+                None,
+                None,
+                None,
+            ),
         );
         assert_eq!(authority_default.value, "api.example.com");
         assert!(matches!(
@@ -2473,24 +2511,14 @@ mod tests {
         let path_default = QUICListener::resolve_lb_key(
             "",
             Some("header:x-user-id"),
-            "GET",
-            "/resource",
-            None,
-            None,
-            None,
-            None,
+            lb_key_request_parts("GET", "/resource", None, None, None, None),
         );
         assert_eq!(path_default.value, "/resource");
 
         let method_default = QUICListener::resolve_lb_key(
             "",
             Some("header:x-user-id"),
-            "GET",
-            "",
-            None,
-            None,
-            None,
-            None,
+            lb_key_request_parts("GET", "", None, None, None, None),
         );
         assert_eq!(method_default.value, "GET");
         assert!(matches!(
@@ -2519,12 +2547,14 @@ mod tests {
         let direct_header = QUICListener::resolve_lb_key(
             "",
             Some("header:x-user-id"),
-            "GET",
-            "/api/items?tenant=acme",
-            Some("api.example.com"),
-            Some("cid-456"),
-            None,
-            Some(&lookup),
+            lb_key_request_parts(
+                "GET",
+                "/api/items?tenant=acme",
+                Some("api.example.com"),
+                Some("cid-456"),
+                None,
+                Some(&lookup),
+            ),
         );
         let routed_header = QUICListener::resolve_lb_key_for_runtime_request(
             impulse_config::runtime::RuntimeLoadBalancingStrategy::RoundRobin,
@@ -2542,12 +2572,14 @@ mod tests {
         let direct_sticky = QUICListener::resolve_lb_key(
             "sticky-cid",
             Some("header:x-missing"),
-            "GET",
-            "/api/items?tenant=acme",
-            Some("api.example.com"),
-            Some("cid-456"),
-            None,
-            Some(&lookup),
+            lb_key_request_parts(
+                "GET",
+                "/api/items?tenant=acme",
+                Some("api.example.com"),
+                Some("cid-456"),
+                None,
+                Some(&lookup),
+            ),
         );
         let routed_sticky = QUICListener::resolve_lb_key_for_runtime_request(
             impulse_config::runtime::RuntimeLoadBalancingStrategy::StickyCid,
@@ -2658,12 +2690,14 @@ mod tests {
         let resolved = QUICListener::resolve_lb_key(
             "sticky-cid",
             Some("header:x-user-id"),
-            "GET",
-            "/resource",
-            Some("api.example.com"),
-            Some("cid-123"),
-            None,
-            None,
+            lb_key_request_parts(
+                "GET",
+                "/resource",
+                Some("api.example.com"),
+                Some("cid-123"),
+                None,
+                None,
+            ),
         );
 
         assert_eq!(resolved.value, "cid-123");

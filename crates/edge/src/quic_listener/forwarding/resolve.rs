@@ -3,6 +3,7 @@ use impulse_config::runtime::RuntimeUpstreamPolicy;
 use super::{lb_key::ResolvedLbKey, *};
 use crate::runtime::connection::outcome::{RouteOutcomeTarget, observe_proxy_error_outcome};
 
+#[derive(Clone, Copy)]
 pub(in crate::quic_listener) struct TargetResolutionRequest<'a> {
     pub(in crate::quic_listener) method: &'a str,
     pub(in crate::quic_listener) path: &'a str,
@@ -26,6 +27,43 @@ impl<'a> TargetResolutionRequest<'a> {
             cid_key,
             header_lookup,
         }
+    }
+
+    fn with_method(self, method: &'a str) -> Self {
+        Self { method, ..self }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(in crate::quic_listener) struct ResolutionContext<'a> {
+    pub(in crate::quic_listener) routing_index: &'a RouteIndex,
+    pub(in crate::quic_listener) upstream_pools: &'a HashMap<String, Arc<RwLock<UpstreamPool>>>,
+    pub(in crate::quic_listener) upstream_policies: &'a HashMap<String, RuntimeUpstreamPolicy>,
+}
+
+impl<'a> ResolutionContext<'a> {
+    pub(in crate::quic_listener) fn new(
+        routing_index: &'a RouteIndex,
+        upstream_pools: &'a HashMap<String, Arc<RwLock<UpstreamPool>>>,
+        upstream_policies: &'a HashMap<String, RuntimeUpstreamPolicy>,
+    ) -> Self {
+        Self {
+            routing_index,
+            upstream_pools,
+            upstream_policies,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(in crate::quic_listener) struct ResolutionObservation<'a> {
+    pub(in crate::quic_listener) metrics: &'a Metrics,
+    pub(in crate::quic_listener) elapsed: Duration,
+}
+
+impl<'a> ResolutionObservation<'a> {
+    pub(in crate::quic_listener) fn new(metrics: &'a Metrics, elapsed: Duration) -> Self {
+        Self { metrics, elapsed }
     }
 }
 
@@ -61,6 +99,13 @@ pub(super) struct ForwardTargetResolution {
     pub(super) backend_lb: String,
 }
 
+pub(super) struct ForwardTargetResolutionInput<'a> {
+    pub(super) request: TargetResolutionRequest<'a>,
+    pub(super) tunnel_mode: TunnelMode,
+    pub(super) context: ResolutionContext<'a>,
+    pub(super) observation: ResolutionObservation<'a>,
+}
+
 pub(in crate::quic_listener) struct BootstrapTargetResolution {
     pub(in crate::quic_listener) upstream_name: String,
     pub(in crate::quic_listener) upstream_pool: Arc<RwLock<UpstreamPool>>,
@@ -70,15 +115,9 @@ pub(in crate::quic_listener) struct BootstrapTargetResolution {
 }
 
 pub(in crate::quic_listener) struct BootstrapTargetResolutionInput<'a> {
-    pub(in crate::quic_listener) method: &'a str,
-    pub(in crate::quic_listener) path: &'a str,
-    pub(in crate::quic_listener) authority: Option<&'a str>,
-    pub(in crate::quic_listener) header_lookup: Option<&'a LbHeaderLookup<'a>>,
-    pub(in crate::quic_listener) routing_index: &'a RouteIndex,
-    pub(in crate::quic_listener) upstream_pools: &'a HashMap<String, Arc<RwLock<UpstreamPool>>>,
-    pub(in crate::quic_listener) upstream_policies: &'a HashMap<String, RuntimeUpstreamPolicy>,
-    pub(in crate::quic_listener) metrics: &'a Metrics,
-    pub(in crate::quic_listener) elapsed: Duration,
+    pub(in crate::quic_listener) request: TargetResolutionRequest<'a>,
+    pub(in crate::quic_listener) context: ResolutionContext<'a>,
+    pub(in crate::quic_listener) observation: ResolutionObservation<'a>,
 }
 
 struct BackendSelectionPlan {
@@ -187,46 +226,29 @@ impl QUICListener {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn resolve_forwarding_target(
-        method: &str,
-        path: &str,
-        authority: Option<&str>,
-        tunnel_mode: TunnelMode,
-        sticky_cid_key: &str,
-        header_lookup: Option<&LbHeaderLookup<'_>>,
-        routing_index: &RouteIndex,
-        upstream_pools: &HashMap<String, Arc<RwLock<UpstreamPool>>>,
-        upstream_policies: &HashMap<String, RuntimeUpstreamPolicy>,
-        metrics: &Metrics,
-        elapsed: Duration,
+        input: ForwardTargetResolutionInput<'_>,
     ) -> Result<ForwardTargetResolution, ProxyError> {
-        let route_method = if matches!(tunnel_mode, TunnelMode::Websocket) {
-            "GET"
+        let ForwardTargetResolutionInput {
+            request,
+            tunnel_mode,
+            context,
+            observation,
+        } = input;
+        let resolution_request = if matches!(tunnel_mode, TunnelMode::Websocket) {
+            request.with_method("GET")
         } else {
-            method
+            request
         };
-        let resolution_request = TargetResolutionRequest::new(
-            route_method,
-            path,
-            authority,
-            Some(sticky_cid_key),
-            header_lookup,
-        );
         let TargetResolution { route, backend } =
-            match Self::resolve_backend_without_inflight_request(
-                &resolution_request,
-                upstream_pools,
-                upstream_policies,
-                routing_index,
-            ) {
+            match Self::resolve_backend_without_inflight_request(&resolution_request, &context) {
                 Ok(resolved) => resolved,
                 Err(err) => {
                     Self::observe_route_resolution_failure(
                         &resolution_request,
                         &err,
-                        metrics,
-                        elapsed,
+                        observation.metrics,
+                        observation.elapsed,
                     );
                     return Err(err);
                 }
@@ -262,31 +284,23 @@ impl QUICListener {
         input: BootstrapTargetResolutionInput<'_>,
     ) -> Result<BootstrapTargetResolution, ProxyError> {
         let BootstrapTargetResolutionInput {
-            method,
-            path,
-            authority,
-            header_lookup,
-            routing_index,
-            upstream_pools,
-            upstream_policies,
-            metrics,
-            elapsed,
+            request,
+            context,
+            observation,
         } = input;
-        let resolution_request =
-            TargetResolutionRequest::new(method, path, authority, None, header_lookup);
-        let TargetResolution { route, backend } = match Self::resolve_backend_internal(
-            &resolution_request,
-            upstream_pools,
-            upstream_policies,
-            routing_index,
-            true,
-        ) {
-            Ok(resolved) => resolved,
-            Err(err) => {
-                Self::observe_route_resolution_failure(&resolution_request, &err, metrics, elapsed);
-                return Err(err);
-            }
-        };
+        let TargetResolution { route, backend } =
+            match Self::resolve_backend_internal(&request, &context, true) {
+                Ok(resolved) => resolved,
+                Err(err) => {
+                    Self::observe_route_resolution_failure(
+                        &request,
+                        &err,
+                        observation.metrics,
+                        observation.elapsed,
+                    );
+                    return Err(err);
+                }
+            };
 
         Ok(BootstrapTargetResolution {
             upstream_name: route.upstream_name,
@@ -300,23 +314,24 @@ impl QUICListener {
     #[allow(clippy::type_complexity)]
     fn resolve_route_target(
         request: &TargetResolutionRequest<'_>,
-        upstream_pools: &HashMap<String, Arc<RwLock<UpstreamPool>>>,
-        upstream_policies: &HashMap<String, RuntimeUpstreamPolicy>,
-        routing_index: &RouteIndex,
+        context: &ResolutionContext<'_>,
     ) -> Result<RouteResolution, ProxyError> {
         if request.method.is_empty() || request.path.is_empty() {
             return Err(ProxyError::Transport("empty method or path".into()));
         }
 
-        let route_decision = routing_index
+        let route_decision = context
+            .routing_index
             .lookup_with_decision_for_method(request.path, request.authority, Some(request.method))
             .ok_or_else(|| ProxyError::Transport(format!("no route for {}", request.path)))?;
         let upstream_name = route_decision.upstream.to_string();
-        let upstream_pool = upstream_pools
+        let upstream_pool = context
+            .upstream_pools
             .get(route_decision.upstream)
             .ok_or_else(|| ProxyError::Transport(format!("pool not found: {upstream_name}")))?
             .clone();
-        let upstream_policy = upstream_policies
+        let upstream_policy = context
+            .upstream_policies
             .get(route_decision.upstream)
             .cloned()
             .unwrap_or_default();
@@ -424,13 +439,10 @@ impl QUICListener {
 
     fn resolve_backend_internal(
         request: &TargetResolutionRequest<'_>,
-        upstream_pools: &HashMap<String, Arc<RwLock<UpstreamPool>>>,
-        upstream_policies: &HashMap<String, RuntimeUpstreamPolicy>,
-        routing_index: &RouteIndex,
+        context: &ResolutionContext<'_>,
         begin_request: bool,
     ) -> Result<TargetResolution, ProxyError> {
-        let route =
-            Self::resolve_route_target(request, upstream_pools, upstream_policies, routing_index)?;
+        let route = Self::resolve_route_target(request, context)?;
         let backend = Self::select_backend_from_pool(request, &route.upstream_pool, begin_request)?;
 
         Self::log_backend_selection(
@@ -447,17 +459,9 @@ impl QUICListener {
 
     fn resolve_backend_without_inflight_request(
         request: &TargetResolutionRequest<'_>,
-        upstream_pools: &HashMap<String, Arc<RwLock<UpstreamPool>>>,
-        upstream_policies: &HashMap<String, RuntimeUpstreamPolicy>,
-        routing_index: &RouteIndex,
+        context: &ResolutionContext<'_>,
     ) -> Result<TargetResolution, ProxyError> {
-        Self::resolve_backend_internal(
-            request,
-            upstream_pools,
-            upstream_policies,
-            routing_index,
-            false,
-        )
+        Self::resolve_backend_internal(request, context, false)
     }
 
     #[cfg(test)]
@@ -467,13 +471,8 @@ impl QUICListener {
         upstream_policies: &HashMap<String, RuntimeUpstreamPolicy>,
         routing_index: &RouteIndex,
     ) -> Result<TargetResolution, ProxyError> {
-        Self::resolve_backend_internal(
-            request,
-            upstream_pools,
-            upstream_policies,
-            routing_index,
-            true,
-        )
+        let context = ResolutionContext::new(routing_index, upstream_pools, upstream_policies);
+        Self::resolve_backend_internal(request, &context, true)
     }
 }
 
@@ -593,6 +592,12 @@ mod tests {
         ]));
         let routing_index = RouteIndex::from_runtime_upstreams(&runtime.upstreams);
         let pools = upstream_pools(&runtime);
+        let policies = runtime
+            .upstreams
+            .iter()
+            .map(|(name, upstream)| (name.clone(), upstream.policy.clone()))
+            .collect::<HashMap<_, _>>();
+        let context = ResolutionContext::new(&routing_index, &pools, &policies);
         let request = TargetResolutionRequest::new(
             "POST",
             "/api/orders",
@@ -601,17 +606,7 @@ mod tests {
             None,
         );
 
-        let route = QUICListener::resolve_route_target(
-            &request,
-            &pools,
-            &runtime
-                .upstreams
-                .iter()
-                .map(|(name, upstream)| (name.clone(), upstream.policy.clone()))
-                .collect(),
-            &routing_index,
-        )
-        .expect("resolved route");
+        let route = QUICListener::resolve_route_target(&request, &context).expect("resolved route");
 
         assert_eq!(route.upstream_name, "method_host");
         assert!(route.route_host_specific);
@@ -640,6 +635,7 @@ mod tests {
             .iter()
             .map(|(name, upstream)| (name.clone(), upstream.policy.clone()))
             .collect::<HashMap<_, _>>();
+        let context = ResolutionContext::new(&routing_index, &pools, &policies);
 
         let request = TargetResolutionRequest::new(
             "GET",
@@ -648,16 +644,14 @@ mod tests {
             None,
             None,
         );
-        let first =
-            match QUICListener::resolve_route_target(&request, &pools, &policies, &routing_index) {
-                Err(err) => err,
-                Ok(_) => panic!("expected unrouted resolution failure"),
-            };
-        let second =
-            match QUICListener::resolve_route_target(&request, &pools, &policies, &routing_index) {
-                Err(err) => err,
-                Ok(_) => panic!("expected unrouted resolution failure"),
-            };
+        let first = match QUICListener::resolve_route_target(&request, &context) {
+            Err(err) => err,
+            Ok(_) => panic!("expected unrouted resolution failure"),
+        };
+        let second = match QUICListener::resolve_route_target(&request, &context) {
+            Err(err) => err,
+            Ok(_) => panic!("expected unrouted resolution failure"),
+        };
 
         assert_eq!(first.to_string(), second.to_string());
         assert_eq!(first.to_string(), "transport error: no route for /missing");

@@ -27,7 +27,10 @@ use super::{
             AdmissionPolicyDecision, admission_rejection_response,
             evaluate_forwarding_pre_admission_policy,
         },
-        forwarding::{BootstrapTargetResolutionInput, evaluate_pending_forward_external_auth},
+        forwarding::{
+            BootstrapTargetResolutionInput, ResolutionContext, ResolutionObservation,
+            TargetResolutionRequest, evaluate_pending_forward_external_auth,
+        },
     },
     context::BootstrapRequestCtx,
     intake::{BootstrapRequestIntake, bootstrap_error_response},
@@ -447,15 +450,22 @@ pub(in crate::quic_listener) fn evaluate_bootstrap_request_policy(
     };
 
     let resolved = match QUICListener::resolve_bootstrap_target(BootstrapTargetResolutionInput {
-        method: &input.intake.method,
-        path: &input.intake.path,
-        authority: input.intake.authority.as_deref(),
-        header_lookup: Some(&lb_header_lookup),
-        routing_index: &input.request_ctx.runtime.routing_index,
-        upstream_pools: &input.request_ctx.runtime.upstream_pools,
-        upstream_policies: &input.request_ctx.runtime.upstream_policies,
-        metrics: input.request_ctx.runtime.metrics.as_ref(),
-        elapsed: Duration::ZERO,
+        request: TargetResolutionRequest::new(
+            &input.intake.method,
+            &input.intake.path,
+            input.intake.authority.as_deref(),
+            None,
+            Some(&lb_header_lookup),
+        ),
+        context: ResolutionContext::new(
+            &input.request_ctx.runtime.routing_index,
+            &input.request_ctx.runtime.upstream_pools,
+            &input.request_ctx.runtime.upstream_policies,
+        ),
+        observation: ResolutionObservation::new(
+            input.request_ctx.runtime.metrics.as_ref(),
+            Duration::ZERO,
+        ),
     }) {
         Ok(value) => value,
         Err(err) => {

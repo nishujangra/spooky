@@ -31,6 +31,18 @@ pub(super) struct AuthStart {
     pub(super) deadline: Instant,
 }
 
+struct OidcExternalAuthInput {
+    pending_forward: Arc<PendingForward>,
+    discovery_url: Option<String>,
+    issuer_url: Option<String>,
+    client_id: String,
+    client_secret: Option<String>,
+    audience: Option<String>,
+    scopes: Vec<String>,
+    request_headers: Vec<impulse_config::runtime::RuntimeExternalAuthRequestHeader>,
+    timeout: Duration,
+}
+
 struct AuthHttpClient {
     client: Client<hyper_rustls::HttpsConnector<HttpConnector>, BoxBody<Bytes, Infallible>>,
 }
@@ -251,18 +263,18 @@ async fn fetch_json_document(uri: String, timeout: Duration) -> Result<Value, Pr
     serde_json::from_slice(&body).map_err(|err| ProxyError::Transport(err.to_string()))
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn run_oidc_external_auth(
-    pending_forward: Arc<PendingForward>,
-    discovery_url: Option<String>,
-    issuer_url: Option<String>,
-    client_id: String,
-    client_secret: Option<String>,
-    audience: Option<String>,
-    scopes: Vec<String>,
-    request_headers: Vec<impulse_config::runtime::RuntimeExternalAuthRequestHeader>,
-    timeout: Duration,
-) -> ExternalAuthResult {
+async fn run_oidc_external_auth(input: OidcExternalAuthInput) -> ExternalAuthResult {
+    let OidcExternalAuthInput {
+        pending_forward,
+        discovery_url,
+        issuer_url,
+        client_id,
+        client_secret,
+        audience,
+        scopes,
+        request_headers,
+        timeout,
+    } = input;
     let token = match oidc_authorization_check(
         authorization_header_from_pending_forward(&pending_forward).as_deref(),
     ) {
@@ -397,7 +409,7 @@ async fn run_external_auth(
             request_headers,
             ..
         } => {
-            run_oidc_external_auth(
+            run_oidc_external_auth(OidcExternalAuthInput {
                 pending_forward,
                 discovery_url,
                 issuer_url,
@@ -407,7 +419,7 @@ async fn run_external_auth(
                 scopes,
                 request_headers,
                 timeout,
-            )
+            })
             .await
         }
     }

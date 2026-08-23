@@ -44,6 +44,14 @@ struct AlternateBodylessCandidate {
     request: UpstreamRequest,
 }
 
+struct WebsocketTunnelForwardInput {
+    endpoint: BackendEndpoint,
+    pending_forward: Arc<PendingForward>,
+    body_rx: mpsc::Receiver<Bytes>,
+    backend_timeout: Duration,
+    metrics: Arc<Metrics>,
+}
+
 struct RetryExecutionCtx<'a> {
     request_id: u64,
     route_name: &'a str,
@@ -174,14 +182,14 @@ impl QUICListener {
         send_result
     }
 
-    #[allow(clippy::too_many_arguments)]
-    async fn forward_http1_websocket_tunnel(
-        endpoint: BackendEndpoint,
-        pending_forward: Arc<PendingForward>,
-        mut body_rx: mpsc::Receiver<Bytes>,
-        backend_timeout: Duration,
-        metrics: Arc<Metrics>,
-    ) -> ForwardResult {
+    async fn forward_http1_websocket_tunnel(input: WebsocketTunnelForwardInput) -> ForwardResult {
+        let WebsocketTunnelForwardInput {
+            endpoint,
+            pending_forward,
+            mut body_rx,
+            backend_timeout,
+            metrics,
+        } = input;
         let request = pending_forward.build_http1_websocket_tunnel_request(&endpoint)?;
 
         let stream = tokio::time::timeout(
@@ -446,13 +454,13 @@ impl QUICListener {
                             "websocket H1 tunnels require a downstream body channel".into(),
                         ));
                     };
-                    Self::forward_http1_websocket_tunnel(
-                        backend_endpoint.clone(),
-                        Arc::clone(&pending_forward_for_upstream),
+                    Self::forward_http1_websocket_tunnel(WebsocketTunnelForwardInput {
+                        endpoint: backend_endpoint.clone(),
+                        pending_forward: Arc::clone(&pending_forward_for_upstream),
                         body_rx,
                         backend_timeout,
-                        Arc::clone(&metrics),
-                    )
+                        metrics: Arc::clone(&metrics),
+                    })
                     .await?
                 } else {
                     let request = request.ok_or_else(|| {
