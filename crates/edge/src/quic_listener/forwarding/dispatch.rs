@@ -182,9 +182,7 @@ impl QUICListener {
         send_result
     }
 
-    async fn forward_http1_websocket_tunnel(
-        input: WebsocketTunnelForwardInput,
-    ) -> ForwardResult {
+    async fn forward_http1_websocket_tunnel(input: WebsocketTunnelForwardInput) -> ForwardResult {
         let WebsocketTunnelForwardInput {
             endpoint,
             pending_forward,

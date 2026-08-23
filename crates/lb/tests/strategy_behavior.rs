@@ -6,8 +6,7 @@ use std::time::Duration;
 
 use common::{pool, runtime_upstream, weighted_backend};
 use impulse_config::config::HealthCheck;
-use impulse_lb::load_balancing::LoadBalancing;
-use impulse_lb::upstream_pool::UpstreamPool;
+use impulse_lb::{load_balancing::LoadBalancing, upstream_pool::UpstreamPool};
 
 #[test]
 fn load_balancing_facade_normalizes_supported_strategy_names() {

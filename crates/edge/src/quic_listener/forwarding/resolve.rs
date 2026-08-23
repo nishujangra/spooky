@@ -300,7 +300,7 @@ impl QUICListener {
                     );
                     return Err(err);
                 }
-        };
+            };
 
         Ok(BootstrapTargetResolution {
             upstream_name: route.upstream_name,
@@ -606,8 +606,7 @@ mod tests {
             None,
         );
 
-        let route =
-            QUICListener::resolve_route_target(&request, &context).expect("resolved route");
+        let route = QUICListener::resolve_route_target(&request, &context).expect("resolved route");
 
         assert_eq!(route.upstream_name, "method_host");
         assert!(route.route_host_specific);
