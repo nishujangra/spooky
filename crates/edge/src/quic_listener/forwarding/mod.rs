@@ -65,6 +65,7 @@ pub(in crate::quic_listener) struct ForwardingSharedCtx<'a> {
     pub(in crate::quic_listener) resilience: &'a RuntimeResilience,
     pub(in crate::quic_listener) routing_index: &'a RouteIndex,
     pub(in crate::quic_listener) upstream_pools: &'a HashMap<String, Arc<RwLock<UpstreamPool>>>,
+    pub(in crate::quic_listener) upstream_policies: &'a HashMap<String, RuntimeUpstreamPolicy>,
 }
 
 pub(in crate::quic_listener) struct ForwardingExecutionCtx<'a> {
@@ -83,6 +84,38 @@ pub(in crate::quic_listener) struct StreamProgressConfig {
     pub(in crate::quic_listener) unknown_length_response_prebuffer_bytes: usize,
     pub(in crate::quic_listener) client_body_idle_timeout: Duration,
     pub(in crate::quic_listener) listen_port: u16,
+}
+
+pub(in crate::quic_listener) struct H3RequestHandlingConfig {
+    pub(in crate::quic_listener) request_finalization: RequestFinalizationConfig,
+    pub(in crate::quic_listener) max_request_body_bytes: usize,
+    pub(in crate::quic_listener) request_buffer_global_cap_bytes: usize,
+    pub(in crate::quic_listener) tracing_enabled: bool,
+    pub(in crate::quic_listener) max_streams_per_connection: usize,
+}
+
+impl H3RequestHandlingConfig {
+    pub(in crate::quic_listener) fn new(
+        routing_transparency_enabled: bool,
+        routing_transparency_include_reason: bool,
+        backend_total_request_timeout: Duration,
+        max_request_body_bytes: usize,
+        request_buffer_global_cap_bytes: usize,
+        tracing_enabled: bool,
+        max_streams_per_connection: usize,
+    ) -> Self {
+        Self {
+            request_finalization: RequestFinalizationConfig {
+                routing_transparency_enabled,
+                routing_transparency_include_reason,
+                backend_total_request_timeout,
+            },
+            max_request_body_bytes,
+            request_buffer_global_cap_bytes,
+            tracing_enabled,
+            max_streams_per_connection,
+        }
+    }
 }
 
 impl QUICListener {
@@ -595,7 +628,6 @@ impl QUICListener {
         Ok(true)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn flush_send(
         socket: &UdpSocket,
         send_buf: &mut [u8],
@@ -628,35 +660,28 @@ impl QUICListener {
 }
 
 impl QUICListener {
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn handle_h3(
         connection: &mut QuicConnection,
-        transport_pool: Arc<UpstreamTransportPool>,
-        backend_endpoints: Arc<HashMap<String, BackendEndpoint>>,
-        upstream_policies: Arc<HashMap<String, RuntimeUpstreamPolicy>>,
-        upstream_pools: &HashMap<String, Arc<RwLock<UpstreamPool>>>,
-        upstream_inflight: &HashMap<String, Arc<Semaphore>>,
-        global_inflight: Arc<Semaphore>,
-        backend_timeout: Duration,
-        backend_body_idle_timeout: Duration,
-        backend_body_total_timeout: Duration,
-        backend_total_request_timeout: Duration,
-        routing_index: &RouteIndex,
-        metrics: Arc<Metrics>,
-        resilience: &RuntimeResilience,
-        max_request_body_bytes: usize,
-        max_response_body_bytes: usize,
-        request_buffer_global_cap_bytes: usize,
-        unknown_length_response_prebuffer_bytes: usize,
-        client_body_idle_timeout: Duration,
-        inflight_acquire_wait: Duration,
-        tracing_enabled: bool,
-        routing_transparency_enabled: bool,
-        routing_transparency_include_reason: bool,
-        listen_port: u16,
-        max_streams_per_connection: usize,
+        shared_ctx: &ForwardingSharedCtx<'_>,
+        exec_ctx: &ForwardingExecutionCtx<'_>,
+        progress_config: &StreamProgressConfig,
+        request_config: &H3RequestHandlingConfig,
     ) -> Result<(), quiche::h3::Error> {
         let mut body_buf = [0u8; MAX_DATAGRAM_SIZE_BYTES];
+        let metrics = shared_ctx.metrics.as_ref();
+        let resilience = shared_ctx.resilience;
+        let routing_index = shared_ctx.routing_index;
+        let upstream_pools = shared_ctx.upstream_pools;
+        let upstream_policies = shared_ctx.upstream_policies;
+        let request_finalization = &request_config.request_finalization;
+        let routing_transparency_enabled = request_finalization.routing_transparency_enabled;
+        let routing_transparency_include_reason =
+            request_finalization.routing_transparency_include_reason;
+        let backend_total_request_timeout = request_finalization.backend_total_request_timeout;
+        let tracing_enabled = request_config.tracing_enabled;
+        let max_request_body_bytes = request_config.max_request_body_bytes;
+        let request_buffer_global_cap_bytes = request_config.request_buffer_global_cap_bytes;
+        let max_streams_per_connection = request_config.max_streams_per_connection;
 
         if connection.h3.is_none() {
             connection.h3 = Some(quiche::h3::Connection::with_transport(
@@ -668,28 +693,6 @@ impl QUICListener {
         let h3 = match connection.h3.as_mut() {
             Some(h3) => h3,
             None => return Ok(()),
-        };
-        let shared_ctx = ForwardingSharedCtx {
-            metrics: Arc::clone(&metrics),
-            resilience,
-            routing_index,
-            upstream_pools,
-        };
-        let exec_ctx = ForwardingExecutionCtx {
-            transport_pool: Arc::clone(&transport_pool),
-            backend_endpoints: Arc::clone(&backend_endpoints),
-            upstream_inflight,
-            global_inflight: Arc::clone(&global_inflight),
-            backend_timeout,
-            inflight_acquire_wait,
-        };
-        let progress_config = StreamProgressConfig {
-            backend_body_idle_timeout,
-            backend_body_total_timeout,
-            max_response_body_bytes,
-            unknown_length_response_prebuffer_bytes,
-            client_body_idle_timeout,
-            listen_port,
         };
 
         loop {
@@ -703,7 +706,7 @@ impl QUICListener {
                                 metrics.inc_policy_denied();
                             }
                             let _ = observe_proxy_error_outcome(
-                                &metrics,
+                                metrics,
                                 RouteOutcomeTarget::UNROUTED,
                                 None,
                                 Duration::from_millis(0),
@@ -744,7 +747,7 @@ impl QUICListener {
                             metrics.inc_early_data_rejected();
                             metrics.inc_policy_denied();
                             let _ = observe_proxy_error_outcome(
-                                &metrics,
+                                metrics,
                                 RouteOutcomeTarget::UNROUTED,
                                 None,
                                 request_start.elapsed(),
@@ -806,9 +809,9 @@ impl QUICListener {
                         sticky_cid_key.as_str(),
                         tracing_enabled,
                         routing_index,
-                        &upstream_policies,
+                        upstream_policies,
                         upstream_pools,
-                        &metrics,
+                        metrics,
                         resilience,
                     )? {
                         Some(pre_auth) => pre_auth,
@@ -819,7 +822,7 @@ impl QUICListener {
                         h3,
                         &mut connection.quic,
                         request_start,
-                        &metrics,
+                        metrics,
                         pre_auth,
                         RequestFinalizationConfig {
                             routing_transparency_enabled,
@@ -843,8 +846,8 @@ impl QUICListener {
                                 req,
                                 h3,
                                 &mut connection.quic,
-                                &exec_ctx,
-                                &shared_ctx,
+                                exec_ctx,
+                                shared_ctx,
                             )?
                         } else {
                             false
@@ -931,7 +934,7 @@ impl QUICListener {
                                                 if let Err(err) = Self::enqueue_request_chunk(
                                                     req,
                                                     chunk,
-                                                    &metrics,
+                                                    metrics,
                                                     max_request_body_bytes,
                                                     request_buffer_global_cap_bytes,
                                                 ) {
