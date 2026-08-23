@@ -4,7 +4,14 @@ use http_body_util::Full;
 use impulse_config::runtime::RuntimeExternalAuth;
 use tokio::{sync::oneshot, task::AbortHandle};
 
-use super::{auth::start_external_auth_task, resolve::ForwardTargetResolution, *};
+use super::{
+    auth::start_external_auth_task,
+    resolve::{
+        ForwardTargetResolution, ForwardTargetResolutionInput, ResolutionContext,
+        ResolutionObservation, TargetResolutionRequest,
+    },
+    *,
+};
 use crate::{
     quic_listener::admission::{
         AdmissionPolicyDecision, AdmissionRejectionResponse, admission_rejection_response,
@@ -148,6 +155,12 @@ pub(super) struct IntakeRequestDescriptor<'a> {
     pub(super) content_length: Option<usize>,
     pub(super) tunnel_mode: TunnelMode,
     pub(super) tracing_enabled: bool,
+}
+
+pub(super) struct RequestRoutingInput<'a> {
+    pub(super) peer_address: SocketAddr,
+    pub(super) sticky_cid_key: &'a str,
+    pub(super) intake: IntakeRequestDescriptor<'a>,
 }
 
 /// Request-scoped configuration applied when finalizing the request envelope.
@@ -355,28 +368,36 @@ impl QUICListener {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn prepare_request_for_auth(
         stream_id: u64,
         h3: &mut quiche::h3::Connection,
         quic: &mut quiche::Connection,
-        peer_address: SocketAddr,
-        quic_trace_id: &str,
-        request_start: Instant,
-        method: &str,
-        path: &str,
-        authority: Option<&str>,
-        content_length: Option<usize>,
-        tunnel_mode: TunnelMode,
-        headers: &[quiche::h3::Header],
-        sticky_cid_key: &str,
-        tracing_enabled: bool,
-        routing_index: &RouteIndex,
-        upstream_policies: &HashMap<String, RuntimeUpstreamPolicy>,
-        upstream_pools: &HashMap<String, Arc<RwLock<UpstreamPool>>>,
-        metrics: &Metrics,
-        resilience: &RuntimeResilience,
+        request: RequestRoutingInput<'_>,
+        shared_ctx: &ForwardingSharedCtx<'_>,
     ) -> Result<Option<PreAdmissionNextState>, quiche::h3::Error> {
+        let RequestRoutingInput {
+            peer_address,
+            sticky_cid_key,
+            intake,
+        } = request;
+        let IntakeRequestDescriptor {
+            quic_trace_id,
+            request_start,
+            method,
+            path,
+            authority,
+            headers,
+            content_length,
+            tunnel_mode,
+            tracing_enabled,
+        } = intake;
+        let metrics = shared_ctx.metrics.as_ref();
+        let resilience = shared_ctx.resilience;
+        let resolution_context = ResolutionContext::new(
+            shared_ctx.routing_index,
+            shared_ctx.upstream_pools,
+            shared_ctx.upstream_policies,
+        );
         let intake = Self::build_request_intake(IntakeRequestDescriptor {
             quic_trace_id,
             request_start,
@@ -395,19 +416,18 @@ impl QUICListener {
                 .and_then(|header| std::str::from_utf8(header.value()).ok())
                 .map(str::to_string)
         };
-        let resolved = Self::resolve_forwarding_target(
-            method,
-            path,
-            authority,
+        let resolved = Self::resolve_forwarding_target(ForwardTargetResolutionInput {
+            request: TargetResolutionRequest::new(
+                method,
+                path,
+                authority,
+                Some(sticky_cid_key),
+                Some(&lb_header_lookup),
+            ),
             tunnel_mode,
-            sticky_cid_key,
-            Some(&lb_header_lookup),
-            routing_index,
-            upstream_pools,
-            upstream_policies,
-            metrics,
-            request_start.elapsed(),
-        );
+            context: resolution_context,
+            observation: ResolutionObservation::new(metrics, request_start.elapsed()),
+        });
 
         let prepared = match resolved {
             Ok(ForwardTargetResolution {

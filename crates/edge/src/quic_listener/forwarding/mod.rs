@@ -13,11 +13,15 @@ use http_body_util::Full;
 use impulse_config::config::ScopedRateLimitScope;
 use impulse_errors::ClassifiedUpstreamProxyError;
 
-use self::prepare::{RequestFinalizationConfig, StartedRequestEnvelope};
+use self::prepare::{RequestFinalizationConfig, RequestRoutingInput, StartedRequestEnvelope};
 #[cfg(test)]
 pub(in crate::quic_listener) use self::resolve::TargetResolutionRequest as TestTargetResolutionRequest;
 pub(in crate::quic_listener) use self::{
-    auth::evaluate_pending_forward_external_auth, resolve::BootstrapTargetResolutionInput,
+    auth::evaluate_pending_forward_external_auth,
+    resolve::{
+        BootstrapTargetResolutionInput, ResolutionContext, ResolutionObservation,
+        TargetResolutionRequest,
+    },
 };
 use super::*;
 use crate::runtime::connection::{
@@ -670,9 +674,6 @@ impl QUICListener {
         let mut body_buf = [0u8; MAX_DATAGRAM_SIZE_BYTES];
         let metrics = shared_ctx.metrics.as_ref();
         let resilience = shared_ctx.resilience;
-        let routing_index = shared_ctx.routing_index;
-        let upstream_pools = shared_ctx.upstream_pools;
-        let upstream_policies = shared_ctx.upstream_policies;
         let request_finalization = &request_config.request_finalization;
         let routing_transparency_enabled = request_finalization.routing_transparency_enabled;
         let routing_transparency_include_reason =
@@ -797,22 +798,22 @@ impl QUICListener {
                         stream_id,
                         h3,
                         &mut connection.quic,
-                        connection.peer_address,
-                        &quic_trace_id,
-                        request_start,
-                        &method,
-                        &path,
-                        authority.as_deref(),
-                        content_length,
-                        tunnel_mode,
-                        &list,
-                        sticky_cid_key.as_str(),
-                        tracing_enabled,
-                        routing_index,
-                        upstream_policies,
-                        upstream_pools,
-                        metrics,
-                        resilience,
+                        RequestRoutingInput {
+                            peer_address: connection.peer_address,
+                            sticky_cid_key: sticky_cid_key.as_str(),
+                            intake: self::prepare::IntakeRequestDescriptor {
+                                quic_trace_id: &quic_trace_id,
+                                request_start,
+                                method: &method,
+                                path: &path,
+                                authority: authority.as_deref(),
+                                headers: &list,
+                                content_length,
+                                tunnel_mode,
+                                tracing_enabled,
+                            },
+                        },
+                        shared_ctx,
                     )? {
                         Some(pre_auth) => pre_auth,
                         None => continue,
