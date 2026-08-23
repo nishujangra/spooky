@@ -860,7 +860,7 @@ impl QUICListener {
                                 terminalize_stream(
                                     req,
                                     TerminalReason::Cancelled(CancellationReason::OperatorAbort),
-                                    &metrics,
+                                    metrics,
                                 );
                             }
                             connection.streams.remove(&stream_id);
