@@ -654,6 +654,11 @@ mod tests {
         )));
     }
 
+    #[test]
+    fn test_is_retryable_tls_error_returns_false() {
+        assert!(!is_retryable(&ProxyError::Tls("tls failure".into())));
+    }
+
     fn hedge_facts() -> HedgePolicyFacts {
         HedgePolicyFacts {
             hedging_configured: true,
