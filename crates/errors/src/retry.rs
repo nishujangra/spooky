@@ -640,6 +640,13 @@ mod tests {
         ))));
     }
 
+    #[test]
+    fn test_is_retryable_bridge_error_returns_false() {
+        assert!(!is_retryable(&ProxyError::Bridge(
+            BridgeError::InvalidMethod
+        )));
+    }
+
     fn hedge_facts() -> HedgePolicyFacts {
         HedgePolicyFacts {
             hedging_configured: true,
