@@ -807,7 +807,7 @@ Each backend represents an upstream server that can handle requests.
 |----------|------|----------|---------|-------------|
 | `id` | string | Yes | - | Unique identifier for the backend |
 | `address` | string | Yes | - | Backend server address. Accepted forms: `host:port`, `host` (defaults to `https://host:443`), `https://host[:port]`, `http://host[:port]` |
-| `weight` | integer | No | `100` | Load balancing weight (higher values receive more traffic) |
+| `weight` | integer | No | `100` | Relative traffic share for supported algorithms; custom values are rejected for `least-connections` and `latency-aware` |
 | `health_check` | object | No | - | Health check configuration. Omit to disable active health polling — backend starts and stays healthy. |
 
 #### Backend Address Forms
@@ -860,7 +860,7 @@ backends:
     health_check:
       path: "/health"
 
-# Weighted backend with custom health checks
+# Weighted backend with custom health checks (`round-robin`, `random`, `consistent-hash`, or `sticky-cid`)
 backends:
   - id: "backend1"
     address: "10.0.1.10:8080"
@@ -896,6 +896,12 @@ backends:
       path: "/healthz"
       interval: 5000
 ```
+
+For backend weights:
+
+- `consistent-hash`, `sticky-cid`, `round-robin`, and `random` honor relative weight
+- `least-connections` and `latency-aware` are intentionally non-weighted
+- validation rejects any `least-connections` or `latency-aware` backend weight other than `100`
 
 ### Host Policy
 
@@ -1152,7 +1158,7 @@ upstream:
 ### Common Mistakes
 
 - picking `consistent-hash` without a stable key that matches application behavior
-- expecting backend `weight` to influence algorithms that currently ignore weights
+- expecting backend `weight` to influence `least-connections` or `latency-aware`; those modes are intentionally non-weighted and reject custom values
 - using `sticky-cid` to solve application-layer affinity problems that should use explicit request keys
 
 ### Examples

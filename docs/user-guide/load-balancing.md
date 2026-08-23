@@ -301,7 +301,18 @@ upstream:
 
 ## Backend Weighting
 
-Consistent hashing and sticky-CID respect backend weights (sticky-CID wraps consistent hashing and uses the same weighted hash ring). Round-robin, random, least-connections, and latency-aware currently ignore weights.
+Consistent hashing, sticky-CID, round-robin, and random respect backend weights. Least-connections and latency-aware are intentionally non-weighted for now: they do not accept custom backend weights, and validation rejects any value other than the default `100`.
+
+### Weight Support By Algorithm
+
+| Algorithm | Weight support | Behavior |
+|---|---|---|
+| `consistent-hash` | Supported | Weight changes virtual-node count on the hash ring |
+| `sticky-cid` | Supported | Wraps consistent hashing, so the weighted hash ring still applies |
+| `round-robin` | Supported | Uses a deterministic weighted schedule across healthy backends |
+| `random` | Supported | Uses weighted random sampling across healthy backends |
+| `least-connections` | Rejected unless `100` | Intentionally non-weighted; custom backend weights fail validation |
+| `latency-aware` | Rejected unless `100` | Intentionally non-weighted; custom backend weights fail validation |
 
 ### Weight Configuration
 
@@ -329,14 +340,84 @@ backends:
       interval: 5000
 ```
 
+### Weighted Round-Robin Example
+
+```yaml
+upstream:
+  api_pool:
+    load_balancing:
+      type: "round-robin"
+    backends:
+      - id: "primary"
+        address: "10.0.1.10:8080"
+        weight: 200   # about 2x the traffic of secondary
+      - id: "secondary"
+        address: "10.0.1.11:8080"
+        weight: 100
+```
+
+### Weighted Random Example
+
+```yaml
+upstream:
+  api_pool:
+    load_balancing:
+      type: "random"
+    backends:
+      - id: "primary"
+        address: "10.0.1.10:8080"
+        weight: 200   # about 2x the selection probability of secondary
+      - id: "secondary"
+        address: "10.0.1.11:8080"
+        weight: 100
+```
+
+### Rejected Weight Example
+
+```yaml
+upstream:
+  api_pool:
+    load_balancing:
+      type: "least-connections"
+    backends:
+      - id: "primary"
+        address: "10.0.1.10:8080"
+        weight: 200   # fails validation: least-connections does not support custom backend weights
+      - id: "secondary"
+        address: "10.0.1.11:8080"
+        weight: 100
+```
+
+This fails at startup with:
+
+```
+Backend 'primary' in upstream 'api_pool' uses weight 200 but load balancing type 'least-connections' does not support custom backend weights; use the default weight 100
+```
+
 **Weight Behavior**:
 - **Consistent Hash**: Number of virtual nodes = replicas × weight (64 replicas per weight unit)
 - **Sticky CID**: Honors weight (wraps consistent hashing, same weighted ring)
-- **Round Robin**: Weight values are currently ignored
-- **Random**: Weight values are currently ignored
-- **Least Connections**: Weight values are currently ignored
-- **Latency Aware**: Weight values are currently ignored
-- **Minimum**: Weight values below 1 are clamped to 1
+- **Round Robin**: Honors weight with a deterministic weighted schedule across healthy backends
+- **Random**: Honors weight with weighted random sampling across healthy backends
+- **Least Connections**: Intentionally non-weighted; custom weights are rejected and only the default `100` is valid
+- **Latency Aware**: Intentionally non-weighted; custom weights are rejected and only the default `100` is valid
+- **Minimum**: Weight values must be between 1 and 1000; invalid values are rejected during validation
+
+### Rejected Weight Example
+
+```yaml
+upstream:
+  api_pool:
+    load_balancing:
+      type: "least-connections"
+    backends:
+      - id: "backend1"
+        address: "10.0.1.10:8080"
+        weight: 200   # invalid for least-connections; validation rejects this
+      - id: "backend2"
+        address: "10.0.1.11:8080"
+        weight: 100
+```
 
 ## Health Checking
 

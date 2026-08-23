@@ -218,6 +218,11 @@ impl RuntimeBundleHandle {
             lifecycle: Arc::new(lifecycle),
         };
         handle.sync_runtime_observability_metrics();
+        info!(
+            "runtime generation initialized: generation={} upstream_lb_policies={}",
+            handle.current_generation(),
+            summarize_upstream_lb_policies(handle.current().as_ref())
+        );
         handle
     }
 
@@ -470,6 +475,11 @@ impl RuntimeBundleHandle {
             generation,
             self.lifecycle.phase()
         );
+        info!(
+            "runtime generation {} upstream_lb_policies={}",
+            generation,
+            summarize_upstream_lb_policies(self.current().as_ref())
+        );
         self.sync_runtime_observability_metrics();
         Ok(generation)
     }
@@ -509,6 +519,26 @@ impl RuntimeBundleHandle {
         ));
         trim_runtime_generation_history(&mut history);
     }
+}
+
+fn summarize_upstream_lb_policies(bundle: &RuntimeBundle) -> String {
+    let mut upstreams = bundle
+        .runtime_config
+        .upstreams
+        .iter()
+        .map(|(name, upstream)| {
+            let weight_policy = upstream.load_balancing.strategy.backend_weight_policy();
+            format!(
+                "{}:{}:{}:{}",
+                name,
+                upstream.load_balancing.strategy.canonical_name(),
+                weight_policy.weighting_label(),
+                weight_policy.canonical_label()
+            )
+        })
+        .collect::<Vec<_>>();
+    upstreams.sort_unstable();
+    upstreams.join(" | ")
 }
 
 fn trim_runtime_generation_history(history: &mut VecDeque<RuntimeGenerationRecord>) {
@@ -662,6 +692,38 @@ mod tests {
             runtime_bundle_from_config(1, startup_path, &startup),
             runtime_bundle_from_config(next_generation, next_path, &reloaded),
         )
+    }
+
+    #[test]
+    fn upstream_lb_policy_summary_exposes_canonical_weighting_contract() {
+        let dir = tempdir().expect("tempdir");
+        let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+
+        let mut weighted = test_config(cert.clone(), key.clone(), "127.0.0.1:7001");
+        weighted
+            .upstream
+            .get_mut("api")
+            .expect("api upstream")
+            .load_balancing
+            .lb_type = "random".to_string();
+        let weighted_bundle = runtime_bundle_from_config(1, "weighted.yaml", &weighted);
+        assert_eq!(
+            summarize_upstream_lb_policies(&weighted_bundle),
+            "api:random:weighted:honored"
+        );
+
+        let mut adaptive = test_config(cert, key, "127.0.0.1:7002");
+        adaptive
+            .upstream
+            .get_mut("api")
+            .expect("api upstream")
+            .load_balancing
+            .lb_type = "least-connections".to_string();
+        let adaptive_bundle = runtime_bundle_from_config(2, "adaptive.yaml", &adaptive);
+        assert_eq!(
+            summarize_upstream_lb_policies(&adaptive_bundle),
+            "api:least-connections:unweighted:rejected-as-invalid"
+        );
     }
 
     struct CompletionSignal(Option<oneshot::Sender<()>>);

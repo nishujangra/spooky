@@ -77,7 +77,7 @@ These items are not user-facing features, but they are important product foundat
 | Least-connections | `Done` | Implemented |
 | Latency-aware | `Done` | EWMA-like scoring plus inflight signal |
 | Sticky CID | `Done` | Implemented as a selection mode |
-| Weighted backends | `Done` | Implemented |
+| Weighted backends | `Partial` | Supported for consistent-hash, sticky-CID, round-robin, and random; least-connections and latency-aware reject custom weights |
 | Canary rollout controls | `Missing` | No first-class release traffic controls |
 | Request mirroring | `Missing` | Not implemented |
 | Fault injection | `Missing` | Not implemented |

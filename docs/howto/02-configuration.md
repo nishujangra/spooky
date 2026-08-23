@@ -244,7 +244,7 @@ backends:
 
 #### Backend weights
 
-Weights are relative. A backend with weight `200` gets twice the traffic of one with weight `100`.
+Weights are relative for supported algorithms. A backend with weight `200` gets twice the traffic of one with weight `100` under `consistent-hash`, `sticky-cid`, `round-robin`, and `random`. `least-connections` and `latency-aware` are intentionally non-weighted and reject any backend weight other than the default `100`.
 
 ```yaml
 backends:
