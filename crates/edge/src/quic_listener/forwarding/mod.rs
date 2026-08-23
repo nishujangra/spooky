@@ -1201,12 +1201,14 @@ impl QUICListener {
                 Self::resolve_lb_key(
                     "",
                     Some(rule.key_spec().unwrap_or("peer_ip")),
-                    method,
-                    path,
-                    authority,
-                    None,
-                    Some(client_addr),
-                    header_lookup,
+                    self::lb_key::LbKeyRequestParts::new(
+                        method,
+                        path,
+                        authority,
+                        None,
+                        Some(client_addr),
+                        header_lookup,
+                    ),
                 )
                 .value,
             ),
@@ -1214,12 +1216,14 @@ impl QUICListener {
                 Self::resolve_lb_key(
                     "",
                     Some(key_spec),
-                    method,
-                    path,
-                    authority,
-                    None,
-                    Some(client_addr),
-                    header_lookup,
+                    self::lb_key::LbKeyRequestParts::new(
+                        method,
+                        path,
+                        authority,
+                        None,
+                        Some(client_addr),
+                        header_lookup,
+                    ),
                 )
                 .value
             }),
@@ -1227,12 +1231,14 @@ impl QUICListener {
                 Self::resolve_lb_key(
                     "",
                     Some(rule.key_spec().unwrap_or("bearer_token")),
-                    method,
-                    path,
-                    authority,
-                    None,
-                    Some(client_addr),
-                    header_lookup,
+                    self::lb_key::LbKeyRequestParts::new(
+                        method,
+                        path,
+                        authority,
+                        None,
+                        Some(client_addr),
+                        header_lookup,
+                    ),
                 )
                 .value,
             ),
@@ -2361,6 +2367,24 @@ mod tests {
         ));
     }
 
+    fn lb_key_request_parts<'a>(
+        method: &'a str,
+        path: &'a str,
+        authority: Option<&'a str>,
+        cid_key: Option<&'a str>,
+        client_addr: Option<SocketAddr>,
+        header_lookup: Option<&'a LbHeaderLookup<'a>>,
+    ) -> super::lb_key::LbKeyRequestParts<'a> {
+        super::lb_key::LbKeyRequestParts::new(
+            method,
+            path,
+            authority,
+            cid_key,
+            client_addr,
+            header_lookup,
+        )
+    }
+
     #[test]
     fn resolve_lb_key_supports_peer_ip_and_bearer_token() {
         let headers = [("authorization".to_string(), "Bearer token-1".to_string())]
@@ -2373,12 +2397,14 @@ mod tests {
             QUICListener::resolve_lb_key(
                 "",
                 Some("peer_ip"),
-                "GET",
-                "/",
-                Some("api.example.com"),
-                None,
-                Some(client_addr),
-                Some(&lookup),
+                lb_key_request_parts(
+                    "GET",
+                    "/",
+                    Some("api.example.com"),
+                    None,
+                    Some(client_addr),
+                    Some(&lookup),
+                ),
             )
             .value,
             "203.0.113.9"
@@ -2387,12 +2413,14 @@ mod tests {
             QUICListener::resolve_lb_key(
                 "",
                 Some("bearer_token"),
-                "GET",
-                "/",
-                Some("api.example.com"),
-                None,
-                Some(client_addr),
-                Some(&lookup),
+                lb_key_request_parts(
+                    "GET",
+                    "/",
+                    Some("api.example.com"),
+                    None,
+                    Some(client_addr),
+                    Some(&lookup),
+                ),
             )
             .value,
             "token-1"
@@ -2415,12 +2443,14 @@ mod tests {
             let resolved = QUICListener::resolve_lb_key(
                 "",
                 Some(spec),
-                "POST",
-                "/api/items?tenant=acme",
-                Some("api.example.com"),
-                Some("cid-123"),
-                Some(client_addr),
-                Some(&lookup),
+                lb_key_request_parts(
+                    "POST",
+                    "/api/items?tenant=acme",
+                    Some("api.example.com"),
+                    Some("cid-123"),
+                    Some(client_addr),
+                    Some(&lookup),
+                ),
             );
             assert_eq!(resolved.value, expected);
             assert!(matches!(
@@ -2445,12 +2475,14 @@ mod tests {
         let sticky = QUICListener::resolve_lb_key(
             "sticky-cid",
             Some("header:x-user-id"),
-            "GET",
-            "/resource",
-            Some("api.example.com"),
-            Some("cid-123"),
-            None,
-            None,
+            lb_key_request_parts(
+                "GET",
+                "/resource",
+                Some("api.example.com"),
+                Some("cid-123"),
+                None,
+                None,
+            ),
         );
         assert_eq!(sticky.value, "cid-123");
         assert!(matches!(
@@ -2461,12 +2493,14 @@ mod tests {
         let authority_default = QUICListener::resolve_lb_key(
             "",
             Some("header:x-user-id"),
-            "GET",
-            "/resource",
-            Some("api.example.com"),
-            None,
-            None,
-            None,
+            lb_key_request_parts(
+                "GET",
+                "/resource",
+                Some("api.example.com"),
+                None,
+                None,
+                None,
+            ),
         );
         assert_eq!(authority_default.value, "api.example.com");
         assert!(matches!(
@@ -2477,24 +2511,14 @@ mod tests {
         let path_default = QUICListener::resolve_lb_key(
             "",
             Some("header:x-user-id"),
-            "GET",
-            "/resource",
-            None,
-            None,
-            None,
-            None,
+            lb_key_request_parts("GET", "/resource", None, None, None, None),
         );
         assert_eq!(path_default.value, "/resource");
 
         let method_default = QUICListener::resolve_lb_key(
             "",
             Some("header:x-user-id"),
-            "GET",
-            "",
-            None,
-            None,
-            None,
-            None,
+            lb_key_request_parts("GET", "", None, None, None, None),
         );
         assert_eq!(method_default.value, "GET");
         assert!(matches!(
@@ -2523,12 +2547,14 @@ mod tests {
         let direct_header = QUICListener::resolve_lb_key(
             "",
             Some("header:x-user-id"),
-            "GET",
-            "/api/items?tenant=acme",
-            Some("api.example.com"),
-            Some("cid-456"),
-            None,
-            Some(&lookup),
+            lb_key_request_parts(
+                "GET",
+                "/api/items?tenant=acme",
+                Some("api.example.com"),
+                Some("cid-456"),
+                None,
+                Some(&lookup),
+            ),
         );
         let routed_header = QUICListener::resolve_lb_key_for_runtime_request(
             impulse_config::runtime::RuntimeLoadBalancingStrategy::RoundRobin,
@@ -2546,12 +2572,14 @@ mod tests {
         let direct_sticky = QUICListener::resolve_lb_key(
             "sticky-cid",
             Some("header:x-missing"),
-            "GET",
-            "/api/items?tenant=acme",
-            Some("api.example.com"),
-            Some("cid-456"),
-            None,
-            Some(&lookup),
+            lb_key_request_parts(
+                "GET",
+                "/api/items?tenant=acme",
+                Some("api.example.com"),
+                Some("cid-456"),
+                None,
+                Some(&lookup),
+            ),
         );
         let routed_sticky = QUICListener::resolve_lb_key_for_runtime_request(
             impulse_config::runtime::RuntimeLoadBalancingStrategy::StickyCid,
@@ -2662,12 +2690,14 @@ mod tests {
         let resolved = QUICListener::resolve_lb_key(
             "sticky-cid",
             Some("header:x-user-id"),
-            "GET",
-            "/resource",
-            Some("api.example.com"),
-            Some("cid-123"),
-            None,
-            None,
+            lb_key_request_parts(
+                "GET",
+                "/resource",
+                Some("api.example.com"),
+                Some("cid-123"),
+                None,
+                None,
+            ),
         );
 
         assert_eq!(resolved.value, "cid-123");

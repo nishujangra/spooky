@@ -5,7 +5,7 @@ use crate::resilience::quota::{
     QuotaIdentityContext, RequestKeyExtraction, extract_runtime_request_key,
 };
 
-struct LbKeyRequestParts<'a> {
+pub(in crate::quic_listener::forwarding) struct LbKeyRequestParts<'a> {
     method: &'a str,
     path: &'a str,
     authority: Option<&'a str>,
@@ -15,7 +15,7 @@ struct LbKeyRequestParts<'a> {
 }
 
 impl<'a> LbKeyRequestParts<'a> {
-    fn new(
+    pub(in crate::quic_listener::forwarding) fn new(
         method: &'a str,
         path: &'a str,
         authority: Option<&'a str>,
@@ -117,19 +117,11 @@ impl QUICListener {
     }
 
     #[cfg(test)]
-    #[allow(clippy::too_many_arguments)]
     pub(in crate::quic_listener::forwarding) fn resolve_lb_key(
         lb_type: &str,
         lb_key_spec: Option<&str>,
-        method: &str,
-        path: &str,
-        authority: Option<&str>,
-        cid_key: Option<&str>,
-        client_addr: Option<SocketAddr>,
-        header_lookup: Option<&LbHeaderLookup<'_>>,
+        request: LbKeyRequestParts<'_>,
     ) -> ResolvedLbKey {
-        let request =
-            LbKeyRequestParts::new(method, path, authority, cid_key, client_addr, header_lookup);
         Self::resolve_lb_key_for_input(&LbKeyResolutionInput::new(lb_type, lb_key_spec, request))
     }
 
@@ -422,12 +414,14 @@ mod tests {
         let direct = QUICListener::resolve_lb_key(
             "consistent-hash",
             Some("cookie:session"),
-            request.method,
-            request.path,
-            request.authority,
-            request.cid_key,
-            request.client_addr,
-            request.header_lookup,
+            LbKeyRequestParts::new(
+                request.method,
+                request.path,
+                request.authority,
+                request.cid_key,
+                request.client_addr,
+                request.header_lookup,
+            ),
         );
         let runtime = QUICListener::resolve_lb_key_for_runtime_input(
             RuntimeLoadBalancingStrategy::ConsistentHash,
@@ -557,12 +551,14 @@ mod tests {
             let resolved = QUICListener::resolve_lb_key(
                 "",
                 Some(spec),
-                request.method,
-                request.path,
-                request.authority,
-                request.cid_key,
-                request.client_addr,
-                request.header_lookup,
+                LbKeyRequestParts::new(
+                    request.method,
+                    request.path,
+                    request.authority,
+                    request.cid_key,
+                    request.client_addr,
+                    request.header_lookup,
+                ),
             );
             assert_resolved(resolved, expected, LbKeySource::DefaultFallback);
         };
