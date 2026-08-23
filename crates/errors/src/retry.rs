@@ -647,6 +647,13 @@ mod tests {
         )));
     }
 
+    #[test]
+    fn test_is_retryable_protocol_error_returns_false() {
+        assert!(!is_retryable(&ProxyError::Protocol(
+            "protocol failure".into()
+        )));
+    }
+
     fn hedge_facts() -> HedgePolicyFacts {
         HedgePolicyFacts {
             hedging_configured: true,
