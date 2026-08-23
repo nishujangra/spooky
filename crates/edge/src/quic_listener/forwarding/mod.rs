@@ -980,7 +980,7 @@ impl QUICListener {
                             }
                             if let Some((route_label, elapsed)) = reject_body_for_bodyless {
                                 let _ = observe_proxy_error_outcome(
-                                    &metrics,
+                                    metrics,
                                     RouteOutcomeTarget {
                                         route: &route_label,
                                     },
@@ -1003,7 +1003,7 @@ impl QUICListener {
                                         TerminalReason::Rejected(
                                             RejectionReason::RequestBodyNotAllowed,
                                         ),
-                                        &metrics,
+                                        metrics,
                                     );
                                 }
                                 connection.streams.remove(&stream_id);
@@ -1012,7 +1012,7 @@ impl QUICListener {
                             }
                             if let Some((route_label, elapsed)) = payload_too_large {
                                 let _ = observe_proxy_error_outcome(
-                                    &metrics,
+                                    metrics,
                                     RouteOutcomeTarget {
                                         route: &route_label,
                                     },
@@ -1035,7 +1035,7 @@ impl QUICListener {
                                         TerminalReason::Rejected(
                                             RejectionReason::RequestBodyTooLarge,
                                         ),
-                                        &metrics,
+                                        metrics,
                                     );
                                 }
                                 connection.streams.remove(&stream_id);
@@ -1046,7 +1046,7 @@ impl QUICListener {
                                 && let Some(req) = connection.streams.get(&stream_id)
                             {
                                 let _ = observe_proxy_error_outcome(
-                                    &metrics,
+                                    metrics,
                                     RouteOutcomeTarget {
                                         route: req.upstream_name.as_deref().unwrap_or("unrouted"),
                                     },
@@ -1083,7 +1083,7 @@ impl QUICListener {
                                     terminalize_stream(
                                         req,
                                         TerminalReason::Rejected(RejectionReason::Overloaded),
-                                        &metrics,
+                                        metrics,
                                     );
                                 }
                                 connection.streams.remove(&stream_id);
@@ -1101,7 +1101,7 @@ impl QUICListener {
                             );
                             if let Some(req) = connection.streams.get(&stream_id) {
                                 let _ = observe_proxy_error_outcome(
-                                    &metrics,
+                                    metrics,
                                     RouteOutcomeTarget {
                                         route: req.upstream_name.as_deref().unwrap_or("unrouted"),
                                     },
@@ -1129,7 +1129,7 @@ impl QUICListener {
                                 terminalize_stream(
                                     req,
                                     TerminalReason::Rejected(RejectionReason::ValidationFailed),
-                                    &metrics,
+                                    metrics,
                                 );
                             }
                             connection.streams.remove(&stream_id);
@@ -1147,7 +1147,7 @@ impl QUICListener {
                 Ok((stream_id, quiche::h3::Event::Finished)) => {
                     if let Some(req) = connection.streams.get_mut(&stream_id) {
                         req.transition_request_body_finished();
-                        let _ = Self::flush_request_buffer(req, &metrics);
+                        let _ = Self::flush_request_buffer(req, metrics);
                         // Upstream polling and response dispatch are handled entirely
                         // by advance_streams_non_blocking, called unconditionally below.
                     }
@@ -1157,7 +1157,7 @@ impl QUICListener {
                         let phase = terminalize_stream(
                             req,
                             TerminalReason::Cancelled(CancellationReason::ClientReset),
-                            &metrics,
+                            metrics,
                         );
                         debug!(
                             "stream {} reset by client (error_code={}, phase={:?}): resources released",
@@ -1177,9 +1177,9 @@ impl QUICListener {
             &mut connection.streams,
             &mut connection.quic,
             h3,
-            &exec_ctx,
-            &shared_ctx,
-            &progress_config,
+            exec_ctx,
+            shared_ctx,
+            progress_config,
         )?;
 
         Ok(())
