@@ -592,6 +592,12 @@ mod tests {
         ]));
         let routing_index = RouteIndex::from_runtime_upstreams(&runtime.upstreams);
         let pools = upstream_pools(&runtime);
+        let policies = runtime
+            .upstreams
+            .iter()
+            .map(|(name, upstream)| (name.clone(), upstream.policy.clone()))
+            .collect::<HashMap<_, _>>();
+        let context = ResolutionContext::new(&routing_index, &pools, &policies);
         let request = TargetResolutionRequest::new(
             "POST",
             "/api/orders",
@@ -600,17 +606,8 @@ mod tests {
             None,
         );
 
-        let route = QUICListener::resolve_route_target(
-            &request,
-            &pools,
-            &runtime
-                .upstreams
-                .iter()
-                .map(|(name, upstream)| (name.clone(), upstream.policy.clone()))
-                .collect(),
-            &routing_index,
-        )
-        .expect("resolved route");
+        let route =
+            QUICListener::resolve_route_target(&request, &context).expect("resolved route");
 
         assert_eq!(route.upstream_name, "method_host");
         assert!(route.route_host_specific);
@@ -639,6 +636,7 @@ mod tests {
             .iter()
             .map(|(name, upstream)| (name.clone(), upstream.policy.clone()))
             .collect::<HashMap<_, _>>();
+        let context = ResolutionContext::new(&routing_index, &pools, &policies);
 
         let request = TargetResolutionRequest::new(
             "GET",
@@ -647,16 +645,14 @@ mod tests {
             None,
             None,
         );
-        let first =
-            match QUICListener::resolve_route_target(&request, &pools, &policies, &routing_index) {
-                Err(err) => err,
-                Ok(_) => panic!("expected unrouted resolution failure"),
-            };
-        let second =
-            match QUICListener::resolve_route_target(&request, &pools, &policies, &routing_index) {
-                Err(err) => err,
-                Ok(_) => panic!("expected unrouted resolution failure"),
-            };
+        let first = match QUICListener::resolve_route_target(&request, &context) {
+            Err(err) => err,
+            Ok(_) => panic!("expected unrouted resolution failure"),
+        };
+        let second = match QUICListener::resolve_route_target(&request, &context) {
+            Err(err) => err,
+            Ok(_) => panic!("expected unrouted resolution failure"),
+        };
 
         assert_eq!(first.to_string(), second.to_string());
         assert_eq!(first.to_string(), "transport error: no route for /missing");

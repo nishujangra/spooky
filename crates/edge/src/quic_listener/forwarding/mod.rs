@@ -91,7 +91,7 @@ pub(in crate::quic_listener) struct StreamProgressConfig {
 }
 
 pub(in crate::quic_listener) struct H3RequestHandlingConfig {
-    pub(in crate::quic_listener) request_finalization: RequestFinalizationConfig,
+    request_finalization: RequestFinalizationConfig,
     pub(in crate::quic_listener) max_request_body_bytes: usize,
     pub(in crate::quic_listener) request_buffer_global_cap_bytes: usize,
     pub(in crate::quic_listener) tracing_enabled: bool,
