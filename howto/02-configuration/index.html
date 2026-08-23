@@ -1660,7 +1660,7 @@ route:
   - address: &quot;[::1]:8443&quot;                   # IPv6 with brackets
 </code></pre>
 <h4 id="backend-weights">Backend weights</h4>
-<p>Weights are relative. A backend with weight <code>200</code> gets twice the traffic of one with weight <code>100</code>.</p>
+<p>Weights are relative for supported algorithms. A backend with weight <code>200</code> gets twice the traffic of one with weight <code>100</code> under <code>consistent-hash</code>, <code>sticky-cid</code>, <code>round-robin</code>, and <code>random</code>. <code>least-connections</code> and <code>latency-aware</code> are intentionally non-weighted and reject any backend weight other than the default <code>100</code>.</p>
 <pre><code class="language-yaml">backends:
   - id: &quot;primary&quot;
     address: &quot;10.0.1.10:8443&quot;

@@ -2468,7 +2468,7 @@ upstream:
 <td>integer</td>
 <td>No</td>
 <td><code>100</code></td>
-<td>Load balancing weight (higher values receive more traffic)</td>
+<td>Relative traffic share for supported algorithms; custom values are rejected for <code>least-connections</code> and <code>latency-aware</code></td>
 </tr>
 <tr>
 <td><code>health_check</code></td>
@@ -2593,7 +2593,7 @@ backends:
     health_check:
       path: &quot;/health&quot;
 
-# Weighted backend with custom health checks
+# Weighted backend with custom health checks (`round-robin`, `random`, `consistent-hash`, or `sticky-cid`)
 backends:
   - id: &quot;backend1&quot;
     address: &quot;10.0.1.10:8080&quot;
@@ -2629,6 +2629,12 @@ backends:
       path: &quot;/healthz&quot;
       interval: 5000
 </code></pre>
+<p>For backend weights:</p>
+<ul>
+<li><code>consistent-hash</code>, <code>sticky-cid</code>, <code>round-robin</code>, and <code>random</code> honor relative weight</li>
+<li><code>least-connections</code> and <code>latency-aware</code> are intentionally non-weighted</li>
+<li>validation rejects any <code>least-connections</code> or <code>latency-aware</code> backend weight other than <code>100</code></li>
+</ul>
 <h3 id="host-policy">Host Policy</h3>
 <p>Controls how the <code>Host</code> / <code>:authority</code> header is set on requests forwarded to the upstream.</p>
 <div class="table-wrapper"><table>
@@ -2978,7 +2984,7 @@ upstream:
 <h3 id="common-mistakes_2">Common Mistakes</h3>
 <ul>
 <li>picking <code>consistent-hash</code> without a stable key that matches application behavior</li>
-<li>expecting backend <code>weight</code> to influence algorithms that currently ignore weights</li>
+<li>expecting backend <code>weight</code> to influence <code>least-connections</code> or <code>latency-aware</code>; those modes are intentionally non-weighted and reject custom values</li>
 <li>using <code>sticky-cid</code> to solve application-layer affinity problems that should use explicit request keys</li>
 </ul>
 <h3 id="examples_4">Examples</h3>

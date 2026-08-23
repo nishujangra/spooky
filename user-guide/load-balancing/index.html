@@ -1778,7 +1778,49 @@
 </tbody>
 </table></div>
 <h2 id="backend-weighting">Backend Weighting</h2>
-<p>Consistent hashing and sticky-CID respect backend weights (sticky-CID wraps consistent hashing and uses the same weighted hash ring). Round-robin, random, least-connections, and latency-aware currently ignore weights.</p>
+<p>Consistent hashing, sticky-CID, round-robin, and random respect backend weights. Least-connections and latency-aware are intentionally non-weighted for now: they do not accept custom backend weights, and validation rejects any value other than the default <code>100</code>.</p>
+<h3 id="weight-support-by-algorithm">Weight Support By Algorithm</h3>
+<div class="table-wrapper"><table>
+<thead>
+<tr>
+<th>Algorithm</th>
+<th>Weight support</th>
+<th>Behavior</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>consistent-hash</code></td>
+<td>Supported</td>
+<td>Weight changes virtual-node count on the hash ring</td>
+</tr>
+<tr>
+<td><code>sticky-cid</code></td>
+<td>Supported</td>
+<td>Wraps consistent hashing, so the weighted hash ring still applies</td>
+</tr>
+<tr>
+<td><code>round-robin</code></td>
+<td>Supported</td>
+<td>Uses a deterministic weighted schedule across healthy backends</td>
+</tr>
+<tr>
+<td><code>random</code></td>
+<td>Supported</td>
+<td>Uses weighted random sampling across healthy backends</td>
+</tr>
+<tr>
+<td><code>least-connections</code></td>
+<td>Rejected unless <code>100</code></td>
+<td>Intentionally non-weighted; custom backend weights fail validation</td>
+</tr>
+<tr>
+<td><code>latency-aware</code></td>
+<td>Rejected unless <code>100</code></td>
+<td>Intentionally non-weighted; custom backend weights fail validation</td>
+</tr>
+</tbody>
+</table></div>
 <h3 id="weight-configuration">Weight Configuration</h3>
 <pre><code class="language-yaml">backends:
   - id: &quot;small-instance&quot;
@@ -1802,14 +1844,69 @@
       path: &quot;/health&quot;
       interval: 5000
 </code></pre>
+<h3 id="weighted-round-robin-example">Weighted Round-Robin Example</h3>
+<pre><code class="language-yaml">upstream:
+  api_pool:
+    load_balancing:
+      type: &quot;round-robin&quot;
+    backends:
+      - id: &quot;primary&quot;
+        address: &quot;10.0.1.10:8080&quot;
+        weight: 200   # about 2x the traffic of secondary
+      - id: &quot;secondary&quot;
+        address: &quot;10.0.1.11:8080&quot;
+        weight: 100
+</code></pre>
+<h3 id="weighted-random-example">Weighted Random Example</h3>
+<pre><code class="language-yaml">upstream:
+  api_pool:
+    load_balancing:
+      type: &quot;random&quot;
+    backends:
+      - id: &quot;primary&quot;
+        address: &quot;10.0.1.10:8080&quot;
+        weight: 200   # about 2x the selection probability of secondary
+      - id: &quot;secondary&quot;
+        address: &quot;10.0.1.11:8080&quot;
+        weight: 100
+</code></pre>
+<h3 id="rejected-weight-example">Rejected Weight Example</h3>
+<pre><code class="language-yaml">upstream:
+  api_pool:
+    load_balancing:
+      type: &quot;least-connections&quot;
+    backends:
+      - id: &quot;primary&quot;
+        address: &quot;10.0.1.10:8080&quot;
+        weight: 200   # fails validation: least-connections does not support custom backend weights
+      - id: &quot;secondary&quot;
+        address: &quot;10.0.1.11:8080&quot;
+        weight: 100
+</code></pre>
+<p>This fails at startup with:</p>
+<pre><code>Backend 'primary' in upstream 'api_pool' uses weight 200 but load balancing type 'least-connections' does not support custom backend weights; use the default weight 100
+</code></pre>
 <p><strong>Weight Behavior</strong>:
 - <strong>Consistent Hash</strong>: Number of virtual nodes = replicas × weight (64 replicas per weight unit)
 - <strong>Sticky CID</strong>: Honors weight (wraps consistent hashing, same weighted ring)
-- <strong>Round Robin</strong>: Weight values are currently ignored
-- <strong>Random</strong>: Weight values are currently ignored
-- <strong>Least Connections</strong>: Weight values are currently ignored
-- <strong>Latency Aware</strong>: Weight values are currently ignored
-- <strong>Minimum</strong>: Weight values below 1 are clamped to 1</p>
+- <strong>Round Robin</strong>: Honors weight with a deterministic weighted schedule across healthy backends
+- <strong>Random</strong>: Honors weight with weighted random sampling across healthy backends
+- <strong>Least Connections</strong>: Intentionally non-weighted; custom weights are rejected and only the default <code>100</code> is valid
+- <strong>Latency Aware</strong>: Intentionally non-weighted; custom weights are rejected and only the default <code>100</code> is valid
+- <strong>Minimum</strong>: Weight values must be between 1 and 1000; invalid values are rejected during validation</p>
+<h3 id="rejected-weight-example_1">Rejected Weight Example</h3>
+<pre><code class="language-yaml">upstream:
+  api_pool:
+    load_balancing:
+      type: &quot;least-connections&quot;
+    backends:
+      - id: &quot;backend1&quot;
+        address: &quot;10.0.1.10:8080&quot;
+        weight: 200   # invalid for least-connections; validation rejects this
+      - id: &quot;backend2&quot;
+        address: &quot;10.0.1.11:8080&quot;
+        weight: 100
+</code></pre>
 <h2 id="health-checking">Health Checking</h2>
 <p>Impulse performs active health checks on all backends. Unhealthy backends are automatically removed from rotation.</p>
 <h3 id="health-check-mechanism">Health Check Mechanism</h3>
@@ -2780,10 +2877,40 @@ upstream:
         </a>
         
         
+        <a href="#weight-support-by-algorithm"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#weight-support-by-algorithm');">
+            Weight Support By Algorithm
+        </a>
+        
         <a href="#weight-configuration"
             class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
             data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#weight-configuration');">
             Weight Configuration
+        </a>
+        
+        <a href="#weighted-round-robin-example"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#weighted-round-robin-example');">
+            Weighted Round-Robin Example
+        </a>
+        
+        <a href="#weighted-random-example"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#weighted-random-example');">
+            Weighted Random Example
+        </a>
+        
+        <a href="#rejected-weight-example"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#rejected-weight-example');">
+            Rejected Weight Example
+        </a>
+        
+        <a href="#rejected-weight-example_1"
+            class="text-muted-foreground hover:text-foreground data-[active=true]:text-foreground text-[0.8rem] no-underline transition-colors data-[depth=3]:pl-4 data-[depth=4]:pl-6"
+            data-active="false" data-depth="3" onClick="deferSetActiveTocLink('#rejected-weight-example_1');">
+            Rejected Weight Example
         </a>
         
         

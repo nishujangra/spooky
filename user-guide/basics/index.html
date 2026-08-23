@@ -1603,7 +1603,7 @@ log:
 <pre><code class="language-yaml">backends:
   - id: &quot;backend1&quot;              # Unique identifier
     address: &quot;127.0.0.1:8080&quot;   # Backend address (IP:port)
-    weight: 100                 # Relative weight for load balancing
+    weight: 100                 # Relative traffic share for supported algorithms
     health_check:
       path: &quot;/health&quot;           # Health check endpoint
       interval: 5000            # Check interval (milliseconds)
@@ -1612,6 +1612,7 @@ log:
       success_threshold: 2      # Consecutive successes before marking healthy
       cooldown_ms: 5000         # Cooldown period after marking unhealthy
 </code></pre>
+<p><code>weight</code> is honored by <code>consistent-hash</code>, <code>sticky-cid</code>, <code>round-robin</code>, and <code>random</code>. <code>least-connections</code> and <code>latency-aware</code> are intentionally non-weighted and reject any backend weight other than the default <code>100</code>.</p>
 <h3 id="health-check-configuration">Health Check Configuration</h3>
 <p><strong>interval</strong>: Time between health checks in milliseconds (default: 5000)</p>
 <p><strong>timeout_ms</strong>: Maximum time to wait for health check response (default: 1000)</p>
