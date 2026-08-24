@@ -425,14 +425,15 @@ mod tests {
         assert_eq!(pool.pick("key"), Some(1));
 
         pool.finish_request(0, std::time::Duration::from_millis(10), Some(200));
-        assert!(pool.mark_backend_healthy(0).is_none());
+        assert!(pool.mark_backend_request_success(0).is_none());
+        assert!(!pool.is_backend_healthy(0));
 
         assert_eq!(pool.pick("key"), Some(0));
         assert_eq!(pool.pick("key"), Some(1));
 
         pool.finish_request(0, std::time::Duration::from_millis(10), Some(200));
         assert!(matches!(
-            pool.mark_backend_healthy(0),
+            pool.mark_backend_request_success(0),
             Some(crate::HealthTransition::BecameHealthy)
         ));
     }
@@ -471,5 +472,49 @@ mod tests {
             pool.mark_backend_healthy(0),
             Some(crate::HealthTransition::BecameHealthy)
         ));
+    }
+
+    #[test]
+    fn passive_request_success_requires_verified_probe_threshold() {
+        let runtime_upstream = runtime_upstream_from_backends(
+            "round-robin",
+            vec![Backend {
+                id: "backend-0".to_string(),
+                address: "http://127.0.0.1:7001".to_string(),
+                weight: 1,
+                health_check: Some(HealthCheck {
+                    path: "/health".to_string(),
+                    interval: 0,
+                    timeout_ms: 1000,
+                    failure_threshold: 1,
+                    success_threshold: 2,
+                    cooldown_ms: 10_000,
+                }),
+            }],
+        );
+        let mut pool = UpstreamPool::from_runtime_upstream(&runtime_upstream)
+            .expect("runtime pool should build");
+
+        assert!(matches!(
+            pool.mark_backend_request_failure(0, crate::HealthFailureReason::Transport),
+            Some(crate::HealthTransition::BecameUnhealthy)
+        ));
+        pool.pool.reconcile_readmit_at(
+            std::time::Instant::now() + std::time::Duration::from_millis(10_001),
+        );
+
+        let runtime = pool.backend_runtime_state(0).expect("runtime state");
+        assert!(!runtime.healthy);
+
+        assert!(pool.mark_backend_request_success(0).is_none());
+        let runtime = pool.backend_runtime_state(0).expect("runtime state");
+        assert!(!runtime.healthy);
+
+        assert!(matches!(
+            pool.mark_backend_request_success(0),
+            Some(crate::HealthTransition::BecameHealthy)
+        ));
+        let runtime = pool.backend_runtime_state(0).expect("runtime state");
+        assert!(runtime.healthy);
     }
 }

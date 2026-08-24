@@ -86,11 +86,33 @@ impl LoadBalancing {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{Duration, Instant};
+
+    use impulse_config::config::{Backend, HealthCheck};
+
     use super::LoadBalancing;
     use crate::{
+        backend::BackendState,
         backend_pool::BackendPool,
+        health::HealthFailureReason,
         test_support::{backend_pool_from_addresses, health_checked_backend_state},
     };
+
+    fn probing_backend_state(address: &str) -> BackendState {
+        BackendState::new(&Backend {
+            id: format!("backend-{address}"),
+            address: address.to_string(),
+            weight: 1,
+            health_check: Some(HealthCheck {
+                path: "/health".to_string(),
+                interval: 0,
+                timeout_ms: 1000,
+                failure_threshold: 1,
+                success_threshold: 2,
+                cooldown_ms: 10_000,
+            }),
+        })
+    }
 
     #[test]
     fn readonly_pick_is_exposed_only_for_readonly_strategies() {
@@ -175,6 +197,37 @@ mod tests {
             assert!(
                 lb.pick("tenant:alpha", &unhealthy_pool).is_none(),
                 "strategy {strategy} should not select from an all-unhealthy backend pool"
+            );
+        }
+    }
+
+    #[test]
+    fn every_strategy_excludes_probing_backends_from_general_selection() {
+        let mut pool = BackendPool::new_from_states(vec![
+            probing_backend_state("10.0.0.1:443"),
+            health_checked_backend_state("10.0.0.2:443"),
+        ]);
+        assert!(matches!(
+            pool.mark_request_failure(0, HealthFailureReason::Transport),
+            Some(crate::HealthTransition::BecameUnhealthy)
+        ));
+        pool.reconcile_readmit_at(Instant::now() + Duration::from_millis(10_001));
+        assert!(pool.backend(0).is_some_and(BackendState::is_probing));
+        assert_eq!(pool.healthy_indices(), vec![1]);
+
+        for strategy in [
+            "round-robin",
+            "consistent-hash",
+            "random",
+            "least-connections",
+            "latency-aware",
+            "sticky-cid",
+        ] {
+            let mut lb = LoadBalancing::from_config(strategy).expect("strategy");
+            assert_eq!(
+                lb.pick("tenant:alpha", &pool),
+                Some(1),
+                "strategy {strategy} should select only from the healthy membership set"
             );
         }
     }
