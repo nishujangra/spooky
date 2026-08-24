@@ -4488,13 +4488,12 @@ mod tests {
     fn jwks_cache_reconcile_evicts_removed_sources() {
         let active_url = "https://issuer.example.com/reconcile-active.json";
         let removed_url = "https://issuer.example.com/reconcile-removed.json";
-        clear_jwks_cache_for_test(active_url);
-        clear_jwks_cache_for_test(removed_url);
-
         let active = test_jwks_source(active_url, vec![JwtAlgorithm::Rs256]);
         let removed = test_jwks_source(removed_url, vec![JwtAlgorithm::Es256]);
 
-        let cache = JwtJwksSharedCache::shared();
+        let cache = JwtJwksSharedCache {
+            entries: RwLock::new(HashMap::new()),
+        };
         cache.register_source(active.clone());
         cache.register_source(removed.clone());
 
@@ -4512,19 +4511,17 @@ mod tests {
                 .is_none(),
             "removed source must be evicted from cache"
         );
-
-        clear_jwks_cache_for_test(active_url);
-        clear_jwks_cache_for_test(removed_url);
     }
 
     #[test]
     fn jwks_cache_reconcile_updates_active_source_in_place_without_resetting_state() {
         let jwks_url = "https://issuer.example.com/reconcile-update.json";
-        clear_jwks_cache_for_test(jwks_url);
-
         let original = test_jwks_source(jwks_url, vec![JwtAlgorithm::Rs256]);
         let cache_now = Instant::now();
-        JwtJwksSharedCache::shared().upsert(
+        let cache = JwtJwksSharedCache {
+            entries: RwLock::new(HashMap::new()),
+        };
+        cache.upsert(
             &original.source_identity,
             JwtJwksCacheEntry {
                 source: original.clone(),
@@ -4560,12 +4557,9 @@ mod tests {
         updated.stale_if_error = Duration::from_secs(180);
         updated.startup_behavior = JwksStartupBehavior::RequireReady;
 
-        JwtJwksSharedCache::shared().reconcile_sources([&updated]);
+        cache.reconcile_sources([&updated]);
 
-        let entries = JwtJwksSharedCache::shared()
-            .entries
-            .read()
-            .expect("jwks cache read lock");
+        let entries = cache.entries.read().expect("jwks cache read lock");
         let entry = entries
             .get(&updated.source_identity)
             .expect("active source entry");
@@ -4586,9 +4580,6 @@ mod tests {
             entry.last_error.as_deref(),
             Some("request_failed: retained")
         );
-
-        drop(entries);
-        clear_jwks_cache_for_test(jwks_url);
     }
 
     #[test]
