@@ -993,33 +993,18 @@ impl JwtJwksSharedCache {
             .and_modify(|entry| {
                 merge_jwks_source_config(&mut entry.source, &source);
             })
-            .or_insert_with(|| JwtJwksCacheEntry {
-                source,
-                state: JwtJwksCacheState::NeverFetched,
-                active_keys: Vec::new(),
-                refresh_in_flight: false,
-                last_refresh_started_at: None,
-                last_refresh_started_wall: None,
-                last_refresh_completed_at: None,
-                last_refresh_completed_wall: None,
-                last_success_at: None,
-                last_success_wall: None,
-                last_failure_at: None,
-                last_failure_wall: None,
-                last_error: None,
-                last_failure_reason: None,
-                next_on_demand_refresh_at: None,
-            });
+            .or_insert_with(|| new_jwks_cache_entry(source));
     }
 
     fn reconcile_sources<'a, I>(&self, active_sources: I)
     where
         I: IntoIterator<Item = &'a JwtJwksSourceConfig>,
     {
-        let active_source_ids = active_sources
+        let active_sources = active_sources
             .into_iter()
-            .map(|source| source.source_identity.clone())
-            .collect::<HashSet<_>>();
+            .map(|source| (source.source_identity.clone(), source.clone()))
+            .collect::<HashMap<_, _>>();
+        let active_source_ids = active_sources.keys().cloned().collect::<HashSet<_>>();
 
         let Ok(mut entries) = self.entries.write() else {
             log::error!("JWKS cache lock poisoned; skipping source reconciliation");
@@ -1028,6 +1013,14 @@ impl JwtJwksSharedCache {
 
         let before = entries.len();
         entries.retain(|source_identity, _| active_source_ids.contains(source_identity));
+        for (source_identity, source) in active_sources {
+            entries
+                .entry(source_identity)
+                .and_modify(|entry| {
+                    merge_jwks_source_config(&mut entry.source, &source);
+                })
+                .or_insert_with(|| new_jwks_cache_entry(source));
+        }
         let removed = before.saturating_sub(entries.len());
         drop(entries);
 
@@ -1193,6 +1186,26 @@ impl JwtJwksSharedCache {
             .write()
             .expect("jwks shared cache write lock")
             .remove(source_identity);
+    }
+}
+
+fn new_jwks_cache_entry(source: JwtJwksSourceConfig) -> JwtJwksCacheEntry {
+    JwtJwksCacheEntry {
+        source,
+        state: JwtJwksCacheState::NeverFetched,
+        active_keys: Vec::new(),
+        refresh_in_flight: false,
+        last_refresh_started_at: None,
+        last_refresh_started_wall: None,
+        last_refresh_completed_at: None,
+        last_refresh_completed_wall: None,
+        last_success_at: None,
+        last_success_wall: None,
+        last_failure_at: None,
+        last_failure_wall: None,
+        last_error: None,
+        last_failure_reason: None,
+        next_on_demand_refresh_at: None,
     }
 }
 
@@ -1624,9 +1637,6 @@ impl QUICListener {
         }
 
         JwtJwksSharedCache::shared().reconcile_sources(sources.iter());
-        for source in &sources {
-            JwtJwksSharedCache::shared().register_source(source.clone());
-        }
 
         let require_ready = sources
             .into_iter()
@@ -2025,7 +2035,6 @@ impl QUICListener {
         };
 
         for source in sources {
-            JwtJwksSharedCache::shared().register_source(source.clone());
             let task_source = source.clone();
             let registration = spawn_supervised_async_task(
                 &handle,
