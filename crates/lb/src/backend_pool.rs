@@ -10,6 +10,9 @@ use crate::{
     health::{HealthFailureReason, HealthTransition},
 };
 
+const EWMA_ALPHA: f64 = 0.2;
+const FAILURE_PENALTY_LATENCY_MS: f64 = 1_000.0;
+
 pub struct BackendPool {
     pub backends: Vec<BackendState>,
     pub healthy: Vec<usize>,
@@ -97,6 +100,21 @@ impl BackendPool {
             return None;
         }
         self.mark_failure_with_reason(index, reason)
+    }
+
+    /// Observe a failed request from the passive request path.
+    ///
+    /// A degraded latency sample is recorded even when active health checks own
+    /// health-state transitions for the backend. This keeps latency-aware
+    /// selection from repeatedly treating a failing backend as unsampled.
+    pub fn observe_request_failure(
+        &mut self,
+        index: usize,
+        latency: Duration,
+        reason: Option<HealthFailureReason>,
+    ) -> Option<HealthTransition> {
+        self.record_failure_latency_penalty(index, latency);
+        reason.and_then(|reason| self.mark_request_failure(index, reason))
     }
 
     pub fn mark_failure_with_reason(
@@ -236,10 +254,28 @@ impl BackendPool {
         }
 
         let observed_ms = latency.as_secs_f64() * 1_000.0;
-        let alpha = 0.2_f64;
+        Self::record_latency_sample(backend, observed_ms);
+    }
+
+    fn record_latency_sample(backend: &mut BackendState, observed_ms: f64) {
         backend.ewma_latency_ms = Some(match backend.ewma_latency_ms {
-            Some(previous) => alpha * observed_ms + (1.0 - alpha) * previous,
+            Some(previous) => EWMA_ALPHA * observed_ms + (1.0 - EWMA_ALPHA) * previous,
             None => observed_ms,
+        });
+    }
+
+    fn record_failure_latency_penalty(&mut self, index: usize, latency: Duration) {
+        let Some(backend) = self.backends.get_mut(index) else {
+            return;
+        };
+
+        let penalty_ms = latency
+            .as_secs_f64()
+            .mul_add(1_000.0, 0.0)
+            .max(FAILURE_PENALTY_LATENCY_MS);
+        backend.ewma_latency_ms = Some(match backend.ewma_latency_ms {
+            Some(previous) => previous.max(penalty_ms),
+            None => penalty_ms,
         });
     }
 
@@ -402,5 +438,57 @@ mod tests {
         pool.reconcile_readmit_at(Instant::now() + Duration::from_millis(10_001));
         assert_eq!(pool.healthy_len(), 1);
         assert!(!pool.readmit_due());
+    }
+
+    #[test]
+    fn request_failure_records_penalty_sample_for_unsampled_backend() {
+        let mut pool = BackendPool::new_from_states(vec![create_backend_state("10.0.0.1:1", 1)]);
+
+        let transition = pool.observe_request_failure(
+            0,
+            Duration::from_millis(25),
+            Some(HealthFailureReason::Transport),
+        );
+
+        assert!(transition.is_none());
+        assert_eq!(
+            pool.backend(0).and_then(BackendState::ewma_latency_ms),
+            Some(FAILURE_PENALTY_LATENCY_MS)
+        );
+    }
+
+    #[test]
+    fn request_failure_penalty_overrides_fast_transport_sample() {
+        let mut pool = BackendPool::new_from_states(vec![create_backend_state("10.0.0.1:1", 1)]);
+
+        pool.finish_request(0, Duration::from_millis(20), None);
+        pool.observe_request_failure(
+            0,
+            Duration::from_millis(20),
+            Some(HealthFailureReason::Transport),
+        );
+
+        assert_eq!(
+            pool.backend(0).and_then(BackendState::ewma_latency_ms),
+            Some(FAILURE_PENALTY_LATENCY_MS)
+        );
+    }
+
+    #[test]
+    fn request_failure_with_active_health_check_still_records_penalty_sample() {
+        let mut pool = BackendPool::new_from_states(vec![create_backend_state("10.0.0.1:1", 1)]);
+
+        let transition = pool.observe_request_failure(
+            0,
+            Duration::from_millis(10),
+            Some(HealthFailureReason::HttpStatus5xx),
+        );
+
+        assert!(transition.is_none());
+        assert!(pool.is_healthy_index(0));
+        assert_eq!(
+            pool.backend(0).and_then(BackendState::ewma_latency_ms),
+            Some(FAILURE_PENALTY_LATENCY_MS)
+        );
     }
 }

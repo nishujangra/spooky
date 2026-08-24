@@ -104,6 +104,15 @@ impl UpstreamPool {
         self.pool.mark_request_failure(index, reason)
     }
 
+    pub fn observe_backend_request_failure(
+        &mut self,
+        index: usize,
+        latency: Duration,
+        reason: Option<HealthFailureReason>,
+    ) -> Option<HealthTransition> {
+        self.pool.observe_request_failure(index, latency, reason)
+    }
+
     pub fn backend_address(&self, index: usize) -> Option<&str> {
         self.pool.address(index)
     }
@@ -285,5 +294,24 @@ mod tests {
         let after_early_success = pool.membership_summary();
         assert_eq!(after_early_success.total_backends, 2);
         assert_eq!(after_early_success.healthy_backends, 1);
+    }
+
+    #[test]
+    fn observed_request_failure_records_penalty_without_forcing_health_transition() {
+        let runtime_upstream =
+            runtime_upstream_from_addresses("round-robin", None, &["http://127.0.0.1:7001"]);
+        let mut pool = UpstreamPool::from_runtime_upstream(&runtime_upstream)
+            .expect("runtime pool should build");
+
+        let transition = pool.observe_backend_request_failure(
+            0,
+            std::time::Duration::from_millis(15),
+            None,
+        );
+
+        assert!(transition.is_none());
+        let runtime = pool.backend_runtime_state(0).expect("runtime state");
+        assert!(runtime.healthy);
+        assert!(runtime.ewma_latency_ms.is_some_and(|latency| latency >= 1_000.0));
     }
 }

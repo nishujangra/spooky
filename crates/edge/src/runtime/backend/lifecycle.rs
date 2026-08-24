@@ -398,7 +398,7 @@ pub(crate) fn apply_backend_request_feedback(
         BackendRequestFeedbackOutcome::Success => pool.mark_backend_healthy(index),
         BackendRequestFeedbackOutcome::Neutral => None,
         BackendRequestFeedbackOutcome::Failure { reason } => {
-            reason.and_then(|reason| pool.mark_backend_request_failure(index, reason))
+            pool.observe_backend_request_failure(index, feedback.elapsed, reason)
         }
     }
 }
@@ -1725,6 +1725,12 @@ mod tests {
                 pool.read().expect("read").is_backend_healthy(0),
                 "reasonless failure feedback should stay a no-op for health"
             );
+            let runtime = pool
+                .read()
+                .expect("read")
+                .backend_runtime_state(0)
+                .expect("backend state");
+            assert!(runtime.ewma_latency_ms.is_some_and(|latency| latency >= 1_000.0));
         }
 
         #[test]
@@ -1746,6 +1752,28 @@ mod tests {
             let state = guard.backend_runtime_state(0).expect("backend state");
             assert_eq!(state.active_requests, 0);
             assert!(state.ewma_latency_ms.is_some());
+        }
+
+        #[test]
+        fn request_feedback_failure_penalizes_latency_even_with_active_health_checks() {
+            let pool = test_active_health_upstream_pool();
+            let feedback = BackendRequestFeedback::failure(
+                BackendIdentity::new("127.0.0.1:8080"),
+                Duration::from_millis(10),
+                Some(503),
+                Some(impulse_lb::health::HealthFailureReason::HttpStatus5xx),
+            );
+
+            let transition = apply_backend_request_feedback(Some(&pool), Some(0), &feedback);
+
+            assert!(transition.is_none());
+            let runtime = pool
+                .read()
+                .expect("read")
+                .backend_runtime_state(0)
+                .expect("backend state");
+            assert!(runtime.healthy);
+            assert!(runtime.ewma_latency_ms.is_some_and(|latency| latency >= 1_000.0));
         }
 
         #[test]
