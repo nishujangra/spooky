@@ -455,7 +455,7 @@ impl QUICListener {
             let transport_pool = transport.as_ref();
             let mut policy_telemetry = ForwardingPolicyTelemetry::default();
             let result: ForwardResult = async {
-                retry_budget.mark_primary(&route_name);
+                retry_budget.mark_primary(route_name);
 
                 let forward_success: ForwardSuccess = if tunnel_mode == TunnelMode::Websocket
                     && backend_endpoint.scheme() == BackendScheme::Http
@@ -616,7 +616,7 @@ impl QUICListener {
                                         primary_err,
                                         RetryExecutionCtx {
                                             request_id,
-                                            route_name: &route_name,
+                                            route_name,
                                             policy,
                                             policy_telemetry: &mut policy_telemetry,
                                             retry_budget,
@@ -651,7 +651,7 @@ impl QUICListener {
                                         primary_err,
                                         RetryExecutionCtx {
                                             request_id,
-                                            route_name: &route_name,
+                                            route_name,
                                             policy,
                                             policy_telemetry: &mut policy_telemetry,
                                             retry_budget,

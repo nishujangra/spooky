@@ -455,18 +455,12 @@ fn jwks_source_state_entry_mut<'a>(
     states: &'a mut HashMap<String, JwksSourceState>,
     jwks_source_id: &str,
 ) -> &'a mut JwksSourceState {
-    if !states.contains_key(jwks_source_id) {
-        states.insert(
-            jwks_source_id.to_string(),
-            JwksSourceState {
-                jwks_source_id: jwks_source_id.to_string(),
-                ..JwksSourceState::default()
-            },
-        );
-    }
     states
-        .get_mut(jwks_source_id)
-        .expect("jwks source state entry inserted")
+        .entry(jwks_source_id.to_string())
+        .or_insert_with(|| JwksSourceState {
+            jwks_source_id: jwks_source_id.to_string(),
+            ..JwksSourceState::default()
+        })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1277,8 +1271,8 @@ impl Metrics {
                 entries.sort_by(|(left, _), (right, _)| {
                     left.upstream
                         .cmp(&right.upstream)
-                        .then_with(|| left.status_class.cmp(&right.status_class))
-                        .then_with(|| left.outcome.cmp(&right.outcome))
+                        .then_with(|| left.status_class.cmp(right.status_class))
+                        .then_with(|| left.outcome.cmp(right.outcome))
                 });
                 entries
             })
@@ -1298,8 +1292,8 @@ impl Metrics {
                     left.upstream
                         .cmp(&right.upstream)
                         .then_with(|| left.backend.cmp(&right.backend))
-                        .then_with(|| left.status_class.cmp(&right.status_class))
-                        .then_with(|| left.outcome.cmp(&right.outcome))
+                        .then_with(|| left.status_class.cmp(right.status_class))
+                        .then_with(|| left.outcome.cmp(right.outcome))
                 });
                 entries
             })
@@ -1320,7 +1314,7 @@ impl Metrics {
                 entries.sort_by(|(left, _), (right, _)| {
                     left.upstream
                         .cmp(&right.upstream)
-                        .then_with(|| left.outcome.cmp(&right.outcome))
+                        .then_with(|| left.outcome.cmp(right.outcome))
                 });
                 entries
             })
