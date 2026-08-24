@@ -56,6 +56,19 @@ fn classify_tls_detail(detail: &str) -> UpstreamErrorClassification {
     }
 }
 
+fn passive_health_failure_for_classification(
+    classification: UpstreamErrorClassification,
+) -> Option<UpstreamHealthFailureMapping> {
+    match classification.category {
+        UpstreamErrorCategory::Tls
+        | UpstreamErrorCategory::Protocol
+        | UpstreamErrorCategory::Internal => None,
+        UpstreamErrorCategory::Timeout | UpstreamErrorCategory::Transport => {
+            Some(classification.health_failure_mapping())
+        }
+    }
+}
+
 pub fn classify_upstream_send_error(
     err: &hyper_util::client::legacy::Error,
 ) -> ClassifiedUpstreamProxyError {
@@ -65,7 +78,7 @@ pub fn classify_upstream_send_error(
         kind: UpstreamProxyErrorKind::Send,
         detail: details.detail,
         classification,
-        health_failure: Some(classification.health_failure_mapping()),
+        health_failure: passive_health_failure_for_classification(classification),
         retryability: UpstreamRetryability::Terminal(UpstreamTerminalErrorKind::PoolSend),
     }
 }
@@ -79,7 +92,7 @@ pub fn classify_upstream_proxy_error(err: &ProxyError) -> Option<ClassifiedUpstr
                 kind: UpstreamProxyErrorKind::Transport,
                 detail: detail.clone(),
                 classification,
-                health_failure: Some(classification.health_failure_mapping()),
+                health_failure: passive_health_failure_for_classification(classification),
                 retryability: classify_retryability(err),
             })
         }
@@ -89,7 +102,7 @@ pub fn classify_upstream_proxy_error(err: &ProxyError) -> Option<ClassifiedUpstr
                 kind: UpstreamProxyErrorKind::Timeout,
                 detail: err.to_string(),
                 classification,
-                health_failure: Some(classification.health_failure_mapping()),
+                health_failure: passive_health_failure_for_classification(classification),
                 retryability: classify_retryability(err),
             })
         }
