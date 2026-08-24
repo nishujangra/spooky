@@ -90,15 +90,20 @@ impl BackendState {
 
                 self.consecutive_failures = 0;
                 if success_threshold <= 1 {
-                    self.consecutive_failures = 0;
                     self.health_state = HealthState::Healthy;
                     return Some(HealthTransition::BecameHealthy);
                 }
 
-                self.health_state = HealthState::Probing { successes: 1 };
+                self.health_state = HealthState::Probing {
+                    successes: 1,
+                    remaining_budget: self.probe_budget(),
+                };
                 None
             }
-            HealthState::Probing { successes } => {
+            HealthState::Probing {
+                successes,
+                remaining_budget,
+            } => {
                 let next_successes = successes.saturating_add(1);
                 if next_successes >= success_threshold {
                     self.consecutive_failures = 0;
@@ -108,6 +113,7 @@ impl BackendState {
 
                 self.health_state = HealthState::Probing {
                     successes: next_successes,
+                    remaining_budget,
                 };
                 None
             }
@@ -157,14 +163,37 @@ impl BackendState {
             && now >= until
         {
             self.consecutive_failures = 0;
-            self.health_state = HealthState::Probing { successes: 0 };
+            self.health_state = HealthState::Probing {
+                successes: 0,
+                remaining_budget: self.probe_budget(),
+            };
             return true;
         }
         false
     }
 
+    pub fn try_acquire_probe_permit(&mut self) -> bool {
+        match &mut self.health_state {
+            HealthState::Probing {
+                remaining_budget, ..
+            } if *remaining_budget > 0 => {
+                *remaining_budget -= 1;
+                true
+            }
+            HealthState::Healthy | HealthState::Unhealthy { .. } | HealthState::Probing { .. } => {
+                false
+            }
+        }
+    }
+
     fn cooldown_duration(&self) -> Duration {
         Duration::from_millis(self.health_check.as_ref().map_or(10_000, |hc| hc.cooldown_ms))
+    }
+
+    fn probe_budget(&self) -> u32 {
+        self.health_check
+            .as_ref()
+            .map_or(1, |hc| hc.success_threshold.max(1))
     }
 }
 
@@ -174,6 +203,9 @@ enum HealthState {
     // Half-open recovery state: a backend has served enough cooldown time to
     // be probe-eligible, but it is not healthy again until probe successes
     // reach the configured threshold.
-    Probing { successes: u32 },
+    Probing {
+        successes: u32,
+        remaining_budget: u32,
+    },
     Unhealthy { until: Instant, successes: u32 },
 }

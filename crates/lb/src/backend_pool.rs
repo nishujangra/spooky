@@ -231,6 +231,23 @@ impl BackendPool {
         self.healthy_pos.get(index).copied().flatten().is_some()
     }
 
+    pub fn pick_probing_backend(&mut self, begin_request: bool) -> Option<usize> {
+        let selected = self.backends.iter_mut().enumerate().find_map(|(index, backend)| {
+            (backend.is_probing()
+                && backend.active_requests() == 0
+                && backend.try_acquire_probe_permit())
+            .then_some(index)
+        });
+
+        if let Some(index) = selected
+            && begin_request
+        {
+            self.begin_request(index);
+        }
+
+        selected
+    }
+
     pub fn begin_request(&self, index: usize) {
         if let Some(backend) = self.backends.get(index) {
             backend.active_requests.fetch_add(1, Ordering::Relaxed);
@@ -443,6 +460,65 @@ mod tests {
         let transition = pool.mark_success(0);
         assert_eq!(pool.healthy_len(), 1);
         assert!(matches!(transition, Some(HealthTransition::BecameHealthy)));
+    }
+
+    #[test]
+    fn probing_backend_probe_budget_is_consumed_by_selection_attempts() {
+        let backend = Backend {
+            id: "b1".to_string(),
+            address: "10.0.0.1:1".to_string(),
+            weight: 1,
+            health_check: Some(HealthCheck {
+                path: "/health".to_string(),
+                interval: 0,
+                timeout_ms: 1000,
+                failure_threshold: 1,
+                success_threshold: 2,
+                cooldown_ms: 10_000,
+            }),
+        };
+        let mut pool = BackendPool::new_from_states(vec![BackendState::new(&backend)]);
+
+        assert!(matches!(
+            pool.mark_request_failure(0, HealthFailureReason::Transport),
+            Some(HealthTransition::BecameUnhealthy)
+        ));
+        pool.reconcile_readmit_at(Instant::now() + Duration::from_millis(10_001));
+        assert!(pool.backend(0).is_some_and(BackendState::is_probing));
+
+        assert_eq!(pool.pick_probing_backend(false), Some(0));
+        assert_eq!(pool.pick_probing_backend(false), Some(0));
+        assert_eq!(pool.pick_probing_backend(false), None);
+    }
+
+    #[test]
+    fn probing_backend_allows_only_one_inflight_probe_when_beginning_requests() {
+        let backend = Backend {
+            id: "b1".to_string(),
+            address: "10.0.0.1:1".to_string(),
+            weight: 1,
+            health_check: Some(HealthCheck {
+                path: "/health".to_string(),
+                interval: 0,
+                timeout_ms: 1000,
+                failure_threshold: 1,
+                success_threshold: 2,
+                cooldown_ms: 10_000,
+            }),
+        };
+        let mut pool = BackendPool::new_from_states(vec![BackendState::new(&backend)]);
+
+        assert!(matches!(
+            pool.mark_request_failure(0, HealthFailureReason::Transport),
+            Some(HealthTransition::BecameUnhealthy)
+        ));
+        pool.reconcile_readmit_at(Instant::now() + Duration::from_millis(10_001));
+
+        assert_eq!(pool.pick_probing_backend(true), Some(0));
+        assert_eq!(pool.pick_probing_backend(true), None);
+        pool.finish_request(0, Duration::from_millis(10), Some(200));
+        assert_eq!(pool.pick_probing_backend(true), Some(0));
+        assert_eq!(pool.pick_probing_backend(true), None);
     }
 
     #[test]
