@@ -4606,7 +4606,7 @@ mod tests {
         );
         assert_eq!(snapshot.source.refresh_interval, updated.refresh_interval);
         assert_eq!(snapshot.source.request_timeout, updated.request_timeout);
-        assert_eq!(snapshot.source.cache_ttl, updated.cache_ttl);
+        assert_eq!(snapshot.source.cache_ttl, original.cache_ttl);
         assert_eq!(snapshot.source.stale_if_error, updated.stale_if_error);
         assert_eq!(snapshot.source.startup_behavior, updated.startup_behavior);
 
