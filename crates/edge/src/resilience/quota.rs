@@ -44,6 +44,11 @@ pub use redis::{REDIS_QUOTA_PROTOCOL_VERSION, RedisDistributedQuotaCounterStore}
 
 const LOCAL_FALLBACK_PROTOCOL_VERSION: &str = "degraded-local-fallback/v1";
 const LOCAL_FALLBACK_BACKEND_SEPARATOR: &str = "_local_fallback_";
+/// Upper bound for request-derived quota identity values handled by this
+/// module. Keep this local to quota extraction so later hardening can enforce a
+/// single canonical limit without introducing broader runtime config surface.
+const MAX_REQUEST_DERIVED_QUOTA_IDENTITY_BYTES: usize = 256;
+const MAX_REQUEST_DERIVED_QUOTA_IDENTITY_COMPONENTS: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuotaEnforcementMode {
@@ -1980,7 +1985,7 @@ fn normalize_route_identity(route: Option<&str>) -> Option<String> {
 }
 
 fn compose_quota_key(policy_name: &str, labels: &QuotaIdentityLabels) -> String {
-    let mut key = String::new();
+    let mut key = String::with_capacity(estimated_quota_key_capacity(policy_name));
     append_key_component(&mut key, "policy", policy_name);
     if let Some(route) = labels.route.as_deref() {
         append_key_component(&mut key, "route", route);
@@ -1995,6 +2000,16 @@ fn compose_quota_key(policy_name: &str, labels: &QuotaIdentityLabels) -> String 
         append_key_component(&mut key, "client", client);
     }
     key
+}
+
+fn estimated_quota_key_capacity(policy_name: &str) -> usize {
+    policy_name
+        .len()
+        .saturating_add(
+            MAX_REQUEST_DERIVED_QUOTA_IDENTITY_BYTES
+                .saturating_mul(MAX_REQUEST_DERIVED_QUOTA_IDENTITY_COMPONENTS),
+        )
+        .saturating_add(64)
 }
 
 fn append_key_component(output: &mut String, label: &str, value: &str) {
