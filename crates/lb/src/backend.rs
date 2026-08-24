@@ -150,15 +150,14 @@ impl BackendState {
         }
     }
 
-    /// Optimistically re-admit an ejected backend once its cooldown has elapsed
-    /// so live traffic can probe it again. Returns true on transition.
+    /// Move an ejected backend into probing once its cooldown has elapsed.
+    /// Returns true when the backend becomes probe-eligible.
     pub fn readmit_if_expired(&mut self, now: Instant) -> bool {
         if let HealthState::Unhealthy { until, .. } = self.health_state
             && now >= until
         {
             self.consecutive_failures = 0;
-            self.ewma_latency_ms = None;
-            self.health_state = HealthState::Healthy;
+            self.health_state = HealthState::Probing { successes: 0 };
             return true;
         }
         false
