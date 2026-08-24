@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, convert::Infallible};
+use std::{borrow::Cow, collections::VecDeque, convert::Infallible};
 
 use http_body_util::Full;
 use impulse_config::runtime::RuntimeExternalAuth;
@@ -171,10 +171,40 @@ pub(super) struct RequestFinalizationConfig {
 }
 
 impl PendingForward {
-    pub(super) fn request_headers(&self) -> Vec<quiche::h3::Header> {
-        let mut headers = self.headers.as_ref().clone();
+    fn request_headers_cow(&self) -> Cow<'_, [quiche::h3::Header]> {
+        if self.auth_header_mutations.is_empty() {
+            return Cow::Borrowed(self.headers.as_ref());
+        }
+
+        let mut headers = self.headers.as_ref().to_vec();
         apply_auth_request_mutations(&mut headers, &self.auth_header_mutations);
-        headers
+        Cow::Owned(headers)
+    }
+
+    fn request_headers_for_http1_websocket_tunnel(&self) -> Cow<'_, [quiche::h3::Header]> {
+        let request_headers = self.request_headers_cow();
+        let has_upgrade = request_headers
+            .iter()
+            .any(|header| header.name().eq_ignore_ascii_case(b"upgrade"));
+        let has_connection = request_headers
+            .iter()
+            .any(|header| header.name().eq_ignore_ascii_case(b"connection"));
+        if has_upgrade && has_connection {
+            return request_headers;
+        }
+
+        let mut request_headers = request_headers.into_owned();
+        if !has_upgrade {
+            request_headers.push(quiche::h3::Header::new(b"upgrade", b"websocket"));
+        }
+        if !has_connection {
+            request_headers.push(quiche::h3::Header::new(b"connection", b"upgrade"));
+        }
+        Cow::Owned(request_headers)
+    }
+
+    pub(super) fn request_headers(&self) -> Vec<quiche::h3::Header> {
+        self.request_headers_cow().into_owned()
     }
 
     fn request_build_target<'a>(
@@ -222,17 +252,17 @@ impl PendingForward {
         body: BoxBody<Bytes, Infallible>,
         content_length: Option<usize>,
     ) -> Result<Request<BoxBody<Bytes, Infallible>>, ProxyError> {
-        let headers = self.request_headers();
+        let headers = self.request_headers_cow();
         if endpoint.scheme() == BackendScheme::Http {
             impulse_bridge::request::build_h1_request(
                 self.request_build_target(endpoint),
-                self.request_build_input(&self.method, &headers, body, content_length),
+                self.request_build_input(&self.method, headers.as_ref(), body, content_length),
             )
             .map_err(ProxyError::from)
         } else {
             impulse_bridge::request::build_h2_request_for_target(
                 self.request_build_target(endpoint),
-                self.request_build_input(&self.method, &headers, body, content_length),
+                self.request_build_input(&self.method, headers.as_ref(), body, content_length),
             )
             .map_err(ProxyError::from)
         }
@@ -249,25 +279,13 @@ impl PendingForward {
         &self,
         endpoint: &BackendEndpoint,
     ) -> Result<Request<BoxBody<Bytes, Infallible>>, ProxyError> {
-        let mut request_headers = self.request_headers();
-        let has_upgrade = request_headers
-            .iter()
-            .any(|header| header.name().eq_ignore_ascii_case(b"upgrade"));
-        if !has_upgrade {
-            request_headers.push(quiche::h3::Header::new(b"upgrade", b"websocket"));
-        }
-        let has_connection = request_headers
-            .iter()
-            .any(|header| header.name().eq_ignore_ascii_case(b"connection"));
-        if !has_connection {
-            request_headers.push(quiche::h3::Header::new(b"connection", b"upgrade"));
-        }
+        let request_headers = self.request_headers_for_http1_websocket_tunnel();
 
         impulse_bridge::request::build_h1_request(
             self.request_build_target(endpoint),
             self.request_build_input(
                 "GET",
-                &request_headers,
+                request_headers.as_ref(),
                 BoxBody::new(Full::new(Bytes::new())),
                 None,
             ),
@@ -987,6 +1005,38 @@ mod tests {
             Some("alice")
         );
         assert!(!headers.contains_key("x-remove-me"));
+    }
+
+    #[test]
+    fn request_headers_borrows_original_headers_when_no_auth_mutations_are_pending() {
+        let pending_forward = PendingForward::sample_for_test(vec![quiche::h3::Header::new(
+            b"x-test",
+            b"1",
+        )]);
+
+        assert!(matches!(
+            pending_forward.request_headers_cow(),
+            Cow::Borrowed(_)
+        ));
+    }
+
+    #[test]
+    fn request_headers_materializes_owned_headers_when_auth_mutations_are_pending() {
+        let pending_forward = PendingForward {
+            auth_header_mutations: vec![PendingHeaderMutation::Upsert {
+                name: b"x-auth-user".to_vec(),
+                value: b"alice".to_vec(),
+            }],
+            ..PendingForward::sample_for_test(vec![quiche::h3::Header::new(
+                b"x-test",
+                b"1",
+            )])
+        };
+
+        assert!(matches!(
+            pending_forward.request_headers_cow(),
+            Cow::Owned(_)
+        ));
     }
 
     #[test]
