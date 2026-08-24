@@ -61,8 +61,8 @@ struct RetryExecutionCtx<'a> {
     alternate_backend: Option<&'a ResolvedAlternateBackend>,
     backend_endpoints: &'a HashMap<String, BackendEndpoint>,
     pending_forward: &'a PendingForward,
-    circuit_breakers: Arc<crate::resilience::circuit_breaker::CircuitBreakers>,
-    transport: Arc<UpstreamTransportPool>,
+    circuit_breakers: &'a crate::resilience::circuit_breaker::CircuitBreakers,
+    transport: &'a UpstreamTransportPool,
 }
 
 #[derive(Clone, Copy)]
@@ -165,19 +165,21 @@ fn retry_budget_available_for_error(
 
 impl QUICListener {
     async fn send_upstream_request(
-        backend: String,
+        backend: &str,
         request: UpstreamRequest,
-        circuit_breakers: Arc<crate::resilience::circuit_breaker::CircuitBreakers>,
-        transport: Arc<UpstreamTransportPool>,
+        circuit_breakers: &crate::resilience::circuit_breaker::CircuitBreakers,
+        transport: &UpstreamTransportPool,
     ) -> Result<Response<Incoming>, ProxyError> {
-        if !circuit_breakers.allow_request(&backend) {
-            return Err(ProxyError::Pool(PoolError::CircuitOpen(backend)));
+        if !circuit_breakers.allow_request(backend) {
+            return Err(ProxyError::Pool(PoolError::CircuitOpen(
+                backend.to_string(),
+            )));
         }
 
-        let send_result = transport.send_backend_request(&backend, request).await;
+        let send_result = transport.send_backend_request(backend, request).await;
         match &send_result {
-            Ok(_) => circuit_breakers.record_success(&backend),
-            _ => circuit_breakers.record_failure(&backend),
+            Ok(_) => circuit_breakers.record_success(backend),
+            _ => circuit_breakers.record_failure(backend),
         }
         send_result
     }
@@ -399,7 +401,13 @@ impl QUICListener {
             canonical_retry_reason.slug(),
             retry_backend
         );
-        Self::send_upstream_request(retry_backend, retry_request, circuit_breakers, transport).await
+        Self::send_upstream_request(
+            retry_backend.as_str(),
+            retry_request,
+            circuit_breakers,
+            transport,
+        )
+        .await
     }
 
     pub(super) fn spawn_upstream_forward_task(
@@ -413,10 +421,8 @@ impl QUICListener {
     ) -> Result<oneshot::Receiver<UpstreamResult>, ProxyError> {
         let metrics = Arc::clone(&shared_ctx.metrics);
         let resilience = shared_ctx.resilience;
-        let fwd_addr = pending_forward.backend_addr.to_string();
-        let cb = Arc::clone(&resilience.circuit_breakers);
+        let circuit_breakers = Arc::clone(&resilience.circuit_breakers);
         let retry_budget = Arc::clone(&resilience.retry_budget);
-        let route_name = pending_forward.upstream_name.to_string();
         let backend_timeout = exec_ctx.backend_timeout;
         let backend_endpoints = Arc::clone(&exec_ctx.backend_endpoints);
         let transport = Arc::clone(&exec_ctx.transport_pool);
@@ -425,14 +431,14 @@ impl QUICListener {
             Self::resolve_alternate_backend(upstream_pool, pending_forward.backend_index)
         });
         let trace_span_for_upstream = req.trace_span.clone();
-        let pending_forward_for_upstream = Arc::clone(&pending_forward);
         let (result_tx, result_rx) = oneshot::channel::<UpstreamResult>();
         let tunnel_mode = req.tunnel_mode;
         let bodyless_mode = req.bodyless_mode;
         let request_id = req.request_id;
         let method_idempotent = is_idempotent_method(&req.method);
         let hedge_method_allowed = resilience.hedging_method_allowed(&req.method);
-        let hedge_configured = resilience.hedging_route_enabled_for(&route_name);
+        let hedge_configured =
+            resilience.hedging_route_enabled_for(pending_forward.upstream_name.as_ref());
         let hedge_tunnel_request = req.tunnel_mode != TunnelMode::None;
         let policy = ForwardingRetryHedgePolicy::new(
             method_idempotent,
@@ -442,6 +448,11 @@ impl QUICListener {
             hedge_tunnel_request,
         );
         let fut = async move {
+            let route_name = pending_forward.upstream_name.as_ref();
+            let primary_backend = pending_forward.backend_addr.as_ref();
+            let circuit_breakers = circuit_breakers.as_ref();
+            let retry_budget = retry_budget.as_ref();
+            let transport_pool = transport.as_ref();
             let mut policy_telemetry = ForwardingPolicyTelemetry::default();
             let result: ForwardResult = async {
                 retry_budget.mark_primary(&route_name);
@@ -456,7 +467,7 @@ impl QUICListener {
                     };
                     Self::forward_http1_websocket_tunnel(WebsocketTunnelForwardInput {
                         endpoint: backend_endpoint.clone(),
-                        pending_forward: Arc::clone(&pending_forward_for_upstream),
+                        pending_forward: Arc::clone(&pending_forward),
                         body_rx,
                         backend_timeout,
                         metrics: Arc::clone(&metrics),
@@ -475,7 +486,7 @@ impl QUICListener {
                             let hedge_candidate = Self::build_alternate_bodyless_candidate(
                                 alternate_backend.as_ref(),
                                 backend_endpoints.as_ref(),
-                                pending_forward_for_upstream.as_ref(),
+                                pending_forward.as_ref(),
                             );
 
                             if let Some(AlternateBodylessCandidate {
@@ -483,104 +494,103 @@ impl QUICListener {
                                 request: hedge_request,
                             }) = hedge_candidate
                             {
-                            let primary_started = Instant::now();
-                            let primary_backend = fwd_addr.clone();
-                            let primary_fut = Self::send_upstream_request(
-                                primary_backend,
-                                request,
-                                Arc::clone(&cb),
-                                Arc::clone(&transport),
-                            );
-                            tokio::pin!(primary_fut);
-                            let hedge_sleep = tokio::time::sleep(hedge_delay);
-                            tokio::pin!(hedge_sleep);
+                                let primary_started = Instant::now();
+                                let primary_fut = Self::send_upstream_request(
+                                    primary_backend,
+                                    request,
+                                    circuit_breakers,
+                                    transport_pool,
+                                );
+                                tokio::pin!(primary_fut);
+                                let hedge_sleep = tokio::time::sleep(hedge_delay);
+                                tokio::pin!(hedge_sleep);
 
-                            if let Some(result) = tokio::select! {
-                                result = &mut primary_fut => Some(result),
-                                _ = &mut hedge_sleep => None,
-                            } {
-                                result?
-                            } else {
-                                match policy.hedge_after_delay(
-                                    retry_budget_available_for_error(
-                                        &ProxyError::Timeout,
-                                        &route_name,
-                                        retry_budget.as_ref(),
-                                    ),
-                                ) {
-                                    HedgePolicyDecision::Hedge { reason } => {
-                                        policy_telemetry.hedge.record_trigger(reason);
-                                        let hedge_fut = Self::send_upstream_request(
-                                            hedge_backend,
-                                            hedge_request,
-                                            Arc::clone(&cb),
-                                            Arc::clone(&transport),
-                                        );
-                                        tokio::pin!(hedge_fut);
-                                        tokio::select! {
-                                            result = &mut primary_fut => {
-                                                match result {
-                                                    Ok(response) => {
-                                                        policy_telemetry
-                                                            .hedge
-                                                            .record_outcome(HedgeOutcomeTelemetryReason::PrimaryWonAfterTrigger);
-                                                        response
-                                                    }
-                                                    Err(_primary_err) => {
-                                                        policy_telemetry
-                                                            .hedge
-                                                            .record_outcome(HedgeOutcomeTelemetryReason::HedgeWon);
-                                                        let elapsed_ms = primary_started.elapsed().as_millis() as u64;
-                                                        let delay_ms = hedge_delay.as_millis() as u64;
-                                                        policy_telemetry
-                                                            .hedge
-                                                            .observe_primary_late_ms(elapsed_ms.saturating_sub(delay_ms));
-                                                        hedge_fut.await?
-                                                    }
-                                                }
-                                            },
-                                            result = &mut hedge_fut => {
-                                                match result {
-                                                    Ok(response) => {
-                                                        policy_telemetry
-                                                            .hedge
-                                                            .record_outcome(HedgeOutcomeTelemetryReason::HedgeWon);
-                                                        let elapsed_ms = primary_started.elapsed().as_millis() as u64;
-                                                        let delay_ms = hedge_delay.as_millis() as u64;
-                                                        policy_telemetry
-                                                            .hedge
-                                                            .observe_primary_late_ms(elapsed_ms.saturating_sub(delay_ms));
-                                                        response
-                                                    }
-                                                    Err(_hedge_err) => {
-                                                        policy_telemetry
-                                                            .hedge
-                                                            .record_outcome(HedgeOutcomeTelemetryReason::PrimaryWonAfterTrigger);
-                                                        primary_fut.await?
+                                if let Some(result) = tokio::select! {
+                                    result = &mut primary_fut => Some(result),
+                                    _ = &mut hedge_sleep => None,
+                                } {
+                                    result?
+                                } else {
+                                    match policy.hedge_after_delay(
+                                        retry_budget_available_for_error(
+                                            &ProxyError::Timeout,
+                                            route_name,
+                                            retry_budget,
+                                        ),
+                                    ) {
+                                        HedgePolicyDecision::Hedge { reason } => {
+                                            policy_telemetry.hedge.record_trigger(reason);
+                                            let hedge_fut = Self::send_upstream_request(
+                                                hedge_backend.as_str(),
+                                                hedge_request,
+                                                circuit_breakers,
+                                                transport_pool,
+                                            );
+                                            tokio::pin!(hedge_fut);
+                                            tokio::select! {
+                                                result = &mut primary_fut => {
+                                                    match result {
+                                                        Ok(response) => {
+                                                            policy_telemetry
+                                                                .hedge
+                                                                .record_outcome(HedgeOutcomeTelemetryReason::PrimaryWonAfterTrigger);
+                                                            response
+                                                        }
+                                                        Err(_primary_err) => {
+                                                            policy_telemetry
+                                                                .hedge
+                                                                .record_outcome(HedgeOutcomeTelemetryReason::HedgeWon);
+                                                            let elapsed_ms = primary_started.elapsed().as_millis() as u64;
+                                                            let delay_ms = hedge_delay.as_millis() as u64;
+                                                            policy_telemetry
+                                                                .hedge
+                                                                .observe_primary_late_ms(elapsed_ms.saturating_sub(delay_ms));
+                                                            hedge_fut.await?
+                                                        }
                                                     }
                                                 }
-                                            },
+                                                result = &mut hedge_fut => {
+                                                    match result {
+                                                        Ok(response) => {
+                                                            policy_telemetry
+                                                                .hedge
+                                                                .record_outcome(HedgeOutcomeTelemetryReason::HedgeWon);
+                                                            let elapsed_ms = primary_started.elapsed().as_millis() as u64;
+                                                            let delay_ms = hedge_delay.as_millis() as u64;
+                                                            policy_telemetry
+                                                                .hedge
+                                                                .observe_primary_late_ms(elapsed_ms.saturating_sub(delay_ms));
+                                                            response
+                                                        }
+                                                        Err(_hedge_err) => {
+                                                            policy_telemetry
+                                                                .hedge
+                                                                .record_outcome(HedgeOutcomeTelemetryReason::PrimaryWonAfterTrigger);
+                                                            primary_fut.await?
+                                                        }
+                                                    }
+                                                },
+                                            }
+                                        }
+                                        HedgePolicyDecision::WaitForPrimary => primary_fut.await?,
+                                        HedgePolicyDecision::DoNotHedge { denial } => {
+                                            debug!(
+                                                "hedge decision: request_id={} upstream={} decision=suppressed reason={} detail={:?}",
+                                                request_id,
+                                                route_name,
+                                                HedgeDecisionReason::from(denial).slug(),
+                                                denial
+                                            );
+                                            primary_fut.await?
                                         }
                                     }
-                                    HedgePolicyDecision::WaitForPrimary => primary_fut.await?,
-                                    HedgePolicyDecision::DoNotHedge { denial } => {
-                                        debug!(
-                                            "hedge decision: request_id={} upstream={} decision=suppressed reason={} detail={:?}",
-                                            request_id,
-                                            route_name,
-                                            HedgeDecisionReason::from(denial).slug(),
-                                            denial
-                                        );
-                                        primary_fut.await?
-                                    }
                                 }
-                            }
                             } else {
                                 Self::send_upstream_request(
-                                    fwd_addr.clone(),
+                                    primary_backend,
                                     request,
-                                    Arc::clone(&cb),
-                                    Arc::clone(&transport),
+                                    circuit_breakers,
+                                    transport_pool,
                                 )
                                 .await?
                             }
@@ -594,10 +604,10 @@ impl QUICListener {
                                 denial
                             );
                             match Self::send_upstream_request(
-                                fwd_addr.clone(),
+                                primary_backend,
                                 request,
-                                Arc::clone(&cb),
-                                Arc::clone(&transport),
+                                circuit_breakers,
+                                transport_pool,
                             )
                             .await
                             {
@@ -609,12 +619,12 @@ impl QUICListener {
                                             route_name: &route_name,
                                             policy,
                                             policy_telemetry: &mut policy_telemetry,
-                                            retry_budget: retry_budget.as_ref(),
+                                            retry_budget,
                                             alternate_backend: alternate_backend.as_ref(),
                                             backend_endpoints: backend_endpoints.as_ref(),
-                                            pending_forward: pending_forward_for_upstream.as_ref(),
-                                            circuit_breakers: Arc::clone(&cb),
-                                            transport: Arc::clone(&transport),
+                                            pending_forward: pending_forward.as_ref(),
+                                            circuit_breakers,
+                                            transport: transport_pool,
                                         },
                                     )
                                     .await?,
@@ -629,10 +639,10 @@ impl QUICListener {
                                 reason
                             );
                             match Self::send_upstream_request(
-                                fwd_addr.clone(),
+                                primary_backend,
                                 request,
-                                Arc::clone(&cb),
-                                Arc::clone(&transport),
+                                circuit_breakers,
+                                transport_pool,
                             )
                             .await
                             {
@@ -644,12 +654,12 @@ impl QUICListener {
                                             route_name: &route_name,
                                             policy,
                                             policy_telemetry: &mut policy_telemetry,
-                                            retry_budget: retry_budget.as_ref(),
+                                            retry_budget,
                                             alternate_backend: alternate_backend.as_ref(),
                                             backend_endpoints: backend_endpoints.as_ref(),
-                                            pending_forward: pending_forward_for_upstream.as_ref(),
-                                            circuit_breakers: Arc::clone(&cb),
-                                            transport: Arc::clone(&transport),
+                                            pending_forward: pending_forward.as_ref(),
+                                            circuit_breakers,
+                                            transport: transport_pool,
                                         },
                                     )
                                     .await?,
