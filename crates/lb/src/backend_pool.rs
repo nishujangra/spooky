@@ -41,6 +41,7 @@ impl BackendPool {
         }
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.backends.len()
     }
@@ -185,6 +186,7 @@ impl BackendPool {
         self.healthy.clone()
     }
 
+    #[must_use]
     pub fn healthy_len(&self) -> usize {
         self.healthy.len()
     }
@@ -201,6 +203,7 @@ impl BackendPool {
         self.backends.get(index)
     }
 
+    #[must_use]
     pub fn membership_epoch(&self) -> u64 {
         self.membership_epoch
     }

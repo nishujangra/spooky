@@ -53,6 +53,7 @@ impl BackendState {
         self.health_check.as_ref()
     }
 
+    #[must_use]
     pub fn weight(&self) -> u32 {
         self.weight
     }

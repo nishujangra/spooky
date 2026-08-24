@@ -65,6 +65,7 @@ impl LoadBalancing {
         }
     }
 
+    #[must_use]
     pub fn name(&self) -> &'static str {
         match self {
             LoadBalancing::RoundRobin(_) => "round-robin",
