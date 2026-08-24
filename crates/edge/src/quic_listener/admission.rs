@@ -4562,25 +4562,6 @@ mod tests {
 
         JwtJwksSharedCache::shared().reconcile_sources([&updated]);
 
-        let snapshot = JwtJwksSharedCache::shared()
-            .snapshot(&updated.source_identity, Instant::now())
-            .expect("active source snapshot after reconcile");
-        assert_eq!(snapshot.state, JwtJwksCacheState::RefreshFailedRetained);
-        assert_eq!(snapshot.active_keys.len(), 1);
-        assert_eq!(
-            snapshot.last_failure_reason,
-            Some(JwtJwksFetchFailureReason::RequestFailed)
-        );
-        assert_eq!(
-            snapshot.source.allowed_algorithms,
-            updated.allowed_algorithms
-        );
-        assert_eq!(snapshot.source.refresh_interval, updated.refresh_interval);
-        assert_eq!(snapshot.source.request_timeout, updated.request_timeout);
-        assert_eq!(snapshot.source.cache_ttl, original.cache_ttl);
-        assert_eq!(snapshot.source.stale_if_error, updated.stale_if_error);
-        assert_eq!(snapshot.source.startup_behavior, updated.startup_behavior);
-
         let entries = JwtJwksSharedCache::shared()
             .entries
             .read()
@@ -4591,6 +4572,16 @@ mod tests {
         assert!(entry.refresh_in_flight);
         assert_eq!(entry.state, JwtJwksCacheState::RefreshFailedRetained);
         assert_eq!(entry.active_keys.len(), 1);
+        assert_eq!(
+            entry.last_failure_reason,
+            Some(JwtJwksFetchFailureReason::RequestFailed)
+        );
+        assert_eq!(entry.source.allowed_algorithms, updated.allowed_algorithms);
+        assert_eq!(entry.source.refresh_interval, updated.refresh_interval);
+        assert_eq!(entry.source.request_timeout, updated.request_timeout);
+        assert_eq!(entry.source.cache_ttl, original.cache_ttl);
+        assert_eq!(entry.source.stale_if_error, updated.stale_if_error);
+        assert_eq!(entry.source.startup_behavior, updated.startup_behavior);
         assert_eq!(
             entry.last_error.as_deref(),
             Some("request_failed: retained")
