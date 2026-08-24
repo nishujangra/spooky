@@ -445,12 +445,11 @@ impl QuotaSelectorMatcher {
         };
 
         let extracted = extract_quota_selector_key(spec, context);
-        let sensitive = quota_dimension_is_sensitive(dimension, spec);
 
         match extracted {
-            RequestKeyExtraction::Found(value) => {
-                Ok(Some(stable_observable_identity_value(&value, sensitive)))
-            }
+            RequestKeyExtraction::Found(value) => Ok(Some(canonical_quota_identity_value(
+                dimension, &value,
+            ))),
             RequestKeyExtraction::Missing => Err(QuotaIdentityRejection {
                 policy_name: policy_name.to_string(),
                 dimension,
@@ -1963,23 +1962,9 @@ fn bounded_owned_request_key_value(value: String) -> RequestKeyExtraction {
     RequestKeyExtraction::Found(value)
 }
 
-fn quota_dimension_is_sensitive(
-    dimension: QuotaIdentityDimension,
-    spec: &QuotaSelectorKeySpec,
-) -> bool {
-    matches!(dimension, QuotaIdentityDimension::Token)
-        || match spec {
-            QuotaSelectorKeySpec::BearerToken => true,
-            QuotaSelectorKeySpec::LegacyFallback(inner) => {
-                quota_dimension_is_sensitive(dimension, inner.as_ref())
-            }
-            _ => false,
-        }
-}
-
-fn stable_observable_identity_value(value: &str, sensitive: bool) -> String {
+fn canonical_quota_identity_value(dimension: QuotaIdentityDimension, value: &str) -> String {
     let normalized = value.trim();
-    if !sensitive {
+    if matches!(dimension, QuotaIdentityDimension::Route) {
         return normalized.to_string();
     }
 
@@ -2563,29 +2548,46 @@ mod tests {
             .composite_key(&context)
             .expect("quota identities should resolve");
 
+        let hashed_tenant = composite
+            .labels
+            .tenant
+            .as_ref()
+            .expect("hashed tenant label");
+        let hashed_token = composite
+            .labels
+            .token
+            .as_ref()
+            .expect("hashed token label");
+        let hashed_client = composite
+            .labels
+            .client
+            .as_ref()
+            .expect("hashed client label");
+
         assert_eq!(composite.policy_name, "tenant-quota");
         assert_eq!(composite.labels.route.as_deref(), Some("api"));
-        assert_eq!(composite.labels.tenant.as_deref(), Some("acme"));
-        assert_eq!(composite.labels.client.as_deref(), Some("203.0.113.10"));
         assert!(
-            composite
-                .labels
-                .token
-                .as_deref()
-                .is_some_and(|value| value.starts_with("sha256:")),
+            hashed_tenant.starts_with("sha256:"),
+            "tenant-derived identities must be hashed before reuse"
+        );
+        assert!(
+            hashed_token.starts_with("sha256:"),
             "token-derived identities must be hashed before reuse"
+        );
+        assert!(
+            hashed_client.starts_with("sha256:"),
+            "client-derived identities must be hashed before reuse"
         );
         assert_eq!(
             composite.key,
             format!(
-                "policy=12:tenant-quota|route=3:api|tenant=4:acme|token={}:{}|client=12:203.0.113.10|",
-                composite
-                    .labels
-                    .token
-                    .as_ref()
-                    .expect("hashed token label")
-                    .len(),
-                composite.labels.token.as_ref().expect("hashed token label")
+                "policy=12:tenant-quota|route=3:api|tenant={}:{}|token={}:{}|client={}:{}|",
+                hashed_tenant.len(),
+                hashed_tenant,
+                hashed_token.len(),
+                hashed_token,
+                hashed_client.len(),
+                hashed_client,
             )
         );
     }
@@ -2677,8 +2679,20 @@ mod tests {
             .expect("matching route should still build composite keys");
 
         assert_eq!(composite.labels.route.as_deref(), Some("payments"));
-        assert_eq!(composite.labels.tenant.as_deref(), Some("acme"));
-        assert_eq!(composite.labels.client.as_deref(), Some("203.0.113.10"));
+        assert!(
+            composite
+                .labels
+                .tenant
+                .as_deref()
+                .is_some_and(|value| value.starts_with("sha256:"))
+        );
+        assert!(
+            composite
+                .labels
+                .client
+                .as_deref()
+                .is_some_and(|value| value.starts_with("sha256:"))
+        );
     }
 
     #[test]
