@@ -41,10 +41,12 @@ impl BackendPool {
         }
     }
 
+    #[must_use]
     pub fn len(&self) -> usize {
         self.backends.len()
     }
 
+    #[must_use = "this returns a bool, it does not modify the pool"]
     pub fn is_empty(&self) -> bool {
         self.backends.is_empty()
     }
@@ -185,6 +187,7 @@ impl BackendPool {
         self.healthy.clone()
     }
 
+    #[must_use]
     pub fn healthy_len(&self) -> usize {
         self.healthy.len()
     }
@@ -201,6 +204,7 @@ impl BackendPool {
         self.backends.get(index)
     }
 
+    #[must_use]
     pub fn membership_epoch(&self) -> u64 {
         self.membership_epoch
     }

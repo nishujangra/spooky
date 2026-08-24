@@ -34,6 +34,7 @@ impl BackendState {
         }
     }
 
+    #[must_use = "this returns a bool, it does not modify the backend state"]
     pub fn is_healthy(&self) -> bool {
         matches!(self.health_state, HealthState::Healthy)
     }
@@ -53,6 +54,7 @@ impl BackendState {
         self.health_check.as_ref()
     }
 
+    #[must_use]
     pub fn weight(&self) -> u32 {
         self.weight
     }
