@@ -1808,9 +1808,8 @@ fn extract_quota_selector_key(
         QuotaSelectorKeySpec::LegacyFallback(inner) => {
             match extract_quota_selector_key(inner.as_ref(), context) {
                 RequestKeyExtraction::Found(value) => RequestKeyExtraction::Found(value),
-                RequestKeyExtraction::Missing | RequestKeyExtraction::Invalid => {
-                    extract_legacy_default_request_key(context)
-                }
+                RequestKeyExtraction::Missing => extract_legacy_default_request_key(context),
+                RequestKeyExtraction::Invalid => RequestKeyExtraction::Invalid,
             }
         }
     }
@@ -2725,6 +2724,45 @@ mod tests {
             .composite_key(&invalid_token)
             .expect_err("invalid bearer token must reject");
         assert_eq!(err.dimension, QuotaIdentityDimension::Token);
+        assert_eq!(err.reason, QuotaDenyReason::SelectorIdentityInvalid);
+    }
+
+    #[test]
+    fn legacy_fallback_does_not_mask_invalid_selector_values() {
+        let policy = QuotaPolicyRuntime {
+            name: "tenant-quota".to_string(),
+            route_allowlist: HashSet::new(),
+            selector: QuotaSelectorMatcher {
+                route: true,
+                tenant: Some(
+                    QuotaSelectorKeySpec::Header("x-tenant-id".to_string())
+                        .with_legacy_default_fallback(),
+                ),
+                token: None,
+                client: None,
+            },
+            burst: Some(QuotaWindowPolicy {
+                requests: 10,
+                window: Duration::from_secs(1),
+            }),
+            sustained: None,
+        };
+
+        let oversized_header = "a".repeat(MAX_REQUEST_DERIVED_QUOTA_IDENTITY_BYTES + 1);
+        let context = identity_context_with_headers(
+            Some("api"),
+            "GET",
+            "/v1",
+            Some("api.example.com"),
+            None,
+            None,
+            HashMap::from([("x-tenant-id".to_string(), oversized_header)]),
+        );
+
+        let err = policy
+            .composite_key(&context)
+            .expect_err("oversized selector values must stay invalid");
+        assert_eq!(err.dimension, QuotaIdentityDimension::Tenant);
         assert_eq!(err.reason, QuotaDenyReason::SelectorIdentityInvalid);
     }
 
