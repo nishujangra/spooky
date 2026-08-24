@@ -154,7 +154,8 @@ impl BackendPool {
         transition
     }
 
-    /// True when any backend is passively ejected and pending re-admission.
+    /// True when any backend is passively ejected and pending transition into
+    /// the probe-eligible recovery state.
     /// Clock-free so the read-locked hot path pays only a branch (no syscall):
     /// while something is pending, callers take the write-locked slow path where
     /// `reconcile_readmit` checks the actual cooldown clock.
@@ -162,9 +163,9 @@ impl BackendPool {
         self.earliest_readmit.is_some()
     }
 
-    /// Re-admit passively-ejected backends whose cooldown has elapsed so live
-    /// traffic can probe them. Reads the clock only when a re-admission is
-    /// actually pending, keeping the healthy pick path syscall-free.
+    /// Advance passively-ejected backends into probe eligibility once their
+    /// cooldown has elapsed. Reads the clock only when recovery is actually
+    /// pending, keeping the healthy pick path syscall-free.
     pub fn reconcile_readmit(&mut self) {
         if self.earliest_readmit.is_some() {
             self.reconcile_readmit_at(Instant::now());
@@ -185,10 +186,9 @@ impl BackendPool {
             if self.backends[index].has_active_health_check() {
                 continue;
             }
-            if self.backends[index].readmit_if_expired(now) {
-                debug_assert!(self.mark_healthy(index));
-                self.membership_epoch = self.membership_epoch.wrapping_add(1);
-            } else if let Some(until) = self.backends[index].cooldown_until() {
+            if !self.backends[index].readmit_if_expired(now)
+                && let Some(until) = self.backends[index].cooldown_until()
+            {
                 next = Some(next.map_or(until, |e| e.min(until)));
             }
         }
@@ -405,7 +405,7 @@ mod tests {
     }
 
     #[test]
-    fn passively_ejected_backend_recovers_after_cooldown() {
+    fn passively_ejected_backend_enters_probing_after_cooldown() {
         let backend = Backend {
             id: "b1".to_string(),
             address: "10.0.0.1:1".to_string(),
@@ -436,8 +436,13 @@ mod tests {
         assert!(pool.readmit_due());
 
         pool.reconcile_readmit_at(Instant::now() + Duration::from_millis(10_001));
-        assert_eq!(pool.healthy_len(), 1);
+        assert_eq!(pool.healthy_len(), 0);
         assert!(!pool.readmit_due());
+        assert!(pool.backend(0).is_some_and(BackendState::is_probing));
+
+        let transition = pool.mark_success(0);
+        assert_eq!(pool.healthy_len(), 1);
+        assert!(matches!(transition, Some(HealthTransition::BecameHealthy)));
     }
 
     #[test]

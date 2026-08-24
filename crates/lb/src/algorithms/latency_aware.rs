@@ -207,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn latency_aware_probes_readmitted_backend_without_handing_it_full_stream() {
+    fn latency_aware_excludes_readmitted_probing_backend_from_general_selection() {
         let mut pool = BackendPool::new_from_states(vec![
             create_backend_state("10.0.0.1:1", 1, 0, 1, 10_000),
             create_backend_state("10.0.0.2:1", 1, 1000, 3, 0),
@@ -223,19 +223,16 @@ mod tests {
             .is_some()
         );
         pool.reconcile_readmit_at(Instant::now() + Duration::from_millis(10_001));
+        assert!(pool.backend(0).is_some_and(BackendState::is_probing));
 
         let mut lb = LatencyAware::new();
-        let mut readmitted_picks = 0;
         let total_picks = UNSAMPLED_PROBE_INTERVAL * 2;
 
         for _ in 0..total_picks {
-            if lb.pick(&pool) == Some(0) {
-                readmitted_picks += 1;
-            }
+            assert_eq!(lb.pick(&pool), Some(1));
         }
 
-        assert!(readmitted_picks > 0);
-        assert!(readmitted_picks < total_picks);
+        assert_eq!(lb.pick_readonly(&pool), Some(1));
     }
 
     #[test]
