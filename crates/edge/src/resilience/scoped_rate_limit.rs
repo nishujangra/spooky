@@ -27,6 +27,12 @@ struct ScopedRateLimitBucketAccess {
     evaluation: ScopedRateLimitBucketEvaluation,
 }
 
+enum ScopedRateLimitBucketAdmission {
+    Existing,
+    New,
+    Saturated,
+}
+
 struct ScopedRateLimitBucketStore {
     buckets: HashMap<String, ScopedRateLimitBucket>,
     last_pruned_at: Instant,
@@ -50,16 +56,14 @@ impl ScopedRateLimitBucketStore {
             .retain(|_, bucket| now.saturating_duration_since(bucket.last_seen) < idle_ttl);
     }
 
-    fn evict_oldest_bucket(&mut self) {
-        let Some(oldest_key) = self
-            .buckets
-            .iter()
-            .min_by_key(|(_, bucket)| bucket.last_seen)
-            .map(|(key, _)| key.clone())
-        else {
-            return;
-        };
-        self.buckets.remove(&oldest_key);
+    fn admit(&mut self, storage_key: &str) -> ScopedRateLimitBucketAdmission {
+        if self.buckets.contains_key(storage_key) {
+            return ScopedRateLimitBucketAdmission::Existing;
+        }
+        if self.buckets.len() >= MAX_SCOPED_RATE_LIMIT_BUCKETS_PER_RULE {
+            return ScopedRateLimitBucketAdmission::Saturated;
+        }
+        ScopedRateLimitBucketAdmission::New
     }
 }
 
@@ -241,14 +245,10 @@ impl ScopedRateLimitRule {
         let storage_key = self.canonical_bucket_storage_key(key);
         bucket_store.prune_expired_if_due(now, self.idle_ttl);
 
-        if !bucket_store.buckets.contains_key(&storage_key)
-            && bucket_store.buckets.len() >= MAX_SCOPED_RATE_LIMIT_BUCKETS_PER_RULE
-        {
-            bucket_store.evict_oldest_bucket();
-        }
-        if !bucket_store.buckets.contains_key(&storage_key)
-            && bucket_store.buckets.len() >= MAX_SCOPED_RATE_LIMIT_BUCKETS_PER_RULE
-        {
+        if matches!(
+            bucket_store.admit(&storage_key),
+            ScopedRateLimitBucketAdmission::Saturated
+        ) {
             return None;
         }
 
@@ -432,7 +432,7 @@ mod tests {
     }
 
     #[test]
-    fn evaluate_bucket_evicts_oldest_entry_before_inserting_under_cap() {
+    fn evaluate_bucket_rejects_new_entry_when_cap_is_reached_without_expiry() {
         let rule = test_rule(ScopedRateLimitScope::Route);
         {
             let mut store = rule.buckets.lock().expect("bucket store lock");
@@ -452,14 +452,15 @@ mod tests {
             }
         }
 
-        let inserted = rule
-            .evaluate_bucket("fresh-bucket", 1)
-            .expect("new bucket should be admitted by eviction");
+        let inserted = rule.evaluate_bucket("fresh-bucket", 1);
+        let existing = rule.evaluate_bucket("bucket-0", 1);
 
         let store = rule.buckets.lock().expect("bucket store lock");
+        assert!(inserted.is_none());
+        assert!(existing.is_some());
         assert_eq!(store.buckets.len(), MAX_SCOPED_RATE_LIMIT_BUCKETS_PER_RULE);
-        assert!(store.buckets.contains_key(&inserted.storage_key));
-        assert!(!store.buckets.contains_key("bucket-0"));
+        assert!(!store.buckets.contains_key("fresh-bucket"));
+        assert!(store.buckets.contains_key("bucket-0"));
     }
 }
 
