@@ -1,6 +1,4 @@
 #[cfg(test)]
-use serial_test::serial;
-#[cfg(test)]
 use std::{collections::VecDeque, sync::Mutex};
 use std::{
     collections::{HashMap, HashSet},
@@ -39,6 +37,8 @@ use impulse_config::{
 use impulse_lb::upstream_pool::UpstreamPool;
 use quiche::h3::NameValue;
 use serde_json::Value;
+#[cfg(test)]
+use serial_test::serial;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use tokio::{

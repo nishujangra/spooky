@@ -709,10 +709,7 @@ mod tests {
 
     #[test]
     fn percent_encode_component_preserves_safe_bytes_and_encodes_reserved_bytes() {
-        assert_eq!(
-            percent_encode_component("AZaz09-_.~"),
-            "AZaz09-_.~"
-        );
+        assert_eq!(percent_encode_component("AZaz09-_.~"), "AZaz09-_.~");
         assert_eq!(
             percent_encode_component("token value+/=?&%"),
             "token%20value%2B%2F%3D%3F%26%25"

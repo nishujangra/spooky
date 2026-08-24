@@ -1009,10 +1009,8 @@ mod tests {
 
     #[test]
     fn request_headers_borrows_original_headers_when_no_auth_mutations_are_pending() {
-        let pending_forward = PendingForward::sample_for_test(vec![quiche::h3::Header::new(
-            b"x-test",
-            b"1",
-        )]);
+        let pending_forward =
+            PendingForward::sample_for_test(vec![quiche::h3::Header::new(b"x-test", b"1")]);
 
         assert!(matches!(
             pending_forward.request_headers_cow(),
@@ -1027,10 +1025,7 @@ mod tests {
                 name: b"x-auth-user".to_vec(),
                 value: b"alice".to_vec(),
             }],
-            ..PendingForward::sample_for_test(vec![quiche::h3::Header::new(
-                b"x-test",
-                b"1",
-            )])
+            ..PendingForward::sample_for_test(vec![quiche::h3::Header::new(b"x-test", b"1")])
         };
 
         assert!(matches!(
@@ -1059,12 +1054,16 @@ mod tests {
 
         let headers = pending_forward.request_headers_for_http1_websocket_tunnel();
         assert!(matches!(headers, Cow::Owned(_)));
-        assert!(headers
-            .iter()
-            .any(|header| header.name().eq_ignore_ascii_case(b"upgrade")));
-        assert!(headers
-            .iter()
-            .any(|header| header.name().eq_ignore_ascii_case(b"connection")));
+        assert!(
+            headers
+                .iter()
+                .any(|header| header.name().eq_ignore_ascii_case(b"upgrade"))
+        );
+        assert!(
+            headers
+                .iter()
+                .any(|header| header.name().eq_ignore_ascii_case(b"connection"))
+        );
     }
 
     #[test]

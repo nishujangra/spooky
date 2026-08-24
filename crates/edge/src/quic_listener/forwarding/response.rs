@@ -877,7 +877,7 @@ impl QUICListener {
                         if let Some(start) = deferred_start.take()
                             && chunk_tx.send(start).await.is_err()
                         {
-                                return;
+                            return;
                         }
                         if pump.defer_headers_until_body_validated {
                             for chunk in buffered_chunks {
@@ -1033,7 +1033,8 @@ impl QUICListener {
                     Self::send_response_start_headers(h3, quic, stream_id, &metadata, false)?;
                 }
                 let deferred_start = Self::into_deferred_response_start_chunk(metadata);
-                let chunk_rx = Self::spawn_response_body_pump(req, response_body, deferred_start, pump);
+                let chunk_rx =
+                    Self::spawn_response_body_pump(req, response_body, deferred_start, pump);
                 req.response_status = Some(response_status.as_u16());
                 req.transition_to_streaming_response(
                     chunk_rx,
