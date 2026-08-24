@@ -4503,13 +4503,7 @@ mod tests {
         let now = SystemTime::now();
         metrics.record_jwks_unknown_kid(&active.source_identity);
         metrics.record_jwks_unknown_kid(&removed.source_identity);
-        metrics.record_jwks_refresh_success(
-            &active.source_identity,
-            "fresh",
-            1,
-            now,
-            Some(now),
-        );
+        metrics.record_jwks_refresh_success(&active.source_identity, "fresh", 1, now, Some(now));
         metrics.record_jwks_refresh_failure(
             &removed.source_identity,
             "empty_unusable",
@@ -4522,11 +4516,15 @@ mod tests {
         cache.reconcile_sources([&active]);
 
         assert!(
-            cache.snapshot(&active.source_identity, Instant::now()).is_some(),
+            cache
+                .snapshot(&active.source_identity, Instant::now())
+                .is_some(),
             "active source must remain in cache"
         );
         assert!(
-            cache.snapshot(&removed.source_identity, Instant::now()).is_none(),
+            cache
+                .snapshot(&removed.source_identity, Instant::now())
+                .is_none(),
             "removed source must be evicted from cache"
         );
 
@@ -4538,7 +4536,9 @@ mod tests {
         assert_eq!(jwks_state.len(), 1);
         assert_eq!(jwks_state[0].jwks_source_id, active.source_identity);
         assert!(
-            !metrics.render_prometheus().contains(&removed.source_identity),
+            !metrics
+                .render_prometheus()
+                .contains(&removed.source_identity),
             "removed source telemetry must be absent after reconcile"
         );
 
@@ -4600,7 +4600,10 @@ mod tests {
             snapshot.last_failure_reason,
             Some(JwtJwksFetchFailureReason::RequestFailed)
         );
-        assert_eq!(snapshot.source.allowed_algorithms, updated.allowed_algorithms);
+        assert_eq!(
+            snapshot.source.allowed_algorithms,
+            updated.allowed_algorithms
+        );
         assert_eq!(snapshot.source.refresh_interval, updated.refresh_interval);
         assert_eq!(snapshot.source.request_timeout, updated.request_timeout);
         assert_eq!(snapshot.source.cache_ttl, updated.cache_ttl);
@@ -4617,7 +4620,10 @@ mod tests {
         assert!(entry.refresh_in_flight);
         assert_eq!(entry.state, JwtJwksCacheState::RefreshFailedRetained);
         assert_eq!(entry.active_keys.len(), 1);
-        assert_eq!(entry.last_error.as_deref(), Some("request_failed: retained"));
+        assert_eq!(
+            entry.last_error.as_deref(),
+            Some("request_failed: retained")
+        );
 
         drop(entries);
         clear_jwks_cache_for_test(jwks_url);

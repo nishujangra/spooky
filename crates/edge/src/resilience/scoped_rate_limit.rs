@@ -186,8 +186,7 @@ impl ScopedRateLimitRule {
         &self,
         request: QuotaCounterEvaluationRequest,
     ) -> Result<QuotaCounterEvaluationOutcome, QuotaCounterBackendError> {
-        let Some(bucket) = self.evaluate_bucket(&request.composite_key.key, request.cost)
-        else {
+        let Some(bucket) = self.evaluate_bucket(&request.composite_key.key, request.cost) else {
             return Err(QuotaCounterBackendError {
                 policy_name: Some(request.policy_name),
                 composite_key: Some(request.composite_key.key),
@@ -469,7 +468,11 @@ mod tests {
         let first_value = "a".repeat(2048);
         let second_value = "b".repeat(2048);
         let first_key = format!("route=4:/api|token={}:{}|", first_value.len(), first_value);
-        let second_key = format!("route=4:/api|token={}:{}|", second_value.len(), second_value);
+        let second_key = format!(
+            "route=4:/api|token={}:{}|",
+            second_value.len(),
+            second_value
+        );
 
         let _ = rule
             .evaluate_bucket(&first_key, 1)
