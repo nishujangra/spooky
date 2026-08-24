@@ -20,10 +20,47 @@ const LEGACY_SCOPED_RATE_LIMIT_PROTOCOL_VERSION: &str = "legacy-scoped-token-buc
 const LEGACY_SCOPED_BACKEND_KIND: &str = "legacy_scoped_rate_limit";
 const LEGACY_SCOPED_KEY_PREFIX: &str = "impulse:legacy-scoped-rate-limit";
 const MAX_SCOPED_RATE_LIMIT_BUCKETS_PER_RULE: usize = 1024;
+const SCOPED_RATE_LIMIT_PRUNE_INTERVAL: Duration = Duration::from_secs(1);
 
 struct ScopedRateLimitBucketAccess {
     storage_key: String,
     evaluation: ScopedRateLimitBucketEvaluation,
+}
+
+struct ScopedRateLimitBucketStore {
+    buckets: HashMap<String, ScopedRateLimitBucket>,
+    last_pruned_at: Instant,
+}
+
+impl ScopedRateLimitBucketStore {
+    fn new() -> Self {
+        Self {
+            buckets: HashMap::new(),
+            last_pruned_at: Instant::now(),
+        }
+    }
+
+    fn prune_expired_if_due(&mut self, now: Instant, idle_ttl: Duration) {
+        if now.saturating_duration_since(self.last_pruned_at) < SCOPED_RATE_LIMIT_PRUNE_INTERVAL {
+            return;
+        }
+
+        self.last_pruned_at = now;
+        self.buckets
+            .retain(|_, bucket| now.saturating_duration_since(bucket.last_seen) < idle_ttl);
+    }
+
+    fn evict_oldest_bucket(&mut self) {
+        let Some(oldest_key) = self
+            .buckets
+            .iter()
+            .min_by_key(|(_, bucket)| bucket.last_seen)
+            .map(|(key, _)| key.clone())
+        else {
+            return;
+        };
+        self.buckets.remove(&oldest_key);
+    }
 }
 
 struct ScopedRateLimitBucket {
@@ -101,7 +138,7 @@ pub struct ScopedRateLimitRule {
     retry_after_seconds: u32,
     rate_per_sec: u32,
     burst: u32,
-    buckets: Mutex<HashMap<String, ScopedRateLimitBucket>>,
+    buckets: Mutex<ScopedRateLimitBucketStore>,
 }
 
 impl ScopedRateLimitRule {
@@ -116,7 +153,7 @@ impl ScopedRateLimitRule {
                 .max(1),
             rate_per_sec: config.requests_per_sec.max(1),
             burst: config.burst.max(1),
-            buckets: Mutex::new(HashMap::new()),
+            buckets: Mutex::new(ScopedRateLimitBucketStore::new()),
         }
     }
 
@@ -196,48 +233,33 @@ impl ScopedRateLimitRule {
     }
 
     fn evaluate_bucket(&self, key: &str, cost: u64) -> Option<ScopedRateLimitBucketAccess> {
-        let mut buckets = match self.buckets.lock() {
+        let mut bucket_store = match self.buckets.lock() {
             Ok(guard) => guard,
             Err(_) => return None,
         };
+        let now = Instant::now();
         let storage_key = self.canonical_bucket_storage_key(key);
-        if buckets.len() >= 64 || !buckets.contains_key(&storage_key) {
-            self.prune_idle_buckets(&mut buckets);
-        }
-        if !buckets.contains_key(&storage_key)
-            && buckets.len() >= MAX_SCOPED_RATE_LIMIT_BUCKETS_PER_RULE
+        bucket_store.prune_expired_if_due(now, self.idle_ttl);
+
+        if !bucket_store.buckets.contains_key(&storage_key)
+            && bucket_store.buckets.len() >= MAX_SCOPED_RATE_LIMIT_BUCKETS_PER_RULE
         {
-            self.evict_oldest_bucket(&mut buckets);
+            bucket_store.evict_oldest_bucket();
         }
-        if !buckets.contains_key(&storage_key)
-            && buckets.len() >= MAX_SCOPED_RATE_LIMIT_BUCKETS_PER_RULE
+        if !bucket_store.buckets.contains_key(&storage_key)
+            && bucket_store.buckets.len() >= MAX_SCOPED_RATE_LIMIT_BUCKETS_PER_RULE
         {
             return None;
         }
 
-        let bucket = buckets
+        let bucket = bucket_store
+            .buckets
             .entry(storage_key.clone())
             .or_insert_with(|| ScopedRateLimitBucket::new(self.rate_per_sec, self.burst));
         Some(ScopedRateLimitBucketAccess {
             storage_key,
             evaluation: bucket.evaluate(cost),
         })
-    }
-
-    fn prune_idle_buckets(&self, buckets: &mut HashMap<String, ScopedRateLimitBucket>) {
-        let idle_ttl = self.idle_ttl;
-        buckets.retain(|_, bucket| bucket.last_seen.elapsed() < idle_ttl);
-    }
-
-    fn evict_oldest_bucket(&self, buckets: &mut HashMap<String, ScopedRateLimitBucket>) {
-        let Some(oldest_key) = buckets
-            .iter()
-            .min_by_key(|(_, bucket)| bucket.last_seen)
-            .map(|(key, _)| key.clone())
-        else {
-            return;
-        };
-        buckets.remove(&oldest_key);
     }
 
     fn canonical_bucket_storage_key(&self, key: &str) -> String {
@@ -355,6 +377,90 @@ fn sha256_storage_key(value: &str) -> String {
     hasher.update(value.as_bytes());
     let digest = hasher.finalize();
     format!("sha256:{digest:x}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_rule(scope: ScopedRateLimitScope) -> ScopedRateLimitRule {
+        ScopedRateLimitRule::from_config(&ScopedRateLimitConfig {
+            name: "test".to_string(),
+            scope,
+            requests_per_sec: 10,
+            burst: 10,
+            key: None,
+            route_allowlist: Vec::new(),
+            idle_ttl_secs: 60,
+        })
+    }
+
+    #[test]
+    fn evaluate_bucket_prunes_expired_entries_on_deterministic_cadence() {
+        let rule = test_rule(ScopedRateLimitScope::Route);
+        {
+            let mut store = rule.buckets.lock().expect("bucket store lock");
+            let now = Instant::now();
+            store.buckets.insert(
+                "expired".to_string(),
+                ScopedRateLimitBucket {
+                    burst: 1.0,
+                    rate_per_sec: 1.0,
+                    tokens: 1.0,
+                    last_refill: now,
+                    last_seen: now - Duration::from_secs(120),
+                },
+            );
+            store.buckets.insert(
+                "live".to_string(),
+                ScopedRateLimitBucket {
+                    burst: 1.0,
+                    rate_per_sec: 1.0,
+                    tokens: 1.0,
+                    last_refill: now,
+                    last_seen: now,
+                },
+            );
+            store.last_pruned_at = now - SCOPED_RATE_LIMIT_PRUNE_INTERVAL;
+        }
+
+        let _ = rule.evaluate_bucket("live", 1).expect("bucket evaluation");
+
+        let store = rule.buckets.lock().expect("bucket store lock");
+        assert!(!store.buckets.contains_key("expired"));
+        assert!(store.buckets.contains_key("live"));
+    }
+
+    #[test]
+    fn evaluate_bucket_evicts_oldest_entry_before_inserting_under_cap() {
+        let rule = test_rule(ScopedRateLimitScope::Route);
+        {
+            let mut store = rule.buckets.lock().expect("bucket store lock");
+            let now = Instant::now();
+            store.last_pruned_at = now;
+            for index in 0..MAX_SCOPED_RATE_LIMIT_BUCKETS_PER_RULE {
+                store.buckets.insert(
+                    format!("bucket-{index}"),
+                    ScopedRateLimitBucket {
+                        burst: 1.0,
+                        rate_per_sec: 1.0,
+                        tokens: 1.0,
+                        last_refill: now,
+                        last_seen: now + Duration::from_millis(index as u64),
+                    },
+                );
+            }
+        }
+
+        let inserted = rule
+            .evaluate_bucket("fresh-bucket", 1)
+            .expect("new bucket should be admitted by eviction");
+
+        let store = rule.buckets.lock().expect("bucket store lock");
+        assert_eq!(store.buckets.len(), MAX_SCOPED_RATE_LIMIT_BUCKETS_PER_RULE);
+        assert!(store.buckets.contains_key(&inserted.storage_key));
+        assert!(!store.buckets.contains_key("bucket-0"));
+    }
 }
 
 #[derive(Debug, Clone)]
