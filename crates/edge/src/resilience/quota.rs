@@ -1802,17 +1802,17 @@ fn extract_legacy_default_request_key(context: &QuotaIdentityContext<'_>) -> Req
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        return RequestKeyExtraction::Found(authority.to_string());
+        return bounded_request_key_value(authority);
     }
 
     let path = context.path.trim();
     if !path.is_empty() {
-        return RequestKeyExtraction::Found(path.to_string());
+        return bounded_request_key_value(path);
     }
 
     let method = context.method.trim();
     if !method.is_empty() {
-        return RequestKeyExtraction::Found(method.to_string());
+        return bounded_owned_request_key_value(method.to_ascii_uppercase());
     }
 
     RequestKeyExtraction::Missing
@@ -1820,19 +1820,14 @@ fn extract_legacy_default_request_key(context: &QuotaIdentityContext<'_>) -> Req
 
 fn extract_path_value(path: &str) -> RequestKeyExtraction {
     let path_only = path.split_once('?').map(|(value, _)| value).unwrap_or(path);
-    let normalized = path_only.trim();
-    if normalized.is_empty() {
-        RequestKeyExtraction::Missing
-    } else {
-        RequestKeyExtraction::Found(normalized.to_string())
-    }
+    bounded_request_key_value(path_only)
 }
 
 fn extract_authority_value(authority: Option<&str>) -> RequestKeyExtraction {
     let Some(authority) = authority.map(str::trim).filter(|value| !value.is_empty()) else {
         return RequestKeyExtraction::Missing;
     };
-    RequestKeyExtraction::Found(authority.to_string())
+    bounded_request_key_value(authority)
 }
 
 fn extract_method_value(method: &str) -> RequestKeyExtraction {
@@ -1840,7 +1835,7 @@ fn extract_method_value(method: &str) -> RequestKeyExtraction {
     if normalized.is_empty() {
         RequestKeyExtraction::Missing
     } else {
-        RequestKeyExtraction::Found(normalized.to_ascii_uppercase())
+        bounded_owned_request_key_value(normalized.to_ascii_uppercase())
     }
 }
 
@@ -1848,14 +1843,14 @@ fn extract_cid_value(cid_key: Option<&str>) -> RequestKeyExtraction {
     let Some(cid_key) = cid_key.map(str::trim).filter(|value| !value.is_empty()) else {
         return RequestKeyExtraction::Missing;
     };
-    RequestKeyExtraction::Found(cid_key.to_string())
+    bounded_request_key_value(cid_key)
 }
 
 fn extract_client_ip_value(client_addr: Option<SocketAddr>) -> RequestKeyExtraction {
     let Some(client_addr) = client_addr else {
         return RequestKeyExtraction::Missing;
     };
-    RequestKeyExtraction::Found(client_addr.ip().to_string())
+    bounded_owned_request_key_value(client_addr.ip().to_string())
 }
 
 fn extract_bearer_token_value(
@@ -1878,7 +1873,7 @@ fn extract_bearer_token_value(
     if token.is_empty() {
         return RequestKeyExtraction::Invalid;
     }
-    RequestKeyExtraction::Found(token.to_string())
+    bounded_request_key_value(token)
 }
 
 fn extract_header_value(
@@ -1888,11 +1883,7 @@ fn extract_header_value(
     let Some(value) = header_lookup.and_then(|lookup| lookup(name)) else {
         return RequestKeyExtraction::Missing;
     };
-    let normalized = value.trim();
-    if normalized.is_empty() {
-        return RequestKeyExtraction::Missing;
-    }
-    RequestKeyExtraction::Found(normalized.to_string())
+    bounded_request_key_value(value.as_str())
 }
 
 fn extract_cookie_key_value(
@@ -1920,7 +1911,7 @@ fn extract_cookie_key_value(
         if value.is_empty() {
             return RequestKeyExtraction::Missing;
         }
-        return RequestKeyExtraction::Found(value.to_string());
+        return bounded_request_key_value(value);
     }
 
     RequestKeyExtraction::Missing
@@ -1945,10 +1936,31 @@ fn extract_query_key_value(path: &str, param: &str) -> RequestKeyExtraction {
         if value.is_empty() {
             return RequestKeyExtraction::Missing;
         }
-        return RequestKeyExtraction::Found(value.to_string());
+        return bounded_request_key_value(value);
     }
 
     RequestKeyExtraction::Missing
+}
+
+fn bounded_request_key_value(value: &str) -> RequestKeyExtraction {
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        return RequestKeyExtraction::Missing;
+    }
+    if normalized.len() > MAX_REQUEST_DERIVED_QUOTA_IDENTITY_BYTES {
+        return RequestKeyExtraction::Invalid;
+    }
+    RequestKeyExtraction::Found(normalized.to_string())
+}
+
+fn bounded_owned_request_key_value(value: String) -> RequestKeyExtraction {
+    if value.is_empty() {
+        return RequestKeyExtraction::Missing;
+    }
+    if value.len() > MAX_REQUEST_DERIVED_QUOTA_IDENTITY_BYTES {
+        return RequestKeyExtraction::Invalid;
+    }
+    RequestKeyExtraction::Found(value)
 }
 
 fn quota_dimension_is_sensitive(
