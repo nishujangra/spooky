@@ -4485,7 +4485,7 @@ mod tests {
     }
 
     #[test]
-    fn jwks_cache_reconcile_evicts_removed_sources_and_their_telemetry() {
+    fn jwks_cache_reconcile_evicts_removed_sources() {
         let active_url = "https://issuer.example.com/reconcile-active.json";
         let removed_url = "https://issuer.example.com/reconcile-removed.json";
         clear_jwks_cache_for_test(active_url);
@@ -4493,25 +4493,10 @@ mod tests {
 
         let active = test_jwks_source(active_url, vec![JwtAlgorithm::Rs256]);
         let removed = test_jwks_source(removed_url, vec![JwtAlgorithm::Es256]);
-        let metrics = Arc::new(crate::Metrics::default());
-        QUICListener::register_jwt_jwks_metrics(&metrics);
 
         let cache = JwtJwksSharedCache::shared();
         cache.register_source(active.clone());
         cache.register_source(removed.clone());
-
-        let now = SystemTime::now();
-        metrics.record_jwks_unknown_kid(&active.source_identity);
-        metrics.record_jwks_unknown_kid(&removed.source_identity);
-        metrics.record_jwks_refresh_success(&active.source_identity, "fresh", 1, now, Some(now));
-        metrics.record_jwks_refresh_failure(
-            &removed.source_identity,
-            "empty_unusable",
-            0,
-            now,
-            None,
-            Some("request_failed"),
-        );
 
         cache.reconcile_sources([&active]);
 
@@ -4526,20 +4511,6 @@ mod tests {
                 .snapshot(&removed.source_identity, Instant::now())
                 .is_none(),
             "removed source must be evicted from cache"
-        );
-
-        let unknown_kid = metrics.snapshot_jwks_unknown_kid_events();
-        assert_eq!(unknown_kid.len(), 1);
-        assert_eq!(unknown_kid[0].0, active.source_identity);
-
-        let jwks_state = metrics.snapshot_jwks_source_state();
-        assert_eq!(jwks_state.len(), 1);
-        assert_eq!(jwks_state[0].jwks_source_id, active.source_identity);
-        assert!(
-            !metrics
-                .render_prometheus()
-                .contains(&removed.source_identity),
-            "removed source telemetry must be absent after reconcile"
         );
 
         clear_jwks_cache_for_test(active_url);

@@ -2044,6 +2044,38 @@ mod tests {
     }
 
     #[test]
+    fn reconcile_jwks_sources_prunes_removed_telemetry_state() {
+        let metrics = Metrics::default();
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+
+        metrics.record_jwks_unknown_kid("jwks:active");
+        metrics.record_jwks_unknown_kid("jwks:removed");
+        metrics.record_jwks_refresh_success("jwks:active", "fresh", 1, now, Some(now));
+        metrics.record_jwks_refresh_failure(
+            "jwks:removed",
+            "empty_unusable",
+            0,
+            now,
+            None,
+            Some("request_failed"),
+        );
+
+        metrics.reconcile_jwks_sources(["jwks:active"]);
+
+        let unknown_kid = metrics.snapshot_jwks_unknown_kid_events();
+        assert_eq!(unknown_kid, vec![("jwks:active".to_string(), 1)]);
+
+        let jwks_state = metrics.snapshot_jwks_source_state();
+        assert_eq!(jwks_state.len(), 1);
+        assert_eq!(jwks_state[0].jwks_source_id, "jwks:active");
+        assert_eq!(jwks_state[0].state, "fresh");
+
+        let rendered = metrics.render_prometheus();
+        assert!(rendered.contains("jwks:active"));
+        assert!(!rendered.contains("jwks:removed"));
+    }
+
+    #[test]
     fn prometheus_render_includes_quota_observability_series() {
         let metrics = Metrics::default();
         metrics.record_quota_policy_outcome(
