@@ -84,7 +84,7 @@ impl BackendState {
                 self.consecutive_failures = 0;
                 None
             }
-            HealthState::Unhealthy { until, .. } => {
+            HealthState::Unhealthy { until } => {
                 if Instant::now() < until {
                     return None;
                 }
@@ -107,7 +107,6 @@ impl BackendState {
             self.consecutive_failures = 0;
             self.health_state = HealthState::Unhealthy {
                 until: Instant::now() + self.cooldown_duration(),
-                successes: 0,
             };
             return None;
         }
@@ -124,14 +123,13 @@ impl BackendState {
         self.consecutive_failures = 0;
         self.health_state = HealthState::Unhealthy {
             until: Instant::now() + self.cooldown_duration(),
-            successes: 0,
         };
         Some(HealthTransition::BecameUnhealthy)
     }
 
     /// Cooldown expiry, if this backend is currently unhealthy.
     pub fn cooldown_until(&self) -> Option<Instant> {
-        if let HealthState::Unhealthy { until, .. } = self.health_state {
+        if let HealthState::Unhealthy { until } = self.health_state {
             Some(until)
         } else {
             None
@@ -141,7 +139,7 @@ impl BackendState {
     /// Move an ejected backend into probing once its cooldown has elapsed.
     /// Returns true when the backend becomes probe-eligible.
     pub fn readmit_if_expired(&mut self, now: Instant) -> bool {
-        if let HealthState::Unhealthy { until, .. } = self.health_state
+        if let HealthState::Unhealthy { until } = self.health_state
             && now >= until
         {
             self.consecutive_failures = 0;
@@ -212,5 +210,5 @@ enum HealthState {
         successes: u32,
         remaining_budget: u32,
     },
-    Unhealthy { until: Instant, successes: u32 },
+    Unhealthy { until: Instant },
 }

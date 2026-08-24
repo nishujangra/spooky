@@ -204,7 +204,7 @@ mod tests {
     };
 
     use super::UpstreamPool;
-    use crate::test_support::runtime_upstream_from_addresses;
+    use crate::{health::HealthFailureReason, test_support::runtime_upstream_from_addresses};
 
     fn runtime_upstream_from_backends(lb_type: &str, backends: Vec<Backend>) -> impulse_config::runtime::RuntimeUpstream {
         let mut upstreams = HashMap::new();
@@ -414,7 +414,7 @@ mod tests {
             .expect("runtime pool should build");
 
         assert!(matches!(
-            pool.mark_backend_request_failure(0, crate::HealthFailureReason::Transport),
+            pool.mark_backend_request_failure(0, HealthFailureReason::Transport),
             Some(crate::HealthTransition::BecameUnhealthy)
         ));
         pool.pool.reconcile_readmit_at(
@@ -496,7 +496,7 @@ mod tests {
             .expect("runtime pool should build");
 
         assert!(matches!(
-            pool.mark_backend_request_failure(0, crate::HealthFailureReason::Transport),
+            pool.mark_backend_request_failure(0, HealthFailureReason::Transport),
             Some(crate::HealthTransition::BecameUnhealthy)
         ));
         pool.pool.reconcile_readmit_at(
