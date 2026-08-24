@@ -395,7 +395,7 @@ pub(crate) fn apply_backend_request_feedback(
     };
     let mut pool = pool.write().ok()?;
     match feedback.outcome {
-        BackendRequestFeedbackOutcome::Success => pool.mark_backend_healthy(index),
+        BackendRequestFeedbackOutcome::Success => pool.mark_backend_request_success(index),
         BackendRequestFeedbackOutcome::Neutral => None,
         BackendRequestFeedbackOutcome::Failure { reason } => {
             pool.observe_backend_request_failure(index, feedback.elapsed, reason)
@@ -443,7 +443,7 @@ pub(crate) fn apply_backend_health_observation(
         (BackendHealthObservationSource::ActiveCheck, BackendHealthObservationOutcome::Neutral) => {
             None
         }
-        (_, BackendHealthObservationOutcome::Success) => pool.mark_backend_healthy(index),
+        (_, BackendHealthObservationOutcome::Success) => pool.mark_backend_request_success(index),
         (_, BackendHealthObservationOutcome::Neutral) => None,
         (_, BackendHealthObservationOutcome::Failure) => observation
             .reason

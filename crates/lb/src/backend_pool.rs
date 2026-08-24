@@ -83,6 +83,21 @@ impl BackendPool {
         transition
     }
 
+    /// Mark a success from the request path (passive).
+    /// When active health checks are configured, only the active loop may drive
+    /// recovery from probing/unhealthy back into healthy.
+    pub fn mark_request_success(&mut self, index: usize) -> Option<HealthTransition> {
+        if index >= self.backends.len() {
+            return None;
+        }
+
+        if self.backends[index].has_active_health_check() {
+            return None;
+        }
+
+        self.mark_success(index)
+    }
+
     /// Mark a failure from the active health-check loop — always recorded.
     pub fn mark_failure(&mut self, index: usize) -> Option<HealthTransition> {
         self.mark_failure_with_reason(index, HealthFailureReason::HttpStatus5xx)
@@ -126,12 +141,14 @@ impl BackendPool {
             return None;
         }
 
-        let (was_healthy, is_healthy, transition) = {
+        let (was_healthy, was_probing, is_healthy, is_probing, transition) = {
             let backend = &mut self.backends[index];
             let was_healthy = backend.is_healthy();
+            let was_probing = backend.is_probing();
             let transition = backend.record_failure(reason);
             let is_healthy = backend.is_healthy();
-            (was_healthy, is_healthy, transition)
+            let is_probing = backend.is_probing();
+            (was_healthy, was_probing, is_healthy, is_probing, transition)
         };
 
         if was_healthy != is_healthy {
@@ -149,6 +166,13 @@ impl BackendPool {
                 }
             }
             self.membership_epoch = self.membership_epoch.wrapping_add(1);
+        }
+
+        if !self.backends[index].has_active_health_check()
+            && was_probing != is_probing
+            && let Some(until) = self.backends[index].cooldown_until()
+        {
+            self.earliest_readmit = Some(self.earliest_readmit.map_or(until, |e| e.min(until)));
         }
 
         transition
@@ -489,6 +513,72 @@ mod tests {
         assert_eq!(pool.pick_probing_backend(false), Some(0));
         assert_eq!(pool.pick_probing_backend(false), Some(0));
         assert_eq!(pool.pick_probing_backend(false), None);
+    }
+
+    #[test]
+    fn probing_backend_requires_full_success_threshold_before_becoming_healthy() {
+        let backend = Backend {
+            id: "b1".to_string(),
+            address: "10.0.0.1:1".to_string(),
+            weight: 1,
+            health_check: Some(HealthCheck {
+                path: "/health".to_string(),
+                interval: 0,
+                timeout_ms: 1000,
+                failure_threshold: 1,
+                success_threshold: 2,
+                cooldown_ms: 10_000,
+            }),
+        };
+        let mut pool = BackendPool::new_from_states(vec![BackendState::new(&backend)]);
+
+        assert!(matches!(
+            pool.mark_request_failure(0, HealthFailureReason::Transport),
+            Some(HealthTransition::BecameUnhealthy)
+        ));
+        pool.reconcile_readmit_at(Instant::now() + Duration::from_millis(10_001));
+
+        assert!(pool.backend(0).is_some_and(BackendState::is_probing));
+        assert!(pool.mark_success(0).is_none());
+        assert_eq!(pool.healthy_len(), 0);
+        assert!(pool.backend(0).is_some_and(BackendState::is_probing));
+
+        let transition = pool.mark_success(0);
+        assert!(matches!(transition, Some(HealthTransition::BecameHealthy)));
+        assert_eq!(pool.healthy_len(), 1);
+    }
+
+    #[test]
+    fn probing_backend_failure_rearms_passive_readmit() {
+        let backend = Backend {
+            id: "b1".to_string(),
+            address: "10.0.0.1:1".to_string(),
+            weight: 1,
+            health_check: Some(HealthCheck {
+                path: "/health".to_string(),
+                interval: 0,
+                timeout_ms: 1000,
+                failure_threshold: 1,
+                success_threshold: 2,
+                cooldown_ms: 10_000,
+            }),
+        };
+        let mut pool = BackendPool::new_from_states(vec![BackendState::new(&backend)]);
+
+        assert!(matches!(
+            pool.mark_request_failure(0, HealthFailureReason::Transport),
+            Some(HealthTransition::BecameUnhealthy)
+        ));
+        pool.reconcile_readmit_at(Instant::now() + Duration::from_millis(10_001));
+
+        assert!(pool.backend(0).is_some_and(BackendState::is_probing));
+        assert!(!pool.readmit_due());
+
+        assert!(pool
+            .mark_request_failure(0, HealthFailureReason::Transport)
+            .is_none());
+        assert!(!pool.backend(0).is_some_and(BackendState::is_probing));
+        assert!(pool.readmit_due());
     }
 
     #[test]

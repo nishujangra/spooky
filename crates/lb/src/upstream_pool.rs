@@ -95,6 +95,10 @@ impl UpstreamPool {
         self.pool.mark_success(index)
     }
 
+    pub fn mark_backend_request_success(&mut self, index: usize) -> Option<HealthTransition> {
+        self.pool.mark_request_success(index)
+    }
+
     pub fn mark_backend_failure_from_active_check(
         &mut self,
         index: usize,
@@ -427,6 +431,42 @@ mod tests {
         assert_eq!(pool.pick("key"), Some(1));
 
         pool.finish_request(0, std::time::Duration::from_millis(10), Some(200));
+        assert!(matches!(
+            pool.mark_backend_healthy(0),
+            Some(crate::HealthTransition::BecameHealthy)
+        ));
+    }
+
+    #[test]
+    fn active_health_check_backends_ignore_passive_success_recovery() {
+        let runtime_upstream = runtime_upstream_from_backends(
+            "round-robin",
+            vec![Backend {
+                id: "backend-0".to_string(),
+                address: "http://127.0.0.1:7001".to_string(),
+                weight: 1,
+                health_check: Some(HealthCheck {
+                    path: "/health".to_string(),
+                    interval: 1_000,
+                    timeout_ms: 1000,
+                    failure_threshold: 1,
+                    success_threshold: 1,
+                    cooldown_ms: 0,
+                }),
+            }],
+        );
+        let mut pool = UpstreamPool::from_runtime_upstream(&runtime_upstream)
+            .expect("runtime pool should build");
+
+        assert!(matches!(
+            pool.mark_backend_failure_from_active_check(0),
+            Some(crate::HealthTransition::BecameUnhealthy)
+        ));
+        assert!(!pool.is_backend_healthy(0));
+
+        assert!(pool.mark_backend_request_success(0).is_none());
+        assert!(!pool.is_backend_healthy(0));
+
         assert!(matches!(
             pool.mark_backend_healthy(0),
             Some(crate::HealthTransition::BecameHealthy)

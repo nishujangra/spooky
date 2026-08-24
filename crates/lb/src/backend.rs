@@ -76,7 +76,8 @@ impl BackendState {
         let success_threshold = self
             .health_check
             .as_ref()
-            .map_or(1, |hc| hc.success_threshold);
+            .map_or(1, |hc| hc.success_threshold)
+            .max(1);
 
         match self.health_state.clone() {
             HealthState::Healthy => {
@@ -89,34 +90,15 @@ impl BackendState {
                 }
 
                 self.consecutive_failures = 0;
-                if success_threshold <= 1 {
-                    self.health_state = HealthState::Healthy;
-                    return Some(HealthTransition::BecameHealthy);
-                }
-
                 self.health_state = HealthState::Probing {
-                    successes: 1,
+                    successes: 0,
                     remaining_budget: self.probe_budget(),
                 };
-                None
+                self.record_probing_success(success_threshold)
             }
             HealthState::Probing {
-                successes,
-                remaining_budget,
-            } => {
-                let next_successes = successes.saturating_add(1);
-                if next_successes >= success_threshold {
-                    self.consecutive_failures = 0;
-                    self.health_state = HealthState::Healthy;
-                    return Some(HealthTransition::BecameHealthy);
-                }
-
-                self.health_state = HealthState::Probing {
-                    successes: next_successes,
-                    remaining_budget,
-                };
-                None
-            }
+                ..
+            } => self.record_probing_success(success_threshold),
         }
     }
 
@@ -194,6 +176,29 @@ impl BackendState {
         self.health_check
             .as_ref()
             .map_or(1, |hc| hc.success_threshold.max(1))
+    }
+
+    fn record_probing_success(&mut self, success_threshold: u32) -> Option<HealthTransition> {
+        let (successes, remaining_budget) = match &self.health_state {
+            HealthState::Probing {
+                successes,
+                remaining_budget,
+            } => (*successes, *remaining_budget),
+            HealthState::Healthy | HealthState::Unhealthy { .. } => return None,
+        };
+
+        let next_successes = successes.saturating_add(1);
+        if next_successes >= success_threshold {
+            self.consecutive_failures = 0;
+            self.health_state = HealthState::Healthy;
+            return Some(HealthTransition::BecameHealthy);
+        }
+
+        self.health_state = HealthState::Probing {
+            successes: next_successes,
+            remaining_budget,
+        };
+        None
     }
 }
 
