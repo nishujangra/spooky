@@ -5,6 +5,7 @@ use std::{
 };
 
 use impulse_config::config::{ScopedRateLimit as ScopedRateLimitConfig, ScopedRateLimitScope};
+use sha2::{Digest, Sha256};
 
 use super::quota::{
     DistributedQuotaCounterBackend, QuotaBackendFailurePolicy, QuotaCounterBackend,
@@ -18,6 +19,12 @@ use super::quota::{
 const LEGACY_SCOPED_RATE_LIMIT_PROTOCOL_VERSION: &str = "legacy-scoped-token-bucket/v1";
 const LEGACY_SCOPED_BACKEND_KIND: &str = "legacy_scoped_rate_limit";
 const LEGACY_SCOPED_KEY_PREFIX: &str = "impulse:legacy-scoped-rate-limit";
+const MAX_SCOPED_RATE_LIMIT_BUCKETS_PER_RULE: usize = 1024;
+
+struct ScopedRateLimitBucketAccess {
+    storage_key: String,
+    evaluation: ScopedRateLimitBucketEvaluation,
+}
 
 struct ScopedRateLimitBucket {
     burst: f64,
@@ -131,25 +138,31 @@ impl ScopedRateLimitRule {
 
     fn allow(&self, key: &str) -> bool {
         self.evaluate_bucket(key, 1)
-            .is_some_and(|evaluation| evaluation.allowed)
+            .is_some_and(|bucket| bucket.evaluation.allowed)
     }
 
     fn evaluate_request(
         &self,
         request: QuotaCounterEvaluationRequest,
     ) -> Result<QuotaCounterEvaluationOutcome, QuotaCounterBackendError> {
-        let Some(evaluation) = self.evaluate_bucket(&request.composite_key.key, request.cost)
+        let Some(bucket) = self.evaluate_bucket(&request.composite_key.key, request.cost)
         else {
             return Err(QuotaCounterBackendError {
                 policy_name: Some(request.policy_name),
                 composite_key: Some(request.composite_key.key),
                 kind: QuotaCounterBackendErrorKind::Unavailable,
-                detail: Some("scoped rate-limit bucket store lock is poisoned".to_string()),
+                detail: Some(
+                    "scoped rate-limit bucket store is unavailable or saturated".to_string(),
+                ),
             });
         };
 
         let limit = u64::from(self.burst.max(1));
-        let remaining = evaluation.remaining_tokens.floor().clamp(0.0, limit as f64) as u64;
+        let remaining = bucket
+            .evaluation
+            .remaining_tokens
+            .floor()
+            .clamp(0.0, limit as f64) as u64;
         let consumed = limit.saturating_sub(remaining);
         let counter = QuotaCounterResult {
             burst: Some(QuotaWindowUsage {
@@ -157,10 +170,10 @@ impl ScopedRateLimitRule {
                 consumed,
                 remaining,
                 window: Duration::from_secs(1),
-                reset_after: evaluation.retry_after,
+                reset_after: bucket.evaluation.retry_after,
                 bucket_started_at_unix_ms: None,
                 reset_at_unix_ms: None,
-                storage_key: Some(request.composite_key.key.clone()),
+                storage_key: Some(bucket.storage_key.clone()),
             }),
             sustained: None,
         };
@@ -168,7 +181,7 @@ impl ScopedRateLimitRule {
         Ok(QuotaCounterEvaluationOutcome {
             matched_policy: request.policy_name,
             composite_key: request.composite_key,
-            decision: if evaluation.allowed {
+            decision: if bucket.evaluation.allowed {
                 QuotaCounterEvaluationDecision::Allowed
             } else {
                 QuotaCounterEvaluationDecision::Denied(QuotaDenyReason::BurstQuotaExhausted)
@@ -182,19 +195,66 @@ impl ScopedRateLimitRule {
         })
     }
 
-    fn evaluate_bucket(&self, key: &str, cost: u64) -> Option<ScopedRateLimitBucketEvaluation> {
+    fn evaluate_bucket(&self, key: &str, cost: u64) -> Option<ScopedRateLimitBucketAccess> {
         let mut buckets = match self.buckets.lock() {
             Ok(guard) => guard,
             Err(_) => return None,
         };
-        if buckets.len() >= 64 {
-            let idle_ttl = self.idle_ttl;
-            buckets.retain(|_, bucket| bucket.last_seen.elapsed() < idle_ttl);
+        let storage_key = self.canonical_bucket_storage_key(key);
+        if buckets.len() >= 64 || !buckets.contains_key(&storage_key) {
+            self.prune_idle_buckets(&mut buckets);
         }
+        if !buckets.contains_key(&storage_key)
+            && buckets.len() >= MAX_SCOPED_RATE_LIMIT_BUCKETS_PER_RULE
+        {
+            self.evict_oldest_bucket(&mut buckets);
+        }
+        if !buckets.contains_key(&storage_key)
+            && buckets.len() >= MAX_SCOPED_RATE_LIMIT_BUCKETS_PER_RULE
+        {
+            return None;
+        }
+
         let bucket = buckets
-            .entry(key.to_string())
+            .entry(storage_key.clone())
             .or_insert_with(|| ScopedRateLimitBucket::new(self.rate_per_sec, self.burst));
-        Some(bucket.evaluate(cost))
+        Some(ScopedRateLimitBucketAccess {
+            storage_key,
+            evaluation: bucket.evaluate(cost),
+        })
+    }
+
+    fn prune_idle_buckets(&self, buckets: &mut HashMap<String, ScopedRateLimitBucket>) {
+        let idle_ttl = self.idle_ttl;
+        buckets.retain(|_, bucket| bucket.last_seen.elapsed() < idle_ttl);
+    }
+
+    fn evict_oldest_bucket(&self, buckets: &mut HashMap<String, ScopedRateLimitBucket>) {
+        let Some(oldest_key) = buckets
+            .iter()
+            .min_by_key(|(_, bucket)| bucket.last_seen)
+            .map(|(key, _)| key.clone())
+        else {
+            return;
+        };
+        buckets.remove(&oldest_key);
+    }
+
+    fn canonical_bucket_storage_key(&self, key: &str) -> String {
+        let normalized = key.trim();
+        if normalized.is_empty() {
+            return "sha256:empty".to_string();
+        }
+        if matches!(self.scope, ScopedRateLimitScope::Route) {
+            return normalized.to_string();
+        }
+
+        let mut output = String::new();
+        if let Some(route) = extract_quota_key_component(normalized, "route") {
+            append_bucket_key_component(&mut output, "route", route);
+        }
+        append_bucket_key_component(&mut output, "selector", &sha256_storage_key(normalized));
+        output
     }
 
     fn quota_policy(&self) -> QuotaPolicyRuntime {
@@ -251,6 +311,50 @@ impl ScopedRateLimitRule {
             sustained: None,
         }
     }
+}
+
+fn extract_quota_key_component<'a>(key: &'a str, label: &str) -> Option<&'a str> {
+    let mut cursor = key;
+    while !cursor.is_empty() {
+        let (component, rest) = cursor.split_once('|').unwrap_or((cursor, ""));
+        cursor = rest;
+
+        let Some((component_label, value)) = component.split_once('=') else {
+            continue;
+        };
+        if component_label != label {
+            continue;
+        }
+
+        let Some((declared_len, payload)) = value.split_once(':') else {
+            continue;
+        };
+        let Some(declared_len) = declared_len.parse::<usize>().ok() else {
+            continue;
+        };
+        if payload.len() != declared_len {
+            return None;
+        }
+        return Some(payload);
+    }
+
+    None
+}
+
+fn append_bucket_key_component(output: &mut String, label: &str, value: &str) {
+    output.push_str(label);
+    output.push('=');
+    output.push_str(&value.len().to_string());
+    output.push(':');
+    output.push_str(value);
+    output.push('|');
+}
+
+fn sha256_storage_key(value: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(value.as_bytes());
+    let digest = hasher.finalize();
+    format!("sha256:{digest:x}")
 }
 
 #[derive(Debug, Clone)]
