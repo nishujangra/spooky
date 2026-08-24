@@ -17,16 +17,20 @@ pub struct BackendPool {
     pub backends: Vec<BackendState>,
     pub healthy: Vec<usize>,
     pub healthy_pos: Vec<Option<usize>>,
+    pub probing: Vec<usize>,
+    pub probing_pos: Vec<Option<usize>>,
     pub membership_epoch: u64,
     // Earliest cooldown expiry among passively-ejected backends (no active
     // health check), driving time-based re-admission. `None` when none pending.
     pub earliest_readmit: Option<Instant>,
+    pub next_probing_cursor: usize,
 }
 
 impl BackendPool {
     pub fn new_from_states(backends: Vec<BackendState>) -> Self {
         let mut healthy = Vec::with_capacity(backends.len());
         let mut healthy_pos = vec![None; backends.len()];
+        let probing_pos = vec![None; backends.len()];
 
         for (idx, backend) in backends.iter().enumerate() {
             if backend.is_healthy() {
@@ -39,8 +43,11 @@ impl BackendPool {
             backends,
             healthy,
             healthy_pos,
+            probing: Vec::new(),
+            probing_pos,
             membership_epoch: 0,
             earliest_readmit: None,
+            next_probing_cursor: 0,
         }
     }
 
@@ -63,12 +70,14 @@ impl BackendPool {
             return None;
         }
 
-        let (was_healthy, is_healthy, transition) = {
+        let (was_healthy, was_probing, is_healthy, is_probing, transition) = {
             let backend = &mut self.backends[index];
             let was_healthy = backend.is_healthy();
+            let was_probing = backend.is_probing();
             let transition = backend.record_success();
             let is_healthy = backend.is_healthy();
-            (was_healthy, is_healthy, transition)
+            let is_probing = backend.is_probing();
+            (was_healthy, was_probing, is_healthy, is_probing, transition)
         };
 
         if was_healthy != is_healthy {
@@ -78,6 +87,14 @@ impl BackendPool {
                 debug_assert!(self.mark_unhealthy(index));
             }
             self.membership_epoch = self.membership_epoch.wrapping_add(1);
+        }
+
+        if was_probing != is_probing {
+            if is_probing {
+                debug_assert!(self.mark_probing(index));
+            } else {
+                debug_assert!(self.mark_not_probing(index));
+            }
         }
 
         transition
@@ -168,6 +185,14 @@ impl BackendPool {
             self.membership_epoch = self.membership_epoch.wrapping_add(1);
         }
 
+        if was_probing != is_probing {
+            if is_probing {
+                debug_assert!(self.mark_probing(index));
+            } else {
+                debug_assert!(self.mark_not_probing(index));
+            }
+        }
+
         if !self.backends[index].has_active_health_check()
             && was_probing != is_probing
             && let Some(until) = self.backends[index].cooldown_until()
@@ -210,9 +235,9 @@ impl BackendPool {
             if self.backends[index].has_active_health_check() {
                 continue;
             }
-            if !self.backends[index].readmit_if_expired(now)
-                && let Some(until) = self.backends[index].cooldown_until()
-            {
+            if self.backends[index].readmit_if_expired(now) {
+                debug_assert!(self.mark_probing(index));
+            } else if let Some(until) = self.backends[index].cooldown_until() {
                 next = Some(next.map_or(until, |e| e.min(until)));
             }
         }
@@ -256,16 +281,24 @@ impl BackendPool {
     }
 
     pub fn pick_probing_backend(&mut self, begin_request: bool) -> Option<usize> {
-        let selected = self
-            .backends
-            .iter_mut()
-            .enumerate()
-            .find_map(|(index, backend)| {
-                (backend.is_probing()
-                    && backend.active_requests() == 0
-                    && backend.try_acquire_probe_permit())
-                .then_some(index)
-            });
+        if self.probing.is_empty() {
+            return None;
+        }
+
+        let probing_len = self.probing.len();
+        let start = self.next_probing_cursor % probing_len;
+        let mut selected = None;
+
+        for offset in 0..probing_len {
+            let probing_pos = (start + offset) % probing_len;
+            let index = self.probing[probing_pos];
+            let backend = &mut self.backends[index];
+            if backend.active_requests() == 0 && backend.try_acquire_probe_permit() {
+                self.next_probing_cursor = probing_pos.wrapping_add(1);
+                selected = Some(index);
+                break;
+            }
+        }
 
         if let Some(index) = selected
             && begin_request
@@ -339,6 +372,21 @@ impl BackendPool {
         true
     }
 
+    fn mark_probing(&mut self, index: usize) -> bool {
+        if index >= self.backends.len() {
+            return false;
+        }
+
+        if self.probing_pos[index].is_some() {
+            return false;
+        }
+
+        let pos = self.probing.len();
+        self.probing.push(index);
+        self.probing_pos[index] = Some(pos);
+        true
+    }
+
     fn mark_unhealthy(&mut self, index: usize) -> bool {
         if index >= self.backends.len() {
             return false;
@@ -357,6 +405,32 @@ impl BackendPool {
         }
 
         self.healthy_pos[index] = None;
+        true
+    }
+
+    fn mark_not_probing(&mut self, index: usize) -> bool {
+        if index >= self.backends.len() {
+            return false;
+        }
+
+        let Some(pos) = self.probing_pos[index] else {
+            return false;
+        };
+
+        let removed = self.probing.swap_remove(pos);
+        debug_assert_eq!(removed, index);
+
+        if pos < self.probing.len() {
+            let moved_index = self.probing[pos];
+            self.probing_pos[moved_index] = Some(pos);
+        }
+
+        self.probing_pos[index] = None;
+        if self.probing.is_empty() {
+            self.next_probing_cursor = 0;
+        } else {
+            self.next_probing_cursor %= self.probing.len();
+        }
         true
     }
 }
