@@ -1,4 +1,6 @@
 #[cfg(test)]
+use serial_test::serial;
+#[cfg(test)]
 use std::{collections::VecDeque, sync::Mutex};
 use std::{
     collections::{HashMap, HashSet},
@@ -4360,6 +4362,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[serial(jwks_cache)]
     async fn startup_jwks_refresh_populates_active_key_set() {
         let jwks_url = "https://issuer.example.com/startup-jwks.json";
         clear_jwks_cache_for_test(jwks_url);
@@ -4396,6 +4399,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(jwks_cache)]
     fn require_ready_startup_preflight_fails_when_jwks_is_unreachable() {
         let jwks_url = "https://issuer.example.com/require-ready-failure.json";
         clear_jwks_cache_for_test(jwks_url);
@@ -4583,6 +4587,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(jwks_cache)]
     fn stale_jwks_cache_beyond_configured_limit_rejects_requests() {
         let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         let jwks_url = "https://issuer.example.com/expired-stale-jwks.json";
@@ -4659,6 +4664,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[serial(jwks_cache)]
     async fn refresh_transport_failure_retains_last_known_good_keys_and_keeps_validating() {
         let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         let jwks_url = "https://issuer.example.com/refresh-failure-retention-jwks.json";
@@ -4875,6 +4881,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[serial(jwks_cache)]
     async fn unknown_kid_rejects_current_request_and_triggers_refresh_hint() {
         let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         let jwks_url = "https://issuer.example.com/on-demand-jwks.json";
@@ -4955,6 +4962,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[serial(jwks_cache)]
     async fn refresh_retains_temporarily_dropped_old_key_during_rollover_overlap() {
         let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         let jwks_url = "https://issuer.example.com/rollover-overlap-jwks.json";
@@ -5014,6 +5022,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[serial(jwks_cache)]
     async fn refresh_replaces_key_material_when_issuer_reuses_existing_kid() {
         let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         let jwks_url = "https://issuer.example.com/reused-kid-jwks.json";
@@ -5078,6 +5087,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[serial(jwks_cache)]
     async fn empty_or_broken_refresh_quarantines_replacement_and_retains_last_known_good_keys() {
         let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         let jwks_url = "https://issuer.example.com/quarantine-jwks.json";
