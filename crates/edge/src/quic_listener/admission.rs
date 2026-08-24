@@ -1012,6 +1012,34 @@ impl JwtJwksSharedCache {
             });
     }
 
+    fn reconcile_sources<'a, I>(&self, active_sources: I)
+    where
+        I: IntoIterator<Item = &'a JwtJwksSourceConfig>,
+    {
+        let active_source_ids = active_sources
+            .into_iter()
+            .map(|source| source.source_identity.clone())
+            .collect::<HashSet<_>>();
+
+        let Ok(mut entries) = self.entries.write() else {
+            log::error!("JWKS cache lock poisoned; skipping source reconciliation");
+            return;
+        };
+
+        let before = entries.len();
+        entries.retain(|source_identity, _| active_source_ids.contains(source_identity));
+        let removed = before.saturating_sub(entries.len());
+        drop(entries);
+
+        if let Some(metrics) = current_jwt_jwks_metrics() {
+            metrics.reconcile_jwks_sources(active_source_ids.iter().map(String::as_str));
+        }
+
+        if removed > 0 {
+            log::debug!("JWKS cache reconciled removed_sources={removed}");
+        }
+    }
+
     fn snapshot(&self, source_identity: &str, now: Instant) -> Option<JwtJwksCacheSnapshot> {
         // A poisoned lock yields `None`, which callers already treat as an
         // unavailable key source and reject rather than admit.
@@ -1591,9 +1619,11 @@ impl QUICListener {
     ) -> Result<(), impulse_errors::ProxyError> {
         let sources = runtime_jwks_sources(config);
         if sources.is_empty() {
+            JwtJwksSharedCache::shared().reconcile_sources([].iter().copied());
             return Ok(());
         }
 
+        JwtJwksSharedCache::shared().reconcile_sources(sources.iter());
         for source in &sources {
             JwtJwksSharedCache::shared().register_source(source.clone());
         }
@@ -1984,8 +2014,11 @@ impl QUICListener {
     ) {
         let sources = runtime_jwks_sources(config);
         if sources.is_empty() {
+            JwtJwksSharedCache::shared().reconcile_sources([].iter().copied());
             return;
         }
+
+        JwtJwksSharedCache::shared().reconcile_sources(sources.iter());
         let Some(handle) = runtime_handle() else {
             log::error!("JWKS refresh disabled: no Tokio runtime available");
             return;
