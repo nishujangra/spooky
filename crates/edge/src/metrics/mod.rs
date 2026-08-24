@@ -1,6 +1,6 @@
 use std::{
     cell::Cell,
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     env,
     sync::{
         RwLock,
@@ -1060,6 +1060,24 @@ impl Metrics {
                 entry.last_refresh_success_unix_seconds = Some(last_success_at);
             }
             entry.last_failure_reason = failure_reason.map(ToOwned::to_owned);
+        }
+    }
+
+    pub fn reconcile_jwks_sources<'a, I>(&self, active_source_ids: I)
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
+        let active_source_ids = active_source_ids
+            .into_iter()
+            .map(ToOwned::to_owned)
+            .collect::<HashSet<_>>();
+
+        if let Ok(mut guard) = self.jwks_unknown_kid_events.write() {
+            guard.retain(|jwks_source_id, _| active_source_ids.contains(jwks_source_id));
+        }
+
+        if let Ok(mut guard) = self.jwks_source_state.write() {
+            guard.retain(|jwks_source_id, _| active_source_ids.contains(jwks_source_id));
         }
     }
 

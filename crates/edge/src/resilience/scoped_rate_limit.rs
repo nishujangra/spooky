@@ -5,6 +5,7 @@ use std::{
 };
 
 use impulse_config::config::{ScopedRateLimit as ScopedRateLimitConfig, ScopedRateLimitScope};
+use sha2::{Digest, Sha256};
 
 use super::quota::{
     DistributedQuotaCounterBackend, QuotaBackendFailurePolicy, QuotaCounterBackend,
@@ -18,6 +19,53 @@ use super::quota::{
 const LEGACY_SCOPED_RATE_LIMIT_PROTOCOL_VERSION: &str = "legacy-scoped-token-bucket/v1";
 const LEGACY_SCOPED_BACKEND_KIND: &str = "legacy_scoped_rate_limit";
 const LEGACY_SCOPED_KEY_PREFIX: &str = "impulse:legacy-scoped-rate-limit";
+const MAX_SCOPED_RATE_LIMIT_BUCKETS_PER_RULE: usize = 1024;
+const SCOPED_RATE_LIMIT_PRUNE_INTERVAL: Duration = Duration::from_secs(1);
+
+struct ScopedRateLimitBucketAccess {
+    storage_key: String,
+    evaluation: ScopedRateLimitBucketEvaluation,
+}
+
+enum ScopedRateLimitBucketAdmission {
+    Existing,
+    New,
+    Saturated,
+}
+
+struct ScopedRateLimitBucketStore {
+    buckets: HashMap<String, ScopedRateLimitBucket>,
+    last_pruned_at: Instant,
+}
+
+impl ScopedRateLimitBucketStore {
+    fn new() -> Self {
+        Self {
+            buckets: HashMap::new(),
+            last_pruned_at: Instant::now(),
+        }
+    }
+
+    fn prune_expired_if_due(&mut self, now: Instant, idle_ttl: Duration) {
+        if now.saturating_duration_since(self.last_pruned_at) < SCOPED_RATE_LIMIT_PRUNE_INTERVAL {
+            return;
+        }
+
+        self.last_pruned_at = now;
+        self.buckets
+            .retain(|_, bucket| now.saturating_duration_since(bucket.last_seen) < idle_ttl);
+    }
+
+    fn admit(&mut self, storage_key: &str) -> ScopedRateLimitBucketAdmission {
+        if self.buckets.contains_key(storage_key) {
+            return ScopedRateLimitBucketAdmission::Existing;
+        }
+        if self.buckets.len() >= MAX_SCOPED_RATE_LIMIT_BUCKETS_PER_RULE {
+            return ScopedRateLimitBucketAdmission::Saturated;
+        }
+        ScopedRateLimitBucketAdmission::New
+    }
+}
 
 struct ScopedRateLimitBucket {
     burst: f64,
@@ -94,7 +142,7 @@ pub struct ScopedRateLimitRule {
     retry_after_seconds: u32,
     rate_per_sec: u32,
     burst: u32,
-    buckets: Mutex<HashMap<String, ScopedRateLimitBucket>>,
+    buckets: Mutex<ScopedRateLimitBucketStore>,
 }
 
 impl ScopedRateLimitRule {
@@ -109,7 +157,7 @@ impl ScopedRateLimitRule {
                 .max(1),
             rate_per_sec: config.requests_per_sec.max(1),
             burst: config.burst.max(1),
-            buckets: Mutex::new(HashMap::new()),
+            buckets: Mutex::new(ScopedRateLimitBucketStore::new()),
         }
     }
 
@@ -131,25 +179,30 @@ impl ScopedRateLimitRule {
 
     fn allow(&self, key: &str) -> bool {
         self.evaluate_bucket(key, 1)
-            .is_some_and(|evaluation| evaluation.allowed)
+            .is_some_and(|bucket| bucket.evaluation.allowed)
     }
 
     fn evaluate_request(
         &self,
         request: QuotaCounterEvaluationRequest,
     ) -> Result<QuotaCounterEvaluationOutcome, QuotaCounterBackendError> {
-        let Some(evaluation) = self.evaluate_bucket(&request.composite_key.key, request.cost)
-        else {
+        let Some(bucket) = self.evaluate_bucket(&request.composite_key.key, request.cost) else {
             return Err(QuotaCounterBackendError {
                 policy_name: Some(request.policy_name),
                 composite_key: Some(request.composite_key.key),
                 kind: QuotaCounterBackendErrorKind::Unavailable,
-                detail: Some("scoped rate-limit bucket store lock is poisoned".to_string()),
+                detail: Some(
+                    "scoped rate-limit bucket store is unavailable or saturated".to_string(),
+                ),
             });
         };
 
         let limit = u64::from(self.burst.max(1));
-        let remaining = evaluation.remaining_tokens.floor().clamp(0.0, limit as f64) as u64;
+        let remaining = bucket
+            .evaluation
+            .remaining_tokens
+            .floor()
+            .clamp(0.0, limit as f64) as u64;
         let consumed = limit.saturating_sub(remaining);
         let counter = QuotaCounterResult {
             burst: Some(QuotaWindowUsage {
@@ -157,10 +210,10 @@ impl ScopedRateLimitRule {
                 consumed,
                 remaining,
                 window: Duration::from_secs(1),
-                reset_after: evaluation.retry_after,
+                reset_after: bucket.evaluation.retry_after,
                 bucket_started_at_unix_ms: None,
                 reset_at_unix_ms: None,
-                storage_key: Some(request.composite_key.key.clone()),
+                storage_key: Some(bucket.storage_key.clone()),
             }),
             sustained: None,
         };
@@ -168,7 +221,7 @@ impl ScopedRateLimitRule {
         Ok(QuotaCounterEvaluationOutcome {
             matched_policy: request.policy_name,
             composite_key: request.composite_key,
-            decision: if evaluation.allowed {
+            decision: if bucket.evaluation.allowed {
                 QuotaCounterEvaluationDecision::Allowed
             } else {
                 QuotaCounterEvaluationDecision::Denied(QuotaDenyReason::BurstQuotaExhausted)
@@ -182,19 +235,47 @@ impl ScopedRateLimitRule {
         })
     }
 
-    fn evaluate_bucket(&self, key: &str, cost: u64) -> Option<ScopedRateLimitBucketEvaluation> {
-        let mut buckets = match self.buckets.lock() {
+    fn evaluate_bucket(&self, key: &str, cost: u64) -> Option<ScopedRateLimitBucketAccess> {
+        let mut bucket_store = match self.buckets.lock() {
             Ok(guard) => guard,
             Err(_) => return None,
         };
-        if buckets.len() >= 64 {
-            let idle_ttl = self.idle_ttl;
-            buckets.retain(|_, bucket| bucket.last_seen.elapsed() < idle_ttl);
+        let now = Instant::now();
+        let storage_key = self.canonical_bucket_storage_key(key);
+        bucket_store.prune_expired_if_due(now, self.idle_ttl);
+
+        if matches!(
+            bucket_store.admit(&storage_key),
+            ScopedRateLimitBucketAdmission::Saturated
+        ) {
+            return None;
         }
-        let bucket = buckets
-            .entry(key.to_string())
+
+        let bucket = bucket_store
+            .buckets
+            .entry(storage_key.clone())
             .or_insert_with(|| ScopedRateLimitBucket::new(self.rate_per_sec, self.burst));
-        Some(bucket.evaluate(cost))
+        Some(ScopedRateLimitBucketAccess {
+            storage_key,
+            evaluation: bucket.evaluate(cost),
+        })
+    }
+
+    fn canonical_bucket_storage_key(&self, key: &str) -> String {
+        let normalized = key.trim();
+        if normalized.is_empty() {
+            return "sha256:empty".to_string();
+        }
+        if matches!(self.scope, ScopedRateLimitScope::Route) {
+            return normalized.to_string();
+        }
+
+        let mut output = String::new();
+        if let Some(route) = extract_quota_key_component(normalized, "route") {
+            append_bucket_key_component(&mut output, "route", route);
+        }
+        append_bucket_key_component(&mut output, "selector", &sha256_storage_key(normalized));
+        output
     }
 
     fn quota_policy(&self) -> QuotaPolicyRuntime {
@@ -249,6 +330,168 @@ impl ScopedRateLimitRule {
                 window: Duration::from_secs(1),
             }),
             sustained: None,
+        }
+    }
+}
+
+fn extract_quota_key_component<'a>(key: &'a str, label: &str) -> Option<&'a str> {
+    let mut cursor = key;
+    while !cursor.is_empty() {
+        let (component, rest) = cursor.split_once('|').unwrap_or((cursor, ""));
+        cursor = rest;
+
+        let Some((component_label, value)) = component.split_once('=') else {
+            continue;
+        };
+        if component_label != label {
+            continue;
+        }
+
+        let Some((declared_len, payload)) = value.split_once(':') else {
+            continue;
+        };
+        let Some(declared_len) = declared_len.parse::<usize>().ok() else {
+            continue;
+        };
+        if payload.len() != declared_len {
+            return None;
+        }
+        return Some(payload);
+    }
+
+    None
+}
+
+fn append_bucket_key_component(output: &mut String, label: &str, value: &str) {
+    output.push_str(label);
+    output.push('=');
+    output.push_str(&value.len().to_string());
+    output.push(':');
+    output.push_str(value);
+    output.push('|');
+}
+
+fn sha256_storage_key(value: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(value.as_bytes());
+    let digest = hasher.finalize();
+    format!("sha256:{digest:x}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_rule(scope: ScopedRateLimitScope) -> ScopedRateLimitRule {
+        ScopedRateLimitRule::from_config(&ScopedRateLimitConfig {
+            name: "test".to_string(),
+            scope,
+            requests_per_sec: 10,
+            burst: 10,
+            key: None,
+            route_allowlist: Vec::new(),
+            idle_ttl_secs: 60,
+        })
+    }
+
+    #[test]
+    fn evaluate_bucket_prunes_expired_entries_on_deterministic_cadence() {
+        let rule = test_rule(ScopedRateLimitScope::Route);
+        {
+            let mut store = rule.buckets.lock().expect("bucket store lock");
+            let now = Instant::now();
+            store.buckets.insert(
+                "expired".to_string(),
+                ScopedRateLimitBucket {
+                    burst: 1.0,
+                    rate_per_sec: 1.0,
+                    tokens: 1.0,
+                    last_refill: now,
+                    last_seen: now - Duration::from_secs(120),
+                },
+            );
+            store.buckets.insert(
+                "live".to_string(),
+                ScopedRateLimitBucket {
+                    burst: 1.0,
+                    rate_per_sec: 1.0,
+                    tokens: 1.0,
+                    last_refill: now,
+                    last_seen: now,
+                },
+            );
+            store.last_pruned_at = now - SCOPED_RATE_LIMIT_PRUNE_INTERVAL;
+        }
+
+        let _ = rule.evaluate_bucket("live", 1).expect("bucket evaluation");
+
+        let store = rule.buckets.lock().expect("bucket store lock");
+        assert!(!store.buckets.contains_key("expired"));
+        assert!(store.buckets.contains_key("live"));
+    }
+
+    #[test]
+    fn evaluate_bucket_rejects_new_entry_when_cap_is_reached_without_expiry() {
+        let rule = test_rule(ScopedRateLimitScope::Route);
+        {
+            let mut store = rule.buckets.lock().expect("bucket store lock");
+            let now = Instant::now();
+            store.last_pruned_at = now;
+            for index in 0..MAX_SCOPED_RATE_LIMIT_BUCKETS_PER_RULE {
+                store.buckets.insert(
+                    format!("bucket-{index}"),
+                    ScopedRateLimitBucket {
+                        burst: 1.0,
+                        rate_per_sec: 1.0,
+                        tokens: 1.0,
+                        last_refill: now,
+                        last_seen: now + Duration::from_millis(index as u64),
+                    },
+                );
+            }
+        }
+
+        let inserted = rule.evaluate_bucket("fresh-bucket", 1);
+        let existing = rule.evaluate_bucket("bucket-0", 1);
+
+        let store = rule.buckets.lock().expect("bucket store lock");
+        assert!(inserted.is_none());
+        assert!(existing.is_some());
+        assert_eq!(store.buckets.len(), MAX_SCOPED_RATE_LIMIT_BUCKETS_PER_RULE);
+        assert!(!store.buckets.contains_key("fresh-bucket"));
+        assert!(store.buckets.contains_key("bucket-0"));
+    }
+
+    #[test]
+    fn evaluate_bucket_hashes_non_route_storage_keys_for_untrusted_identities() {
+        let rule = test_rule(ScopedRateLimitScope::Token);
+        let first_value = "a".repeat(2048);
+        let second_value = "b".repeat(2048);
+        let first_key = format!("route=4:/api|token={}:{}|", first_value.len(), first_value);
+        let second_key = format!(
+            "route=4:/api|token={}:{}|",
+            second_value.len(),
+            second_value
+        );
+
+        let _ = rule
+            .evaluate_bucket(&first_key, 1)
+            .expect("first bucket evaluation");
+        let _ = rule
+            .evaluate_bucket(&second_key, 1)
+            .expect("second bucket evaluation");
+
+        let store = rule.buckets.lock().expect("bucket store lock");
+        let keys = store.buckets.keys().cloned().collect::<Vec<_>>();
+        assert_eq!(keys.len(), 2);
+        assert_ne!(keys[0], keys[1]);
+        for key in keys {
+            assert!(key.starts_with("route=4:/api|selector="));
+            assert!(key.contains("sha256:"));
+            assert!(!key.contains(&first_value[..128]));
+            assert!(!key.contains(&second_value[..128]));
+            assert!(key.len() < first_key.len());
+            assert!(key.len() < second_key.len());
         }
     }
 }

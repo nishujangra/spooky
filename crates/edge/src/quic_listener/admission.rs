@@ -993,23 +993,44 @@ impl JwtJwksSharedCache {
             .and_modify(|entry| {
                 merge_jwks_source_config(&mut entry.source, &source);
             })
-            .or_insert_with(|| JwtJwksCacheEntry {
-                source,
-                state: JwtJwksCacheState::NeverFetched,
-                active_keys: Vec::new(),
-                refresh_in_flight: false,
-                last_refresh_started_at: None,
-                last_refresh_started_wall: None,
-                last_refresh_completed_at: None,
-                last_refresh_completed_wall: None,
-                last_success_at: None,
-                last_success_wall: None,
-                last_failure_at: None,
-                last_failure_wall: None,
-                last_error: None,
-                last_failure_reason: None,
-                next_on_demand_refresh_at: None,
-            });
+            .or_insert_with(|| new_jwks_cache_entry(source));
+    }
+
+    fn reconcile_sources<'a, I>(&self, active_sources: I)
+    where
+        I: IntoIterator<Item = &'a JwtJwksSourceConfig>,
+    {
+        let active_sources = active_sources
+            .into_iter()
+            .map(|source| (source.source_identity.clone(), source.clone()))
+            .collect::<HashMap<_, _>>();
+        let active_source_ids = active_sources.keys().cloned().collect::<HashSet<_>>();
+
+        let Ok(mut entries) = self.entries.write() else {
+            log::error!("JWKS cache lock poisoned; skipping source reconciliation");
+            return;
+        };
+
+        let before = entries.len();
+        entries.retain(|source_identity, _| active_source_ids.contains(source_identity));
+        for (source_identity, source) in active_sources {
+            entries
+                .entry(source_identity)
+                .and_modify(|entry| {
+                    merge_jwks_source_config(&mut entry.source, &source);
+                })
+                .or_insert_with(|| new_jwks_cache_entry(source));
+        }
+        let removed = before.saturating_sub(entries.len());
+        drop(entries);
+
+        if let Some(metrics) = current_jwt_jwks_metrics() {
+            metrics.reconcile_jwks_sources(active_source_ids.iter().map(String::as_str));
+        }
+
+        if removed > 0 {
+            log::debug!("JWKS cache reconciled removed_sources={removed}");
+        }
     }
 
     fn snapshot(&self, source_identity: &str, now: Instant) -> Option<JwtJwksCacheSnapshot> {
@@ -1165,6 +1186,26 @@ impl JwtJwksSharedCache {
             .write()
             .expect("jwks shared cache write lock")
             .remove(source_identity);
+    }
+}
+
+fn new_jwks_cache_entry(source: JwtJwksSourceConfig) -> JwtJwksCacheEntry {
+    JwtJwksCacheEntry {
+        source,
+        state: JwtJwksCacheState::NeverFetched,
+        active_keys: Vec::new(),
+        refresh_in_flight: false,
+        last_refresh_started_at: None,
+        last_refresh_started_wall: None,
+        last_refresh_completed_at: None,
+        last_refresh_completed_wall: None,
+        last_success_at: None,
+        last_success_wall: None,
+        last_failure_at: None,
+        last_failure_wall: None,
+        last_error: None,
+        last_failure_reason: None,
+        next_on_demand_refresh_at: None,
     }
 }
 
@@ -1591,12 +1632,11 @@ impl QUICListener {
     ) -> Result<(), impulse_errors::ProxyError> {
         let sources = runtime_jwks_sources(config);
         if sources.is_empty() {
+            JwtJwksSharedCache::shared().reconcile_sources([].iter().copied());
             return Ok(());
         }
 
-        for source in &sources {
-            JwtJwksSharedCache::shared().register_source(source.clone());
-        }
+        JwtJwksSharedCache::shared().reconcile_sources(sources.iter());
 
         let require_ready = sources
             .into_iter()
@@ -1984,15 +2024,17 @@ impl QUICListener {
     ) {
         let sources = runtime_jwks_sources(config);
         if sources.is_empty() {
+            JwtJwksSharedCache::shared().reconcile_sources([].iter().copied());
             return;
         }
+
+        JwtJwksSharedCache::shared().reconcile_sources(sources.iter());
         let Some(handle) = runtime_handle() else {
             log::error!("JWKS refresh disabled: no Tokio runtime available");
             return;
         };
 
         for source in sources {
-            JwtJwksSharedCache::shared().register_source(source.clone());
             let task_source = source.clone();
             let registration = spawn_supervised_async_task(
                 &handle,
@@ -3445,6 +3487,22 @@ mod tests {
         .expect("runtime config")
     }
 
+    fn test_jwks_source(
+        jwks_url: &str,
+        allowed_algorithms: Vec<JwtAlgorithm>,
+    ) -> JwtJwksSourceConfig {
+        JwtJwksSourceConfig {
+            source_identity: jwks_source_identity_for_test(jwks_url),
+            jwks_url: jwks_url.to_string(),
+            allowed_algorithms,
+            refresh_interval: Duration::from_secs(60),
+            request_timeout: Duration::from_secs(1),
+            cache_ttl: Duration::from_secs(60),
+            stale_if_error: Duration::from_secs(60),
+            startup_behavior: JwksStartupBehavior::AllowDegraded,
+        }
+    }
+
     mod admission_rejection_contracts {
         use super::*;
 
@@ -4424,6 +4482,151 @@ mod tests {
             sources[0].public_endpoint(),
             "https://issuer.example.com/shared-jwks.json"
         );
+    }
+
+    #[test]
+    fn jwks_cache_reconcile_evicts_removed_sources_and_their_telemetry() {
+        let active_url = "https://issuer.example.com/reconcile-active.json";
+        let removed_url = "https://issuer.example.com/reconcile-removed.json";
+        clear_jwks_cache_for_test(active_url);
+        clear_jwks_cache_for_test(removed_url);
+
+        let active = test_jwks_source(active_url, vec![JwtAlgorithm::Rs256]);
+        let removed = test_jwks_source(removed_url, vec![JwtAlgorithm::Es256]);
+        let metrics = Arc::new(crate::Metrics::default());
+        QUICListener::register_jwt_jwks_metrics(&metrics);
+
+        let cache = JwtJwksSharedCache::shared();
+        cache.register_source(active.clone());
+        cache.register_source(removed.clone());
+
+        let now = SystemTime::now();
+        metrics.record_jwks_unknown_kid(&active.source_identity);
+        metrics.record_jwks_unknown_kid(&removed.source_identity);
+        metrics.record_jwks_refresh_success(&active.source_identity, "fresh", 1, now, Some(now));
+        metrics.record_jwks_refresh_failure(
+            &removed.source_identity,
+            "empty_unusable",
+            0,
+            now,
+            None,
+            Some("request_failed"),
+        );
+
+        cache.reconcile_sources([&active]);
+
+        assert!(
+            cache
+                .snapshot(&active.source_identity, Instant::now())
+                .is_some(),
+            "active source must remain in cache"
+        );
+        assert!(
+            cache
+                .snapshot(&removed.source_identity, Instant::now())
+                .is_none(),
+            "removed source must be evicted from cache"
+        );
+
+        let unknown_kid = metrics.snapshot_jwks_unknown_kid_events();
+        assert_eq!(unknown_kid.len(), 1);
+        assert_eq!(unknown_kid[0].0, active.source_identity);
+
+        let jwks_state = metrics.snapshot_jwks_source_state();
+        assert_eq!(jwks_state.len(), 1);
+        assert_eq!(jwks_state[0].jwks_source_id, active.source_identity);
+        assert!(
+            !metrics
+                .render_prometheus()
+                .contains(&removed.source_identity),
+            "removed source telemetry must be absent after reconcile"
+        );
+
+        clear_jwks_cache_for_test(active_url);
+        clear_jwks_cache_for_test(removed_url);
+    }
+
+    #[test]
+    fn jwks_cache_reconcile_updates_active_source_in_place_without_resetting_state() {
+        let jwks_url = "https://issuer.example.com/reconcile-update.json";
+        clear_jwks_cache_for_test(jwks_url);
+
+        let original = test_jwks_source(jwks_url, vec![JwtAlgorithm::Rs256]);
+        let cache_now = Instant::now();
+        JwtJwksSharedCache::shared().upsert(
+            &original.source_identity,
+            JwtJwksCacheEntry {
+                source: original.clone(),
+                state: JwtJwksCacheState::RefreshFailedRetained,
+                active_keys: vec![JwtJwksActiveKey {
+                    key: RuntimeJwtVerificationKey::Pem {
+                        kid: Some("persisted-kid".to_string()),
+                        alg: Some(JwtAlgorithm::Rs256),
+                        public_key_pem: "persisted-pem".to_string(),
+                    },
+                    retained_until: None,
+                }],
+                refresh_in_flight: true,
+                last_refresh_started_at: Some(cache_now - Duration::from_secs(5)),
+                last_refresh_started_wall: Some(SystemTime::now() - Duration::from_secs(5)),
+                last_refresh_completed_at: Some(cache_now - Duration::from_secs(30)),
+                last_refresh_completed_wall: Some(SystemTime::now() - Duration::from_secs(30)),
+                last_success_at: Some(cache_now - Duration::from_secs(30)),
+                last_success_wall: Some(SystemTime::now() - Duration::from_secs(30)),
+                last_failure_at: Some(cache_now - Duration::from_secs(5)),
+                last_failure_wall: Some(SystemTime::now() - Duration::from_secs(5)),
+                last_error: Some("request_failed: retained".to_string()),
+                last_failure_reason: Some(JwtJwksFetchFailureReason::RequestFailed),
+                next_on_demand_refresh_at: Some(cache_now + Duration::from_secs(10)),
+            },
+        );
+
+        let mut updated = original.clone();
+        updated.allowed_algorithms = vec![JwtAlgorithm::Es256, JwtAlgorithm::Rs256];
+        updated.refresh_interval = Duration::from_secs(15);
+        updated.request_timeout = Duration::from_secs(3);
+        updated.cache_ttl = Duration::from_secs(120);
+        updated.stale_if_error = Duration::from_secs(180);
+        updated.startup_behavior = JwksStartupBehavior::RequireReady;
+
+        JwtJwksSharedCache::shared().reconcile_sources([&updated]);
+
+        let snapshot = JwtJwksSharedCache::shared()
+            .snapshot(&updated.source_identity, Instant::now())
+            .expect("active source snapshot after reconcile");
+        assert_eq!(snapshot.state, JwtJwksCacheState::RefreshFailedRetained);
+        assert_eq!(snapshot.active_keys.len(), 1);
+        assert_eq!(
+            snapshot.last_failure_reason,
+            Some(JwtJwksFetchFailureReason::RequestFailed)
+        );
+        assert_eq!(
+            snapshot.source.allowed_algorithms,
+            updated.allowed_algorithms
+        );
+        assert_eq!(snapshot.source.refresh_interval, updated.refresh_interval);
+        assert_eq!(snapshot.source.request_timeout, updated.request_timeout);
+        assert_eq!(snapshot.source.cache_ttl, original.cache_ttl);
+        assert_eq!(snapshot.source.stale_if_error, updated.stale_if_error);
+        assert_eq!(snapshot.source.startup_behavior, updated.startup_behavior);
+
+        let entries = JwtJwksSharedCache::shared()
+            .entries
+            .read()
+            .expect("jwks cache read lock");
+        let entry = entries
+            .get(&updated.source_identity)
+            .expect("active source entry");
+        assert!(entry.refresh_in_flight);
+        assert_eq!(entry.state, JwtJwksCacheState::RefreshFailedRetained);
+        assert_eq!(entry.active_keys.len(), 1);
+        assert_eq!(
+            entry.last_error.as_deref(),
+            Some("request_failed: retained")
+        );
+
+        drop(entries);
+        clear_jwks_cache_for_test(jwks_url);
     }
 
     #[test]
