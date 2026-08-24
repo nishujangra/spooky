@@ -147,6 +147,26 @@ pub struct QuotaIdentityLabels {
     pub client: Option<String>,
 }
 
+impl QuotaIdentityLabels {
+    fn canonicalize_for_storage(&self) -> Self {
+        Self {
+            route: canonical_stored_quota_identity(QuotaIdentityDimension::Route, self.route.as_deref()),
+            tenant: canonical_stored_quota_identity(
+                QuotaIdentityDimension::Tenant,
+                self.tenant.as_deref(),
+            ),
+            token: canonical_stored_quota_identity(
+                QuotaIdentityDimension::Token,
+                self.token.as_deref(),
+            ),
+            client: canonical_stored_quota_identity(
+                QuotaIdentityDimension::Client,
+                self.client.as_deref(),
+            ),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuotaCompositeKey {
     pub policy_name: String,
@@ -1050,6 +1070,7 @@ impl QuotaPolicyRuntime {
         context: &QuotaIdentityContext<'_>,
     ) -> Result<QuotaCompositeKey, QuotaIdentityRejection> {
         let labels = self.selector.extract_identities(&self.name, context)?;
+        let labels = labels.canonicalize_for_storage();
         Ok(QuotaCompositeKey {
             policy_name: self.name.clone(),
             key: compose_quota_key(&self.name, &labels),
@@ -1974,6 +1995,28 @@ fn canonical_quota_identity_value(dimension: QuotaIdentityDimension, value: &str
     format!("sha256:{digest:x}")
 }
 
+fn canonical_stored_quota_identity(
+    dimension: QuotaIdentityDimension,
+    value: Option<&str>,
+) -> Option<String> {
+    let normalized = value.map(str::trim).filter(|value| !value.is_empty())?;
+    if matches!(dimension, QuotaIdentityDimension::Route) {
+        return Some(normalized.to_string());
+    }
+    if is_canonical_hashed_quota_identity(normalized) {
+        return Some(normalized.to_string());
+    }
+    Some(canonical_quota_identity_value(dimension, normalized))
+}
+
+fn is_canonical_hashed_quota_identity(value: &str) -> bool {
+    value.len() == "sha256:".len() + 64
+        && value.starts_with("sha256:")
+        && value["sha256:".len()..]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
+}
+
 fn normalize_route_identity(route: Option<&str>) -> Option<String> {
     route
         .map(str::trim)
@@ -1982,6 +2025,7 @@ fn normalize_route_identity(route: Option<&str>) -> Option<String> {
 }
 
 fn compose_quota_key(policy_name: &str, labels: &QuotaIdentityLabels) -> String {
+    let labels = labels.canonicalize_for_storage();
     let mut key = String::with_capacity(estimated_quota_key_capacity(policy_name));
     append_key_component(&mut key, "policy", policy_name);
     if let Some(route) = labels.route.as_deref() {
@@ -2590,6 +2634,46 @@ mod tests {
                 hashed_client,
             )
         );
+    }
+
+    #[test]
+    fn compose_quota_key_canonicalizes_non_route_labels_before_storage() {
+        let labels = QuotaIdentityLabels {
+            route: Some("api".to_string()),
+            tenant: Some("acme".to_string()),
+            token: Some("secret-token".to_string()),
+            client: Some("203.0.113.10".to_string()),
+        };
+
+        let canonical = labels.canonicalize_for_storage();
+        assert_eq!(canonical.route.as_deref(), Some("api"));
+        assert!(
+            canonical
+                .tenant
+                .as_deref()
+                .is_some_and(|value| value.starts_with("sha256:"))
+        );
+        assert!(
+            canonical
+                .token
+                .as_deref()
+                .is_some_and(|value| value.starts_with("sha256:"))
+        );
+        assert!(
+            canonical
+                .client
+                .as_deref()
+                .is_some_and(|value| value.starts_with("sha256:"))
+        );
+
+        let key = compose_quota_key("tenant-quota", &labels);
+        assert!(key.contains("route=3:api|"));
+        assert!(!key.contains("tenant=4:acme|"));
+        assert!(!key.contains("token=12:secret-token|"));
+        assert!(!key.contains("client=12:203.0.113.10|"));
+        assert!(key.contains(canonical.tenant.as_deref().expect("hashed tenant")));
+        assert!(key.contains(canonical.token.as_deref().expect("hashed token")));
+        assert!(key.contains(canonical.client.as_deref().expect("hashed client")));
     }
 
     #[test]
