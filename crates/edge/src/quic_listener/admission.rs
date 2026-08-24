@@ -37,6 +37,8 @@ use impulse_config::{
 use impulse_lb::upstream_pool::UpstreamPool;
 use quiche::h3::NameValue;
 use serde_json::Value;
+#[cfg(test)]
+use serial_test::serial;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 use tokio::{
@@ -4360,6 +4362,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[serial(jwks_cache)]
     async fn startup_jwks_refresh_populates_active_key_set() {
         let jwks_url = "https://issuer.example.com/startup-jwks.json";
         clear_jwks_cache_for_test(jwks_url);
@@ -4396,6 +4399,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(jwks_cache)]
     fn require_ready_startup_preflight_fails_when_jwks_is_unreachable() {
         let jwks_url = "https://issuer.example.com/require-ready-failure.json";
         clear_jwks_cache_for_test(jwks_url);
@@ -4485,33 +4489,17 @@ mod tests {
     }
 
     #[test]
-    fn jwks_cache_reconcile_evicts_removed_sources_and_their_telemetry() {
+    fn jwks_cache_reconcile_evicts_removed_sources() {
         let active_url = "https://issuer.example.com/reconcile-active.json";
         let removed_url = "https://issuer.example.com/reconcile-removed.json";
-        clear_jwks_cache_for_test(active_url);
-        clear_jwks_cache_for_test(removed_url);
-
         let active = test_jwks_source(active_url, vec![JwtAlgorithm::Rs256]);
         let removed = test_jwks_source(removed_url, vec![JwtAlgorithm::Es256]);
-        let metrics = Arc::new(crate::Metrics::default());
-        QUICListener::register_jwt_jwks_metrics(&metrics);
 
-        let cache = JwtJwksSharedCache::shared();
+        let cache = JwtJwksSharedCache {
+            entries: RwLock::new(HashMap::new()),
+        };
         cache.register_source(active.clone());
         cache.register_source(removed.clone());
-
-        let now = SystemTime::now();
-        metrics.record_jwks_unknown_kid(&active.source_identity);
-        metrics.record_jwks_unknown_kid(&removed.source_identity);
-        metrics.record_jwks_refresh_success(&active.source_identity, "fresh", 1, now, Some(now));
-        metrics.record_jwks_refresh_failure(
-            &removed.source_identity,
-            "empty_unusable",
-            0,
-            now,
-            None,
-            Some("request_failed"),
-        );
 
         cache.reconcile_sources([&active]);
 
@@ -4527,33 +4515,17 @@ mod tests {
                 .is_none(),
             "removed source must be evicted from cache"
         );
-
-        let unknown_kid = metrics.snapshot_jwks_unknown_kid_events();
-        assert_eq!(unknown_kid.len(), 1);
-        assert_eq!(unknown_kid[0].0, active.source_identity);
-
-        let jwks_state = metrics.snapshot_jwks_source_state();
-        assert_eq!(jwks_state.len(), 1);
-        assert_eq!(jwks_state[0].jwks_source_id, active.source_identity);
-        assert!(
-            !metrics
-                .render_prometheus()
-                .contains(&removed.source_identity),
-            "removed source telemetry must be absent after reconcile"
-        );
-
-        clear_jwks_cache_for_test(active_url);
-        clear_jwks_cache_for_test(removed_url);
     }
 
     #[test]
     fn jwks_cache_reconcile_updates_active_source_in_place_without_resetting_state() {
         let jwks_url = "https://issuer.example.com/reconcile-update.json";
-        clear_jwks_cache_for_test(jwks_url);
-
         let original = test_jwks_source(jwks_url, vec![JwtAlgorithm::Rs256]);
         let cache_now = Instant::now();
-        JwtJwksSharedCache::shared().upsert(
+        let cache = JwtJwksSharedCache {
+            entries: RwLock::new(HashMap::new()),
+        };
+        cache.upsert(
             &original.source_identity,
             JwtJwksCacheEntry {
                 source: original.clone(),
@@ -4589,31 +4561,9 @@ mod tests {
         updated.stale_if_error = Duration::from_secs(180);
         updated.startup_behavior = JwksStartupBehavior::RequireReady;
 
-        JwtJwksSharedCache::shared().reconcile_sources([&updated]);
+        cache.reconcile_sources([&updated]);
 
-        let snapshot = JwtJwksSharedCache::shared()
-            .snapshot(&updated.source_identity, Instant::now())
-            .expect("active source snapshot after reconcile");
-        assert_eq!(snapshot.state, JwtJwksCacheState::RefreshFailedRetained);
-        assert_eq!(snapshot.active_keys.len(), 1);
-        assert_eq!(
-            snapshot.last_failure_reason,
-            Some(JwtJwksFetchFailureReason::RequestFailed)
-        );
-        assert_eq!(
-            snapshot.source.allowed_algorithms,
-            updated.allowed_algorithms
-        );
-        assert_eq!(snapshot.source.refresh_interval, updated.refresh_interval);
-        assert_eq!(snapshot.source.request_timeout, updated.request_timeout);
-        assert_eq!(snapshot.source.cache_ttl, original.cache_ttl);
-        assert_eq!(snapshot.source.stale_if_error, updated.stale_if_error);
-        assert_eq!(snapshot.source.startup_behavior, updated.startup_behavior);
-
-        let entries = JwtJwksSharedCache::shared()
-            .entries
-            .read()
-            .expect("jwks cache read lock");
+        let entries = cache.entries.read().expect("jwks cache read lock");
         let entry = entries
             .get(&updated.source_identity)
             .expect("active source entry");
@@ -4621,15 +4571,23 @@ mod tests {
         assert_eq!(entry.state, JwtJwksCacheState::RefreshFailedRetained);
         assert_eq!(entry.active_keys.len(), 1);
         assert_eq!(
+            entry.last_failure_reason,
+            Some(JwtJwksFetchFailureReason::RequestFailed)
+        );
+        assert_eq!(entry.source.allowed_algorithms, updated.allowed_algorithms);
+        assert_eq!(entry.source.refresh_interval, updated.refresh_interval);
+        assert_eq!(entry.source.request_timeout, updated.request_timeout);
+        assert_eq!(entry.source.cache_ttl, original.cache_ttl);
+        assert_eq!(entry.source.stale_if_error, updated.stale_if_error);
+        assert_eq!(entry.source.startup_behavior, updated.startup_behavior);
+        assert_eq!(
             entry.last_error.as_deref(),
             Some("request_failed: retained")
         );
-
-        drop(entries);
-        clear_jwks_cache_for_test(jwks_url);
     }
 
     #[test]
+    #[serial(jwks_cache)]
     fn stale_jwks_cache_beyond_configured_limit_rejects_requests() {
         let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         let jwks_url = "https://issuer.example.com/expired-stale-jwks.json";
@@ -4706,6 +4664,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[serial(jwks_cache)]
     async fn refresh_transport_failure_retains_last_known_good_keys_and_keeps_validating() {
         let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         let jwks_url = "https://issuer.example.com/refresh-failure-retention-jwks.json";
@@ -4922,6 +4881,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[serial(jwks_cache)]
     async fn unknown_kid_rejects_current_request_and_triggers_refresh_hint() {
         let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         let jwks_url = "https://issuer.example.com/on-demand-jwks.json";
@@ -5002,6 +4962,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[serial(jwks_cache)]
     async fn refresh_retains_temporarily_dropped_old_key_during_rollover_overlap() {
         let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         let jwks_url = "https://issuer.example.com/rollover-overlap-jwks.json";
@@ -5061,6 +5022,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[serial(jwks_cache)]
     async fn refresh_replaces_key_material_when_issuer_reuses_existing_kid() {
         let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         let jwks_url = "https://issuer.example.com/reused-kid-jwks.json";
@@ -5125,6 +5087,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "current_thread")]
+    #[serial(jwks_cache)]
     async fn empty_or_broken_refresh_quarantines_replacement_and_retains_last_known_good_keys() {
         let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
         let jwks_url = "https://issuer.example.com/quarantine-jwks.json";

@@ -950,7 +950,7 @@ impl Metrics {
             out.push_str(&format!(
                 "impulse_jwks_state{{jwks_source_id=\"{}\",state=\"{}\"}} 1\n",
                 jwks_source_id,
-                escape_prometheus_label(&state.state)
+                escape_prometheus_label(state.state)
             ));
             out.push_str(&format!(
                 "impulse_jwks_active_keys{{jwks_source_id=\"{}\"}} {}\n",
@@ -1026,8 +1026,8 @@ impl Metrics {
             out.push_str(&format!(
                 "impulse_upstream_requests_total{{upstream=\"{}\",status_class=\"{}\",outcome=\"{}\"}} {}\n",
                 escape_prometheus_label(&key.upstream),
-                escape_prometheus_label(&key.status_class),
-                escape_prometheus_label(&key.outcome),
+                escape_prometheus_label(key.status_class),
+                escape_prometheus_label(key.outcome),
                 count
             ));
         }
@@ -1040,8 +1040,8 @@ impl Metrics {
                 "impulse_backend_requests_total{{upstream=\"{}\",backend=\"{}\",status_class=\"{}\",outcome=\"{}\"}} {}\n",
                 escape_prometheus_label(&key.upstream),
                 escape_prometheus_label(&key.backend),
-                escape_prometheus_label(&key.status_class),
-                escape_prometheus_label(&key.outcome),
+                escape_prometheus_label(key.status_class),
+                escape_prometheus_label(key.outcome),
                 count
             ));
         }
@@ -1051,7 +1051,7 @@ impl Metrics {
         out.push_str("# TYPE impulse_upstream_request_latency_ms histogram\n");
         for (key, stats) in self.snapshot_upstream_request_latency() {
             let upstream = escape_prometheus_label(&key.upstream);
-            let outcome = escape_prometheus_label(&key.outcome);
+            let outcome = escape_prometheus_label(key.outcome);
             let mut cumulative = 0u64;
             for (idx, bucket_value) in stats.latency_buckets.iter().enumerate() {
                 cumulative = cumulative.saturating_add(*bucket_value);

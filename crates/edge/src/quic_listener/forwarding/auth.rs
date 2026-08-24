@@ -187,14 +187,20 @@ fn authorization_header_from_pending_forward(pending_forward: &PendingForward) -
 }
 
 fn percent_encode_component(raw: &str) -> String {
-    raw.bytes()
-        .flat_map(|byte| match byte {
+    let mut encoded = String::with_capacity(raw.len());
+    for byte in raw.bytes() {
+        match byte {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                vec![byte as char]
+                encoded.push(byte as char);
             }
-            _ => format!("%{:02X}", byte).chars().collect::<Vec<_>>(),
-        })
-        .collect()
+            _ => {
+                encoded.push('%');
+                encoded.push(char::from(b"0123456789ABCDEF"[(byte >> 4) as usize]));
+                encoded.push(char::from(b"0123456789ABCDEF"[(byte & 0x0F) as usize]));
+            }
+        }
+    }
+    encoded
 }
 
 async fn send_auth_request(
@@ -699,6 +705,16 @@ mod tests {
                 .and_then(|value| value.to_str().ok()),
             Some("api.example.com")
         );
+    }
+
+    #[test]
+    fn percent_encode_component_preserves_safe_bytes_and_encodes_reserved_bytes() {
+        assert_eq!(percent_encode_component("AZaz09-_.~"), "AZaz09-_.~");
+        assert_eq!(
+            percent_encode_component("token value+/=?&%"),
+            "token%20value%2B%2F%3D%3F%26%25"
+        );
+        assert_eq!(percent_encode_component("\n"), "%0A");
     }
 
     #[test]

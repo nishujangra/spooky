@@ -127,9 +127,7 @@ pub struct Metrics {
     backend_dns_state: RwLock<HashMap<String, BackendDnsState>>,
     backend_rotation_state: RwLock<HashMap<String, BackendRotationState>>,
     backend_connect_attempts: RwLock<HashMap<BackendConnectAttemptKey, u64>>,
-    upstream_request_counts: RwLock<HashMap<UpstreamRequestCountKey, u64>>,
-    backend_request_counts: RwLock<HashMap<BackendRequestCountKey, u64>>,
-    upstream_request_latency: RwLock<HashMap<UpstreamRequestLatencyKey, RequestLatencyStats>>,
+    request_result_metrics: RwLock<RequestResultMetricsStore>,
     quota_policy_outcomes: RwLock<HashMap<QuotaPolicyOutcomeKey, u64>>,
     quota_backend_health: RwLock<HashMap<QuotaBackendHealthKey, u64>>,
     downstream_tls_handshake_failures: RwLock<HashMap<DownstreamTlsHandshakeFailureKey, u64>>,
@@ -161,10 +159,10 @@ pub(crate) struct JwksSourceState {
     pub(crate) refresh_success_total: u64,
     pub(crate) refresh_failure_total: u64,
     pub(crate) active_key_count: u64,
-    pub(crate) state: String,
+    pub(crate) state: &'static str,
     pub(crate) last_refresh_attempt_unix_seconds: Option<u64>,
     pub(crate) last_refresh_success_unix_seconds: Option<u64>,
-    pub(crate) last_failure_reason: Option<String>,
+    pub(crate) last_failure_reason: Option<&'static str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -188,22 +186,29 @@ pub(crate) const METRIC_LABEL_OVER_CAP: &str = "__over_cap__";
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct UpstreamRequestCountKey {
     pub(crate) upstream: String,
-    pub(crate) status_class: String,
-    pub(crate) outcome: String,
+    pub(crate) status_class: &'static str,
+    pub(crate) outcome: &'static str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct BackendRequestCountKey {
     pub(crate) upstream: String,
     pub(crate) backend: String,
-    pub(crate) status_class: String,
-    pub(crate) outcome: String,
+    pub(crate) status_class: &'static str,
+    pub(crate) outcome: &'static str,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct UpstreamRequestLatencyKey {
     pub(crate) upstream: String,
-    pub(crate) outcome: String,
+    pub(crate) outcome: &'static str,
+}
+
+#[derive(Default)]
+struct RequestResultMetricsStore {
+    upstream_request_counts: HashMap<UpstreamRequestCountKey, u64>,
+    backend_request_counts: HashMap<BackendRequestCountKey, u64>,
+    upstream_request_latency: HashMap<UpstreamRequestLatencyKey, RequestLatencyStats>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -436,6 +441,28 @@ fn route_outcome_label(outcome: RouteOutcome) -> &'static str {
     }
 }
 
+fn increment_label_counter(counter: &RwLock<HashMap<String, u64>>, label: &str) {
+    if let Ok(mut guard) = counter.write() {
+        if let Some(value) = guard.get_mut(label) {
+            *value = value.saturating_add(1);
+        } else {
+            guard.insert(label.to_string(), 1);
+        }
+    }
+}
+
+fn jwks_source_state_entry_mut<'a>(
+    states: &'a mut HashMap<String, JwksSourceState>,
+    jwks_source_id: &str,
+) -> &'a mut JwksSourceState {
+    states
+        .entry(jwks_source_id.to_string())
+        .or_insert_with(|| JwksSourceState {
+            jwks_source_id: jwks_source_id.to_string(),
+            ..JwksSourceState::default()
+        })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverloadShedReason {
     Brownout,
@@ -638,9 +665,7 @@ impl Metrics {
             backend_dns_state: RwLock::new(HashMap::new()),
             backend_rotation_state: RwLock::new(HashMap::new()),
             backend_connect_attempts: RwLock::new(HashMap::new()),
-            upstream_request_counts: RwLock::new(HashMap::new()),
-            backend_request_counts: RwLock::new(HashMap::new()),
-            upstream_request_latency: RwLock::new(HashMap::new()),
+            request_result_metrics: RwLock::new(RequestResultMetricsStore::default()),
             quota_policy_outcomes: RwLock::new(HashMap::new()),
             quota_backend_health: RwLock::new(HashMap::new()),
             downstream_tls_handshake_failures: RwLock::new(HashMap::new()),
@@ -962,21 +987,15 @@ impl Metrics {
     }
 
     pub fn record_jwt_validation_failure(&self, reason: &str) {
-        if let Ok(mut guard) = self.jwt_validation_failures.write() {
-            *guard.entry(reason.to_string()).or_default() += 1;
-        }
+        increment_label_counter(&self.jwt_validation_failures, reason);
     }
 
     pub fn record_jwt_algorithm_rejection(&self, algorithm: &str) {
-        if let Ok(mut guard) = self.jwt_algorithm_rejections.write() {
-            *guard.entry(algorithm.to_string()).or_default() += 1;
-        }
+        increment_label_counter(&self.jwt_algorithm_rejections, algorithm);
     }
 
     pub fn record_jwks_unknown_kid(&self, jwks_source_id: &str) {
-        if let Ok(mut guard) = self.jwks_unknown_kid_events.write() {
-            *guard.entry(jwks_source_id.to_string()).or_default() += 1;
-        }
+        increment_label_counter(&self.jwks_unknown_kid_events, jwks_source_id);
     }
 
     pub fn record_jwks_refresh_started(&self, jwks_source_id: &str, refreshed_at: SystemTime) {
@@ -985,13 +1004,7 @@ impl Metrics {
             .ok()
             .map(|duration| duration.as_secs());
         if let Ok(mut guard) = self.jwks_source_state.write() {
-            let entry =
-                guard
-                    .entry(jwks_source_id.to_string())
-                    .or_insert_with(|| JwksSourceState {
-                        jwks_source_id: jwks_source_id.to_string(),
-                        ..JwksSourceState::default()
-                    });
+            let entry = jwks_source_state_entry_mut(&mut guard, jwks_source_id);
             entry.last_refresh_attempt_unix_seconds = refreshed_at;
         }
     }
@@ -999,7 +1012,7 @@ impl Metrics {
     pub fn record_jwks_refresh_success(
         &self,
         jwks_source_id: &str,
-        state: &str,
+        state: &'static str,
         active_key_count: usize,
         refreshed_at: SystemTime,
         last_success_at: Option<SystemTime>,
@@ -1012,16 +1025,10 @@ impl Metrics {
             .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
             .map(|duration| duration.as_secs());
         if let Ok(mut guard) = self.jwks_source_state.write() {
-            let entry =
-                guard
-                    .entry(jwks_source_id.to_string())
-                    .or_insert_with(|| JwksSourceState {
-                        jwks_source_id: jwks_source_id.to_string(),
-                        ..JwksSourceState::default()
-                    });
+            let entry = jwks_source_state_entry_mut(&mut guard, jwks_source_id);
             entry.refresh_success_total = entry.refresh_success_total.saturating_add(1);
             entry.active_key_count = active_key_count as u64;
-            entry.state = state.to_string();
+            entry.state = state;
             entry.last_refresh_attempt_unix_seconds = refreshed_at;
             entry.last_refresh_success_unix_seconds = last_success_at.or(refreshed_at);
             entry.last_failure_reason = None;
@@ -1031,11 +1038,11 @@ impl Metrics {
     pub fn record_jwks_refresh_failure(
         &self,
         jwks_source_id: &str,
-        state: &str,
+        state: &'static str,
         active_key_count: usize,
         refreshed_at: SystemTime,
         last_success_at: Option<SystemTime>,
-        failure_reason: Option<&str>,
+        failure_reason: Option<&'static str>,
     ) {
         let refreshed_at = refreshed_at
             .duration_since(UNIX_EPOCH)
@@ -1045,21 +1052,15 @@ impl Metrics {
             .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
             .map(|duration| duration.as_secs());
         if let Ok(mut guard) = self.jwks_source_state.write() {
-            let entry =
-                guard
-                    .entry(jwks_source_id.to_string())
-                    .or_insert_with(|| JwksSourceState {
-                        jwks_source_id: jwks_source_id.to_string(),
-                        ..JwksSourceState::default()
-                    });
+            let entry = jwks_source_state_entry_mut(&mut guard, jwks_source_id);
             entry.refresh_failure_total = entry.refresh_failure_total.saturating_add(1);
             entry.active_key_count = active_key_count as u64;
-            entry.state = state.to_string();
+            entry.state = state;
             entry.last_refresh_attempt_unix_seconds = refreshed_at;
             if let Some(last_success_at) = last_success_at {
                 entry.last_refresh_success_unix_seconds = Some(last_success_at);
             }
-            entry.last_failure_reason = failure_reason.map(ToOwned::to_owned);
+            entry.last_failure_reason = failure_reason;
         }
     }
 
@@ -1121,39 +1122,37 @@ impl Metrics {
     ) {
         let upstream = normalize_metric_label(upstream, "unrouted");
         let backend = normalize_metric_label(backend.unwrap_or("__none__"), "__none__");
-        let status_class = status_class_label(status).to_string();
-        let outcome = route_outcome_label(outcome).to_string();
+        let status_class = status_class_label(status);
+        let outcome = route_outcome_label(outcome);
 
-        if let Ok(mut guard) = self.upstream_request_counts.write() {
+        if let Ok(mut guard) = self.request_result_metrics.write() {
             *guard
+                .upstream_request_counts
                 .entry(UpstreamRequestCountKey {
                     upstream: upstream.clone(),
-                    status_class: status_class.clone(),
-                    outcome: outcome.clone(),
+                    status_class,
+                    outcome,
                 })
                 .or_default() += 1;
-        }
-
-        if let Ok(mut guard) = self.backend_request_counts.write() {
             *guard
+                .backend_request_counts
                 .entry(BackendRequestCountKey {
                     upstream: upstream.clone(),
                     backend,
                     status_class,
-                    outcome: outcome.clone(),
+                    outcome,
                 })
                 .or_default() += 1;
-        }
 
-        let latency_ms = latency.as_millis() as u64;
-        let bucket = LATENCY_BUCKETS_MS
-            .iter()
-            .position(|cutoff| latency_ms <= *cutoff)
-            .unwrap_or(LATENCY_BUCKETS_MS.len());
-        if let Ok(mut guard) = self.upstream_request_latency.write() {
             let stats = guard
+                .upstream_request_latency
                 .entry(UpstreamRequestLatencyKey { upstream, outcome })
                 .or_default();
+            let latency_ms = latency.as_millis() as u64;
+            let bucket = LATENCY_BUCKETS_MS
+                .iter()
+                .position(|cutoff| latency_ms <= *cutoff)
+                .unwrap_or(LATENCY_BUCKETS_MS.len());
             stats.count = stats.count.saturating_add(1);
             stats.latency_ms_sum = stats.latency_ms_sum.saturating_add(latency_ms);
             stats.latency_buckets[bucket] = stats.latency_buckets[bucket].saturating_add(1);
@@ -1261,18 +1260,19 @@ impl Metrics {
     }
 
     pub(crate) fn snapshot_upstream_request_counts(&self) -> Vec<(UpstreamRequestCountKey, u64)> {
-        self.upstream_request_counts
+        self.request_result_metrics
             .read()
             .map(|guard| {
                 let mut entries = guard
+                    .upstream_request_counts
                     .iter()
                     .map(|(key, value)| (key.clone(), *value))
                     .collect::<Vec<_>>();
                 entries.sort_by(|(left, _), (right, _)| {
                     left.upstream
                         .cmp(&right.upstream)
-                        .then_with(|| left.status_class.cmp(&right.status_class))
-                        .then_with(|| left.outcome.cmp(&right.outcome))
+                        .then_with(|| left.status_class.cmp(right.status_class))
+                        .then_with(|| left.outcome.cmp(right.outcome))
                 });
                 entries
             })
@@ -1280,10 +1280,11 @@ impl Metrics {
     }
 
     pub(crate) fn snapshot_backend_request_counts(&self) -> Vec<(BackendRequestCountKey, u64)> {
-        self.backend_request_counts
+        self.request_result_metrics
             .read()
             .map(|guard| {
                 let mut entries = guard
+                    .backend_request_counts
                     .iter()
                     .map(|(key, value)| (key.clone(), *value))
                     .collect::<Vec<_>>();
@@ -1291,8 +1292,8 @@ impl Metrics {
                     left.upstream
                         .cmp(&right.upstream)
                         .then_with(|| left.backend.cmp(&right.backend))
-                        .then_with(|| left.status_class.cmp(&right.status_class))
-                        .then_with(|| left.outcome.cmp(&right.outcome))
+                        .then_with(|| left.status_class.cmp(right.status_class))
+                        .then_with(|| left.outcome.cmp(right.outcome))
                 });
                 entries
             })
@@ -1302,17 +1303,18 @@ impl Metrics {
     pub(crate) fn snapshot_upstream_request_latency(
         &self,
     ) -> Vec<(UpstreamRequestLatencyKey, RequestLatencyStats)> {
-        self.upstream_request_latency
+        self.request_result_metrics
             .read()
             .map(|guard| {
                 let mut entries = guard
+                    .upstream_request_latency
                     .iter()
                     .map(|(key, value)| (key.clone(), value.clone()))
                     .collect::<Vec<_>>();
                 entries.sort_by(|(left, _), (right, _)| {
                     left.upstream
                         .cmp(&right.upstream)
-                        .then_with(|| left.outcome.cmp(&right.outcome))
+                        .then_with(|| left.outcome.cmp(right.outcome))
                 });
                 entries
             })
@@ -2033,6 +2035,38 @@ mod tests {
             "impulse_jwks_state{jwks_source_id=\"jwks:example\",state=\"refresh_failed_retained\"} 1"
         ));
         assert!(rendered.contains("impulse_jwks_active_keys{jwks_source_id=\"jwks:example\"} 2"));
+    }
+
+    #[test]
+    fn reconcile_jwks_sources_prunes_removed_telemetry_state() {
+        let metrics = Metrics::default();
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+
+        metrics.record_jwks_unknown_kid("jwks:active");
+        metrics.record_jwks_unknown_kid("jwks:removed");
+        metrics.record_jwks_refresh_success("jwks:active", "fresh", 1, now, Some(now));
+        metrics.record_jwks_refresh_failure(
+            "jwks:removed",
+            "empty_unusable",
+            0,
+            now,
+            None,
+            Some("request_failed"),
+        );
+
+        metrics.reconcile_jwks_sources(["jwks:active"]);
+
+        let unknown_kid = metrics.snapshot_jwks_unknown_kid_events();
+        assert_eq!(unknown_kid, vec![("jwks:active".to_string(), 1)]);
+
+        let jwks_state = metrics.snapshot_jwks_source_state();
+        assert_eq!(jwks_state.len(), 1);
+        assert_eq!(jwks_state[0].jwks_source_id, "jwks:active");
+        assert_eq!(jwks_state[0].state, "fresh");
+
+        let rendered = metrics.render_prometheus();
+        assert!(rendered.contains("jwks:active"));
+        assert!(!rendered.contains("jwks:removed"));
     }
 
     #[test]
