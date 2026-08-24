@@ -462,6 +462,35 @@ mod tests {
         assert!(!store.buckets.contains_key("fresh-bucket"));
         assert!(store.buckets.contains_key("bucket-0"));
     }
+
+    #[test]
+    fn evaluate_bucket_hashes_non_route_storage_keys_for_untrusted_identities() {
+        let rule = test_rule(ScopedRateLimitScope::Token);
+        let first_value = "a".repeat(2048);
+        let second_value = "b".repeat(2048);
+        let first_key = format!("route=4:/api|token={}:{}|", first_value.len(), first_value);
+        let second_key = format!("route=4:/api|token={}:{}|", second_value.len(), second_value);
+
+        let _ = rule
+            .evaluate_bucket(&first_key, 1)
+            .expect("first bucket evaluation");
+        let _ = rule
+            .evaluate_bucket(&second_key, 1)
+            .expect("second bucket evaluation");
+
+        let store = rule.buckets.lock().expect("bucket store lock");
+        let keys = store.buckets.keys().cloned().collect::<Vec<_>>();
+        assert_eq!(keys.len(), 2);
+        assert_ne!(keys[0], keys[1]);
+        for key in keys {
+            assert!(key.starts_with("route=4:/api|selector="));
+            assert!(key.contains("sha256:"));
+            assert!(!key.contains(&first_value[..128]));
+            assert!(!key.contains(&second_value[..128]));
+            assert!(key.len() < first_key.len());
+            assert!(key.len() < second_key.len());
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
