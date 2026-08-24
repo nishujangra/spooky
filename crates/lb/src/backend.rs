@@ -134,6 +134,7 @@ impl BackendState {
             && now >= until
         {
             self.consecutive_failures = 0;
+            self.ewma_latency_ms = None;
             self.health_state = HealthState::Healthy;
             return true;
         }

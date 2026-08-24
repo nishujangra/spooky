@@ -206,12 +206,19 @@ mod tests {
     #[test]
     fn latency_aware_probes_readmitted_backend_without_handing_it_full_stream() {
         let mut pool = BackendPool::new_from_states(vec![
-            create_backend_state("10.0.0.1:1", 1, 1000, 1, 10_000),
+            create_backend_state("10.0.0.1:1", 1, 0, 1, 10_000),
             create_backend_state("10.0.0.2:1", 1, 1000, 3, 0),
         ]);
 
         pool.finish_request(1, Duration::from_millis(20), Some(200));
-        assert!(pool.mark_failure(0).is_some());
+        assert!(
+            pool.observe_request_failure(
+                0,
+                Duration::from_millis(5),
+                Some(HealthFailureReason::Transport),
+            )
+            .is_some()
+        );
         pool.reconcile_readmit_at(Instant::now() + Duration::from_millis(10_001));
 
         let mut lb = LatencyAware::new();
