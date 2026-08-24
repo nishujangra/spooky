@@ -44,6 +44,11 @@ pub use redis::{REDIS_QUOTA_PROTOCOL_VERSION, RedisDistributedQuotaCounterStore}
 
 const LOCAL_FALLBACK_PROTOCOL_VERSION: &str = "degraded-local-fallback/v1";
 const LOCAL_FALLBACK_BACKEND_SEPARATOR: &str = "_local_fallback_";
+/// Upper bound for request-derived quota identity values handled by this
+/// module. Keep this local to quota extraction so later hardening can enforce a
+/// single canonical limit without introducing broader runtime config surface.
+const MAX_REQUEST_DERIVED_QUOTA_IDENTITY_BYTES: usize = 256;
+const MAX_REQUEST_DERIVED_QUOTA_IDENTITY_COMPONENTS: usize = 4;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuotaEnforcementMode {
@@ -140,6 +145,29 @@ pub struct QuotaIdentityLabels {
     pub tenant: Option<String>,
     pub token: Option<String>,
     pub client: Option<String>,
+}
+
+impl QuotaIdentityLabels {
+    fn canonicalize_for_storage(&self) -> Self {
+        Self {
+            route: canonical_stored_quota_identity(
+                QuotaIdentityDimension::Route,
+                self.route.as_deref(),
+            ),
+            tenant: canonical_stored_quota_identity(
+                QuotaIdentityDimension::Tenant,
+                self.tenant.as_deref(),
+            ),
+            token: canonical_stored_quota_identity(
+                QuotaIdentityDimension::Token,
+                self.token.as_deref(),
+            ),
+            client: canonical_stored_quota_identity(
+                QuotaIdentityDimension::Client,
+                self.client.as_deref(),
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -440,11 +468,10 @@ impl QuotaSelectorMatcher {
         };
 
         let extracted = extract_quota_selector_key(spec, context);
-        let sensitive = quota_dimension_is_sensitive(dimension, spec);
 
         match extracted {
             RequestKeyExtraction::Found(value) => {
-                Ok(Some(stable_observable_identity_value(&value, sensitive)))
+                Ok(Some(canonical_quota_identity_value(dimension, &value)))
             }
             RequestKeyExtraction::Missing => Err(QuotaIdentityRejection {
                 policy_name: policy_name.to_string(),
@@ -1046,6 +1073,7 @@ impl QuotaPolicyRuntime {
         context: &QuotaIdentityContext<'_>,
     ) -> Result<QuotaCompositeKey, QuotaIdentityRejection> {
         let labels = self.selector.extract_identities(&self.name, context)?;
+        let labels = labels.canonicalize_for_storage();
         Ok(QuotaCompositeKey {
             policy_name: self.name.clone(),
             key: compose_quota_key(&self.name, &labels),
@@ -1783,9 +1811,8 @@ fn extract_quota_selector_key(
         QuotaSelectorKeySpec::LegacyFallback(inner) => {
             match extract_quota_selector_key(inner.as_ref(), context) {
                 RequestKeyExtraction::Found(value) => RequestKeyExtraction::Found(value),
-                RequestKeyExtraction::Missing | RequestKeyExtraction::Invalid => {
-                    extract_legacy_default_request_key(context)
-                }
+                RequestKeyExtraction::Missing => extract_legacy_default_request_key(context),
+                RequestKeyExtraction::Invalid => RequestKeyExtraction::Invalid,
             }
         }
     }
@@ -1797,17 +1824,17 @@ fn extract_legacy_default_request_key(context: &QuotaIdentityContext<'_>) -> Req
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        return RequestKeyExtraction::Found(authority.to_string());
+        return bounded_request_key_value(authority);
     }
 
     let path = context.path.trim();
     if !path.is_empty() {
-        return RequestKeyExtraction::Found(path.to_string());
+        return bounded_request_key_value(path);
     }
 
     let method = context.method.trim();
     if !method.is_empty() {
-        return RequestKeyExtraction::Found(method.to_string());
+        return bounded_owned_request_key_value(method.to_ascii_uppercase());
     }
 
     RequestKeyExtraction::Missing
@@ -1815,19 +1842,14 @@ fn extract_legacy_default_request_key(context: &QuotaIdentityContext<'_>) -> Req
 
 fn extract_path_value(path: &str) -> RequestKeyExtraction {
     let path_only = path.split_once('?').map(|(value, _)| value).unwrap_or(path);
-    let normalized = path_only.trim();
-    if normalized.is_empty() {
-        RequestKeyExtraction::Missing
-    } else {
-        RequestKeyExtraction::Found(normalized.to_string())
-    }
+    bounded_request_key_value(path_only)
 }
 
 fn extract_authority_value(authority: Option<&str>) -> RequestKeyExtraction {
     let Some(authority) = authority.map(str::trim).filter(|value| !value.is_empty()) else {
         return RequestKeyExtraction::Missing;
     };
-    RequestKeyExtraction::Found(authority.to_string())
+    bounded_request_key_value(authority)
 }
 
 fn extract_method_value(method: &str) -> RequestKeyExtraction {
@@ -1835,7 +1857,7 @@ fn extract_method_value(method: &str) -> RequestKeyExtraction {
     if normalized.is_empty() {
         RequestKeyExtraction::Missing
     } else {
-        RequestKeyExtraction::Found(normalized.to_ascii_uppercase())
+        bounded_owned_request_key_value(normalized.to_ascii_uppercase())
     }
 }
 
@@ -1843,14 +1865,14 @@ fn extract_cid_value(cid_key: Option<&str>) -> RequestKeyExtraction {
     let Some(cid_key) = cid_key.map(str::trim).filter(|value| !value.is_empty()) else {
         return RequestKeyExtraction::Missing;
     };
-    RequestKeyExtraction::Found(cid_key.to_string())
+    bounded_request_key_value(cid_key)
 }
 
 fn extract_client_ip_value(client_addr: Option<SocketAddr>) -> RequestKeyExtraction {
     let Some(client_addr) = client_addr else {
         return RequestKeyExtraction::Missing;
     };
-    RequestKeyExtraction::Found(client_addr.ip().to_string())
+    bounded_owned_request_key_value(client_addr.ip().to_string())
 }
 
 fn extract_bearer_token_value(
@@ -1873,7 +1895,7 @@ fn extract_bearer_token_value(
     if token.is_empty() {
         return RequestKeyExtraction::Invalid;
     }
-    RequestKeyExtraction::Found(token.to_string())
+    bounded_request_key_value(token)
 }
 
 fn extract_header_value(
@@ -1883,11 +1905,7 @@ fn extract_header_value(
     let Some(value) = header_lookup.and_then(|lookup| lookup(name)) else {
         return RequestKeyExtraction::Missing;
     };
-    let normalized = value.trim();
-    if normalized.is_empty() {
-        return RequestKeyExtraction::Missing;
-    }
-    RequestKeyExtraction::Found(normalized.to_string())
+    bounded_request_key_value(value.as_str())
 }
 
 fn extract_cookie_key_value(
@@ -1915,7 +1933,7 @@ fn extract_cookie_key_value(
         if value.is_empty() {
             return RequestKeyExtraction::Missing;
         }
-        return RequestKeyExtraction::Found(value.to_string());
+        return bounded_request_key_value(value);
     }
 
     RequestKeyExtraction::Missing
@@ -1940,29 +1958,36 @@ fn extract_query_key_value(path: &str, param: &str) -> RequestKeyExtraction {
         if value.is_empty() {
             return RequestKeyExtraction::Missing;
         }
-        return RequestKeyExtraction::Found(value.to_string());
+        return bounded_request_key_value(value);
     }
 
     RequestKeyExtraction::Missing
 }
 
-fn quota_dimension_is_sensitive(
-    dimension: QuotaIdentityDimension,
-    spec: &QuotaSelectorKeySpec,
-) -> bool {
-    matches!(dimension, QuotaIdentityDimension::Token)
-        || match spec {
-            QuotaSelectorKeySpec::BearerToken => true,
-            QuotaSelectorKeySpec::LegacyFallback(inner) => {
-                quota_dimension_is_sensitive(dimension, inner.as_ref())
-            }
-            _ => false,
-        }
+fn bounded_request_key_value(value: &str) -> RequestKeyExtraction {
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        return RequestKeyExtraction::Missing;
+    }
+    if normalized.len() > MAX_REQUEST_DERIVED_QUOTA_IDENTITY_BYTES {
+        return RequestKeyExtraction::Invalid;
+    }
+    RequestKeyExtraction::Found(normalized.to_string())
 }
 
-fn stable_observable_identity_value(value: &str, sensitive: bool) -> String {
+fn bounded_owned_request_key_value(value: String) -> RequestKeyExtraction {
+    if value.is_empty() {
+        return RequestKeyExtraction::Missing;
+    }
+    if value.len() > MAX_REQUEST_DERIVED_QUOTA_IDENTITY_BYTES {
+        return RequestKeyExtraction::Invalid;
+    }
+    RequestKeyExtraction::Found(value)
+}
+
+fn canonical_quota_identity_value(dimension: QuotaIdentityDimension, value: &str) -> String {
     let normalized = value.trim();
-    if !sensitive {
+    if matches!(dimension, QuotaIdentityDimension::Route) {
         return normalized.to_string();
     }
 
@@ -1970,6 +1995,28 @@ fn stable_observable_identity_value(value: &str, sensitive: bool) -> String {
     hasher.update(normalized.as_bytes());
     let digest = hasher.finalize();
     format!("sha256:{digest:x}")
+}
+
+fn canonical_stored_quota_identity(
+    dimension: QuotaIdentityDimension,
+    value: Option<&str>,
+) -> Option<String> {
+    let normalized = value.map(str::trim).filter(|value| !value.is_empty())?;
+    if matches!(dimension, QuotaIdentityDimension::Route) {
+        return Some(normalized.to_string());
+    }
+    if is_canonical_hashed_quota_identity(normalized) {
+        return Some(normalized.to_string());
+    }
+    Some(canonical_quota_identity_value(dimension, normalized))
+}
+
+fn is_canonical_hashed_quota_identity(value: &str) -> bool {
+    value.len() == "sha256:".len() + 64
+        && value.starts_with("sha256:")
+        && value["sha256:".len()..]
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn normalize_route_identity(route: Option<&str>) -> Option<String> {
@@ -1980,7 +2027,8 @@ fn normalize_route_identity(route: Option<&str>) -> Option<String> {
 }
 
 fn compose_quota_key(policy_name: &str, labels: &QuotaIdentityLabels) -> String {
-    let mut key = String::new();
+    let labels = labels.canonicalize_for_storage();
+    let mut key = String::with_capacity(estimated_quota_key_capacity(policy_name));
     append_key_component(&mut key, "policy", policy_name);
     if let Some(route) = labels.route.as_deref() {
         append_key_component(&mut key, "route", route);
@@ -1995,6 +2043,16 @@ fn compose_quota_key(policy_name: &str, labels: &QuotaIdentityLabels) -> String 
         append_key_component(&mut key, "client", client);
     }
     key
+}
+
+fn estimated_quota_key_capacity(policy_name: &str) -> usize {
+    policy_name
+        .len()
+        .saturating_add(
+            MAX_REQUEST_DERIVED_QUOTA_IDENTITY_BYTES
+                .saturating_mul(MAX_REQUEST_DERIVED_QUOTA_IDENTITY_COMPONENTS),
+        )
+        .saturating_add(64)
 }
 
 fn append_key_component(output: &mut String, label: &str, value: &str) {
@@ -2049,6 +2107,44 @@ mod tests {
             client_addr,
             Some(lookup),
         )
+    }
+
+    fn leak_string(value: String) -> &'static str {
+        Box::leak(value.into_boxed_str())
+    }
+
+    fn quota_policy_with_selectors(
+        tenant: Option<QuotaSelectorKeySpec>,
+        token: Option<QuotaSelectorKeySpec>,
+        client: Option<QuotaSelectorKeySpec>,
+    ) -> QuotaPolicyRuntime {
+        QuotaPolicyRuntime {
+            name: "tenant-quota".to_string(),
+            route_allowlist: HashSet::new(),
+            selector: QuotaSelectorMatcher {
+                route: true,
+                tenant,
+                token,
+                client,
+            },
+            burst: Some(QuotaWindowPolicy {
+                requests: 10,
+                window: Duration::from_secs(1),
+            }),
+            sustained: None,
+        }
+    }
+
+    fn assert_selector_identity_invalid(
+        policy: &QuotaPolicyRuntime,
+        context: &QuotaIdentityContext<'_>,
+        dimension: QuotaIdentityDimension,
+    ) {
+        let err = policy
+            .composite_key(context)
+            .expect_err("selector identity should be rejected");
+        assert_eq!(err.dimension, dimension);
+        assert_eq!(err.reason, QuotaDenyReason::SelectorIdentityInvalid);
     }
 
     #[test]
@@ -2536,31 +2632,105 @@ mod tests {
             .composite_key(&context)
             .expect("quota identities should resolve");
 
+        let hashed_tenant = composite
+            .labels
+            .tenant
+            .as_ref()
+            .expect("hashed tenant label");
+        let hashed_token = composite.labels.token.as_ref().expect("hashed token label");
+        let hashed_client = composite
+            .labels
+            .client
+            .as_ref()
+            .expect("hashed client label");
+
         assert_eq!(composite.policy_name, "tenant-quota");
         assert_eq!(composite.labels.route.as_deref(), Some("api"));
-        assert_eq!(composite.labels.tenant.as_deref(), Some("acme"));
-        assert_eq!(composite.labels.client.as_deref(), Some("203.0.113.10"));
         assert!(
-            composite
-                .labels
-                .token
-                .as_deref()
-                .is_some_and(|value| value.starts_with("sha256:")),
+            hashed_tenant.starts_with("sha256:"),
+            "tenant-derived identities must be hashed before reuse"
+        );
+        assert!(
+            hashed_token.starts_with("sha256:"),
             "token-derived identities must be hashed before reuse"
+        );
+        assert!(
+            hashed_client.starts_with("sha256:"),
+            "client-derived identities must be hashed before reuse"
         );
         assert_eq!(
             composite.key,
             format!(
-                "policy=12:tenant-quota|route=3:api|tenant=4:acme|token={}:{}|client=12:203.0.113.10|",
-                composite
-                    .labels
-                    .token
-                    .as_ref()
-                    .expect("hashed token label")
-                    .len(),
-                composite.labels.token.as_ref().expect("hashed token label")
+                "policy=12:tenant-quota|route=3:api|tenant={}:{}|token={}:{}|client={}:{}|",
+                hashed_tenant.len(),
+                hashed_tenant,
+                hashed_token.len(),
+                hashed_token,
+                hashed_client.len(),
+                hashed_client,
             )
         );
+    }
+
+    #[test]
+    fn compose_quota_key_canonicalizes_non_route_labels_before_storage() {
+        let labels = QuotaIdentityLabels {
+            route: Some("api".to_string()),
+            tenant: Some("acme".to_string()),
+            token: Some("secret-token".to_string()),
+            client: Some("203.0.113.10".to_string()),
+        };
+
+        let canonical = labels.canonicalize_for_storage();
+        assert_eq!(canonical.route.as_deref(), Some("api"));
+        assert!(
+            canonical
+                .tenant
+                .as_deref()
+                .is_some_and(|value| value.starts_with("sha256:"))
+        );
+        assert!(
+            canonical
+                .token
+                .as_deref()
+                .is_some_and(|value| value.starts_with("sha256:"))
+        );
+        assert!(
+            canonical
+                .client
+                .as_deref()
+                .is_some_and(|value| value.starts_with("sha256:"))
+        );
+
+        let key = compose_quota_key("tenant-quota", &labels);
+        assert!(key.contains("route=3:api|"));
+        assert!(!key.contains("tenant=4:acme|"));
+        assert!(!key.contains("token=12:secret-token|"));
+        assert!(!key.contains("client=12:203.0.113.10|"));
+        assert!(key.contains(canonical.tenant.as_deref().expect("hashed tenant")));
+        assert!(key.contains(canonical.token.as_deref().expect("hashed token")));
+        assert!(key.contains(canonical.client.as_deref().expect("hashed client")));
+    }
+
+    #[test]
+    fn route_identity_remains_readable_during_storage_canonicalization() {
+        let labels = QuotaIdentityLabels {
+            route: Some("payments".to_string()),
+            tenant: Some("acme".to_string()),
+            token: None,
+            client: None,
+        };
+
+        let canonical = labels.canonicalize_for_storage();
+        assert_eq!(canonical.route.as_deref(), Some("payments"));
+        assert_eq!(
+            canonical.tenant.as_deref(),
+            Some(canonical_quota_identity_value(QuotaIdentityDimension::Tenant, "acme",).as_str())
+        );
+
+        let key = compose_quota_key("tenant-quota", &labels);
+        assert!(key.contains("route=8:payments|"));
+        assert!(!key.contains("tenant=4:acme|"));
     }
 
     #[test]
@@ -2616,6 +2786,223 @@ mod tests {
     }
 
     #[test]
+    fn oversized_bearer_token_is_rejected() {
+        let policy =
+            quota_policy_with_selectors(None, Some(QuotaSelectorKeySpec::BearerToken), None);
+        let oversized_token = "t".repeat(MAX_REQUEST_DERIVED_QUOTA_IDENTITY_BYTES + 1);
+        let context = identity_context_with_headers(
+            Some("api"),
+            "GET",
+            "/v1",
+            Some("api.example.com"),
+            None,
+            None,
+            HashMap::from([(
+                "authorization".to_string(),
+                format!("Bearer {oversized_token}"),
+            )]),
+        );
+
+        assert_eq!(
+            extract_runtime_request_key(&RuntimeRequestKeySpec::BearerToken, &context),
+            RequestKeyExtraction::Invalid
+        );
+        assert_selector_identity_invalid(&policy, &context, QuotaIdentityDimension::Token);
+    }
+
+    #[test]
+    fn oversized_header_cookie_query_and_cid_values_are_rejected() {
+        let oversized = "a".repeat(MAX_REQUEST_DERIVED_QUOTA_IDENTITY_BYTES + 1);
+
+        let header_policy = quota_policy_with_selectors(
+            Some(QuotaSelectorKeySpec::Header("x-tenant-id".to_string())),
+            None,
+            None,
+        );
+        let header_context = identity_context_with_headers(
+            Some("api"),
+            "GET",
+            "/v1",
+            Some("api.example.com"),
+            None,
+            None,
+            HashMap::from([("x-tenant-id".to_string(), oversized.clone())]),
+        );
+        assert_eq!(
+            extract_runtime_request_key(
+                &RuntimeRequestKeySpec::Header("x-tenant-id".to_string()),
+                &header_context,
+            ),
+            RequestKeyExtraction::Invalid
+        );
+        assert_selector_identity_invalid(
+            &header_policy,
+            &header_context,
+            QuotaIdentityDimension::Tenant,
+        );
+
+        let cookie_policy = quota_policy_with_selectors(
+            Some(QuotaSelectorKeySpec::Cookie("session".to_string())),
+            None,
+            None,
+        );
+        let cookie_context = identity_context_with_headers(
+            Some("api"),
+            "GET",
+            "/v1",
+            Some("api.example.com"),
+            None,
+            None,
+            HashMap::from([(
+                "cookie".to_string(),
+                format!("session={oversized}; theme=dark"),
+            )]),
+        );
+        assert_eq!(
+            extract_runtime_request_key(
+                &RuntimeRequestKeySpec::Cookie("session".to_string()),
+                &cookie_context,
+            ),
+            RequestKeyExtraction::Invalid
+        );
+        assert_selector_identity_invalid(
+            &cookie_policy,
+            &cookie_context,
+            QuotaIdentityDimension::Tenant,
+        );
+
+        let query_policy = quota_policy_with_selectors(
+            Some(QuotaSelectorKeySpec::Query("tenant".to_string())),
+            None,
+            None,
+        );
+        let query_context = identity_context_with_headers(
+            Some("api"),
+            "GET",
+            leak_string(format!("/v1?tenant={oversized}")),
+            Some("api.example.com"),
+            None,
+            None,
+            HashMap::new(),
+        );
+        assert_eq!(
+            extract_runtime_request_key(
+                &RuntimeRequestKeySpec::Query("tenant".to_string()),
+                &query_context,
+            ),
+            RequestKeyExtraction::Invalid
+        );
+        assert_selector_identity_invalid(
+            &query_policy,
+            &query_context,
+            QuotaIdentityDimension::Tenant,
+        );
+
+        let cid_policy = quota_policy_with_selectors(Some(QuotaSelectorKeySpec::Cid), None, None);
+        let cid_context = identity_context_with_headers(
+            Some("api"),
+            "GET",
+            "/v1",
+            Some("api.example.com"),
+            Some(leak_string(oversized)),
+            None,
+            HashMap::new(),
+        );
+        assert_eq!(
+            extract_runtime_request_key(&RuntimeRequestKeySpec::Cid, &cid_context),
+            RequestKeyExtraction::Invalid
+        );
+        assert_selector_identity_invalid(&cid_policy, &cid_context, QuotaIdentityDimension::Tenant);
+    }
+
+    #[test]
+    fn legacy_fallback_does_not_mask_invalid_selector_values() {
+        let policy = QuotaPolicyRuntime {
+            name: "tenant-quota".to_string(),
+            route_allowlist: HashSet::new(),
+            selector: QuotaSelectorMatcher {
+                route: true,
+                tenant: Some(
+                    QuotaSelectorKeySpec::Header("x-tenant-id".to_string())
+                        .with_legacy_default_fallback(),
+                ),
+                token: None,
+                client: None,
+            },
+            burst: Some(QuotaWindowPolicy {
+                requests: 10,
+                window: Duration::from_secs(1),
+            }),
+            sustained: None,
+        };
+
+        let oversized_header = "a".repeat(MAX_REQUEST_DERIVED_QUOTA_IDENTITY_BYTES + 1);
+        let context = identity_context_with_headers(
+            Some("api"),
+            "GET",
+            "/v1",
+            Some("api.example.com"),
+            None,
+            None,
+            HashMap::from([("x-tenant-id".to_string(), oversized_header)]),
+        );
+
+        let err = policy
+            .composite_key(&context)
+            .expect_err("oversized selector values must stay invalid");
+        assert_eq!(err.dimension, QuotaIdentityDimension::Tenant);
+        assert_eq!(err.reason, QuotaDenyReason::SelectorIdentityInvalid);
+    }
+
+    #[test]
+    fn distinct_oversized_selector_values_do_not_collide_via_truncation() {
+        let policy = quota_policy_with_selectors(
+            Some(QuotaSelectorKeySpec::Header("x-tenant-id".to_string())),
+            None,
+            None,
+        );
+        let prefix = "x".repeat(MAX_REQUEST_DERIVED_QUOTA_IDENTITY_BYTES);
+        let first = format!("{prefix}a");
+        let second = format!("{prefix}b");
+
+        let first_context = identity_context_with_headers(
+            Some("api"),
+            "GET",
+            "/v1",
+            Some("api.example.com"),
+            None,
+            None,
+            HashMap::from([("x-tenant-id".to_string(), first)]),
+        );
+        let second_context = identity_context_with_headers(
+            Some("api"),
+            "GET",
+            "/v1",
+            Some("api.example.com"),
+            None,
+            None,
+            HashMap::from([("x-tenant-id".to_string(), second)]),
+        );
+
+        assert_eq!(
+            extract_runtime_request_key(
+                &RuntimeRequestKeySpec::Header("x-tenant-id".to_string()),
+                &first_context,
+            ),
+            RequestKeyExtraction::Invalid
+        );
+        assert_eq!(
+            extract_runtime_request_key(
+                &RuntimeRequestKeySpec::Header("x-tenant-id".to_string()),
+                &second_context,
+            ),
+            RequestKeyExtraction::Invalid
+        );
+        assert_selector_identity_invalid(&policy, &first_context, QuotaIdentityDimension::Tenant);
+        assert_selector_identity_invalid(&policy, &second_context, QuotaIdentityDimension::Tenant);
+    }
+
+    #[test]
     fn quota_policy_route_allowlist_scopes_composite_selector_matching() {
         let policy = QuotaPolicyRuntime {
             name: "tenant-quota".to_string(),
@@ -2650,8 +3037,20 @@ mod tests {
             .expect("matching route should still build composite keys");
 
         assert_eq!(composite.labels.route.as_deref(), Some("payments"));
-        assert_eq!(composite.labels.tenant.as_deref(), Some("acme"));
-        assert_eq!(composite.labels.client.as_deref(), Some("203.0.113.10"));
+        assert!(
+            composite
+                .labels
+                .tenant
+                .as_deref()
+                .is_some_and(|value| value.starts_with("sha256:"))
+        );
+        assert!(
+            composite
+                .labels
+                .client
+                .as_deref()
+                .is_some_and(|value| value.starts_with("sha256:"))
+        );
     }
 
     #[test]
