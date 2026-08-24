@@ -150,7 +150,10 @@ pub struct QuotaIdentityLabels {
 impl QuotaIdentityLabels {
     fn canonicalize_for_storage(&self) -> Self {
         Self {
-            route: canonical_stored_quota_identity(QuotaIdentityDimension::Route, self.route.as_deref()),
+            route: canonical_stored_quota_identity(
+                QuotaIdentityDimension::Route,
+                self.route.as_deref(),
+            ),
             tenant: canonical_stored_quota_identity(
                 QuotaIdentityDimension::Tenant,
                 self.tenant.as_deref(),
@@ -467,9 +470,9 @@ impl QuotaSelectorMatcher {
         let extracted = extract_quota_selector_key(spec, context);
 
         match extracted {
-            RequestKeyExtraction::Found(value) => Ok(Some(canonical_quota_identity_value(
-                dimension, &value,
-            ))),
+            RequestKeyExtraction::Found(value) => {
+                Ok(Some(canonical_quota_identity_value(dimension, &value)))
+            }
             RequestKeyExtraction::Missing => Err(QuotaIdentityRejection {
                 policy_name: policy_name.to_string(),
                 dimension,
@@ -2634,11 +2637,7 @@ mod tests {
             .tenant
             .as_ref()
             .expect("hashed tenant label");
-        let hashed_token = composite
-            .labels
-            .token
-            .as_ref()
-            .expect("hashed token label");
+        let hashed_token = composite.labels.token.as_ref().expect("hashed token label");
         let hashed_client = composite
             .labels
             .client
@@ -2724,11 +2723,10 @@ mod tests {
 
         let canonical = labels.canonicalize_for_storage();
         assert_eq!(canonical.route.as_deref(), Some("payments"));
-        assert_eq!(canonical.tenant.as_deref(), Some(canonical_quota_identity_value(
-            QuotaIdentityDimension::Tenant,
-            "acme",
-        )
-        .as_str()));
+        assert_eq!(
+            canonical.tenant.as_deref(),
+            Some(canonical_quota_identity_value(QuotaIdentityDimension::Tenant, "acme",).as_str())
+        );
 
         let key = compose_quota_key("tenant-quota", &labels);
         assert!(key.contains("route=8:payments|"));
@@ -2789,7 +2787,8 @@ mod tests {
 
     #[test]
     fn oversized_bearer_token_is_rejected() {
-        let policy = quota_policy_with_selectors(None, Some(QuotaSelectorKeySpec::BearerToken), None);
+        let policy =
+            quota_policy_with_selectors(None, Some(QuotaSelectorKeySpec::BearerToken), None);
         let oversized_token = "t".repeat(MAX_REQUEST_DERIVED_QUOTA_IDENTITY_BYTES + 1);
         let context = identity_context_with_headers(
             Some("api"),
@@ -2899,8 +2898,7 @@ mod tests {
             QuotaIdentityDimension::Tenant,
         );
 
-        let cid_policy =
-            quota_policy_with_selectors(Some(QuotaSelectorKeySpec::Cid), None, None);
+        let cid_policy = quota_policy_with_selectors(Some(QuotaSelectorKeySpec::Cid), None, None);
         let cid_context = identity_context_with_headers(
             Some("api"),
             "GET",
@@ -3000,16 +2998,8 @@ mod tests {
             ),
             RequestKeyExtraction::Invalid
         );
-        assert_selector_identity_invalid(
-            &policy,
-            &first_context,
-            QuotaIdentityDimension::Tenant,
-        );
-        assert_selector_identity_invalid(
-            &policy,
-            &second_context,
-            QuotaIdentityDimension::Tenant,
-        );
+        assert_selector_identity_invalid(&policy, &first_context, QuotaIdentityDimension::Tenant);
+        assert_selector_identity_invalid(&policy, &second_context, QuotaIdentityDimension::Tenant);
     }
 
     #[test]
