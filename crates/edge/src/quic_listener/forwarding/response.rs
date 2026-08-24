@@ -729,17 +729,16 @@ impl QUICListener {
     fn spawn_response_body_pump(
         req: &RequestEnvelope,
         response_body: hyper::body::Incoming,
-        metadata: &ResponseStartMetadata,
+        deferred_start: Option<ResponseChunk>,
         pump: ResponseBodyPumpPlan,
     ) -> mpsc::Receiver<ResponseChunk> {
         let (chunk_tx, chunk_rx) = mpsc::channel::<ResponseChunk>(RESPONSE_CHUNK_CHANNEL_CAPACITY);
         let fail_tx = chunk_tx.clone();
-        let deferred_status = metadata.status;
-        let deferred_headers = metadata.headers.clone();
         let fut = async move {
             use http_body_util::BodyExt;
 
             let mut body = response_body;
+            let mut deferred_start = deferred_start;
             let body_started_at = tokio::time::Instant::now();
             let mut last_body_progress_at = body_started_at;
             let mut response_bytes_received: usize = 0;
@@ -866,17 +865,12 @@ impl QUICListener {
                         return;
                     }
                     Ok(None) => {
-                        if pump.defer_headers_until_body_validated {
-                            if chunk_tx
-                                .send(ResponseChunk::Start {
-                                    status: deferred_status,
-                                    headers: deferred_headers,
-                                })
-                                .await
-                                .is_err()
-                            {
+                        if let Some(start) = deferred_start.take()
+                            && chunk_tx.send(start).await.is_err()
+                        {
                                 return;
-                            }
+                        }
+                        if pump.defer_headers_until_body_validated {
                             for chunk in buffered_chunks {
                                 if chunk_tx.send(ResponseChunk::Data(chunk)).await.is_err() {
                                     return;
@@ -1024,19 +1018,25 @@ impl QUICListener {
                 pump,
                 observation,
             } => {
+                let response_status = metadata.status;
+                let response_headers_sent = metadata.response_headers_sent();
                 if !metadata.headers_deferred {
                     Self::send_response_start_headers(h3, quic, stream_id, &metadata, false)?;
                 }
-                let chunk_rx = Self::spawn_response_body_pump(req, response_body, &metadata, pump);
-                req.response_status = Some(metadata.status.as_u16());
+                let deferred_start = metadata.headers_deferred.then_some(ResponseChunk::Start {
+                    status: metadata.status,
+                    headers: metadata.headers,
+                });
+                let chunk_rx = Self::spawn_response_body_pump(req, response_body, deferred_start, pump);
+                req.response_status = Some(response_status.as_u16());
                 req.transition_to_streaming_response(
                     chunk_rx,
-                    if metadata.response_headers_sent() {
+                    if response_headers_sent {
                         ResponseEmissionState::HeadersSent
                     } else {
                         ResponseEmissionState::DeferredHeaders
                     },
-                    metadata.status,
+                    response_status,
                 );
                 Self::observe_response_start_transition(req, &observation, shared_ctx);
                 Ok(false)
