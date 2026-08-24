@@ -1040,6 +1040,34 @@ mod tests {
     }
 
     #[test]
+    fn websocket_tunnel_headers_borrow_when_upgrade_headers_are_already_present() {
+        let pending_forward = PendingForward::sample_for_test(vec![
+            quiche::h3::Header::new(b"upgrade", b"websocket"),
+            quiche::h3::Header::new(b"connection", b"upgrade"),
+        ]);
+
+        assert!(matches!(
+            pending_forward.request_headers_for_http1_websocket_tunnel(),
+            Cow::Borrowed(_)
+        ));
+    }
+
+    #[test]
+    fn websocket_tunnel_headers_materialize_owned_headers_when_upgrade_headers_are_missing() {
+        let pending_forward =
+            PendingForward::sample_for_test(vec![quiche::h3::Header::new(b"x-test", b"1")]);
+
+        let headers = pending_forward.request_headers_for_http1_websocket_tunnel();
+        assert!(matches!(headers, Cow::Owned(_)));
+        assert!(headers
+            .iter()
+            .any(|header| header.name().eq_ignore_ascii_case(b"upgrade")));
+        assert!(headers
+            .iter()
+            .any(|header| header.name().eq_ignore_ascii_case(b"connection")));
+    }
+
+    #[test]
     fn build_request_rejects_invalid_headers_before_upstream_dispatch() {
         let pending_forward =
             PendingForward::sample_for_test(vec![quiche::h3::Header::new(b"bad header", b"1")]);

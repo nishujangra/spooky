@@ -142,6 +142,15 @@ fn response_headers_with_defaults(
 }
 
 impl QUICListener {
+    fn into_deferred_response_start_chunk(
+        metadata: ResponseStartMetadata,
+    ) -> Option<ResponseChunk> {
+        metadata.headers_deferred.then_some(ResponseChunk::Start {
+            status: metadata.status,
+            headers: metadata.headers,
+        })
+    }
+
     pub(super) fn prepare_response_start_decision(
         req: &RequestEnvelope,
         success: ForwardSuccess,
@@ -1023,10 +1032,7 @@ impl QUICListener {
                 if !metadata.headers_deferred {
                     Self::send_response_start_headers(h3, quic, stream_id, &metadata, false)?;
                 }
-                let deferred_start = metadata.headers_deferred.then_some(ResponseChunk::Start {
-                    status: metadata.status,
-                    headers: metadata.headers,
-                });
+                let deferred_start = Self::into_deferred_response_start_chunk(metadata);
                 let chunk_rx = Self::spawn_response_body_pump(req, response_body, deferred_start, pump);
                 req.response_status = Some(response_status.as_u16());
                 req.transition_to_streaming_response(
@@ -1586,5 +1592,28 @@ mod tests {
             Some(&b"Bearer"[..])
         );
         assert_eq!(header_value(&headers, b"content-length"), Some(&b"10"[..]));
+    }
+
+    #[test]
+    fn deferred_response_start_chunk_moves_headers_only_for_deferred_metadata() {
+        let deferred = QUICListener::into_deferred_response_start_chunk(ResponseStartMetadata {
+            status: http::StatusCode::OK,
+            headers: vec![(b"x-test".to_vec(), b"1".to_vec())],
+            headers_deferred: true,
+        });
+        let immediate = QUICListener::into_deferred_response_start_chunk(ResponseStartMetadata {
+            status: http::StatusCode::OK,
+            headers: vec![(b"x-test".to_vec(), b"1".to_vec())],
+            headers_deferred: false,
+        });
+
+        match deferred {
+            Some(ResponseChunk::Start { status, headers }) => {
+                assert_eq!(status, http::StatusCode::OK);
+                assert_eq!(headers, vec![(b"x-test".to_vec(), b"1".to_vec())]);
+            }
+            _ => panic!("deferred metadata must produce a start chunk"),
+        }
+        assert!(immediate.is_none());
     }
 }
