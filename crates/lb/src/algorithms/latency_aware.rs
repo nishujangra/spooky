@@ -50,7 +50,9 @@ impl LatencyAware {
         let (sampled_best, unsampled_best) = Self::rank_candidates(pool);
 
         match (sampled_best, unsampled_best) {
-            (Some(sampled_best), Some(unsampled_best)) if unsampled_best.score < sampled_best.score => {
+            (Some(sampled_best), Some(unsampled_best))
+                if unsampled_best.score < sampled_best.score =>
+            {
                 Some(unsampled_best.idx)
             }
             (Some(sampled_best), _) => Some(sampled_best.idx),
@@ -148,7 +150,7 @@ mod tests {
 
     use impulse_config::config::{Backend, HealthCheck};
 
-    use super::LatencyAware;
+    use super::{LatencyAware, UNSAMPLED_PROBE_INTERVAL};
     use crate::{backend::BackendState, backend_pool::BackendPool, health::HealthFailureReason};
 
     fn create_backend_state(

@@ -303,15 +303,16 @@ mod tests {
         let mut pool = UpstreamPool::from_runtime_upstream(&runtime_upstream)
             .expect("runtime pool should build");
 
-        let transition = pool.observe_backend_request_failure(
-            0,
-            std::time::Duration::from_millis(15),
-            None,
-        );
+        let transition =
+            pool.observe_backend_request_failure(0, std::time::Duration::from_millis(15), None);
 
         assert!(transition.is_none());
         let runtime = pool.backend_runtime_state(0).expect("runtime state");
         assert!(runtime.healthy);
-        assert!(runtime.ewma_latency_ms.is_some_and(|latency| latency >= 1_000.0));
+        assert!(
+            runtime
+                .ewma_latency_ms
+                .is_some_and(|latency| latency >= 1_000.0)
+        );
     }
 }

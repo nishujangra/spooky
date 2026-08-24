@@ -322,7 +322,7 @@ mod tests {
 
     use impulse_config::config::{Backend, HealthCheck};
 
-    use super::BackendPool;
+    use super::{BackendPool, FAILURE_PENALTY_LATENCY_MS};
     use crate::{
         backend::BackendState,
         health::{HealthFailureReason, HealthTransition},

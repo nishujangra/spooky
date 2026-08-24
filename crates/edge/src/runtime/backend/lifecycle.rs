@@ -1730,7 +1730,11 @@ mod tests {
                 .expect("read")
                 .backend_runtime_state(0)
                 .expect("backend state");
-            assert!(runtime.ewma_latency_ms.is_some_and(|latency| latency >= 1_000.0));
+            assert!(
+                runtime
+                    .ewma_latency_ms
+                    .is_some_and(|latency| latency >= 1_000.0)
+            );
         }
 
         #[test]
@@ -1773,7 +1777,11 @@ mod tests {
                 .backend_runtime_state(0)
                 .expect("backend state");
             assert!(runtime.healthy);
-            assert!(runtime.ewma_latency_ms.is_some_and(|latency| latency >= 1_000.0));
+            assert!(
+                runtime
+                    .ewma_latency_ms
+                    .is_some_and(|latency| latency >= 1_000.0)
+            );
         }
 
         #[test]
