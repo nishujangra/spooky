@@ -96,9 +96,7 @@ impl BackendState {
                 };
                 self.record_probing_success(success_threshold)
             }
-            HealthState::Probing {
-                ..
-            } => self.record_probing_success(success_threshold),
+            HealthState::Probing { .. } => self.record_probing_success(success_threshold),
         }
     }
 
@@ -167,7 +165,11 @@ impl BackendState {
     }
 
     fn cooldown_duration(&self) -> Duration {
-        Duration::from_millis(self.health_check.as_ref().map_or(10_000, |hc| hc.cooldown_ms))
+        Duration::from_millis(
+            self.health_check
+                .as_ref()
+                .map_or(10_000, |hc| hc.cooldown_ms),
+        )
     }
 
     fn probe_budget(&self) -> u32 {
@@ -210,5 +212,7 @@ enum HealthState {
         successes: u32,
         remaining_budget: u32,
     },
-    Unhealthy { until: Instant },
+    Unhealthy {
+        until: Instant,
+    },
 }

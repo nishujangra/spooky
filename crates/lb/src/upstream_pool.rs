@@ -206,7 +206,10 @@ mod tests {
     use super::UpstreamPool;
     use crate::{health::HealthFailureReason, test_support::runtime_upstream_from_addresses};
 
-    fn runtime_upstream_from_backends(lb_type: &str, backends: Vec<Backend>) -> impulse_config::runtime::RuntimeUpstream {
+    fn runtime_upstream_from_backends(
+        lb_type: &str,
+        backends: Vec<Backend>,
+    ) -> impulse_config::runtime::RuntimeUpstream {
         let mut upstreams = HashMap::new();
         upstreams.insert(
             "api".to_string(),
@@ -379,39 +382,21 @@ mod tests {
 
     #[test]
     fn probing_backend_is_selected_with_bounded_budget_before_general_lb() {
-        let runtime_upstream = runtime_upstream_from_backends(
+        let runtime_upstream = runtime_upstream_from_addresses(
             "round-robin",
-            vec![
-                Backend {
-                    id: "backend-0".to_string(),
-                    address: "http://127.0.0.1:7001".to_string(),
-                    weight: 1,
-                    health_check: Some(HealthCheck {
-                        path: "/health".to_string(),
-                        interval: 0,
-                        timeout_ms: 1000,
-                        failure_threshold: 1,
-                        success_threshold: 2,
-                        cooldown_ms: 10_000,
-                    }),
-                },
-                Backend {
-                    id: "backend-1".to_string(),
-                    address: "http://127.0.0.1:7002".to_string(),
-                    weight: 1,
-                    health_check: Some(HealthCheck {
-                        path: "/health".to_string(),
-                        interval: 1_000,
-                        timeout_ms: 1000,
-                        failure_threshold: 1,
-                        success_threshold: 1,
-                        cooldown_ms: 0,
-                    }),
-                },
-            ],
+            None,
+            &["http://127.0.0.1:7001", "http://127.0.0.1:7002"],
         );
         let mut pool = UpstreamPool::from_runtime_upstream(&runtime_upstream)
             .expect("runtime pool should build");
+        pool.pool.backends[0].health_check = Some(HealthCheck {
+            path: "/health".to_string(),
+            interval: 0,
+            timeout_ms: 1000,
+            failure_threshold: 1,
+            success_threshold: 2,
+            cooldown_ms: 10_000,
+        });
 
         assert!(matches!(
             pool.mark_backend_request_failure(0, HealthFailureReason::Transport),
@@ -476,24 +461,18 @@ mod tests {
 
     #[test]
     fn passive_request_success_requires_verified_probe_threshold() {
-        let runtime_upstream = runtime_upstream_from_backends(
-            "round-robin",
-            vec![Backend {
-                id: "backend-0".to_string(),
-                address: "http://127.0.0.1:7001".to_string(),
-                weight: 1,
-                health_check: Some(HealthCheck {
-                    path: "/health".to_string(),
-                    interval: 0,
-                    timeout_ms: 1000,
-                    failure_threshold: 1,
-                    success_threshold: 2,
-                    cooldown_ms: 10_000,
-                }),
-            }],
-        );
+        let runtime_upstream =
+            runtime_upstream_from_addresses("round-robin", None, &["http://127.0.0.1:7001"]);
         let mut pool = UpstreamPool::from_runtime_upstream(&runtime_upstream)
             .expect("runtime pool should build");
+        pool.pool.backends[0].health_check = Some(HealthCheck {
+            path: "/health".to_string(),
+            interval: 0,
+            timeout_ms: 1000,
+            failure_threshold: 1,
+            success_threshold: 2,
+            cooldown_ms: 10_000,
+        });
 
         assert!(matches!(
             pool.mark_backend_request_failure(0, HealthFailureReason::Transport),

@@ -256,12 +256,16 @@ impl BackendPool {
     }
 
     pub fn pick_probing_backend(&mut self, begin_request: bool) -> Option<usize> {
-        let selected = self.backends.iter_mut().enumerate().find_map(|(index, backend)| {
-            (backend.is_probing()
-                && backend.active_requests() == 0
-                && backend.try_acquire_probe_permit())
-            .then_some(index)
-        });
+        let selected = self
+            .backends
+            .iter_mut()
+            .enumerate()
+            .find_map(|(index, backend)| {
+                (backend.is_probing()
+                    && backend.active_requests() == 0
+                    && backend.try_acquire_probe_permit())
+                .then_some(index)
+            });
 
         if let Some(index) = selected
             && begin_request
@@ -574,9 +578,10 @@ mod tests {
         assert!(pool.backend(0).is_some_and(BackendState::is_probing));
         assert!(!pool.readmit_due());
 
-        assert!(pool
-            .mark_request_failure(0, HealthFailureReason::Transport)
-            .is_none());
+        assert!(
+            pool.mark_request_failure(0, HealthFailureReason::Transport)
+                .is_none()
+        );
         assert!(!pool.backend(0).is_some_and(BackendState::is_probing));
         assert!(pool.readmit_due());
     }
