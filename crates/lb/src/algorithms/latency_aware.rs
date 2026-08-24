@@ -134,7 +134,10 @@ impl LatencyAware {
 
     fn should_probe_unsampled(&mut self, unsampled_active: usize) -> bool {
         self.unsampled_probe_cursor = self.unsampled_probe_cursor.wrapping_add(1);
-        unsampled_active == 0 && self.unsampled_probe_cursor % UNSAMPLED_PROBE_INTERVAL == 0
+        unsampled_active == 0
+            && self
+                .unsampled_probe_cursor
+                .is_multiple_of(UNSAMPLED_PROBE_INTERVAL)
     }
 }
 
