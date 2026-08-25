@@ -1,5 +1,7 @@
 use std::{
-    fmt, fs,
+    fmt,
+    fs::{self, File},
+    io::Read,
     path::{Component, Path, PathBuf},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -601,7 +603,10 @@ fn resolve_file_bytes(
         ));
     }
 
-    let metadata = fs::metadata(trimmed).map_err(|err| map_io_error(field_name, err.kind()))?;
+    let mut file = File::open(trimmed).map_err(|err| map_io_error(field_name, err.kind()))?;
+    let metadata = file
+        .metadata()
+        .map_err(|err| map_io_error(field_name, err.kind()))?;
     if !metadata.is_file() {
         return Err(RuntimeSecretResolutionError::new(
             field_name,
@@ -617,7 +622,20 @@ fn resolve_file_bytes(
         ));
     }
 
-    let bytes = fs::read(trimmed).map_err(|err| map_io_error(field_name, err.kind()))?;
+    let mut bytes = Vec::with_capacity(
+        (MAX_FILE_BACKED_SECRET_BYTES as usize)
+            .min(usize::try_from(metadata.len()).unwrap_or(usize::MAX)),
+    );
+    file.take(MAX_FILE_BACKED_SECRET_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|err| map_io_error(field_name, err.kind()))?;
+    if bytes.len() > MAX_FILE_BACKED_SECRET_BYTES as usize {
+        return Err(RuntimeSecretResolutionError::new(
+            field_name,
+            Some(RuntimeSecretSourceKind::File),
+            RuntimeSecretResolutionErrorKind::SecretTooLarge,
+        ));
+    }
     if bytes.is_empty() {
         return Err(RuntimeSecretResolutionError::new(
             field_name,
