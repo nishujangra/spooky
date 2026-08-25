@@ -101,21 +101,41 @@ fn consistent_hash_upstream(backends: Vec<Backend>) -> Upstream {
     upstream_with_policy("consistent-hash", Some("header:x-tenant-id"), backends)
 }
 
-/// Probe tenant keys until one hashes to `expected_body`'s backend.
+/// Compute a tenant key that the production consistent-hash ring maps to
+/// `expected_addr`, given the full set of backend addresses in the pool.
 ///
-/// The hash ring is built from backend addresses, and both test backends share a
-/// randomly reserved port. For some ports none of the first ~128 `tenant-N` keys land
-/// on a given backend, so the key space has to be wide enough to survive an unlucky
-/// port. A request error just means "not this key" — keep probing.
+/// This mirrors `ConsistentHash::rebuild_ring`/`pick` exactly (same ring hash,
+/// same replica count, same binary search over sorted ring entries), so the
+/// key is guaranteed to land on the expected backend rather than being
+/// discovered by probing live requests, which was a source of flakiness: with
+/// both backends sharing a randomly reserved port, an unlucky port could push
+/// a real match past the first ~2048 probed `tenant-N` keys, and each miss
+/// cost a full request round-trip.
 fn find_consistent_hash_key_for_backend(
-    harness: &BackendLifecycleHarness,
-    expected_body: &str,
-) -> Option<String> {
-    (0..2048).find_map(|idx| {
-        let key = format!("tenant-{idx}");
-        let response = run_keyed_request(harness, &key).ok()?;
-        (response.status == 200 && response.body_text() == expected_body).then_some(key)
-    })
+    all_backend_addrs: &[String],
+    expected_addr: &str,
+) -> String {
+    let mut ring: Vec<(u64, &str)> = all_backend_addrs
+        .iter()
+        .flat_map(|addr| {
+            (0..impulse_lb::hash::DEFAULT_REPLICAS)
+                .map(move |replica| (impulse_lb::hash::hash_backend_replica(addr, replica), addr.as_str()))
+        })
+        .collect();
+    ring.sort_unstable();
+
+    (0..100_000)
+        .map(|idx| format!("tenant-{idx}"))
+        .find(|key| {
+            let key_hash = impulse_lb::hash::hash64(key.as_bytes());
+            let idx = match ring.binary_search_by(|(hash, _)| hash.cmp(&key_hash)) {
+                Ok(idx) => idx,
+                Err(idx) if idx < ring.len() => idx,
+                Err(_) => 0,
+            };
+            ring[idx].1 == expected_addr
+        })
+        .expect("consistent-hash ring should map some tenant key to the expected backend")
 }
 
 fn wait_for_backend_health_state(
@@ -544,8 +564,13 @@ fn passive_request_failures_mark_backend_unhealthy_and_shift_selection_to_health
     )]));
     harness.start_listener(config).expect("listener");
 
-    let backend_a_key = find_consistent_hash_key_for_backend(&harness, "backend-a")
-        .expect("consistent-hash key should map to backend A");
+    let backend_a_key = find_consistent_hash_key_for_backend(
+        &[
+            backend_identity(backend_a_addr),
+            backend_identity(backend_b_addr),
+        ],
+        &backend_identity(backend_a_addr),
+    );
     let healthy_summary = harness
         .upstream_membership_summary("api")
         .expect("membership summary");
