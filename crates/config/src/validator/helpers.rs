@@ -1,4 +1,7 @@
 use super::*;
+use crate::bounded_file::{BoundedFileReadError, read_file_with_limit};
+
+const MAX_VALIDATION_PEM_BYTES: u64 = 1024 * 1024;
 
 macro_rules! validation_error {
     ($($arg:tt)*) => {{
@@ -9,10 +12,23 @@ macro_rules! validation_error {
 }
 
 pub(super) fn validate_pem_certificates(path: &str, field_name: &str) -> bool {
-    let pem = match std::fs::read(path) {
+    let pem = match read_file_with_limit(path, MAX_VALIDATION_PEM_BYTES) {
         Ok(pem) => pem,
-        Err(err) => {
+        Err(BoundedFileReadError::Io(err)) => {
             validation_error!("Cannot open {} '{}': {}", field_name, path, err);
+            return false;
+        }
+        Err(BoundedFileReadError::NotAFile) => {
+            validation_error!("{} '{}' must be a file", field_name, path);
+            return false;
+        }
+        Err(BoundedFileReadError::TooLarge) => {
+            validation_error!(
+                "{} '{}' exceeds the maximum supported PEM size ({} bytes)",
+                field_name,
+                path,
+                MAX_VALIDATION_PEM_BYTES
+            );
             return false;
         }
     };
@@ -43,10 +59,23 @@ pub(super) fn validate_pem_certificates(path: &str, field_name: &str) -> bool {
 }
 
 pub(super) fn validate_pem_private_key(path: &str, field_name: &str) -> bool {
-    let pem = match std::fs::read(path) {
+    let pem = match read_file_with_limit(path, MAX_VALIDATION_PEM_BYTES) {
         Ok(pem) => pem,
-        Err(err) => {
+        Err(BoundedFileReadError::Io(err)) => {
             validation_error!("Cannot open {} '{}': {}", field_name, path, err);
+            return false;
+        }
+        Err(BoundedFileReadError::NotAFile) => {
+            validation_error!("{} '{}' must be a file", field_name, path);
+            return false;
+        }
+        Err(BoundedFileReadError::TooLarge) => {
+            validation_error!(
+                "{} '{}' exceeds the maximum supported PEM size ({} bytes)",
+                field_name,
+                path,
+                MAX_VALIDATION_PEM_BYTES
+            );
             return false;
         }
     };
