@@ -13,6 +13,8 @@ use crate::config::{
     Config, ControlApiBearerToken, ExternalAuth, SecretProvider, SecretRef, Secrets,
 };
 
+const MAX_FILE_BACKED_SECRET_BYTES: u64 = 1024 * 1024;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeSecretSourceKind {
     Literal,
@@ -40,6 +42,7 @@ pub enum RuntimeSecretResolutionErrorKind {
     InvalidBaseDirectory,
     PathOutsideBaseDir,
     EmptySecret,
+    SecretTooLarge,
     Io,
     InvalidUtf8,
     MalformedPemCertificate,
@@ -59,6 +62,7 @@ impl RuntimeSecretResolutionErrorKind {
             Self::InvalidBaseDirectory => "invalid_base_directory",
             Self::PathOutsideBaseDir => "path_outside_base_dir",
             Self::EmptySecret => "empty_secret",
+            Self::SecretTooLarge => "secret_too_large",
             Self::Io => "io_error",
             Self::InvalidUtf8 => "invalid_utf8",
             Self::MalformedPemCertificate => "malformed_pem_certificate",
@@ -605,6 +609,13 @@ fn resolve_file_bytes(
             RuntimeSecretResolutionErrorKind::NotAFile,
         ));
     }
+    if metadata.len() > MAX_FILE_BACKED_SECRET_BYTES {
+        return Err(RuntimeSecretResolutionError::new(
+            field_name,
+            Some(RuntimeSecretSourceKind::File),
+            RuntimeSecretResolutionErrorKind::SecretTooLarge,
+        ));
+    }
 
     let bytes = fs::read(trimmed).map_err(|err| map_io_error(field_name, err.kind()))?;
     if bytes.is_empty() {
@@ -747,6 +758,18 @@ mod tests {
             .expect_err("empty file");
 
         assert_eq!(err.kind(), RuntimeSecretResolutionErrorKind::EmptySecret);
+    }
+
+    #[test]
+    fn file_provider_rejects_oversized_file() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("secret.txt");
+        fs::write(&path, vec![b'x'; (MAX_FILE_BACKED_SECRET_BYTES as usize) + 1]).expect("write");
+
+        let err = resolve_file_secret_path(path.to_string_lossy().as_ref(), "auth.jwt.secret_ref")
+            .expect_err("oversized file");
+
+        assert_eq!(err.kind(), RuntimeSecretResolutionErrorKind::SecretTooLarge);
     }
 
     #[test]
