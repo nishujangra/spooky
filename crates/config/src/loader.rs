@@ -1,11 +1,33 @@
-use std::fs;
-
 use serde_yaml::{Mapping, Value};
 
+use crate::bounded_file::{BoundedFileReadError, read_file_with_limit};
 use crate::config::{CURRENT_CONFIG_VERSION, Config, SUPPORTED_CONFIG_VERSIONS};
 
+const MAX_CONFIG_FILE_BYTES: u64 = 4 * 1024 * 1024;
+
 pub fn read_config(filename: &str) -> Result<Config, String> {
-    let text = fs::read_to_string(filename)
+    let bytes = match read_file_with_limit(filename, MAX_CONFIG_FILE_BYTES) {
+        Ok(bytes) => bytes,
+        Err(BoundedFileReadError::Io(err)) => {
+            return Err(format!(
+                "Failed to read config file '{}': {}",
+                filename, err
+            ));
+        }
+        Err(BoundedFileReadError::NotAFile) => {
+            return Err(format!(
+                "Failed to read config file '{}': not a file",
+                filename
+            ));
+        }
+        Err(BoundedFileReadError::TooLarge) => {
+            return Err(format!(
+                "Failed to read config file '{}': exceeds maximum supported size ({} bytes)",
+                filename, MAX_CONFIG_FILE_BYTES
+            ));
+        }
+    };
+    let text = String::from_utf8(bytes)
         .map_err(|err| format!("Failed to read config file '{}': {}", filename, err))?;
 
     parse_config_text(&text)
