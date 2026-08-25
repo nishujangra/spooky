@@ -7,6 +7,8 @@
 //! - [`runtime`] for normalized, validated runtime policy output
 //! - [`backend_endpoint`] for shared backend endpoint parsing/runtime shaping
 
+mod bounded_file;
+
 pub mod backend_endpoint;
 pub mod config;
 pub mod loader;

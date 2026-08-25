@@ -9,8 +9,9 @@ use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use sha2::{Digest, Sha256};
 
 use super::RuntimeConfigError;
-use crate::config::{
-    Config, ControlApiBearerToken, ExternalAuth, SecretProvider, SecretRef, Secrets,
+use crate::{
+    bounded_file::{BoundedFileReadError, read_file_with_limit},
+    config::{Config, ControlApiBearerToken, ExternalAuth, SecretProvider, SecretRef, Secrets},
 };
 
 const MAX_FILE_BACKED_SECRET_BYTES: u64 = 1024 * 1024;
@@ -601,23 +602,24 @@ fn resolve_file_bytes(
         ));
     }
 
-    let metadata = fs::metadata(trimmed).map_err(|err| map_io_error(field_name, err.kind()))?;
-    if !metadata.is_file() {
-        return Err(RuntimeSecretResolutionError::new(
-            field_name,
-            Some(RuntimeSecretSourceKind::File),
-            RuntimeSecretResolutionErrorKind::NotAFile,
-        ));
-    }
-    if metadata.len() > MAX_FILE_BACKED_SECRET_BYTES {
-        return Err(RuntimeSecretResolutionError::new(
-            field_name,
-            Some(RuntimeSecretSourceKind::File),
-            RuntimeSecretResolutionErrorKind::SecretTooLarge,
-        ));
-    }
-
-    let bytes = fs::read(trimmed).map_err(|err| map_io_error(field_name, err.kind()))?;
+    let bytes = match read_file_with_limit(trimmed, MAX_FILE_BACKED_SECRET_BYTES) {
+        Ok(bytes) => bytes,
+        Err(BoundedFileReadError::Io(err)) => return Err(map_io_error(field_name, err.kind())),
+        Err(BoundedFileReadError::NotAFile) => {
+            return Err(RuntimeSecretResolutionError::new(
+                field_name,
+                Some(RuntimeSecretSourceKind::File),
+                RuntimeSecretResolutionErrorKind::NotAFile,
+            ));
+        }
+        Err(BoundedFileReadError::TooLarge) => {
+            return Err(RuntimeSecretResolutionError::new(
+                field_name,
+                Some(RuntimeSecretSourceKind::File),
+                RuntimeSecretResolutionErrorKind::SecretTooLarge,
+            ));
+        }
+    };
     if bytes.is_empty() {
         return Err(RuntimeSecretResolutionError::new(
             field_name,
@@ -774,6 +776,23 @@ mod tests {
             .expect_err("oversized file");
 
         assert_eq!(err.kind(), RuntimeSecretResolutionErrorKind::SecretTooLarge);
+    }
+
+    #[test]
+    fn file_provider_accepts_file_at_size_limit() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("secret.txt");
+        fs::write(&path, vec![b'x'; MAX_FILE_BACKED_SECRET_BYTES as usize]).expect("write");
+
+        let secret =
+            resolve_file_secret_path(path.to_string_lossy().as_ref(), "auth.jwt.secret_ref")
+                .expect("file at size limit");
+
+        assert_eq!(secret.bytes().len(), MAX_FILE_BACKED_SECRET_BYTES as usize);
+        assert_eq!(
+            secret.metadata().byte_len,
+            MAX_FILE_BACKED_SECRET_BYTES as usize
+        );
     }
 
     #[test]

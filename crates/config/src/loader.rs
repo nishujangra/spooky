@@ -1,11 +1,35 @@
-use std::fs;
-
 use serde_yaml::{Mapping, Value};
 
-use crate::config::{CURRENT_CONFIG_VERSION, Config, SUPPORTED_CONFIG_VERSIONS};
+use crate::{
+    bounded_file::{BoundedFileReadError, read_file_with_limit},
+    config::{CURRENT_CONFIG_VERSION, Config, SUPPORTED_CONFIG_VERSIONS},
+};
+
+const MAX_CONFIG_FILE_BYTES: u64 = 4 * 1024 * 1024;
 
 pub fn read_config(filename: &str) -> Result<Config, String> {
-    let text = fs::read_to_string(filename)
+    let bytes = match read_file_with_limit(filename, MAX_CONFIG_FILE_BYTES) {
+        Ok(bytes) => bytes,
+        Err(BoundedFileReadError::Io(err)) => {
+            return Err(format!(
+                "Failed to read config file '{}': {}",
+                filename, err
+            ));
+        }
+        Err(BoundedFileReadError::NotAFile) => {
+            return Err(format!(
+                "Failed to read config file '{}': not a file",
+                filename
+            ));
+        }
+        Err(BoundedFileReadError::TooLarge) => {
+            return Err(format!(
+                "Failed to read config file '{}': exceeds maximum supported size ({} bytes)",
+                filename, MAX_CONFIG_FILE_BYTES
+            ));
+        }
+    };
+    let text = String::from_utf8(bytes)
         .map_err(|err| format!("Failed to read config file '{}': {}", filename, err))?;
 
     parse_config_text(&text)
@@ -100,7 +124,11 @@ fn ensure_mapping_has_lb(map: &mut Mapping, lb_key: &Value, global_lb: Value) {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_config_text;
+    use std::fs;
+
+    use tempfile::tempdir;
+
+    use super::{MAX_CONFIG_FILE_BYTES, parse_config_text, read_config};
 
     #[test]
     fn applies_global_lb_to_upstream_without_override() {
@@ -268,5 +296,47 @@ observability:
 
         let err = parse_config_text(yaml).expect_err("unknown_control_field should be rejected");
         assert!(err.contains("unknown field"));
+    }
+
+    #[test]
+    fn read_config_rejects_oversized_yaml_before_parse() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("oversized.yaml");
+        fs::write(&path, vec![b'x'; (MAX_CONFIG_FILE_BYTES as usize) + 1]).expect("write");
+
+        let err = read_config(path.to_string_lossy().as_ref()).expect_err("oversized config");
+
+        assert!(err.contains("exceeds maximum supported size"));
+    }
+
+    #[test]
+    fn read_config_accepts_normal_sized_valid_yaml() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("config.yaml");
+        let yaml = r#"
+version: 1
+listen:
+  protocol: http3
+  address: "127.0.0.1"
+  port: 9889
+  tls:
+    cert: "certs/cert.pem"
+    key: "certs/key.pem"
+upstream:
+  default:
+    route:
+      path_prefix: "/"
+    backends:
+      - id: b1
+        address: "http://127.0.0.1:7001"
+        weight: 1
+        health_check: {}
+"#;
+        fs::write(&path, yaml).expect("write");
+
+        let cfg = read_config(path.to_string_lossy().as_ref()).expect("valid config file");
+
+        assert_eq!(cfg.version, 1);
+        assert!(cfg.upstream.contains_key("default"));
     }
 }

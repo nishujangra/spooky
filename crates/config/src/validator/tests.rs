@@ -761,6 +761,46 @@ fn rejects_unparseable_tls_material() {
 }
 
 #[test]
+fn rejects_oversized_pem_certificate_material() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+    std::fs::write(&cert, vec![b'x'; (1024 * 1024) + 1]).expect("write oversized cert");
+
+    let cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    let err = validate(&cfg).expect_err("oversized cert must fail validation");
+
+    assert!(
+        err.to_string()
+            .contains("exceeds the maximum supported PEM size")
+    );
+}
+
+#[test]
+fn rejects_oversized_pem_private_key_material() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+    std::fs::write(&key, vec![b'x'; (1024 * 1024) + 1]).expect("write oversized key");
+
+    let cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    let err = validate(&cfg).expect_err("oversized key must fail validation");
+
+    assert!(
+        err.to_string()
+            .contains("exceeds the maximum supported PEM size")
+    );
+}
+
+#[test]
+fn accepts_valid_tls_material_after_bounded_pem_validation() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+
+    let cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+
+    assert!(validate(&cfg).is_ok());
+}
+
+#[test]
 fn accepts_sni_certificates_without_legacy_cert_pair() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_certs(dir.path());
