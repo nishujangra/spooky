@@ -10,7 +10,8 @@ use impulse_config::{
         DistributedQuotaSelector, DistributedQuotaSelectorSource, DistributedQuotaWindow,
         JwksStartupBehavior, JwtAlgorithm, JwtAuth, Listen, LoadBalancing, Log, LogFormat,
         Observability, Performance, QuotaBackendFailurePolicy, QuotaCounterBackend,
-        QuotaEnforcementMode, Resilience, RouteMatch, Security, Tls, Upstream, UpstreamTls,
+        QuotaEnforcementMode, Resilience, RouteMatch, SecretProvider, Security, Tls, Upstream,
+        UpstreamTls,
     },
     runtime::{RuntimeConfig, RuntimeJwtVerificationKey},
 };
@@ -277,12 +278,41 @@ fn attach_control_api_peer_addr<B>(req: &mut Request<B>, peer_addr: &str) {
 }
 
 fn read_audit_events(path: &Path) -> Vec<serde_json::Value> {
+    for _ in 0..20 {
+        if let Ok(contents) = std::fs::read_to_string(path) {
+            let events = contents
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(|line| serde_json::from_str(line).expect("parse audit event"))
+                .collect::<Vec<_>>();
+            if !events.is_empty() {
+                return events;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
     let contents = std::fs::read_to_string(path).expect("read audit file");
     contents
         .lines()
         .filter(|line| !line.trim().is_empty())
         .map(|line| serde_json::from_str(line).expect("parse audit event"))
         .collect()
+}
+
+fn wait_for_audit_event<F>(path: &Path, predicate: F) -> Vec<serde_json::Value>
+where
+    F: Fn(&serde_json::Value) -> bool,
+{
+    for _ in 0..40 {
+        let events = read_audit_events(path);
+        if events.iter().any(&predicate) {
+            return events;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    read_audit_events(path)
 }
 
 fn audit_enabled_control_api_state(
@@ -1516,6 +1546,75 @@ fn control_api_builds_mtls_identity_from_subject_role_mapping() {
 }
 
 #[test]
+fn control_api_dual_auth_identity_uses_least_privileged_common_role() {
+    let request_context = super::admin_identity::ControlApiRequestContext {
+        peer_addr: "127.0.0.1:9443".parse().expect("peer socket addr"),
+        mtls_identity: Some(super::admin_identity::AdminMtlsIdentity {
+            subject: Some("CN=alice".to_string()),
+            common_name: Some("alice".to_string()),
+            san_dns: vec!["admin.example.com".to_string()],
+            san_uri: Vec::new(),
+            roles: vec![super::admin_identity::AdminRole::Admin],
+        }),
+        listener: Some("edge-primary".to_string()),
+        request_id: None,
+        trace_id: None,
+        span_id: None,
+    };
+    let token_match = super::admin_identity::AdminTokenMatch {
+        actor_id: Some("alice".to_string()),
+        role: super::admin_identity::AdminRole::Viewer,
+    };
+
+    let identity =
+        QUICListener::build_admin_identity(Some(request_context), Some(token_match), None)
+            .expect("dual auth identity");
+
+    assert_eq!(
+        identity.roles,
+        vec![super::admin_identity::AdminRole::Viewer]
+    );
+    assert_eq!(
+        identity.authn_mechanisms,
+        vec![
+            super::admin_identity::AdminAuthnMechanism::BearerToken,
+            super::admin_identity::AdminAuthnMechanism::MutualTls,
+        ]
+    );
+}
+
+#[test]
+fn control_api_dual_auth_identity_keeps_token_role_when_mtls_has_no_role_mapping() {
+    let request_context = super::admin_identity::ControlApiRequestContext {
+        peer_addr: "127.0.0.1:9443".parse().expect("peer socket addr"),
+        mtls_identity: Some(super::admin_identity::AdminMtlsIdentity {
+            subject: Some("CN=alice".to_string()),
+            common_name: Some("alice".to_string()),
+            san_dns: vec!["admin.example.com".to_string()],
+            san_uri: Vec::new(),
+            roles: Vec::new(),
+        }),
+        listener: Some("edge-primary".to_string()),
+        request_id: None,
+        trace_id: None,
+        span_id: None,
+    };
+    let token_match = super::admin_identity::AdminTokenMatch {
+        actor_id: Some("alice".to_string()),
+        role: super::admin_identity::AdminRole::Operator,
+    };
+
+    let identity =
+        QUICListener::build_admin_identity(Some(request_context), Some(token_match), None)
+            .expect("dual auth identity without mtls role");
+
+    assert_eq!(
+        identity.roles,
+        vec![super::admin_identity::AdminRole::Operator]
+    );
+}
+
+#[test]
 fn control_api_request_context_captures_operator_correlation_headers() {
     let request_context = super::admin_identity::ControlApiRequestContext {
         peer_addr: "127.0.0.1:9443".parse().expect("peer socket addr"),
@@ -1731,6 +1830,105 @@ async fn control_api_runtime_snapshot_includes_jwks_cache_visibility() {
         "RS256"
     );
     crate::quic_listener::admission::clear_jwks_cache_for_test(jwks_url);
+}
+
+#[tokio::test]
+async fn control_api_runtime_snapshot_coarsens_sensitive_tls_and_secret_details() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let ca_dir = dir.path().join("ca");
+    std::fs::create_dir_all(&ca_dir).expect("create ca dir");
+    std::fs::copy(&cert, ca_dir.join("root.pem")).expect("copy ca cert");
+
+    let mut config = test_config(cert.clone(), key.clone());
+    config.observability.control_api.enabled = true;
+    config
+        .upstream
+        .get_mut("api")
+        .expect("api upstream")
+        .backends[0]
+        .address = "https://127.0.0.1:7001".to_string();
+    config.upstream.get_mut("api").expect("api upstream").tls = Some(UpstreamTls {
+        verify_certificates: true,
+        strict_sni: true,
+        ca_file: Some(cert.clone()),
+        ca_dir: Some(ca_dir.to_string_lossy().to_string()),
+        client_certificate: Some(cert),
+        client_certificate_ref: None,
+        client_key: Some(key),
+        client_key_ref: None,
+    });
+    config.secrets.providers.insert(
+        "files".to_string(),
+        SecretProvider::File {
+            base_dir: Some(dir.path().join("secrets").to_string_lossy().to_string()),
+        },
+    );
+    config.secrets.default_provider = Some("files".to_string());
+
+    let state = control_api_state_with_runtime_bundle(&config, &config);
+    let payload = json_body(QUICListener::render_control_api_runtime_snapshot(&state)).await;
+
+    let upstream_tls = &payload["tls"]["upstreams"]["api"];
+    assert_eq!(upstream_tls["custom_ca_file_configured"], true);
+    assert_eq!(upstream_tls["custom_ca_dir_configured"], true);
+    assert!(
+        upstream_tls.get("ca_file").is_none(),
+        "viewer payload must not expose CA file path surrogates"
+    );
+    assert!(
+        upstream_tls.get("ca_dir").is_none(),
+        "viewer payload must not expose CA directory path surrogates"
+    );
+    assert!(
+        upstream_tls.get("ca_file_fingerprint").is_none(),
+        "viewer payload must not expose CA fingerprint surrogates"
+    );
+    assert!(
+        upstream_tls.get("ca_dir_fingerprint").is_none(),
+        "viewer payload must not expose CA fingerprint surrogates"
+    );
+    assert!(
+        upstream_tls["client_certificate"]
+            .get("reference")
+            .is_none(),
+        "viewer payload must not expose secret references"
+    );
+    assert!(
+        upstream_tls["client_certificate"]
+            .get("fingerprint")
+            .is_none(),
+        "viewer payload must not expose secret fingerprints"
+    );
+    assert_eq!(upstream_tls["client_certificate"]["source_kind"], "file");
+
+    let provider = payload["secrets"]["providers"]
+        .as_array()
+        .expect("providers array")
+        .iter()
+        .find(|provider| provider["provider"] == "files")
+        .expect("files provider");
+    assert_eq!(provider["base_dir_configured"], true);
+    assert!(
+        provider.get("base_dir").is_none(),
+        "viewer payload must not expose secret-provider base_dir"
+    );
+
+    let material = payload["secrets"]["material"]
+        .as_array()
+        .expect("material array");
+    assert!(
+        material
+            .iter()
+            .all(|entry| entry.get("reference").is_none()),
+        "viewer payload must not expose secret references"
+    );
+    assert!(
+        material
+            .iter()
+            .all(|entry| entry.get("fingerprint").is_none()),
+        "viewer payload must not expose secret fingerprints"
+    );
 }
 
 #[test]
@@ -1959,7 +2157,11 @@ async fn control_api_snapshot_read_emits_audit_event() {
         None,
     );
 
-    let events = read_audit_events(&audit_path);
+    let events = wait_for_audit_event(&audit_path, |event| {
+        event["event_type"] == "runtime_snapshot"
+            && event["action"] == "runtime_snapshot.read"
+            && event["result"] == "success"
+    });
     assert!(events.iter().any(|event| {
         event["event_type"] == "runtime_snapshot"
             && event["action"] == "runtime_snapshot.read"
@@ -2051,6 +2253,63 @@ async fn control_api_restart_emits_attempt_and_result_audit_events() {
         events
             .iter()
             .any(|event| event["action"] == "runtime_restart.result")
+    );
+}
+
+#[tokio::test]
+async fn control_api_restart_keeps_admin_action_available_when_audit_sink_fails() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+    let audit_sink_path = dir.path().join("audit-sink-dir");
+    std::fs::create_dir_all(&audit_sink_path).expect("create audit sink dir");
+
+    let mut config = test_config(cert, key);
+    config.observability.control_api.auth_token = None;
+    config.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
+        token: "admin-token".to_string(),
+        token_ref: None,
+        role: ControlApiRole::Admin,
+        actor_id: Some("admin".to_string()),
+    }];
+    config.resilience.watchdog.enabled = true;
+    let state = audit_enabled_control_api_state(config, &config_path, &audit_sink_path);
+
+    let metrics = state.current_service_state().metrics();
+    let response = QUICListener::handle_control_api_restart(
+        &state,
+        Some(super::admin_identity::AdminIdentity {
+            actor_id: Some("admin".to_string()),
+            authn_mechanisms: vec![super::admin_identity::AdminAuthnMechanism::BearerToken],
+            roles: vec![super::admin_identity::AdminRole::Admin],
+            peer_addr: None,
+            mtls_subject: None,
+            mtls_san: Vec::new(),
+        }),
+        None,
+    );
+
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let payload = json_body(response).await;
+    assert_eq!(payload["accepted"], true);
+
+    for _ in 0..50 {
+        if metrics
+            .control_api_audit_write_failures
+            .load(std::sync::atomic::Ordering::Relaxed)
+            > 0
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    assert!(
+        metrics
+            .control_api_audit_write_failures
+            .load(std::sync::atomic::Ordering::Relaxed)
+            > 0,
+        "audit sink write/open failures must be observable even when admin actions succeed"
     );
 }
 

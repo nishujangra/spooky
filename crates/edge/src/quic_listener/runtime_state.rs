@@ -71,6 +71,7 @@ impl ControlPlaneRuntimeView {
                 .map(|listener| crate::quic_listener::QUICListener::listener_label(&listener)),
             control_api_security: Arc::new(ControlApiSecurityPolicy::from_config(
                 &runtime_config.observability.control_api,
+                Arc::clone(&shared.metrics),
             )),
         }
     }
@@ -96,6 +97,7 @@ impl ControlPlaneRuntimeView {
                 .map(|listener| crate::quic_listener::QUICListener::listener_label(&listener)),
             control_api_security: Arc::new(ControlApiSecurityPolicy::from_config(
                 &view.runtime_config.observability.control_api,
+                Arc::clone(&view.shared.metrics),
             )),
         }
     }

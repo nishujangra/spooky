@@ -1,6 +1,6 @@
 use std::{
     fmt, fs,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -12,6 +12,8 @@ use super::RuntimeConfigError;
 use crate::config::{
     Config, ControlApiBearerToken, ExternalAuth, SecretProvider, SecretRef, Secrets,
 };
+
+const MAX_FILE_BACKED_SECRET_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeSecretSourceKind {
@@ -37,7 +39,10 @@ pub enum RuntimeSecretResolutionErrorKind {
     FileNotFound,
     PermissionDenied,
     NotAFile,
+    InvalidBaseDirectory,
+    PathOutsideBaseDir,
     EmptySecret,
+    SecretTooLarge,
     Io,
     InvalidUtf8,
     MalformedPemCertificate,
@@ -54,7 +59,10 @@ impl RuntimeSecretResolutionErrorKind {
             Self::FileNotFound => "file_not_found",
             Self::PermissionDenied => "permission_denied",
             Self::NotAFile => "not_a_file",
+            Self::InvalidBaseDirectory => "invalid_base_directory",
+            Self::PathOutsideBaseDir => "path_outside_base_dir",
             Self::EmptySecret => "empty_secret",
+            Self::SecretTooLarge => "secret_too_large",
             Self::Io => "io_error",
             Self::InvalidUtf8 => "invalid_utf8",
             Self::MalformedPemCertificate => "malformed_pem_certificate",
@@ -271,15 +279,62 @@ impl FilesystemSecretProvider {
         Self { base_dir }
     }
 
-    fn resolve_path(&self, raw_path: &str) -> PathBuf {
-        let candidate = Path::new(raw_path);
-        if candidate.is_absolute() {
-            candidate.to_path_buf()
-        } else if let Some(base_dir) = &self.base_dir {
-            base_dir.join(candidate)
-        } else {
-            candidate.to_path_buf()
+    fn canonical_base_dir(
+        &self,
+        field_name: &str,
+    ) -> Result<Option<PathBuf>, RuntimeSecretResolutionError> {
+        let Some(base_dir) = self.base_dir.as_ref() else {
+            return Ok(None);
+        };
+
+        let canonical_base_dir =
+            fs::canonicalize(base_dir).map_err(|err| map_io_error(field_name, err.kind()))?;
+        let metadata = fs::metadata(&canonical_base_dir)
+            .map_err(|err| map_io_error(field_name, err.kind()))?;
+        if !metadata.is_dir() {
+            return Err(RuntimeSecretResolutionError::new(
+                field_name,
+                Some(RuntimeSecretSourceKind::File),
+                RuntimeSecretResolutionErrorKind::InvalidBaseDirectory,
+            ));
         }
+
+        Ok(Some(canonical_base_dir))
+    }
+
+    fn resolve_path(
+        &self,
+        raw_path: &str,
+        field_name: &str,
+    ) -> Result<PathBuf, RuntimeSecretResolutionError> {
+        let candidate = Path::new(raw_path);
+        let Some(canonical_base_dir) = self.canonical_base_dir(field_name)? else {
+            return Ok(candidate.to_path_buf());
+        };
+
+        if candidate.is_absolute()
+            || candidate
+                .components()
+                .any(|component| matches!(component, Component::ParentDir | Component::Prefix(_)))
+        {
+            return Err(RuntimeSecretResolutionError::new(
+                field_name,
+                Some(RuntimeSecretSourceKind::File),
+                RuntimeSecretResolutionErrorKind::PathOutsideBaseDir,
+            ));
+        }
+
+        let canonical_path = fs::canonicalize(canonical_base_dir.join(candidate))
+            .map_err(|err| map_io_error(field_name, err.kind()))?;
+        if !canonical_path.starts_with(&canonical_base_dir) {
+            return Err(RuntimeSecretResolutionError::new(
+                field_name,
+                Some(RuntimeSecretSourceKind::File),
+                RuntimeSecretResolutionErrorKind::PathOutsideBaseDir,
+            ));
+        }
+
+        Ok(canonical_path)
     }
 }
 
@@ -311,7 +366,7 @@ impl RuntimeSecretProvider for FilesystemSecretProvider {
                 RuntimeSecretResolutionErrorKind::MalformedReference,
             ));
         }
-        let resolved_path = self.resolve_path(path);
+        let resolved_path = self.resolve_path(path, field_name)?;
         let Some(resolved_path) = resolved_path.to_str() else {
             return Err(RuntimeSecretResolutionError::new(
                 field_name,
@@ -554,6 +609,13 @@ fn resolve_file_bytes(
             RuntimeSecretResolutionErrorKind::NotAFile,
         ));
     }
+    if metadata.len() > MAX_FILE_BACKED_SECRET_BYTES {
+        return Err(RuntimeSecretResolutionError::new(
+            field_name,
+            Some(RuntimeSecretSourceKind::File),
+            RuntimeSecretResolutionErrorKind::SecretTooLarge,
+        ));
+    }
 
     let bytes = fs::read(trimmed).map_err(|err| map_io_error(field_name, err.kind()))?;
     if bytes.is_empty() {
@@ -599,6 +661,8 @@ fn runtime_secret_config_error(err: RuntimeSecretResolutionError) -> RuntimeConf
 #[cfg(test)]
 mod tests {
     use std::os::unix::fs::PermissionsExt;
+    #[cfg(unix)]
+    use std::os::unix::fs::symlink;
 
     use tempfile::tempdir;
 
@@ -697,6 +761,22 @@ mod tests {
     }
 
     #[test]
+    fn file_provider_rejects_oversized_file() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("secret.txt");
+        fs::write(
+            &path,
+            vec![b'x'; (MAX_FILE_BACKED_SECRET_BYTES as usize) + 1],
+        )
+        .expect("write");
+
+        let err = resolve_file_secret_path(path.to_string_lossy().as_ref(), "auth.jwt.secret_ref")
+            .expect_err("oversized file");
+
+        assert_eq!(err.kind(), RuntimeSecretResolutionErrorKind::SecretTooLarge);
+    }
+
+    #[test]
     fn pem_helpers_reject_malformed_material() {
         let secret = resolved_secret(RuntimeSecretSourceKind::Literal, b"not-pem".to_vec());
         assert_eq!(
@@ -731,6 +811,111 @@ mod tests {
         assert_ne!(
             first.metadata().fingerprint_sha256,
             second.metadata().fingerprint_sha256
+        );
+    }
+
+    #[test]
+    fn file_provider_rejects_absolute_path_when_base_dir_is_configured() {
+        let dir = tempdir().expect("tempdir");
+        let secrets_dir = dir.path().join("secrets");
+        fs::create_dir_all(&secrets_dir).expect("create secrets dir");
+
+        let resolver = RuntimeSecretResolver::from_secrets_config(&Secrets {
+            default_provider: Some("local".to_string()),
+            providers: std::iter::once((
+                "local".to_string(),
+                SecretProvider::File {
+                    base_dir: Some(secrets_dir.to_string_lossy().to_string()),
+                },
+            ))
+            .collect(),
+        });
+
+        let absolute = dir.path().join("outside.txt");
+        fs::write(&absolute, b"outside-secret").expect("write outside secret");
+
+        let err = resolver
+            .resolve(
+                &SecretRef {
+                    reference: format!("file://{}", absolute.to_string_lossy()),
+                },
+                "auth.jwt.secret_ref",
+            )
+            .expect_err("absolute path must be rejected");
+
+        assert_eq!(
+            err.kind(),
+            RuntimeSecretResolutionErrorKind::PathOutsideBaseDir
+        );
+    }
+
+    #[test]
+    fn file_provider_rejects_parent_dir_escape_when_base_dir_is_configured() {
+        let dir = tempdir().expect("tempdir");
+        let secrets_dir = dir.path().join("secrets");
+        fs::create_dir_all(&secrets_dir).expect("create secrets dir");
+        fs::write(dir.path().join("outside.txt"), b"outside-secret").expect("write outside secret");
+
+        let resolver = RuntimeSecretResolver::from_secrets_config(&Secrets {
+            default_provider: Some("local".to_string()),
+            providers: std::iter::once((
+                "local".to_string(),
+                SecretProvider::File {
+                    base_dir: Some(secrets_dir.to_string_lossy().to_string()),
+                },
+            ))
+            .collect(),
+        });
+
+        let err = resolver
+            .resolve(
+                &SecretRef {
+                    reference: "file://../outside.txt".to_string(),
+                },
+                "auth.jwt.secret_ref",
+            )
+            .expect_err("parent-dir escape must be rejected");
+
+        assert_eq!(
+            err.kind(),
+            RuntimeSecretResolutionErrorKind::PathOutsideBaseDir
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn file_provider_rejects_symlink_escape_when_base_dir_is_configured() {
+        let dir = tempdir().expect("tempdir");
+        let secrets_dir = dir.path().join("secrets");
+        fs::create_dir_all(&secrets_dir).expect("create secrets dir");
+
+        let outside = dir.path().join("outside.txt");
+        fs::write(&outside, b"outside-secret").expect("write outside secret");
+        symlink(&outside, secrets_dir.join("linked.txt")).expect("create symlink");
+
+        let resolver = RuntimeSecretResolver::from_secrets_config(&Secrets {
+            default_provider: Some("local".to_string()),
+            providers: std::iter::once((
+                "local".to_string(),
+                SecretProvider::File {
+                    base_dir: Some(secrets_dir.to_string_lossy().to_string()),
+                },
+            ))
+            .collect(),
+        });
+
+        let err = resolver
+            .resolve(
+                &SecretRef {
+                    reference: "file://linked.txt".to_string(),
+                },
+                "auth.jwt.secret_ref",
+            )
+            .expect_err("symlink escape must be rejected");
+
+        assert_eq!(
+            err.kind(),
+            RuntimeSecretResolutionErrorKind::PathOutsideBaseDir
         );
     }
 }

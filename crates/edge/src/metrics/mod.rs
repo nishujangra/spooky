@@ -76,6 +76,8 @@ pub struct Metrics {
     pub response_prebuffer_limit_rejects: AtomicU64,
     pub scid_rotations: AtomicU64,
     pub control_api_connection_limit_drops: AtomicU64,
+    pub control_api_audit_event_drops: AtomicU64,
+    pub control_api_audit_write_failures: AtomicU64,
     pub watchdog_restart_requests: AtomicU64,
     pub watchdog_restart_hooks: AtomicU64,
     pub watchdog_degraded_windows: AtomicU64,
@@ -128,6 +130,8 @@ pub struct Metrics {
     backend_rotation_state: RwLock<HashMap<String, BackendRotationState>>,
     backend_connect_attempts: RwLock<HashMap<BackendConnectAttemptKey, u64>>,
     request_result_metrics: RwLock<RequestResultMetricsStore>,
+    request_result_metrics_version: AtomicU64,
+    request_result_metrics_cache: RwLock<RequestResultMetricsSnapshotCache>,
     quota_policy_outcomes: RwLock<HashMap<QuotaPolicyOutcomeKey, u64>>,
     quota_backend_health: RwLock<HashMap<QuotaBackendHealthKey, u64>>,
     downstream_tls_handshake_failures: RwLock<HashMap<DownstreamTlsHandshakeFailureKey, u64>>,
@@ -209,6 +213,65 @@ struct RequestResultMetricsStore {
     upstream_request_counts: HashMap<UpstreamRequestCountKey, u64>,
     backend_request_counts: HashMap<BackendRequestCountKey, u64>,
     upstream_request_latency: HashMap<UpstreamRequestLatencyKey, RequestLatencyStats>,
+}
+
+#[derive(Default, Clone)]
+pub(crate) struct RequestResultMetricsSnapshot {
+    pub(crate) upstream_request_counts: Vec<(UpstreamRequestCountKey, u64)>,
+    pub(crate) backend_request_counts: Vec<(BackendRequestCountKey, u64)>,
+    pub(crate) upstream_request_latency: Vec<(UpstreamRequestLatencyKey, RequestLatencyStats)>,
+}
+
+#[derive(Default, Clone)]
+struct RequestResultMetricsSnapshotCache {
+    version: u64,
+    snapshot: RequestResultMetricsSnapshot,
+}
+
+impl RequestResultMetricsSnapshot {
+    fn from_store(store: &RequestResultMetricsStore) -> Self {
+        let mut upstream_request_counts = store
+            .upstream_request_counts
+            .iter()
+            .map(|(key, value)| (key.clone(), *value))
+            .collect::<Vec<_>>();
+        upstream_request_counts.sort_by(|(left, _), (right, _)| {
+            left.upstream
+                .cmp(&right.upstream)
+                .then_with(|| left.status_class.cmp(right.status_class))
+                .then_with(|| left.outcome.cmp(right.outcome))
+        });
+
+        let mut backend_request_counts = store
+            .backend_request_counts
+            .iter()
+            .map(|(key, value)| (key.clone(), *value))
+            .collect::<Vec<_>>();
+        backend_request_counts.sort_by(|(left, _), (right, _)| {
+            left.upstream
+                .cmp(&right.upstream)
+                .then_with(|| left.backend.cmp(&right.backend))
+                .then_with(|| left.status_class.cmp(right.status_class))
+                .then_with(|| left.outcome.cmp(right.outcome))
+        });
+
+        let mut upstream_request_latency = store
+            .upstream_request_latency
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect::<Vec<_>>();
+        upstream_request_latency.sort_by(|(left, _), (right, _)| {
+            left.upstream
+                .cmp(&right.upstream)
+                .then_with(|| left.outcome.cmp(right.outcome))
+        });
+
+        Self {
+            upstream_request_counts,
+            backend_request_counts,
+            upstream_request_latency,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -614,6 +677,8 @@ impl Metrics {
             response_prebuffer_limit_rejects: AtomicU64::new(0),
             scid_rotations: AtomicU64::new(0),
             control_api_connection_limit_drops: AtomicU64::new(0),
+            control_api_audit_event_drops: AtomicU64::new(0),
+            control_api_audit_write_failures: AtomicU64::new(0),
             watchdog_restart_requests: AtomicU64::new(0),
             watchdog_restart_hooks: AtomicU64::new(0),
             watchdog_degraded_windows: AtomicU64::new(0),
@@ -666,6 +731,8 @@ impl Metrics {
             backend_rotation_state: RwLock::new(HashMap::new()),
             backend_connect_attempts: RwLock::new(HashMap::new()),
             request_result_metrics: RwLock::new(RequestResultMetricsStore::default()),
+            request_result_metrics_version: AtomicU64::new(0),
+            request_result_metrics_cache: RwLock::new(RequestResultMetricsSnapshotCache::default()),
             quota_policy_outcomes: RwLock::new(HashMap::new()),
             quota_backend_health: RwLock::new(HashMap::new()),
             downstream_tls_handshake_failures: RwLock::new(HashMap::new()),
@@ -1156,6 +1223,8 @@ impl Metrics {
             stats.count = stats.count.saturating_add(1);
             stats.latency_ms_sum = stats.latency_ms_sum.saturating_add(latency_ms);
             stats.latency_buckets[bucket] = stats.latency_buckets[bucket].saturating_add(1);
+            self.request_result_metrics_version
+                .fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -1259,66 +1328,46 @@ impl Metrics {
             .unwrap_or_default()
     }
 
+    pub(crate) fn snapshot_request_result_metrics(&self) -> RequestResultMetricsSnapshot {
+        let version = self.request_result_metrics_version.load(Ordering::Relaxed);
+        if let Ok(cache) = self.request_result_metrics_cache.read()
+            && cache.version == version
+        {
+            return cache.snapshot.clone();
+        }
+
+        let snapshot = self
+            .request_result_metrics
+            .read()
+            .map(|guard| RequestResultMetricsSnapshot::from_store(&guard))
+            .unwrap_or_default();
+
+        if let Ok(mut cache) = self.request_result_metrics_cache.write() {
+            cache.version = version;
+            cache.snapshot = snapshot.clone();
+        }
+
+        snapshot
+    }
+
+    #[cfg(test)]
     pub(crate) fn snapshot_upstream_request_counts(&self) -> Vec<(UpstreamRequestCountKey, u64)> {
-        self.request_result_metrics
-            .read()
-            .map(|guard| {
-                let mut entries = guard
-                    .upstream_request_counts
-                    .iter()
-                    .map(|(key, value)| (key.clone(), *value))
-                    .collect::<Vec<_>>();
-                entries.sort_by(|(left, _), (right, _)| {
-                    left.upstream
-                        .cmp(&right.upstream)
-                        .then_with(|| left.status_class.cmp(right.status_class))
-                        .then_with(|| left.outcome.cmp(right.outcome))
-                });
-                entries
-            })
-            .unwrap_or_default()
+        self.snapshot_request_result_metrics()
+            .upstream_request_counts
     }
 
+    #[cfg(test)]
     pub(crate) fn snapshot_backend_request_counts(&self) -> Vec<(BackendRequestCountKey, u64)> {
-        self.request_result_metrics
-            .read()
-            .map(|guard| {
-                let mut entries = guard
-                    .backend_request_counts
-                    .iter()
-                    .map(|(key, value)| (key.clone(), *value))
-                    .collect::<Vec<_>>();
-                entries.sort_by(|(left, _), (right, _)| {
-                    left.upstream
-                        .cmp(&right.upstream)
-                        .then_with(|| left.backend.cmp(&right.backend))
-                        .then_with(|| left.status_class.cmp(right.status_class))
-                        .then_with(|| left.outcome.cmp(right.outcome))
-                });
-                entries
-            })
-            .unwrap_or_default()
+        self.snapshot_request_result_metrics()
+            .backend_request_counts
     }
 
+    #[cfg(test)]
     pub(crate) fn snapshot_upstream_request_latency(
         &self,
     ) -> Vec<(UpstreamRequestLatencyKey, RequestLatencyStats)> {
-        self.request_result_metrics
-            .read()
-            .map(|guard| {
-                let mut entries = guard
-                    .upstream_request_latency
-                    .iter()
-                    .map(|(key, value)| (key.clone(), value.clone()))
-                    .collect::<Vec<_>>();
-                entries.sort_by(|(left, _), (right, _)| {
-                    left.upstream
-                        .cmp(&right.upstream)
-                        .then_with(|| left.outcome.cmp(right.outcome))
-                });
-                entries
-            })
-            .unwrap_or_default()
+        self.snapshot_request_result_metrics()
+            .upstream_request_latency
     }
 
     pub(crate) fn snapshot_downstream_tls_handshake_failures(
@@ -1621,6 +1670,16 @@ impl Metrics {
 
     pub fn inc_control_api_connection_limit_drop(&self) {
         self.control_api_connection_limit_drops
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn inc_control_api_audit_event_drop(&self) {
+        self.control_api_audit_event_drops
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn inc_control_api_audit_write_failure(&self) {
+        self.control_api_audit_write_failures
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -2161,5 +2220,111 @@ mod tests {
         assert!(rendered.contains(
             "impulse_control_plane_cert_reload_total{result=\"success\",reason=\"cert_reload_applied\"} 1"
         ));
+    }
+
+    #[test]
+    fn request_result_snapshots_stay_sorted_and_refresh_after_updates() {
+        let metrics = Metrics::default();
+        metrics.record_request_result(
+            "z-upstream",
+            Some("backend-z"),
+            Some(503),
+            RouteOutcome::Failure,
+            Duration::from_millis(42),
+        );
+        metrics.record_request_result(
+            "a-upstream",
+            Some("backend-a"),
+            Some(200),
+            RouteOutcome::Success,
+            Duration::from_millis(12),
+        );
+
+        let first_render = metrics.render_prometheus();
+        let a_idx = first_render
+            .find("impulse_upstream_requests_total{upstream=\"a-upstream\"")
+            .expect("a-upstream series");
+        let z_idx = first_render
+            .find("impulse_upstream_requests_total{upstream=\"z-upstream\"")
+            .expect("z-upstream series");
+        assert!(a_idx < z_idx, "request-result series should stay sorted");
+
+        metrics.record_request_result(
+            "a-upstream",
+            Some("backend-a"),
+            Some(200),
+            RouteOutcome::Success,
+            Duration::from_millis(9),
+        );
+
+        let second_render = metrics.render_prometheus();
+        assert!(second_render.contains(
+            "impulse_upstream_requests_total{upstream=\"a-upstream\",status_class=\"2xx\",outcome=\"success\"} 2"
+        ));
+        assert!(second_render.contains(
+            "impulse_backend_requests_total{upstream=\"a-upstream\",backend=\"backend-a\",status_class=\"2xx\",outcome=\"success\"} 2"
+        ));
+    }
+
+    #[test]
+    fn request_result_snapshot_cache_refreshes_only_after_metric_updates() {
+        let metrics = Metrics::default();
+        metrics.record_request_result(
+            "api",
+            Some("backend-a"),
+            Some(200),
+            RouteOutcome::Success,
+            Duration::from_millis(10),
+        );
+
+        let first = metrics.snapshot_request_result_metrics();
+        let second = metrics.snapshot_request_result_metrics();
+        assert_eq!(
+            first.upstream_request_counts,
+            second.upstream_request_counts
+        );
+        assert_eq!(first.backend_request_counts, second.backend_request_counts);
+        assert_eq!(
+            first.upstream_request_latency.len(),
+            second.upstream_request_latency.len()
+        );
+        assert_eq!(
+            first.upstream_request_latency[0].0.upstream,
+            second.upstream_request_latency[0].0.upstream
+        );
+        assert_eq!(
+            first.upstream_request_latency[0].0.outcome,
+            second.upstream_request_latency[0].0.outcome
+        );
+        assert_eq!(
+            first.upstream_request_latency[0].1.count,
+            second.upstream_request_latency[0].1.count
+        );
+        assert_eq!(
+            first.upstream_request_latency[0].1.latency_ms_sum,
+            second.upstream_request_latency[0].1.latency_ms_sum
+        );
+
+        metrics.record_request_result(
+            "api",
+            Some("backend-a"),
+            Some(503),
+            RouteOutcome::Failure,
+            Duration::from_millis(25),
+        );
+
+        let refreshed = metrics.snapshot_request_result_metrics();
+        assert_eq!(refreshed.upstream_request_counts.len(), 2);
+        assert!(
+            refreshed
+                .upstream_request_counts
+                .iter()
+                .any(|(key, count)| {
+                    key.upstream == "api"
+                        && key.status_class == "5xx"
+                        && key.outcome == "failure"
+                        && *count == 1
+                })
+        );
     }
 }

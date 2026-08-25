@@ -4,6 +4,7 @@ use crate::runtime::activation::{RuntimeOperationOutcomeReason, RuntimeRejection
 impl Metrics {
     pub fn render_prometheus(&self) -> String {
         let mut out = String::with_capacity(8 * 1024);
+        let request_result_metrics = self.snapshot_request_result_metrics();
         out.push_str("# HELP impulse_requests_total Total requests seen by impulse.\n");
         out.push_str("# TYPE impulse_requests_total counter\n");
         out.push_str(&format!(
@@ -566,6 +567,25 @@ impl Metrics {
                 .load(Ordering::Relaxed)
         ));
 
+        out.push_str(
+            "# HELP impulse_control_api_audit_event_drops Total control API admin audit records dropped before persistence.\n",
+        );
+        out.push_str("# TYPE impulse_control_api_audit_event_drops counter\n");
+        out.push_str(&format!(
+            "impulse_control_api_audit_event_drops {}\n",
+            self.control_api_audit_event_drops.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP impulse_control_api_audit_write_failures Total control API admin audit sink open or write failures.\n",
+        );
+        out.push_str("# TYPE impulse_control_api_audit_write_failures counter\n");
+        out.push_str(&format!(
+            "impulse_control_api_audit_write_failures {}\n",
+            self.control_api_audit_write_failures
+                .load(Ordering::Relaxed)
+        ));
+
         out.push_str("# HELP impulse_watchdog_restart_requests Total watchdog restart requests.\n");
         out.push_str("# TYPE impulse_watchdog_restart_requests counter\n");
         out.push_str(&format!(
@@ -1022,7 +1042,7 @@ impl Metrics {
             "# HELP impulse_upstream_requests_total Total completed requests grouped by upstream, status class, and outcome.\n",
         );
         out.push_str("# TYPE impulse_upstream_requests_total counter\n");
-        for (key, count) in self.snapshot_upstream_request_counts() {
+        for (key, count) in &request_result_metrics.upstream_request_counts {
             out.push_str(&format!(
                 "impulse_upstream_requests_total{{upstream=\"{}\",status_class=\"{}\",outcome=\"{}\"}} {}\n",
                 escape_prometheus_label(&key.upstream),
@@ -1035,7 +1055,7 @@ impl Metrics {
             "# HELP impulse_backend_requests_total Total completed requests grouped by upstream, backend, status class, and outcome.\n",
         );
         out.push_str("# TYPE impulse_backend_requests_total counter\n");
-        for (key, count) in self.snapshot_backend_request_counts() {
+        for (key, count) in &request_result_metrics.backend_request_counts {
             out.push_str(&format!(
                 "impulse_backend_requests_total{{upstream=\"{}\",backend=\"{}\",status_class=\"{}\",outcome=\"{}\"}} {}\n",
                 escape_prometheus_label(&key.upstream),
@@ -1049,7 +1069,7 @@ impl Metrics {
             "# HELP impulse_upstream_request_latency_ms Upstream request latency histogram grouped by upstream and final outcome.\n",
         );
         out.push_str("# TYPE impulse_upstream_request_latency_ms histogram\n");
-        for (key, stats) in self.snapshot_upstream_request_latency() {
+        for (key, stats) in &request_result_metrics.upstream_request_latency {
             let upstream = escape_prometheus_label(&key.upstream);
             let outcome = escape_prometheus_label(key.outcome);
             let mut cumulative = 0u64;

@@ -25,6 +25,16 @@ impl From<impulse_config::config::ControlApiRole> for AdminRole {
     }
 }
 
+impl AdminRole {
+    fn most_privileged(roles: &[Self]) -> Option<Self> {
+        roles.iter().copied().max()
+    }
+
+    fn least_privileged(left: Self, right: Self) -> Self {
+        left.min(right)
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(super) enum AdminAuthnMechanism {
@@ -242,9 +252,11 @@ impl QUICListener {
         let mut roles = BTreeSet::new();
         let mut mechanisms = Vec::new();
         let mut actor_id = None;
+        let mut effective_role_limit = None;
         if let Some(token) = token_match {
             mechanisms.push(AdminAuthnMechanism::BearerToken);
             roles.insert(token.role);
+            effective_role_limit = Some(token.role);
             actor_id = token.actor_id.or(actor_id);
         }
         if let Some(mtls) = mtls_identity.as_ref() {
@@ -252,14 +264,26 @@ impl QUICListener {
             for role in &mtls.roles {
                 roles.insert(*role);
             }
+            if let Some(mtls_role_limit) = AdminRole::most_privileged(&mtls.roles) {
+                effective_role_limit = Some(
+                    effective_role_limit
+                        .map(|current| AdminRole::least_privileged(current, mtls_role_limit))
+                        .unwrap_or(mtls_role_limit),
+                );
+            }
             actor_id =
                 actor_id.or_else(|| Self::actor_id_from_mtls_identity(mtls, identity_source));
         }
 
+        let roles = match effective_role_limit {
+            Some(role_limit) if mechanisms.len() > 1 => vec![role_limit],
+            _ => roles.into_iter().collect(),
+        };
+
         Some(AdminIdentity {
             actor_id,
             authn_mechanisms: mechanisms,
-            roles: roles.into_iter().collect(),
+            roles,
             peer_addr: request_ctx.as_ref().map(|ctx| ctx.peer_addr),
             mtls_subject: mtls_identity
                 .as_ref()
