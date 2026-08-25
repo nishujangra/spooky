@@ -764,7 +764,11 @@ mod tests {
     fn file_provider_rejects_oversized_file() {
         let dir = tempdir().expect("tempdir");
         let path = dir.path().join("secret.txt");
-        fs::write(&path, vec![b'x'; (MAX_FILE_BACKED_SECRET_BYTES as usize) + 1]).expect("write");
+        fs::write(
+            &path,
+            vec![b'x'; (MAX_FILE_BACKED_SECRET_BYTES as usize) + 1],
+        )
+        .expect("write");
 
         let err = resolve_file_secret_path(path.to_string_lossy().as_ref(), "auth.jwt.secret_ref")
             .expect_err("oversized file");

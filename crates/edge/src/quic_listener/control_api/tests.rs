@@ -1566,8 +1566,9 @@ fn control_api_dual_auth_identity_uses_least_privileged_common_role() {
         role: super::admin_identity::AdminRole::Viewer,
     };
 
-    let identity = QUICListener::build_admin_identity(Some(request_context), Some(token_match), None)
-        .expect("dual auth identity");
+    let identity =
+        QUICListener::build_admin_identity(Some(request_context), Some(token_match), None)
+            .expect("dual auth identity");
 
     assert_eq!(
         identity.roles,
@@ -1603,8 +1604,9 @@ fn control_api_dual_auth_identity_keeps_token_role_when_mtls_has_no_role_mapping
         role: super::admin_identity::AdminRole::Operator,
     };
 
-    let identity = QUICListener::build_admin_identity(Some(request_context), Some(token_match), None)
-        .expect("dual auth identity without mtls role");
+    let identity =
+        QUICListener::build_admin_identity(Some(request_context), Some(token_match), None)
+            .expect("dual auth identity without mtls role");
 
     assert_eq!(
         identity.roles,
@@ -1887,11 +1889,15 @@ async fn control_api_runtime_snapshot_coarsens_sensitive_tls_and_secret_details(
         "viewer payload must not expose CA fingerprint surrogates"
     );
     assert!(
-        upstream_tls["client_certificate"].get("reference").is_none(),
+        upstream_tls["client_certificate"]
+            .get("reference")
+            .is_none(),
         "viewer payload must not expose secret references"
     );
     assert!(
-        upstream_tls["client_certificate"].get("fingerprint").is_none(),
+        upstream_tls["client_certificate"]
+            .get("fingerprint")
+            .is_none(),
         "viewer payload must not expose secret fingerprints"
     );
     assert_eq!(upstream_tls["client_certificate"]["source_kind"], "file");
@@ -1912,11 +1918,15 @@ async fn control_api_runtime_snapshot_coarsens_sensitive_tls_and_secret_details(
         .as_array()
         .expect("material array");
     assert!(
-        material.iter().all(|entry| entry.get("reference").is_none()),
+        material
+            .iter()
+            .all(|entry| entry.get("reference").is_none()),
         "viewer payload must not expose secret references"
     );
     assert!(
-        material.iter().all(|entry| entry.get("fingerprint").is_none()),
+        material
+            .iter()
+            .all(|entry| entry.get("fingerprint").is_none()),
         "viewer payload must not expose secret fingerprints"
     );
 }

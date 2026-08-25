@@ -42,7 +42,9 @@ impl ControlApiAdminAuditEmitter {
     ) -> Self {
         let sink = match config.audit.sink {
             ControlApiAuditSink::Log => ControlApiAdminAuditTarget::Log,
-            ControlApiAuditSink::File => ControlApiAdminAuditTarget::File(config.audit.file_path.clone()),
+            ControlApiAuditSink::File => {
+                ControlApiAdminAuditTarget::File(config.audit.file_path.clone())
+            }
         };
         Self {
             enabled: config.audit.enabled,
@@ -76,9 +78,7 @@ impl fmt::Debug for ControlApiAdminAuditEmitter {
 
 impl PartialEq for ControlApiAdminAuditEmitter {
     fn eq(&self, other: &Self) -> bool {
-        self.enabled == other.enabled
-            && self.format == other.format
-            && self.sink == other.sink
+        self.enabled == other.enabled && self.format == other.format && self.sink == other.sink
     }
 }
 
@@ -99,13 +99,12 @@ enum ControlApiAdminAuditDelivery {
 impl ControlApiAdminAuditDelivery {
     fn for_target(target: &ControlApiAdminAuditTarget, metrics: Arc<Metrics>) -> Self {
         match target {
-            ControlApiAdminAuditTarget::Log | ControlApiAdminAuditTarget::File(None) => Self::Inline,
-            ControlApiAdminAuditTarget::File(Some(path)) => {
-                Self::BufferedFile(Arc::new(ControlApiBufferedAuditWriter::spawn(
-                    path.clone(),
-                    metrics,
-                )))
+            ControlApiAdminAuditTarget::Log | ControlApiAdminAuditTarget::File(None) => {
+                Self::Inline
             }
+            ControlApiAdminAuditTarget::File(Some(path)) => Self::BufferedFile(Arc::new(
+                ControlApiBufferedAuditWriter::spawn(path.clone(), metrics),
+            )),
         }
     }
 }
@@ -135,8 +134,8 @@ impl ControlApiBufferedAuditWriter {
                         continue;
                     };
 
-                    if let Err(err) = writeln!(open_file, "{}", serialized)
-                        .and_then(|()| open_file.flush())
+                    if let Err(err) =
+                        writeln!(open_file, "{}", serialized).and_then(|()| open_file.flush())
                     {
                         thread_metrics.inc_control_api_audit_write_failure();
                         error!(
@@ -181,7 +180,10 @@ impl ControlApiBufferedAuditWriter {
             Ok(file) => Some(file),
             Err(err) => {
                 metrics.inc_control_api_audit_write_failure();
-                error!("failed to open control API admin audit sink {}: {}", path, err);
+                error!(
+                    "failed to open control API admin audit sink {}: {}",
+                    path, err
+                );
                 None
             }
         }

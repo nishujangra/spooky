@@ -1352,19 +1352,22 @@ impl Metrics {
 
     #[cfg(test)]
     pub(crate) fn snapshot_upstream_request_counts(&self) -> Vec<(UpstreamRequestCountKey, u64)> {
-        self.snapshot_request_result_metrics().upstream_request_counts
+        self.snapshot_request_result_metrics()
+            .upstream_request_counts
     }
 
     #[cfg(test)]
     pub(crate) fn snapshot_backend_request_counts(&self) -> Vec<(BackendRequestCountKey, u64)> {
-        self.snapshot_request_result_metrics().backend_request_counts
+        self.snapshot_request_result_metrics()
+            .backend_request_counts
     }
 
     #[cfg(test)]
     pub(crate) fn snapshot_upstream_request_latency(
         &self,
     ) -> Vec<(UpstreamRequestLatencyKey, RequestLatencyStats)> {
-        self.snapshot_request_result_metrics().upstream_request_latency
+        self.snapshot_request_result_metrics()
+            .upstream_request_latency
     }
 
     pub(crate) fn snapshot_downstream_tls_handshake_failures(
@@ -2276,7 +2279,10 @@ mod tests {
 
         let first = metrics.snapshot_request_result_metrics();
         let second = metrics.snapshot_request_result_metrics();
-        assert_eq!(first.upstream_request_counts, second.upstream_request_counts);
+        assert_eq!(
+            first.upstream_request_counts,
+            second.upstream_request_counts
+        );
         assert_eq!(first.backend_request_counts, second.backend_request_counts);
         assert_eq!(
             first.upstream_request_latency.len(),
@@ -2309,11 +2315,16 @@ mod tests {
 
         let refreshed = metrics.snapshot_request_result_metrics();
         assert_eq!(refreshed.upstream_request_counts.len(), 2);
-        assert!(refreshed.upstream_request_counts.iter().any(|(key, count)| {
-            key.upstream == "api"
-                && key.status_class == "5xx"
-                && key.outcome == "failure"
-                && *count == 1
-        }));
+        assert!(
+            refreshed
+                .upstream_request_counts
+                .iter()
+                .any(|(key, count)| {
+                    key.upstream == "api"
+                        && key.status_class == "5xx"
+                        && key.outcome == "failure"
+                        && *count == 1
+                })
+        );
     }
 }

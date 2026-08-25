@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
-use hyper::body::Body;
 use http_body_util::{BodyExt, Full};
+use hyper::body::Body;
 use serde::{Deserialize, de::DeserializeOwned};
 
 use super::{
@@ -1616,9 +1616,10 @@ fn rollback_error_payload(rollback: &RollbackResult, error: &str) -> serde_json:
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use bytes::Bytes;
     use http_body_util::{BodyExt, Full};
+
+    use super::*;
     use crate::runtime::activation::{
         ActivationRequest, GenerationHistoryEntry, GenerationOperation, GenerationStatus,
         RejectedChange, RejectedChangeKind, ReloadDiff, RollbackRequest,
@@ -1736,11 +1737,10 @@ mod tests {
     async fn control_api_json_body_bounded_rejects_oversized_payload() {
         let oversized = vec![b'a'; MAX_CONTROL_API_JSON_BODY_BYTES + 1];
 
-        let response = QUICListener::collect_control_api_json_body_bounded(Full::new(
-            Bytes::from(oversized),
-        ))
-        .await
-        .expect_err("oversized control-plane JSON body must be rejected");
+        let response =
+            QUICListener::collect_control_api_json_body_bounded(Full::new(Bytes::from(oversized)))
+                .await
+                .expect_err("oversized control-plane JSON body must be rejected");
         let response = *response;
 
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
