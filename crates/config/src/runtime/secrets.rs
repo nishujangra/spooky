@@ -1,7 +1,5 @@
 use std::{
-    fmt,
-    fs::{self, File},
-    io::Read,
+    fmt, fs,
     path::{Component, Path, PathBuf},
     sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
@@ -11,6 +9,7 @@ use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use sha2::{Digest, Sha256};
 
 use super::RuntimeConfigError;
+use crate::bounded_file::{BoundedFileReadError, read_file_with_limit};
 use crate::config::{
     Config, ControlApiBearerToken, ExternalAuth, SecretProvider, SecretRef, Secrets,
 };
@@ -603,39 +602,24 @@ fn resolve_file_bytes(
         ));
     }
 
-    let mut file = File::open(trimmed).map_err(|err| map_io_error(field_name, err.kind()))?;
-    let metadata = file
-        .metadata()
-        .map_err(|err| map_io_error(field_name, err.kind()))?;
-    if !metadata.is_file() {
-        return Err(RuntimeSecretResolutionError::new(
-            field_name,
-            Some(RuntimeSecretSourceKind::File),
-            RuntimeSecretResolutionErrorKind::NotAFile,
-        ));
-    }
-    if metadata.len() > MAX_FILE_BACKED_SECRET_BYTES {
-        return Err(RuntimeSecretResolutionError::new(
-            field_name,
-            Some(RuntimeSecretSourceKind::File),
-            RuntimeSecretResolutionErrorKind::SecretTooLarge,
-        ));
-    }
-
-    let mut bytes = Vec::with_capacity(
-        (MAX_FILE_BACKED_SECRET_BYTES as usize)
-            .min(usize::try_from(metadata.len()).unwrap_or(usize::MAX)),
-    );
-    file.take(MAX_FILE_BACKED_SECRET_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|err| map_io_error(field_name, err.kind()))?;
-    if bytes.len() > MAX_FILE_BACKED_SECRET_BYTES as usize {
-        return Err(RuntimeSecretResolutionError::new(
-            field_name,
-            Some(RuntimeSecretSourceKind::File),
-            RuntimeSecretResolutionErrorKind::SecretTooLarge,
-        ));
-    }
+    let bytes = match read_file_with_limit(trimmed, MAX_FILE_BACKED_SECRET_BYTES) {
+        Ok(bytes) => bytes,
+        Err(BoundedFileReadError::Io(err)) => return Err(map_io_error(field_name, err.kind())),
+        Err(BoundedFileReadError::NotAFile) => {
+            return Err(RuntimeSecretResolutionError::new(
+                field_name,
+                Some(RuntimeSecretSourceKind::File),
+                RuntimeSecretResolutionErrorKind::NotAFile,
+            ));
+        }
+        Err(BoundedFileReadError::TooLarge) => {
+            return Err(RuntimeSecretResolutionError::new(
+                field_name,
+                Some(RuntimeSecretSourceKind::File),
+                RuntimeSecretResolutionErrorKind::SecretTooLarge,
+            ));
+        }
+    };
     if bytes.is_empty() {
         return Err(RuntimeSecretResolutionError::new(
             field_name,
