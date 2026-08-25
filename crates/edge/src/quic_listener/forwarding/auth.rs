@@ -95,7 +95,8 @@ pub(super) fn append_auth_request_headers(
     pending_forward: &PendingForward,
     configured_headers: &[impulse_config::runtime::RuntimeExternalAuthRequestHeader],
 ) {
-    for header in pending_forward.request_headers() {
+    let request_headers = pending_forward.request_headers_read_only();
+    for header in request_headers.iter() {
         if header.name().starts_with(b":") || is_unsafe_forwarded_auth_request_header(header.name())
         {
             continue;
@@ -175,9 +176,9 @@ async fn collect_auth_body(mut body: Incoming) -> Result<Vec<u8>, ProxyError> {
 }
 
 fn authorization_header_from_pending_forward(pending_forward: &PendingForward) -> Option<String> {
-    pending_forward
-        .request_headers()
-        .into_iter()
+    let request_headers = pending_forward.request_headers_read_only();
+    request_headers
+        .iter()
         .find(|header| {
             header
                 .name()
@@ -715,6 +716,27 @@ mod tests {
             "token%20value%2B%2F%3D%3F%26%25"
         );
         assert_eq!(percent_encode_component("\n"), "%0A");
+    }
+
+    #[test]
+    fn authorization_header_lookup_observes_pending_auth_mutations() {
+        let pending_forward = PendingForward {
+            auth_header_mutations: vec![
+                crate::runtime::connection::auth::PendingHeaderMutation::Upsert {
+                    name: http::header::AUTHORIZATION.as_str().as_bytes().to_vec(),
+                    value: b"Bearer refreshed-token".to_vec(),
+                },
+            ],
+            ..PendingForward::sample_for_test(vec![quiche::h3::Header::new(
+                b"authorization",
+                b"Bearer stale-token",
+            )])
+        };
+
+        assert_eq!(
+            authorization_header_from_pending_forward(&pending_forward).as_deref(),
+            Some("Bearer refreshed-token")
+        );
     }
 
     #[test]
