@@ -77,6 +77,13 @@ thread_local! {
     static LAST_VALIDATION_ERROR: RefCell<Option<ValidationError>> = const { RefCell::new(None) };
 }
 
+const VALID_CONTROL_API_IDENTITY_SOURCE_KINDS: &[&str] = &[
+    "mtls_subject_cn",
+    "mtls_san_dns",
+    "mtls_san_uri",
+    "mtls_subject",
+];
+
 fn clear_validation_error() {
     LAST_VALIDATION_ERROR.with(|slot| *slot.borrow_mut() = None);
 }
@@ -269,9 +276,20 @@ fn validate_control_api_authentication(control_api: &ControlApi) -> bool {
     }
 
     if let Some(identity_source) = control_api.auth.identity_source.as_ref() {
-        if identity_source.kind.trim().is_empty() {
+        let kind = identity_source.kind.trim();
+        if kind.is_empty() {
             validation_error!(
                 "observability.control_api.auth.identity_source.kind cannot be empty when provided"
+            );
+            return false;
+        }
+        if !VALID_CONTROL_API_IDENTITY_SOURCE_KINDS
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(kind))
+        {
+            validation_error!(
+                "observability.control_api.auth.identity_source.kind must be one of {:?}",
+                VALID_CONTROL_API_IDENTITY_SOURCE_KINDS
             );
             return false;
         }
