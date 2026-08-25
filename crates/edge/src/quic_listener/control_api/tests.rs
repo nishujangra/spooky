@@ -2154,6 +2154,63 @@ async fn control_api_restart_emits_attempt_and_result_audit_events() {
     );
 }
 
+#[tokio::test]
+async fn control_api_restart_keeps_admin_action_available_when_audit_sink_fails() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let config_path = dir.path().join("runtime.yaml");
+    let audit_sink_path = dir.path().join("audit-sink-dir");
+    std::fs::create_dir_all(&audit_sink_path).expect("create audit sink dir");
+
+    let mut config = test_config(cert, key);
+    config.observability.control_api.auth_token = None;
+    config.observability.control_api.auth.bearer_tokens = vec![ControlApiBearerToken {
+        token: "admin-token".to_string(),
+        token_ref: None,
+        role: ControlApiRole::Admin,
+        actor_id: Some("admin".to_string()),
+    }];
+    config.resilience.watchdog.enabled = true;
+    let state = audit_enabled_control_api_state(config, &config_path, &audit_sink_path);
+
+    let metrics = state.current_service_state().metrics();
+    let response = QUICListener::handle_control_api_restart(
+        &state,
+        Some(super::admin_identity::AdminIdentity {
+            actor_id: Some("admin".to_string()),
+            authn_mechanisms: vec![super::admin_identity::AdminAuthnMechanism::BearerToken],
+            roles: vec![super::admin_identity::AdminRole::Admin],
+            peer_addr: None,
+            mtls_subject: None,
+            mtls_san: Vec::new(),
+        }),
+        None,
+    );
+
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    let payload = json_body(response).await;
+    assert_eq!(payload["accepted"], true);
+
+    for _ in 0..50 {
+        if metrics
+            .control_api_audit_write_failures
+            .load(std::sync::atomic::Ordering::Relaxed)
+            > 0
+        {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
+    assert!(
+        metrics
+            .control_api_audit_write_failures
+            .load(std::sync::atomic::Ordering::Relaxed)
+            > 0,
+        "audit sink write/open failures must be observable even when admin actions succeed"
+    );
+}
+
 // Domain: runtime snapshot rendering and live runtime-view selection.
 #[test]
 fn control_api_state_prefers_reloaded_paths_and_auth_token() {

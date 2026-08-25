@@ -2262,4 +2262,58 @@ mod tests {
             "impulse_backend_requests_total{upstream=\"a-upstream\",backend=\"backend-a\",status_class=\"2xx\",outcome=\"success\"} 2"
         ));
     }
+
+    #[test]
+    fn request_result_snapshot_cache_refreshes_only_after_metric_updates() {
+        let metrics = Metrics::default();
+        metrics.record_request_result(
+            "api",
+            Some("backend-a"),
+            Some(200),
+            RouteOutcome::Success,
+            Duration::from_millis(10),
+        );
+
+        let first = metrics.snapshot_request_result_metrics();
+        let second = metrics.snapshot_request_result_metrics();
+        assert_eq!(first.upstream_request_counts, second.upstream_request_counts);
+        assert_eq!(first.backend_request_counts, second.backend_request_counts);
+        assert_eq!(
+            first.upstream_request_latency.len(),
+            second.upstream_request_latency.len()
+        );
+        assert_eq!(
+            first.upstream_request_latency[0].0.upstream,
+            second.upstream_request_latency[0].0.upstream
+        );
+        assert_eq!(
+            first.upstream_request_latency[0].0.outcome,
+            second.upstream_request_latency[0].0.outcome
+        );
+        assert_eq!(
+            first.upstream_request_latency[0].1.count,
+            second.upstream_request_latency[0].1.count
+        );
+        assert_eq!(
+            first.upstream_request_latency[0].1.latency_ms_sum,
+            second.upstream_request_latency[0].1.latency_ms_sum
+        );
+
+        metrics.record_request_result(
+            "api",
+            Some("backend-a"),
+            Some(503),
+            RouteOutcome::Failure,
+            Duration::from_millis(25),
+        );
+
+        let refreshed = metrics.snapshot_request_result_metrics();
+        assert_eq!(refreshed.upstream_request_counts.len(), 2);
+        assert!(refreshed.upstream_request_counts.iter().any(|(key, count)| {
+            key.upstream == "api"
+                && key.status_class == "5xx"
+                && key.outcome == "failure"
+                && *count == 1
+        }));
+    }
 }
