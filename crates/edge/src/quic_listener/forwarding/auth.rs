@@ -176,6 +176,22 @@ async fn collect_auth_body(mut body: Incoming) -> Result<Vec<u8>, ProxyError> {
 }
 
 fn authorization_header_from_pending_forward(pending_forward: &PendingForward) -> Option<String> {
+    for mutation in pending_forward.auth_header_mutations.iter().rev() {
+        match mutation {
+            crate::runtime::connection::auth::PendingHeaderMutation::Upsert { name, value }
+                if name.eq_ignore_ascii_case(http::header::AUTHORIZATION.as_str().as_bytes()) =>
+            {
+                return std::str::from_utf8(value).ok().map(str::to_string);
+            }
+            crate::runtime::connection::auth::PendingHeaderMutation::Remove { name }
+                if name.eq_ignore_ascii_case(http::header::AUTHORIZATION.as_str().as_bytes()) =>
+            {
+                return None;
+            }
+            _ => {}
+        }
+    }
+
     let request_headers = pending_forward.request_headers_read_only();
     request_headers
         .iter()
@@ -759,6 +775,26 @@ mod tests {
         assert_eq!(
             authorization_header_from_pending_forward(&pending_forward).as_deref(),
             Some("Bearer refreshed-token")
+        );
+    }
+
+    #[test]
+    fn authorization_header_lookup_honors_pending_auth_removal() {
+        let pending_forward = PendingForward {
+            auth_header_mutations: vec![
+                crate::runtime::connection::auth::PendingHeaderMutation::Remove {
+                    name: http::header::AUTHORIZATION.as_str().as_bytes().to_vec(),
+                },
+            ],
+            ..PendingForward::sample_for_test(vec![quiche::h3::Header::new(
+                b"authorization",
+                b"Bearer stale-token",
+            )])
+        };
+
+        assert_eq!(
+            authorization_header_from_pending_forward(&pending_forward),
+            None
         );
     }
 
