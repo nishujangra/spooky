@@ -998,6 +998,25 @@ impl JwtJwksSharedCache {
             .or_insert_with(|| new_jwks_cache_entry(source));
     }
 
+    fn register_sources<'a, I>(&self, sources: I)
+    where
+        I: IntoIterator<Item = &'a JwtJwksSourceConfig>,
+    {
+        let Ok(mut entries) = self.entries.write() else {
+            log::error!("JWKS cache lock poisoned; skipping source registration");
+            return;
+        };
+
+        for source in sources {
+            entries
+                .entry(source.source_identity.clone())
+                .and_modify(|entry| {
+                    merge_jwks_source_config(&mut entry.source, source);
+                })
+                .or_insert_with(|| new_jwks_cache_entry(source.clone()));
+        }
+    }
+
     fn reconcile_sources<'a, I>(&self, active_sources: I)
     where
         I: IntoIterator<Item = &'a JwtJwksSourceConfig>,
@@ -1634,11 +1653,13 @@ impl QUICListener {
     ) -> Result<(), impulse_errors::ProxyError> {
         let sources = runtime_jwks_sources(config);
         if sources.is_empty() {
-            JwtJwksSharedCache::shared().reconcile_sources([].iter().copied());
             return Ok(());
         }
 
-        JwtJwksSharedCache::shared().reconcile_sources(sources.iter());
+        // Preflight can run for startup checks, preview, or validation using a
+        // candidate config. Those paths must not evict unrelated live JWKS
+        // entries from the process-global cache.
+        JwtJwksSharedCache::shared().register_sources(sources.iter());
 
         let require_ready = sources
             .into_iter()
@@ -4425,6 +4446,109 @@ mod tests {
             QUICListener::initialize_jwks_startup(&runtime_config).expect_err("startup must fail");
 
         assert!(error.to_string().contains("startup_behavior=require_ready"));
+        clear_jwks_cache_for_test(jwks_url);
+    }
+
+    #[test]
+    #[serial(jwks_cache)]
+    fn startup_preflight_without_jwks_does_not_evict_unrelated_cached_sources() {
+        let jwks_url = "https://issuer.example.com/preflight-keeps-live-cache.json";
+        clear_jwks_cache_for_test(jwks_url);
+        let source_identity = jwks_source_identity_for_test(jwks_url);
+        let source = JwtJwksSourceConfig {
+            source_identity: source_identity.clone(),
+            jwks_url: jwks_url.to_string(),
+            allowed_algorithms: vec![JwtAlgorithm::Rs256],
+            refresh_interval: Duration::from_secs(60),
+            request_timeout: Duration::from_secs(1),
+            cache_ttl: Duration::from_secs(60),
+            stale_if_error: Duration::from_secs(60),
+            startup_behavior: JwksStartupBehavior::AllowDegraded,
+        };
+        let cache_now = Instant::now();
+        JwtJwksSharedCache::shared().upsert(
+            &source_identity,
+            JwtJwksCacheEntry {
+                source: source.clone(),
+                state: JwtJwksCacheState::Fresh,
+                active_keys: vec![JwtJwksActiveKey {
+                    key: RuntimeJwtVerificationKey::Pem {
+                        kid: Some("persisted-kid".to_string()),
+                        alg: Some(JwtAlgorithm::Rs256),
+                        public_key_pem: "persisted-pem".to_string(),
+                    },
+                    retained_until: None,
+                }],
+                refresh_in_flight: false,
+                last_refresh_started_at: Some(cache_now - Duration::from_secs(5)),
+                last_refresh_started_wall: Some(SystemTime::now() - Duration::from_secs(5)),
+                last_refresh_completed_at: Some(cache_now - Duration::from_secs(5)),
+                last_refresh_completed_wall: Some(SystemTime::now() - Duration::from_secs(5)),
+                last_success_at: Some(cache_now - Duration::from_secs(5)),
+                last_success_wall: Some(SystemTime::now() - Duration::from_secs(5)),
+                last_failure_at: None,
+                last_failure_wall: None,
+                last_error: None,
+                last_failure_reason: None,
+                next_on_demand_refresh_at: None,
+            },
+        );
+
+        let runtime_config = RuntimeConfig::from_config(&Config {
+            version: 1,
+            listen: Listen {
+                protocol: "http1".to_string(),
+                tls: Tls {
+                    cert: "/tmp/test-cert.pem".to_string(),
+                    key: "/tmp/test-key.pem".to_string(),
+                    ..Tls::default()
+                },
+                ..Listen::default()
+            },
+            listeners: Vec::new(),
+            upstream: HashMap::from([(
+                "api".to_string(),
+                Upstream {
+                    load_balancing: LoadBalancing {
+                        lb_type: "round-robin".to_string(),
+                        key: None,
+                    },
+                    auth: RouteAuth::default(),
+                    host_policy: UpstreamHostPolicy::default(),
+                    forwarded_headers: ForwardedHeaderPolicy::default(),
+                    tls: None,
+                    route: RouteMatch {
+                        host: None,
+                        path_prefix: Some("/".to_string()),
+                        method: None,
+                    },
+                    backends: vec![Backend {
+                        id: "a".to_string(),
+                        address: "http://127.0.0.1:8080".to_string(),
+                        weight: 1,
+                        health_check: None,
+                    }],
+                },
+            )]),
+            load_balancing: None,
+            upstream_tls: Default::default(),
+            secrets: Default::default(),
+            log: Default::default(),
+            performance: Default::default(),
+            observability: Default::default(),
+            resilience: Default::default(),
+            security: Default::default(),
+        })
+        .expect("runtime config without jwks");
+
+        QUICListener::initialize_jwks_startup(&runtime_config).expect("preflight without jwks");
+
+        let snapshot = JwtJwksSharedCache::shared()
+            .snapshot(&source_identity, Instant::now())
+            .expect("unrelated cached jwks source must remain available");
+        assert_eq!(snapshot.state, JwtJwksCacheState::Fresh);
+        assert_eq!(snapshot.active_keys.len(), 1);
+
         clear_jwks_cache_for_test(jwks_url);
     }
 

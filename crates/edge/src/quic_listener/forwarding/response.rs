@@ -109,18 +109,39 @@ fn admission_rejection_headers(
     headers
 }
 
+#[cfg(test)]
 fn response_headers_with_defaults(
     status: http::StatusCode,
     body: &[u8],
     headers: &[(String, String)],
 ) -> Vec<quiche::h3::Header> {
-    let mut resp_headers = vec![quiche::h3::Header::new(
+    response_headers_with_defaults_and_extra(status, body, headers, None)
+}
+
+fn response_headers_with_defaults_and_extra(
+    status: http::StatusCode,
+    body: &[u8],
+    headers: &[(String, String)],
+    extra_header: Option<(&str, &str)>,
+) -> Vec<quiche::h3::Header> {
+    let mut resp_headers =
+        Vec::with_capacity(headers.len() + usize::from(extra_header.is_some()) + 3);
+    resp_headers.push(quiche::h3::Header::new(
         b":status",
         status.as_str().as_bytes(),
-    )];
+    ));
     let mut has_content_type = false;
     let mut has_content_length = false;
     for (name, value) in headers {
+        if name.eq_ignore_ascii_case(http::header::CONTENT_TYPE.as_str()) {
+            has_content_type = true;
+        }
+        if name.eq_ignore_ascii_case(http::header::CONTENT_LENGTH.as_str()) {
+            has_content_length = true;
+        }
+        resp_headers.push(quiche::h3::Header::new(name.as_bytes(), value.as_bytes()));
+    }
+    if let Some((name, value)) = extra_header {
         if name.eq_ignore_ascii_case(http::header::CONTENT_TYPE.as_str()) {
             has_content_type = true;
         }
@@ -142,6 +163,21 @@ fn response_headers_with_defaults(
 }
 
 impl QUICListener {
+    fn response_start_header_block(
+        status: http::StatusCode,
+        headers: &[(Vec<u8>, Vec<u8>)],
+    ) -> Vec<quiche::h3::Header> {
+        let mut h3_headers = Vec::with_capacity(headers.len() + 1);
+        h3_headers.push(quiche::h3::Header::new(
+            b":status",
+            status.as_str().as_bytes(),
+        ));
+        for (name, value) in headers {
+            h3_headers.push(quiche::h3::Header::new(name, value));
+        }
+        h3_headers
+    }
+
     fn into_deferred_response_start_chunk(
         metadata: ResponseStartMetadata,
     ) -> Option<ResponseChunk> {
@@ -651,15 +687,17 @@ impl QUICListener {
         Ok(())
     }
 
-    pub(super) fn send_response_with_headers(
+    fn send_response_with_headers_and_extra(
         h3: &mut quiche::h3::Connection,
         quic: &mut quiche::Connection,
         stream_id: u64,
         status: http::StatusCode,
         body: &[u8],
         headers: &[(String, String)],
+        extra_header: Option<(&str, &str)>,
     ) -> Result<(), quiche::h3::Error> {
-        let resp_headers = response_headers_with_defaults(status, body, headers);
+        let resp_headers =
+            response_headers_with_defaults_and_extra(status, body, headers, extra_header);
         h3.send_response(quic, stream_id, &resp_headers, false)?;
         h3.send_body(quic, stream_id, body, true)?;
         Ok(())
@@ -673,42 +711,36 @@ impl QUICListener {
     ) -> Result<(), quiche::h3::Error> {
         match decision {
             ExternalAuthDecision::Allow { .. } => Ok(()),
-            ExternalAuthDecision::Deny(response) => Self::send_response_with_headers(
+            ExternalAuthDecision::Deny(response) => Self::send_response_with_headers_and_extra(
                 h3,
                 quic,
                 stream_id,
                 response.status,
                 &response.body,
                 &response.headers,
+                None,
             ),
-            ExternalAuthDecision::Redirect(response) => {
-                let mut headers = response.headers.clone();
-                headers.push((
-                    http::header::LOCATION.as_str().to_string(),
-                    response.location.clone(),
-                ));
-                Self::send_response_with_headers(
-                    h3,
-                    quic,
-                    stream_id,
-                    response.status,
-                    &[],
-                    &headers,
-                )
-            }
+            ExternalAuthDecision::Redirect(response) => Self::send_response_with_headers_and_extra(
+                h3,
+                quic,
+                stream_id,
+                response.status,
+                &[],
+                &response.headers,
+                Some((http::header::LOCATION.as_str(), response.location.as_str())),
+            ),
             ExternalAuthDecision::Challenge(response) => {
-                let mut headers = response.headers.clone();
-                headers.push((
-                    http::header::WWW_AUTHENTICATE.as_str().to_string(),
-                    response.www_authenticate.clone(),
-                ));
-                Self::send_response_with_headers(
+                Self::send_response_with_headers_and_extra(
                     h3,
                     quic,
                     stream_id,
                     response.status,
                     &response.body,
-                    &headers,
+                    &response.headers,
+                    Some((
+                        http::header::WWW_AUTHENTICATE.as_str(),
+                        response.www_authenticate.as_str(),
+                    )),
                 )
             }
         }
@@ -721,14 +753,7 @@ impl QUICListener {
         metadata: &ResponseStartMetadata,
         end_stream: bool,
     ) -> Result<(), ProxyError> {
-        let mut h3_headers = Vec::with_capacity(metadata.headers.len() + 1);
-        h3_headers.push(quiche::h3::Header::new(
-            b":status",
-            metadata.status.as_str().as_bytes(),
-        ));
-        for (name, value) in &metadata.headers {
-            h3_headers.push(quiche::h3::Header::new(name, value));
-        }
+        let h3_headers = Self::response_start_header_block(metadata.status, &metadata.headers);
         h3.send_response(quic, stream_id, &h3_headers, end_stream)
             .map_err(|err| {
                 ProxyError::Protocol(format!("failed to send HTTP/3 response headers: {:?}", err))
@@ -1087,14 +1112,7 @@ impl QUICListener {
             };
             match chunk {
                 ResponseChunk::Start { status, headers } => {
-                    let mut h3_headers = Vec::with_capacity(headers.len() + 1);
-                    h3_headers.push(quiche::h3::Header::new(
-                        b":status",
-                        status.as_str().as_bytes(),
-                    ));
-                    for (name, value) in &headers {
-                        h3_headers.push(quiche::h3::Header::new(name, value));
-                    }
+                    let h3_headers = Self::response_start_header_block(status, &headers);
                     match h3.send_response(quic, stream_id, &h3_headers, false) {
                         Ok(_) => {
                             req.set_response_emission_state(ResponseEmissionState::HeadersSent);
@@ -1551,12 +1569,12 @@ mod tests {
             location: "https://login.example.com".to_string(),
         };
 
-        let mut headers = response.headers.clone();
-        headers.push((
-            http::header::LOCATION.as_str().to_string(),
-            response.location.clone(),
-        ));
-        let headers = response_headers_with_defaults(response.status, &[], &headers);
+        let headers = response_headers_with_defaults_and_extra(
+            response.status,
+            &[],
+            &response.headers,
+            Some((http::header::LOCATION.as_str(), response.location.as_str())),
+        );
 
         assert_eq!(header_value(&headers, b":status"), Some(&b"307"[..]));
         assert_eq!(
@@ -1576,12 +1594,15 @@ mod tests {
             body: b"challenge\n".to_vec(),
         };
 
-        let mut headers = response.headers.clone();
-        headers.push((
-            http::header::WWW_AUTHENTICATE.as_str().to_string(),
-            response.www_authenticate.clone(),
-        ));
-        let headers = response_headers_with_defaults(response.status, &response.body, &headers);
+        let headers = response_headers_with_defaults_and_extra(
+            response.status,
+            &response.body,
+            &response.headers,
+            Some((
+                http::header::WWW_AUTHENTICATE.as_str(),
+                response.www_authenticate.as_str(),
+            )),
+        );
 
         assert_eq!(header_value(&headers, b":status"), Some(&b"401"[..]));
         assert_eq!(
@@ -1593,6 +1614,56 @@ mod tests {
             Some(&b"Bearer"[..])
         );
         assert_eq!(header_value(&headers, b"content-length"), Some(&b"10"[..]));
+    }
+
+    #[test]
+    fn external_auth_redirect_and_challenge_headers_match_historical_clone_contract() {
+        let redirect = ExternalAuthRedirectResponse {
+            status: http::StatusCode::TEMPORARY_REDIRECT,
+            headers: vec![("x-auth-reason".to_string(), "login".to_string())],
+            location: "https://login.example.com".to_string(),
+        };
+        let mut historical_redirect_headers = redirect.headers.clone();
+        historical_redirect_headers.push((
+            http::header::LOCATION.as_str().to_string(),
+            redirect.location.clone(),
+        ));
+        let historical_redirect =
+            response_headers_with_defaults(redirect.status, &[], &historical_redirect_headers);
+        let current_redirect = response_headers_with_defaults_and_extra(
+            redirect.status,
+            &[],
+            &redirect.headers,
+            Some((http::header::LOCATION.as_str(), redirect.location.as_str())),
+        );
+        assert_eq!(current_redirect, historical_redirect);
+
+        let challenge = ExternalAuthChallengeResponse {
+            status: http::StatusCode::UNAUTHORIZED,
+            headers: vec![("x-auth-reason".to_string(), "expired".to_string())],
+            www_authenticate: "Bearer".to_string(),
+            body: b"challenge\n".to_vec(),
+        };
+        let mut historical_challenge_headers = challenge.headers.clone();
+        historical_challenge_headers.push((
+            http::header::WWW_AUTHENTICATE.as_str().to_string(),
+            challenge.www_authenticate.clone(),
+        ));
+        let historical_challenge = response_headers_with_defaults(
+            challenge.status,
+            &challenge.body,
+            &historical_challenge_headers,
+        );
+        let current_challenge = response_headers_with_defaults_and_extra(
+            challenge.status,
+            &challenge.body,
+            &challenge.headers,
+            Some((
+                http::header::WWW_AUTHENTICATE.as_str(),
+                challenge.www_authenticate.as_str(),
+            )),
+        );
+        assert_eq!(current_challenge, historical_challenge);
     }
 
     #[test]

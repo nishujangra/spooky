@@ -181,6 +181,10 @@ impl PendingForward {
         Cow::Owned(headers)
     }
 
+    pub(super) fn request_headers_read_only(&self) -> Cow<'_, [quiche::h3::Header]> {
+        self.request_headers_cow()
+    }
+
     fn request_headers_for_http1_websocket_tunnel(&self) -> Cow<'_, [quiche::h3::Header]> {
         let request_headers = self.request_headers_cow();
         let has_upgrade = request_headers
@@ -203,6 +207,7 @@ impl PendingForward {
         Cow::Owned(request_headers)
     }
 
+    #[cfg(test)]
     pub(super) fn request_headers(&self) -> Vec<quiche::h3::Header> {
         self.request_headers_cow().into_owned()
     }

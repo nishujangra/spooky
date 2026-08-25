@@ -132,6 +132,14 @@ pub struct Metrics {
     request_result_metrics: RwLock<RequestResultMetricsStore>,
     request_result_metrics_version: AtomicU64,
     request_result_metrics_cache: RwLock<RequestResultMetricsSnapshotCache>,
+    quota_metrics_version: AtomicU64,
+    quota_metrics_cache: RwLock<QuotaMetricsSnapshotCache>,
+    jwt_jwks_metrics_version: AtomicU64,
+    jwt_jwks_metrics_cache: RwLock<JwtJwksMetricsSnapshotCache>,
+    backend_metrics_version: AtomicU64,
+    backend_metrics_cache: RwLock<BackendMetricsSnapshotCache>,
+    secret_metrics_version: AtomicU64,
+    secret_metrics_cache: RwLock<SecretMetricsSnapshotCache>,
     quota_policy_outcomes: RwLock<HashMap<QuotaPolicyOutcomeKey, u64>>,
     quota_backend_health: RwLock<HashMap<QuotaBackendHealthKey, u64>>,
     downstream_tls_handshake_failures: RwLock<HashMap<DownstreamTlsHandshakeFailureKey, u64>>,
@@ -228,6 +236,60 @@ struct RequestResultMetricsSnapshotCache {
     snapshot: RequestResultMetricsSnapshot,
 }
 
+#[derive(Default, Clone)]
+pub(crate) struct QuotaMetricsSnapshot {
+    pub(crate) quota_policy_outcomes: Vec<(QuotaPolicyOutcomeKey, u64)>,
+    pub(crate) quota_backend_health: Vec<(QuotaBackendHealthKey, u64)>,
+}
+
+#[derive(Default, Clone)]
+struct QuotaMetricsSnapshotCache {
+    version: u64,
+    snapshot: QuotaMetricsSnapshot,
+}
+
+#[derive(Default, Clone)]
+pub(crate) struct JwtJwksMetricsSnapshot {
+    pub(crate) jwt_validation_failures: Vec<(String, u64)>,
+    pub(crate) jwt_algorithm_rejections: Vec<(String, u64)>,
+    pub(crate) jwks_unknown_kid_events: Vec<(String, u64)>,
+    pub(crate) jwks_source_state: Vec<JwksSourceState>,
+}
+
+#[derive(Default, Clone)]
+struct JwtJwksMetricsSnapshotCache {
+    version: u64,
+    snapshot: JwtJwksMetricsSnapshot,
+}
+
+#[derive(Default, Clone)]
+pub(crate) struct BackendMetricsSnapshot {
+    pub(crate) backend_dns_state: Vec<(String, BackendDnsState)>,
+    pub(crate) backend_rotation_state: Vec<(String, BackendRotationState)>,
+    pub(crate) backend_connect_attempts: Vec<(BackendConnectAttemptKey, u64)>,
+}
+
+#[derive(Default, Clone)]
+struct BackendMetricsSnapshotCache {
+    version: u64,
+    snapshot: BackendMetricsSnapshot,
+}
+
+#[derive(Default, Clone)]
+pub(crate) struct SecretMetricsSnapshot {
+    pub(crate) secret_reload_totals: Vec<(SecretReloadKey, u64)>,
+    pub(crate) secret_resolve_totals: Vec<(SecretResolveKey, u64)>,
+    pub(crate) secret_last_success_unixtime: Vec<(SecretLastSuccessKey, u64)>,
+    pub(crate) upstream_client_cert_expiry: Vec<(UpstreamClientCertExpiryKey, i64)>,
+    pub(crate) control_plane_cert_reload_totals: Vec<(ControlPlaneCertReloadKey, u64)>,
+}
+
+#[derive(Default, Clone)]
+struct SecretMetricsSnapshotCache {
+    version: u64,
+    snapshot: SecretMetricsSnapshot,
+}
+
 impl RequestResultMetricsSnapshot {
     fn from_store(store: &RequestResultMetricsStore) -> Self {
         let mut upstream_request_counts = store
@@ -270,6 +332,257 @@ impl RequestResultMetricsSnapshot {
             upstream_request_counts,
             backend_request_counts,
             upstream_request_latency,
+        }
+    }
+}
+
+impl QuotaMetricsSnapshot {
+    fn from_metrics(metrics: &Metrics) -> Self {
+        let quota_policy_outcomes = metrics
+            .quota_policy_outcomes
+            .read()
+            .map(|guard| {
+                let mut rows = guard
+                    .iter()
+                    .map(|(key, value)| (key.clone(), *value))
+                    .collect::<Vec<_>>();
+                rows.sort_by(|(left, _), (right, _)| {
+                    left.policy
+                        .cmp(&right.policy)
+                        .then(left.decision.cmp(&right.decision))
+                        .then(left.reason.cmp(&right.reason))
+                        .then(left.selector_dimensions.cmp(&right.selector_dimensions))
+                        .then(left.backend_mode.cmp(&right.backend_mode))
+                });
+                rows
+            })
+            .unwrap_or_default();
+
+        let quota_backend_health = metrics
+            .quota_backend_health
+            .read()
+            .map(|guard| {
+                let mut rows = guard
+                    .iter()
+                    .map(|(key, value)| (key.clone(), *value))
+                    .collect::<Vec<_>>();
+                rows.sort_by(|(left, _), (right, _)| {
+                    left.backend_mode
+                        .cmp(&right.backend_mode)
+                        .then(left.reason.cmp(&right.reason))
+                });
+                rows
+            })
+            .unwrap_or_default();
+
+        Self {
+            quota_policy_outcomes,
+            quota_backend_health,
+        }
+    }
+}
+
+impl JwtJwksMetricsSnapshot {
+    fn from_metrics(metrics: &Metrics) -> Self {
+        let jwt_validation_failures = metrics
+            .jwt_validation_failures
+            .read()
+            .map(|guard| {
+                let mut entries = guard
+                    .iter()
+                    .map(|(reason, value)| (reason.clone(), *value))
+                    .collect::<Vec<_>>();
+                entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+                entries
+            })
+            .unwrap_or_default();
+
+        let jwt_algorithm_rejections = metrics
+            .jwt_algorithm_rejections
+            .read()
+            .map(|guard| {
+                let mut entries = guard
+                    .iter()
+                    .map(|(algorithm, value)| (algorithm.clone(), *value))
+                    .collect::<Vec<_>>();
+                entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+                entries
+            })
+            .unwrap_or_default();
+
+        let jwks_unknown_kid_events = metrics
+            .jwks_unknown_kid_events
+            .read()
+            .map(|guard| {
+                let mut entries = guard
+                    .iter()
+                    .map(|(jwks_source_id, value)| (jwks_source_id.clone(), *value))
+                    .collect::<Vec<_>>();
+                entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+                entries
+            })
+            .unwrap_or_default();
+
+        let jwks_source_state = metrics
+            .jwks_source_state
+            .read()
+            .map(|guard| {
+                let mut entries = guard.values().cloned().collect::<Vec<_>>();
+                entries.sort_by(|left, right| left.jwks_source_id.cmp(&right.jwks_source_id));
+                entries
+            })
+            .unwrap_or_default();
+
+        Self {
+            jwt_validation_failures,
+            jwt_algorithm_rejections,
+            jwks_unknown_kid_events,
+            jwks_source_state,
+        }
+    }
+}
+
+impl BackendMetricsSnapshot {
+    fn from_metrics(metrics: &Metrics) -> Self {
+        let backend_dns_state = metrics
+            .backend_dns_state
+            .read()
+            .map(|guard| {
+                let mut entries = guard
+                    .iter()
+                    .map(|(backend, state)| (backend.clone(), state.clone()))
+                    .collect::<Vec<_>>();
+                entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+                entries
+            })
+            .unwrap_or_default();
+
+        let backend_rotation_state = metrics
+            .backend_rotation_state
+            .read()
+            .map(|guard| {
+                let mut entries = guard
+                    .iter()
+                    .map(|(backend, state)| (backend.clone(), state.clone()))
+                    .collect::<Vec<_>>();
+                entries.sort_by(|(left, _), (right, _)| left.cmp(right));
+                entries
+            })
+            .unwrap_or_default();
+
+        let backend_connect_attempts = metrics
+            .backend_connect_attempts
+            .read()
+            .map(|guard| {
+                let mut entries = guard
+                    .iter()
+                    .map(|(key, value)| (key.clone(), *value))
+                    .collect::<Vec<_>>();
+                entries.sort_by(|(left, _), (right, _)| {
+                    left.backend
+                        .cmp(&right.backend)
+                        .then_with(|| left.hostname.cmp(&right.hostname))
+                        .then_with(|| left.resolved_addr.cmp(&right.resolved_addr))
+                });
+                entries
+            })
+            .unwrap_or_default();
+
+        Self {
+            backend_dns_state,
+            backend_rotation_state,
+            backend_connect_attempts,
+        }
+    }
+}
+
+impl SecretMetricsSnapshot {
+    fn from_metrics(metrics: &Metrics) -> Self {
+        let secret_reload_totals = metrics
+            .secret_reload_totals
+            .read()
+            .map(|guard| {
+                let mut entries = guard
+                    .iter()
+                    .map(|(key, value)| (key.clone(), *value))
+                    .collect::<Vec<_>>();
+                entries.sort_by(|(left, _), (right, _)| {
+                    left.scope
+                        .cmp(&right.scope)
+                        .then_with(|| left.result.cmp(&right.result))
+                        .then_with(|| left.reason.cmp(&right.reason))
+                });
+                entries
+            })
+            .unwrap_or_default();
+
+        let secret_resolve_totals = metrics
+            .secret_resolve_totals
+            .read()
+            .map(|guard| {
+                let mut entries = guard
+                    .iter()
+                    .map(|(key, value)| (key.clone(), *value))
+                    .collect::<Vec<_>>();
+                entries.sort_by(|(left, _), (right, _)| {
+                    left.provider
+                        .cmp(&right.provider)
+                        .then_with(|| left.result.cmp(&right.result))
+                        .then_with(|| left.reason.cmp(&right.reason))
+                });
+                entries
+            })
+            .unwrap_or_default();
+
+        let secret_last_success_unixtime = metrics
+            .secret_last_success_unixtime
+            .read()
+            .map(|guard| {
+                let mut entries = guard
+                    .iter()
+                    .map(|(key, value)| (key.clone(), *value))
+                    .collect::<Vec<_>>();
+                entries.sort_by(|(left, _), (right, _)| left.scope.cmp(&right.scope));
+                entries
+            })
+            .unwrap_or_default();
+
+        let upstream_client_cert_expiry = metrics
+            .upstream_client_cert_expiry
+            .read()
+            .map(|guard| {
+                let mut entries = guard
+                    .iter()
+                    .map(|(key, value)| (key.clone(), *value))
+                    .collect::<Vec<_>>();
+                entries.sort_by(|(left, _), (right, _)| left.upstream.cmp(&right.upstream));
+                entries
+            })
+            .unwrap_or_default();
+
+        let control_plane_cert_reload_totals = metrics
+            .control_plane_cert_reload_totals
+            .read()
+            .map(|guard| {
+                let mut entries = guard
+                    .iter()
+                    .map(|(key, value)| (key.clone(), *value))
+                    .collect::<Vec<_>>();
+                entries.sort_by(|(left, _), (right, _)| {
+                    left.result
+                        .cmp(&right.result)
+                        .then_with(|| left.reason.cmp(&right.reason))
+                });
+                entries
+            })
+            .unwrap_or_default();
+
+        Self {
+            secret_reload_totals,
+            secret_resolve_totals,
+            secret_last_success_unixtime,
+            upstream_client_cert_expiry,
+            control_plane_cert_reload_totals,
         }
     }
 }
@@ -504,13 +817,16 @@ fn route_outcome_label(outcome: RouteOutcome) -> &'static str {
     }
 }
 
-fn increment_label_counter(counter: &RwLock<HashMap<String, u64>>, label: &str) {
+fn increment_label_counter(counter: &RwLock<HashMap<String, u64>>, label: &str) -> bool {
     if let Ok(mut guard) = counter.write() {
         if let Some(value) = guard.get_mut(label) {
             *value = value.saturating_add(1);
         } else {
             guard.insert(label.to_string(), 1);
         }
+        true
+    } else {
+        false
     }
 }
 
@@ -581,6 +897,23 @@ thread_local! {
 }
 
 impl Metrics {
+    fn mark_quota_metrics_stale(&self) {
+        self.quota_metrics_version.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn mark_jwt_jwks_metrics_stale(&self) {
+        self.jwt_jwks_metrics_version
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn mark_backend_metrics_stale(&self) {
+        self.backend_metrics_version.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn mark_secret_metrics_stale(&self) {
+        self.secret_metrics_version.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn new<I>(worker_slots: usize, route_labels: I) -> Self
     where
         I: IntoIterator<Item = String>,
@@ -733,6 +1066,14 @@ impl Metrics {
             request_result_metrics: RwLock::new(RequestResultMetricsStore::default()),
             request_result_metrics_version: AtomicU64::new(0),
             request_result_metrics_cache: RwLock::new(RequestResultMetricsSnapshotCache::default()),
+            quota_metrics_version: AtomicU64::new(0),
+            quota_metrics_cache: RwLock::new(QuotaMetricsSnapshotCache::default()),
+            jwt_jwks_metrics_version: AtomicU64::new(0),
+            jwt_jwks_metrics_cache: RwLock::new(JwtJwksMetricsSnapshotCache::default()),
+            backend_metrics_version: AtomicU64::new(0),
+            backend_metrics_cache: RwLock::new(BackendMetricsSnapshotCache::default()),
+            secret_metrics_version: AtomicU64::new(0),
+            secret_metrics_cache: RwLock::new(SecretMetricsSnapshotCache::default()),
             quota_policy_outcomes: RwLock::new(HashMap::new()),
             quota_backend_health: RwLock::new(HashMap::new()),
             downstream_tls_handshake_failures: RwLock::new(HashMap::new()),
@@ -814,6 +1155,7 @@ impl Metrics {
                 backend_mode: backend_mode.to_string(),
             };
             *guard.entry(key).or_default() += 1;
+            self.mark_quota_metrics_stale();
         }
     }
 
@@ -828,6 +1170,7 @@ impl Metrics {
                 reason: reason.slug().to_string(),
             };
             *guard.entry(key).or_default() += 1;
+            self.mark_quota_metrics_stale();
         }
     }
 
@@ -1029,6 +1372,7 @@ impl Metrics {
                     resolved_address_count: resolved_address_count as u64,
                 },
             );
+            self.mark_backend_metrics_stale();
         }
     }
 
@@ -1042,6 +1386,7 @@ impl Metrics {
             .fetch_add(1, Ordering::Relaxed);
         if let Ok(mut guard) = self.backend_rotation_state.write() {
             guard.entry(backend.to_string()).or_default().rotations += 1;
+            self.mark_backend_metrics_stale();
         }
     }
 
@@ -1054,15 +1399,21 @@ impl Metrics {
     }
 
     pub fn record_jwt_validation_failure(&self, reason: &str) {
-        increment_label_counter(&self.jwt_validation_failures, reason);
+        if increment_label_counter(&self.jwt_validation_failures, reason) {
+            self.mark_jwt_jwks_metrics_stale();
+        }
     }
 
     pub fn record_jwt_algorithm_rejection(&self, algorithm: &str) {
-        increment_label_counter(&self.jwt_algorithm_rejections, algorithm);
+        if increment_label_counter(&self.jwt_algorithm_rejections, algorithm) {
+            self.mark_jwt_jwks_metrics_stale();
+        }
     }
 
     pub fn record_jwks_unknown_kid(&self, jwks_source_id: &str) {
-        increment_label_counter(&self.jwks_unknown_kid_events, jwks_source_id);
+        if increment_label_counter(&self.jwks_unknown_kid_events, jwks_source_id) {
+            self.mark_jwt_jwks_metrics_stale();
+        }
     }
 
     pub fn record_jwks_refresh_started(&self, jwks_source_id: &str, refreshed_at: SystemTime) {
@@ -1073,6 +1424,7 @@ impl Metrics {
         if let Ok(mut guard) = self.jwks_source_state.write() {
             let entry = jwks_source_state_entry_mut(&mut guard, jwks_source_id);
             entry.last_refresh_attempt_unix_seconds = refreshed_at;
+            self.mark_jwt_jwks_metrics_stale();
         }
     }
 
@@ -1099,6 +1451,7 @@ impl Metrics {
             entry.last_refresh_attempt_unix_seconds = refreshed_at;
             entry.last_refresh_success_unix_seconds = last_success_at.or(refreshed_at);
             entry.last_failure_reason = None;
+            self.mark_jwt_jwks_metrics_stale();
         }
     }
 
@@ -1128,6 +1481,7 @@ impl Metrics {
                 entry.last_refresh_success_unix_seconds = Some(last_success_at);
             }
             entry.last_failure_reason = failure_reason;
+            self.mark_jwt_jwks_metrics_stale();
         }
     }
 
@@ -1139,13 +1493,20 @@ impl Metrics {
             .into_iter()
             .map(ToOwned::to_owned)
             .collect::<HashSet<_>>();
+        let mut marked_stale = false;
 
         if let Ok(mut guard) = self.jwks_unknown_kid_events.write() {
             guard.retain(|jwks_source_id, _| active_source_ids.contains(jwks_source_id));
+            marked_stale = true;
         }
 
         if let Ok(mut guard) = self.jwks_source_state.write() {
             guard.retain(|jwks_source_id, _| active_source_ids.contains(jwks_source_id));
+            marked_stale = true;
+        }
+
+        if marked_stale {
+            self.mark_jwt_jwks_metrics_stale();
         }
     }
 
@@ -1176,6 +1537,7 @@ impl Metrics {
                     })
                     .or_default() += 1;
             }
+            self.mark_backend_metrics_stale();
         }
     }
 
@@ -1228,104 +1590,93 @@ impl Metrics {
         }
     }
 
-    pub(crate) fn snapshot_backend_dns_state(&self) -> Vec<(String, BackendDnsState)> {
-        self.backend_dns_state
-            .read()
-            .map(|guard| {
-                let mut entries = guard
-                    .iter()
-                    .map(|(backend, state)| (backend.clone(), state.clone()))
-                    .collect::<Vec<_>>();
-                entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-                entries
-            })
-            .unwrap_or_default()
+    pub(crate) fn snapshot_quota_metrics(&self) -> QuotaMetricsSnapshot {
+        let version = self.quota_metrics_version.load(Ordering::Relaxed);
+        if let Ok(cache) = self.quota_metrics_cache.read()
+            && cache.version == version
+        {
+            return cache.snapshot.clone();
+        }
+
+        let snapshot = QuotaMetricsSnapshot::from_metrics(self);
+
+        if let Ok(mut cache) = self.quota_metrics_cache.write() {
+            cache.version = version;
+            cache.snapshot = snapshot.clone();
+        }
+
+        snapshot
     }
 
-    pub(crate) fn snapshot_backend_rotation_state(&self) -> Vec<(String, BackendRotationState)> {
-        self.backend_rotation_state
-            .read()
-            .map(|guard| {
-                let mut entries = guard
-                    .iter()
-                    .map(|(backend, state)| (backend.clone(), state.clone()))
-                    .collect::<Vec<_>>();
-                entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-                entries
-            })
-            .unwrap_or_default()
+    pub(crate) fn snapshot_jwt_jwks_metrics(&self) -> JwtJwksMetricsSnapshot {
+        let version = self.jwt_jwks_metrics_version.load(Ordering::Relaxed);
+        if let Ok(cache) = self.jwt_jwks_metrics_cache.read()
+            && cache.version == version
+        {
+            return cache.snapshot.clone();
+        }
+
+        let snapshot = JwtJwksMetricsSnapshot::from_metrics(self);
+
+        if let Ok(mut cache) = self.jwt_jwks_metrics_cache.write() {
+            cache.version = version;
+            cache.snapshot = snapshot.clone();
+        }
+
+        snapshot
+    }
+
+    pub(crate) fn snapshot_backend_metrics(&self) -> BackendMetricsSnapshot {
+        let version = self.backend_metrics_version.load(Ordering::Relaxed);
+        if let Ok(cache) = self.backend_metrics_cache.read()
+            && cache.version == version
+        {
+            return cache.snapshot.clone();
+        }
+
+        let snapshot = BackendMetricsSnapshot::from_metrics(self);
+
+        if let Ok(mut cache) = self.backend_metrics_cache.write() {
+            cache.version = version;
+            cache.snapshot = snapshot.clone();
+        }
+
+        snapshot
+    }
+
+    pub(crate) fn snapshot_secret_metrics(&self) -> SecretMetricsSnapshot {
+        let version = self.secret_metrics_version.load(Ordering::Relaxed);
+        if let Ok(cache) = self.secret_metrics_cache.read()
+            && cache.version == version
+        {
+            return cache.snapshot.clone();
+        }
+
+        let snapshot = SecretMetricsSnapshot::from_metrics(self);
+
+        if let Ok(mut cache) = self.secret_metrics_cache.write() {
+            cache.version = version;
+            cache.snapshot = snapshot.clone();
+        }
+
+        snapshot
     }
 
     pub(crate) fn snapshot_jwt_validation_failures(&self) -> Vec<(String, u64)> {
-        self.jwt_validation_failures
-            .read()
-            .map(|guard| {
-                let mut entries = guard
-                    .iter()
-                    .map(|(reason, value)| (reason.clone(), *value))
-                    .collect::<Vec<_>>();
-                entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-                entries
-            })
-            .unwrap_or_default()
+        self.snapshot_jwt_jwks_metrics().jwt_validation_failures
     }
 
     pub(crate) fn snapshot_jwt_algorithm_rejections(&self) -> Vec<(String, u64)> {
-        self.jwt_algorithm_rejections
-            .read()
-            .map(|guard| {
-                let mut entries = guard
-                    .iter()
-                    .map(|(algorithm, value)| (algorithm.clone(), *value))
-                    .collect::<Vec<_>>();
-                entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-                entries
-            })
-            .unwrap_or_default()
+        self.snapshot_jwt_jwks_metrics().jwt_algorithm_rejections
     }
 
     pub(crate) fn snapshot_jwks_unknown_kid_events(&self) -> Vec<(String, u64)> {
-        self.jwks_unknown_kid_events
-            .read()
-            .map(|guard| {
-                let mut entries = guard
-                    .iter()
-                    .map(|(jwks_source_id, value)| (jwks_source_id.clone(), *value))
-                    .collect::<Vec<_>>();
-                entries.sort_by(|(left, _), (right, _)| left.cmp(right));
-                entries
-            })
-            .unwrap_or_default()
+        self.snapshot_jwt_jwks_metrics().jwks_unknown_kid_events
     }
 
+    #[cfg(test)]
     pub(crate) fn snapshot_jwks_source_state(&self) -> Vec<JwksSourceState> {
-        self.jwks_source_state
-            .read()
-            .map(|guard| {
-                let mut entries = guard.values().cloned().collect::<Vec<_>>();
-                entries.sort_by(|left, right| left.jwks_source_id.cmp(&right.jwks_source_id));
-                entries
-            })
-            .unwrap_or_default()
-    }
-
-    pub(crate) fn snapshot_backend_connect_attempts(&self) -> Vec<(BackendConnectAttemptKey, u64)> {
-        self.backend_connect_attempts
-            .read()
-            .map(|guard| {
-                let mut entries = guard
-                    .iter()
-                    .map(|(key, value)| (key.clone(), *value))
-                    .collect::<Vec<_>>();
-                entries.sort_by(|(left, _), (right, _)| {
-                    left.backend
-                        .cmp(&right.backend)
-                        .then_with(|| left.hostname.cmp(&right.hostname))
-                        .then_with(|| left.resolved_addr.cmp(&right.resolved_addr))
-                });
-                entries
-            })
-            .unwrap_or_default()
+        self.snapshot_jwt_jwks_metrics().jwks_source_state
     }
 
     pub(crate) fn snapshot_request_result_metrics(&self) -> RequestResultMetricsSnapshot {
@@ -1441,94 +1792,6 @@ impl Metrics {
                         .cmp(&right.upstream)
                         .then_with(|| left.backend.cmp(&right.backend))
                         .then_with(|| left.phase.cmp(&right.phase))
-                        .then_with(|| left.reason.cmp(&right.reason))
-                });
-                entries
-            })
-            .unwrap_or_default()
-    }
-
-    pub(crate) fn snapshot_secret_reload_totals(&self) -> Vec<(SecretReloadKey, u64)> {
-        self.secret_reload_totals
-            .read()
-            .map(|guard| {
-                let mut entries = guard
-                    .iter()
-                    .map(|(key, value)| (key.clone(), *value))
-                    .collect::<Vec<_>>();
-                entries.sort_by(|(left, _), (right, _)| {
-                    left.scope
-                        .cmp(&right.scope)
-                        .then_with(|| left.result.cmp(&right.result))
-                        .then_with(|| left.reason.cmp(&right.reason))
-                });
-                entries
-            })
-            .unwrap_or_default()
-    }
-
-    pub(crate) fn snapshot_secret_resolve_totals(&self) -> Vec<(SecretResolveKey, u64)> {
-        self.secret_resolve_totals
-            .read()
-            .map(|guard| {
-                let mut entries = guard
-                    .iter()
-                    .map(|(key, value)| (key.clone(), *value))
-                    .collect::<Vec<_>>();
-                entries.sort_by(|(left, _), (right, _)| {
-                    left.provider
-                        .cmp(&right.provider)
-                        .then_with(|| left.result.cmp(&right.result))
-                        .then_with(|| left.reason.cmp(&right.reason))
-                });
-                entries
-            })
-            .unwrap_or_default()
-    }
-
-    pub(crate) fn snapshot_secret_last_success_unixtime(&self) -> Vec<(SecretLastSuccessKey, u64)> {
-        self.secret_last_success_unixtime
-            .read()
-            .map(|guard| {
-                let mut entries = guard
-                    .iter()
-                    .map(|(key, value)| (key.clone(), *value))
-                    .collect::<Vec<_>>();
-                entries.sort_by(|(left, _), (right, _)| left.scope.cmp(&right.scope));
-                entries
-            })
-            .unwrap_or_default()
-    }
-
-    pub(crate) fn snapshot_upstream_client_cert_expiry(
-        &self,
-    ) -> Vec<(UpstreamClientCertExpiryKey, i64)> {
-        self.upstream_client_cert_expiry
-            .read()
-            .map(|guard| {
-                let mut entries = guard
-                    .iter()
-                    .map(|(key, value)| (key.clone(), *value))
-                    .collect::<Vec<_>>();
-                entries.sort_by(|(left, _), (right, _)| left.upstream.cmp(&right.upstream));
-                entries
-            })
-            .unwrap_or_default()
-    }
-
-    pub(crate) fn snapshot_control_plane_cert_reload_totals(
-        &self,
-    ) -> Vec<(ControlPlaneCertReloadKey, u64)> {
-        self.control_plane_cert_reload_totals
-            .read()
-            .map(|guard| {
-                let mut entries = guard
-                    .iter()
-                    .map(|(key, value)| (key.clone(), *value))
-                    .collect::<Vec<_>>();
-                entries.sort_by(|(left, _), (right, _)| {
-                    left.result
-                        .cmp(&right.result)
                         .then_with(|| left.reason.cmp(&right.reason))
                 });
                 entries
@@ -1925,6 +2188,7 @@ impl Metrics {
                     reason: reason.to_string(),
                 })
                 .or_default() += 1;
+            self.mark_secret_metrics_stale();
         }
     }
 
@@ -1937,6 +2201,7 @@ impl Metrics {
                     reason: reason.to_string(),
                 })
                 .or_default() += 1;
+            self.mark_secret_metrics_stale();
         }
     }
 
@@ -1948,6 +2213,7 @@ impl Metrics {
                 },
                 unix_seconds,
             );
+            self.mark_secret_metrics_stale();
         }
     }
 
@@ -1963,6 +2229,7 @@ impl Metrics {
                     not_after_unix_seconds,
                 );
             }
+            self.mark_secret_metrics_stale();
         }
     }
 
@@ -1974,6 +2241,7 @@ impl Metrics {
                     reason: reason.to_string(),
                 })
                 .or_default() += 1;
+            self.mark_secret_metrics_stale();
         }
     }
 
@@ -2325,6 +2593,106 @@ mod tests {
                         && key.outcome == "failure"
                         && *count == 1
                 })
+        );
+    }
+
+    #[test]
+    fn prometheus_render_is_stable_across_repeated_cached_family_renders() {
+        let metrics = Metrics::default();
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+
+        metrics.record_quota_policy_outcome(
+            "tenant-write-quota",
+            QuotaPolicyDecision::Denied,
+            QuotaPolicyReason::BurstQuotaExhausted,
+            "route+tenant+token",
+            "redis",
+        );
+        metrics.record_quota_backend_health("redis", QuotaBackendHealthReason::Timeout);
+        metrics.record_jwt_validation_failure("issuer_mismatch");
+        metrics.record_jwks_unknown_kid("jwks:example");
+        metrics.record_jwks_refresh_success("jwks:example", "fresh", 2, now, Some(now));
+        metrics.record_backend_dns_refresh_success("backend-a", now, 2, false);
+        metrics.record_backend_connect(
+            "backend-a",
+            "origin.internal",
+            "127.0.0.1:443".parse().expect("socket address"),
+        );
+        metrics.record_secret_reload("listeners", "success", "cert_reload_applied");
+        metrics.set_secret_last_success_unixtime("upstreams", 1_700_000_123);
+        metrics.replace_upstream_client_cert_expiry([("payments".to_string(), 1_800_000_000)]);
+
+        let first = metrics.render_prometheus();
+        let second = metrics.render_prometheus();
+
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn cached_metric_family_snapshots_refresh_after_targeted_updates() {
+        let metrics = Metrics::default();
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+
+        metrics.record_quota_policy_outcome(
+            "tenant-write-quota",
+            QuotaPolicyDecision::Allowed,
+            QuotaPolicyReason::Allowed,
+            "route+tenant+client",
+            "redis",
+        );
+        let quota_before = metrics.snapshot_quota_metrics();
+        assert_eq!(quota_before.quota_policy_outcomes.len(), 1);
+        assert!(quota_before.quota_backend_health.is_empty());
+        metrics.record_quota_backend_health("redis", QuotaBackendHealthReason::Available);
+        let quota_after = metrics.snapshot_quota_metrics();
+        assert_eq!(quota_after.quota_policy_outcomes.len(), 1);
+        assert_eq!(quota_after.quota_backend_health.len(), 1);
+        assert_eq!(quota_after.quota_backend_health[0].1, 1);
+
+        metrics.record_jwt_validation_failure("issuer_mismatch");
+        let jwt_before = metrics.snapshot_jwt_jwks_metrics();
+        assert_eq!(
+            jwt_before.jwt_validation_failures,
+            vec![("issuer_mismatch".to_string(), 1)]
+        );
+        assert!(jwt_before.jwks_unknown_kid_events.is_empty());
+        metrics.record_jwks_unknown_kid("jwks:example");
+        let jwt_after = metrics.snapshot_jwt_jwks_metrics();
+        assert_eq!(
+            jwt_after.jwt_validation_failures,
+            vec![("issuer_mismatch".to_string(), 1)]
+        );
+        assert_eq!(
+            jwt_after.jwks_unknown_kid_events,
+            vec![("jwks:example".to_string(), 1)]
+        );
+
+        metrics.record_backend_dns_refresh_success("backend-a", now, 2, false);
+        let backend_before = metrics.snapshot_backend_metrics();
+        assert_eq!(backend_before.backend_dns_state.len(), 1);
+        assert!(backend_before.backend_rotation_state.is_empty());
+        metrics.inc_backend_client_rotation("backend-a");
+        let backend_after = metrics.snapshot_backend_metrics();
+        assert_eq!(backend_after.backend_dns_state.len(), 1);
+        assert_eq!(backend_after.backend_rotation_state.len(), 1);
+        assert_eq!(backend_after.backend_rotation_state[0].0, "backend-a");
+        assert_eq!(backend_after.backend_rotation_state[0].1.rotations, 1);
+
+        metrics.record_secret_reload("listeners", "success", "cert_reload_applied");
+        let secret_before = metrics.snapshot_secret_metrics();
+        assert_eq!(secret_before.secret_reload_totals.len(), 1);
+        assert!(secret_before.secret_last_success_unixtime.is_empty());
+        metrics.set_secret_last_success_unixtime("listeners", 1_700_000_123);
+        let secret_after = metrics.snapshot_secret_metrics();
+        assert_eq!(secret_after.secret_reload_totals.len(), 1);
+        assert_eq!(secret_after.secret_last_success_unixtime.len(), 1);
+        assert_eq!(
+            secret_after.secret_last_success_unixtime[0].0.scope,
+            "listeners"
+        );
+        assert_eq!(
+            secret_after.secret_last_success_unixtime[0].1,
+            1_700_000_123
         );
     }
 }

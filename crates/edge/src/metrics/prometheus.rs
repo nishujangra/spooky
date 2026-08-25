@@ -5,6 +5,10 @@ impl Metrics {
     pub fn render_prometheus(&self) -> String {
         let mut out = String::with_capacity(8 * 1024);
         let request_result_metrics = self.snapshot_request_result_metrics();
+        let quota_metrics = self.snapshot_quota_metrics();
+        let jwt_jwks_metrics = self.snapshot_jwt_jwks_metrics();
+        let backend_metrics = self.snapshot_backend_metrics();
+        let secret_metrics = self.snapshot_secret_metrics();
         out.push_str("# HELP impulse_requests_total Total requests seen by impulse.\n");
         out.push_str("# TYPE impulse_requests_total counter\n");
         out.push_str(&format!(
@@ -93,48 +97,29 @@ impl Metrics {
             "# HELP impulse_quota_policy_outcomes_total Total quota policy outcomes grouped by policy, decision, reason, selector dimensions, and backend mode.\n",
         );
         out.push_str("# TYPE impulse_quota_policy_outcomes_total counter\n");
-        if let Ok(guard) = self.quota_policy_outcomes.read() {
-            let mut rows = guard.iter().collect::<Vec<_>>();
-            rows.sort_by(|(left, _), (right, _)| {
-                left.policy
-                    .cmp(&right.policy)
-                    .then(left.decision.cmp(&right.decision))
-                    .then(left.reason.cmp(&right.reason))
-                    .then(left.selector_dimensions.cmp(&right.selector_dimensions))
-                    .then(left.backend_mode.cmp(&right.backend_mode))
-            });
-            for (key, count) in rows {
-                out.push_str(&format!(
-                    "impulse_quota_policy_outcomes_total{{policy=\"{}\",decision=\"{}\",reason=\"{}\",selector_dimensions=\"{}\",backend_mode=\"{}\"}} {}\n",
-                    escape_prometheus_label(&key.policy),
-                    escape_prometheus_label(&key.decision),
-                    escape_prometheus_label(&key.reason),
-                    escape_prometheus_label(&key.selector_dimensions),
-                    escape_prometheus_label(&key.backend_mode),
-                    count
-                ));
-            }
+        for (key, count) in &quota_metrics.quota_policy_outcomes {
+            out.push_str(&format!(
+                "impulse_quota_policy_outcomes_total{{policy=\"{}\",decision=\"{}\",reason=\"{}\",selector_dimensions=\"{}\",backend_mode=\"{}\"}} {}\n",
+                escape_prometheus_label(&key.policy),
+                escape_prometheus_label(&key.decision),
+                escape_prometheus_label(&key.reason),
+                escape_prometheus_label(&key.selector_dimensions),
+                escape_prometheus_label(&key.backend_mode),
+                count
+            ));
         }
 
         out.push_str(
             "# HELP impulse_quota_backend_health_total Total quota backend health/error observations grouped by backend mode and reason.\n",
         );
         out.push_str("# TYPE impulse_quota_backend_health_total counter\n");
-        if let Ok(guard) = self.quota_backend_health.read() {
-            let mut rows = guard.iter().collect::<Vec<_>>();
-            rows.sort_by(|(left, _), (right, _)| {
-                left.backend_mode
-                    .cmp(&right.backend_mode)
-                    .then(left.reason.cmp(&right.reason))
-            });
-            for (key, count) in rows {
-                out.push_str(&format!(
-                    "impulse_quota_backend_health_total{{backend_mode=\"{}\",reason=\"{}\"}} {}\n",
-                    escape_prometheus_label(&key.backend_mode),
-                    escape_prometheus_label(&key.reason),
-                    count
-                ));
-            }
+        for (key, count) in &quota_metrics.quota_backend_health {
+            out.push_str(&format!(
+                "impulse_quota_backend_health_total{{backend_mode=\"{}\",reason=\"{}\"}} {}\n",
+                escape_prometheus_label(&key.backend_mode),
+                escape_prometheus_label(&key.reason),
+                count
+            ));
         }
 
         out.push_str("# HELP impulse_early_data_accepted Total requests accepted in early data.\n");
@@ -783,7 +768,7 @@ impl Metrics {
             "# HELP impulse_secret_reload_total Total secret or certificate reload outcomes grouped by scope, result, and reason.\n",
         );
         out.push_str("# TYPE impulse_secret_reload_total counter\n");
-        for (key, value) in self.snapshot_secret_reload_totals() {
+        for (key, value) in &secret_metrics.secret_reload_totals {
             out.push_str(&format!(
                 "impulse_secret_reload_total{{scope=\"{}\",result=\"{}\",reason=\"{}\"}} {}\n",
                 escape_prometheus_label(&key.scope),
@@ -796,7 +781,7 @@ impl Metrics {
             "# HELP impulse_secret_resolve_total Total secret resolution outcomes grouped by provider, result, and reason.\n",
         );
         out.push_str("# TYPE impulse_secret_resolve_total counter\n");
-        for (key, value) in self.snapshot_secret_resolve_totals() {
+        for (key, value) in &secret_metrics.secret_resolve_totals {
             out.push_str(&format!(
                 "impulse_secret_resolve_total{{provider=\"{}\",result=\"{}\",reason=\"{}\"}} {}\n",
                 escape_prometheus_label(&key.provider),
@@ -809,7 +794,7 @@ impl Metrics {
             "# HELP impulse_secret_last_success_unixtime Unix timestamp of the last successful secret or certificate load by scope.\n",
         );
         out.push_str("# TYPE impulse_secret_last_success_unixtime gauge\n");
-        for (key, value) in self.snapshot_secret_last_success_unixtime() {
+        for (key, value) in &secret_metrics.secret_last_success_unixtime {
             out.push_str(&format!(
                 "impulse_secret_last_success_unixtime{{scope=\"{}\"}} {}\n",
                 escape_prometheus_label(&key.scope),
@@ -824,7 +809,7 @@ impl Metrics {
             "# HELP impulse_upstream_client_certificate_days_remaining Estimated whole days remaining before upstream client certificate expiration.\n",
         );
         out.push_str("# TYPE impulse_upstream_client_certificate_days_remaining gauge\n");
-        for (key, value) in self.snapshot_upstream_client_cert_expiry() {
+        for (key, value) in &secret_metrics.upstream_client_cert_expiry {
             out.push_str(&format!(
                 "impulse_upstream_client_certificate_not_after_seconds{{upstream=\"{}\"}} {}\n",
                 escape_prometheus_label(&key.upstream),
@@ -841,7 +826,7 @@ impl Metrics {
             "# HELP impulse_control_plane_cert_reload_total Total control-plane listener certificate reload outcomes grouped by result and reason.\n",
         );
         out.push_str("# TYPE impulse_control_plane_cert_reload_total counter\n");
-        for (key, value) in self.snapshot_control_plane_cert_reload_totals() {
+        for (key, value) in &secret_metrics.control_plane_cert_reload_totals {
             out.push_str(&format!(
                 "impulse_control_plane_cert_reload_total{{result=\"{}\",reason=\"{}\"}} {}\n",
                 escape_prometheus_label(&key.result),
@@ -895,10 +880,10 @@ impl Metrics {
             "# HELP impulse_jwt_validation_failures_total Total JWT validation failures grouped by stable rejection reason.\n",
         );
         out.push_str("# TYPE impulse_jwt_validation_failures_total counter\n");
-        for (reason, count) in self.snapshot_jwt_validation_failures() {
+        for (reason, count) in &jwt_jwks_metrics.jwt_validation_failures {
             out.push_str(&format!(
                 "impulse_jwt_validation_failures_total{{reason=\"{}\"}} {}\n",
-                escape_prometheus_label(&reason),
+                escape_prometheus_label(reason),
                 count
             ));
         }
@@ -906,10 +891,10 @@ impl Metrics {
             "# HELP impulse_jwt_algorithm_rejections_total Total JWT algorithm rejections grouped by JOSE alg.\n",
         );
         out.push_str("# TYPE impulse_jwt_algorithm_rejections_total counter\n");
-        for (algorithm, count) in self.snapshot_jwt_algorithm_rejections() {
+        for (algorithm, count) in &jwt_jwks_metrics.jwt_algorithm_rejections {
             out.push_str(&format!(
                 "impulse_jwt_algorithm_rejections_total{{algorithm=\"{}\"}} {}\n",
-                escape_prometheus_label(&algorithm),
+                escape_prometheus_label(algorithm),
                 count
             ));
         }
@@ -917,10 +902,10 @@ impl Metrics {
             "# HELP impulse_jwks_unknown_kid_total Total unknown-kid events that triggered JWKS miss handling.\n",
         );
         out.push_str("# TYPE impulse_jwks_unknown_kid_total counter\n");
-        for (jwks_source_id, count) in self.snapshot_jwks_unknown_kid_events() {
+        for (jwks_source_id, count) in &jwt_jwks_metrics.jwks_unknown_kid_events {
             out.push_str(&format!(
                 "impulse_jwks_unknown_kid_total{{jwks_source_id=\"{}\"}} {}\n",
-                escape_prometheus_label(&jwks_source_id),
+                escape_prometheus_label(jwks_source_id),
                 count
             ));
         }
@@ -952,12 +937,12 @@ impl Metrics {
             "# HELP impulse_jwks_last_refresh_success_seconds Unix timestamp of the last successful JWKS refresh.\n",
         );
         out.push_str("# TYPE impulse_jwks_last_refresh_success_seconds gauge\n");
-        let now_unix_seconds = SystemTime::now()
+        let jwks_now_unix_seconds = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .ok()
             .map(|duration| duration.as_secs())
             .unwrap_or_default();
-        for state in self.snapshot_jwks_source_state() {
+        for state in &jwt_jwks_metrics.jwks_source_state {
             let jwks_source_id = escape_prometheus_label(&state.jwks_source_id);
             out.push_str(&format!(
                 "impulse_jwks_refresh_success_total{{jwks_source_id=\"{}\"}} {}\n",
@@ -988,7 +973,7 @@ impl Metrics {
             ));
             let age_seconds = state
                 .last_refresh_success_unix_seconds
-                .map(|last_success| now_unix_seconds.saturating_sub(last_success))
+                .map(|last_success| jwks_now_unix_seconds.saturating_sub(last_success))
                 .unwrap_or_default();
             out.push_str(&format!(
                 "impulse_jwks_age_seconds{{jwks_source_id=\"{}\"}} {}\n",
@@ -1011,8 +996,8 @@ impl Metrics {
             "# HELP impulse_backend_connect_attempt_total Observed upstream socket connects grouped by backend identity, hostname, and resolved address.\n",
         );
         out.push_str("# TYPE impulse_backend_connect_attempt_total counter\n");
-        for (backend, state) in self.snapshot_backend_dns_state() {
-            let backend = escape_prometheus_label(&backend);
+        for (backend, state) in &backend_metrics.backend_dns_state {
+            let backend = escape_prometheus_label(backend);
             out.push_str(&format!(
                 "impulse_backend_dns_last_refresh_success_seconds{{backend=\"{}\"}} {}\n",
                 backend, state.last_success_unix_seconds
@@ -1022,14 +1007,14 @@ impl Metrics {
                 backend, state.resolved_address_count
             ));
         }
-        for (backend, state) in self.snapshot_backend_rotation_state() {
-            let backend = escape_prometheus_label(&backend);
+        for (backend, state) in &backend_metrics.backend_rotation_state {
+            let backend = escape_prometheus_label(backend);
             out.push_str(&format!(
                 "impulse_backend_client_rotations{{backend=\"{}\"}} {}\n",
                 backend, state.rotations
             ));
         }
-        for (key, count) in self.snapshot_backend_connect_attempts() {
+        for (key, count) in &backend_metrics.backend_connect_attempts {
             let backend = escape_prometheus_label(&key.backend);
             let hostname = escape_prometheus_label(&key.hostname);
             let resolved_addr = escape_prometheus_label(&key.resolved_addr);
