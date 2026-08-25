@@ -114,13 +114,33 @@ fn response_headers_with_defaults(
     body: &[u8],
     headers: &[(String, String)],
 ) -> Vec<quiche::h3::Header> {
-    let mut resp_headers = vec![quiche::h3::Header::new(
+    response_headers_with_defaults_and_extra(status, body, headers, None)
+}
+
+fn response_headers_with_defaults_and_extra(
+    status: http::StatusCode,
+    body: &[u8],
+    headers: &[(String, String)],
+    extra_header: Option<(&str, &str)>,
+) -> Vec<quiche::h3::Header> {
+    let mut resp_headers =
+        Vec::with_capacity(headers.len() + usize::from(extra_header.is_some()) + 3);
+    resp_headers.push(quiche::h3::Header::new(
         b":status",
         status.as_str().as_bytes(),
-    )];
+    ));
     let mut has_content_type = false;
     let mut has_content_length = false;
     for (name, value) in headers {
+        if name.eq_ignore_ascii_case(http::header::CONTENT_TYPE.as_str()) {
+            has_content_type = true;
+        }
+        if name.eq_ignore_ascii_case(http::header::CONTENT_LENGTH.as_str()) {
+            has_content_length = true;
+        }
+        resp_headers.push(quiche::h3::Header::new(name.as_bytes(), value.as_bytes()));
+    }
+    if let Some((name, value)) = extra_header {
         if name.eq_ignore_ascii_case(http::header::CONTENT_TYPE.as_str()) {
             has_content_type = true;
         }
@@ -659,7 +679,23 @@ impl QUICListener {
         body: &[u8],
         headers: &[(String, String)],
     ) -> Result<(), quiche::h3::Error> {
-        let resp_headers = response_headers_with_defaults(status, body, headers);
+        let resp_headers = response_headers_with_defaults_and_extra(status, body, headers, None);
+        h3.send_response(quic, stream_id, &resp_headers, false)?;
+        h3.send_body(quic, stream_id, body, true)?;
+        Ok(())
+    }
+
+    fn send_response_with_headers_and_extra(
+        h3: &mut quiche::h3::Connection,
+        quic: &mut quiche::Connection,
+        stream_id: u64,
+        status: http::StatusCode,
+        body: &[u8],
+        headers: &[(String, String)],
+        extra_header: Option<(&str, &str)>,
+    ) -> Result<(), quiche::h3::Error> {
+        let resp_headers =
+            response_headers_with_defaults_and_extra(status, body, headers, extra_header);
         h3.send_response(quic, stream_id, &resp_headers, false)?;
         h3.send_body(quic, stream_id, body, true)?;
         Ok(())
@@ -673,42 +709,36 @@ impl QUICListener {
     ) -> Result<(), quiche::h3::Error> {
         match decision {
             ExternalAuthDecision::Allow { .. } => Ok(()),
-            ExternalAuthDecision::Deny(response) => Self::send_response_with_headers(
+            ExternalAuthDecision::Deny(response) => Self::send_response_with_headers_and_extra(
                 h3,
                 quic,
                 stream_id,
                 response.status,
                 &response.body,
                 &response.headers,
+                None,
             ),
-            ExternalAuthDecision::Redirect(response) => {
-                let mut headers = response.headers.clone();
-                headers.push((
-                    http::header::LOCATION.as_str().to_string(),
-                    response.location.clone(),
-                ));
-                Self::send_response_with_headers(
-                    h3,
-                    quic,
-                    stream_id,
-                    response.status,
-                    &[],
-                    &headers,
-                )
-            }
+            ExternalAuthDecision::Redirect(response) => Self::send_response_with_headers_and_extra(
+                h3,
+                quic,
+                stream_id,
+                response.status,
+                &[],
+                &response.headers,
+                Some((http::header::LOCATION.as_str(), response.location.as_str())),
+            ),
             ExternalAuthDecision::Challenge(response) => {
-                let mut headers = response.headers.clone();
-                headers.push((
-                    http::header::WWW_AUTHENTICATE.as_str().to_string(),
-                    response.www_authenticate.clone(),
-                ));
-                Self::send_response_with_headers(
+                Self::send_response_with_headers_and_extra(
                     h3,
                     quic,
                     stream_id,
                     response.status,
                     &response.body,
-                    &headers,
+                    &response.headers,
+                    Some((
+                        http::header::WWW_AUTHENTICATE.as_str(),
+                        response.www_authenticate.as_str(),
+                    )),
                 )
             }
         }
@@ -1551,12 +1581,12 @@ mod tests {
             location: "https://login.example.com".to_string(),
         };
 
-        let mut headers = response.headers.clone();
-        headers.push((
-            http::header::LOCATION.as_str().to_string(),
-            response.location.clone(),
-        ));
-        let headers = response_headers_with_defaults(response.status, &[], &headers);
+        let headers = response_headers_with_defaults_and_extra(
+            response.status,
+            &[],
+            &response.headers,
+            Some((http::header::LOCATION.as_str(), response.location.as_str())),
+        );
 
         assert_eq!(header_value(&headers, b":status"), Some(&b"307"[..]));
         assert_eq!(
@@ -1576,12 +1606,15 @@ mod tests {
             body: b"challenge\n".to_vec(),
         };
 
-        let mut headers = response.headers.clone();
-        headers.push((
-            http::header::WWW_AUTHENTICATE.as_str().to_string(),
-            response.www_authenticate.clone(),
-        ));
-        let headers = response_headers_with_defaults(response.status, &response.body, &headers);
+        let headers = response_headers_with_defaults_and_extra(
+            response.status,
+            &response.body,
+            &response.headers,
+            Some((
+                http::header::WWW_AUTHENTICATE.as_str(),
+                response.www_authenticate.as_str(),
+            )),
+        );
 
         assert_eq!(header_value(&headers, b":status"), Some(&b"401"[..]));
         assert_eq!(

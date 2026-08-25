@@ -625,22 +625,32 @@ mod tests {
                 response.headers.clone(),
                 response.body.clone(),
             ),
-            crate::runtime::connection::auth::ExternalAuthDecision::Redirect(response) => {
-                let mut headers = response.headers.clone();
-                headers.push((
-                    http::header::LOCATION.as_str().to_string(),
-                    response.location.clone(),
-                ));
-                (response.status, headers, Vec::new())
-            }
-            crate::runtime::connection::auth::ExternalAuthDecision::Challenge(response) => {
-                let mut headers = response.headers.clone();
-                headers.push((
-                    http::header::WWW_AUTHENTICATE.as_str().to_string(),
-                    response.www_authenticate.clone(),
-                ));
-                (response.status, headers, response.body.clone())
-            }
+            crate::runtime::connection::auth::ExternalAuthDecision::Redirect(response) => (
+                response.status,
+                response
+                    .headers
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once((
+                        http::header::LOCATION.as_str().to_string(),
+                        response.location.clone(),
+                    )))
+                    .collect(),
+                Vec::new(),
+            ),
+            crate::runtime::connection::auth::ExternalAuthDecision::Challenge(response) => (
+                response.status,
+                response
+                    .headers
+                    .iter()
+                    .cloned()
+                    .chain(std::iter::once((
+                        http::header::WWW_AUTHENTICATE.as_str().to_string(),
+                        response.www_authenticate.clone(),
+                    )))
+                    .collect(),
+                response.body.clone(),
+            ),
         }
     }
 
