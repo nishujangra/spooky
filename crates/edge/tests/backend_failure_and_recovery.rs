@@ -118,8 +118,12 @@ fn find_consistent_hash_key_for_backend(
     let mut ring: Vec<(u64, &str)> = all_backend_addrs
         .iter()
         .flat_map(|addr| {
-            (0..impulse_lb::hash::DEFAULT_REPLICAS)
-                .map(move |replica| (impulse_lb::hash::hash_backend_replica(addr, replica), addr.as_str()))
+            (0..impulse_lb::hash::DEFAULT_REPLICAS).map(move |replica| {
+                (
+                    impulse_lb::hash::hash_backend_replica(addr, replica),
+                    addr.as_str(),
+                )
+            })
         })
         .collect();
     ring.sort_unstable();
