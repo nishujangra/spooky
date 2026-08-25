@@ -9,9 +9,9 @@ use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use sha2::{Digest, Sha256};
 
 use super::RuntimeConfigError;
-use crate::bounded_file::{BoundedFileReadError, read_file_with_limit};
-use crate::config::{
-    Config, ControlApiBearerToken, ExternalAuth, SecretProvider, SecretRef, Secrets,
+use crate::{
+    bounded_file::{BoundedFileReadError, read_file_with_limit},
+    config::{Config, ControlApiBearerToken, ExternalAuth, SecretProvider, SecretRef, Secrets},
 };
 
 const MAX_FILE_BACKED_SECRET_BYTES: u64 = 1024 * 1024;

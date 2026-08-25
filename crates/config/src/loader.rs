@@ -1,7 +1,9 @@
 use serde_yaml::{Mapping, Value};
 
-use crate::bounded_file::{BoundedFileReadError, read_file_with_limit};
-use crate::config::{CURRENT_CONFIG_VERSION, Config, SUPPORTED_CONFIG_VERSIONS};
+use crate::{
+    bounded_file::{BoundedFileReadError, read_file_with_limit},
+    config::{CURRENT_CONFIG_VERSION, Config, SUPPORTED_CONFIG_VERSIONS},
+};
 
 const MAX_CONFIG_FILE_BYTES: u64 = 4 * 1024 * 1024;
 
