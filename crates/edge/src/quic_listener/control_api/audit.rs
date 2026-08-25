@@ -102,9 +102,19 @@ impl ControlApiAdminAuditDelivery {
             ControlApiAdminAuditTarget::Log | ControlApiAdminAuditTarget::File(None) => {
                 Self::Inline
             }
-            ControlApiAdminAuditTarget::File(Some(path)) => Self::BufferedFile(Arc::new(
-                ControlApiBufferedAuditWriter::spawn(path.clone(), metrics),
-            )),
+            ControlApiAdminAuditTarget::File(Some(path)) => {
+                match ControlApiBufferedAuditWriter::try_spawn(path.clone(), Arc::clone(&metrics)) {
+                    Some(writer) => Self::BufferedFile(Arc::new(writer)),
+                    None => {
+                        metrics.inc_control_api_audit_write_failure();
+                        error!(
+                            "failed to start control API admin audit sink thread for {}; falling back to inline log sink",
+                            path
+                        );
+                        Self::Inline
+                    }
+                }
+            }
         }
     }
 }
@@ -116,7 +126,7 @@ struct ControlApiBufferedAuditWriter {
 }
 
 impl ControlApiBufferedAuditWriter {
-    fn spawn(path: String, metrics: Arc<Metrics>) -> Self {
+    fn try_spawn(path: String, metrics: Arc<Metrics>) -> Option<Self> {
         let (sender, receiver) = mpsc::sync_channel(CONTROL_API_AUDIT_BUFFER_CAPACITY);
         let thread_path = path.clone();
         let thread_metrics = Arc::clone(&metrics);
@@ -146,13 +156,13 @@ impl ControlApiBufferedAuditWriter {
                     }
                 }
             })
-            .expect("control API audit writer thread must start");
+            .ok()?;
 
-        Self {
+        Some(Self {
             sender,
             path,
             metrics,
-        }
+        })
     }
 
     fn try_emit(&self, serialized: String) {
