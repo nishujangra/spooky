@@ -386,14 +386,8 @@ struct ControlApiTlsListenerPayload {
 struct ControlApiTlsUpstreamPayload {
     verify_certificates: bool,
     strict_sni: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ca_file: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ca_file_fingerprint: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ca_dir: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    ca_dir_fingerprint: Option<String>,
+    custom_ca_file_configured: bool,
+    custom_ca_dir_configured: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     client_certificate: Option<ControlApiSecretMaterialPayload>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -410,8 +404,7 @@ struct ControlApiSecretsPayload {
 struct ControlApiSecretProviderPayload {
     provider: String,
     kind: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    base_dir: Option<String>,
+    base_dir_configured: bool,
     default_provider: bool,
 }
 
@@ -419,8 +412,6 @@ struct ControlApiSecretProviderPayload {
 struct ControlApiSecretMaterialPayload {
     scope: String,
     source_kind: &'static str,
-    reference: String,
-    fingerprint: String,
     last_loaded_at_unix_ms: u64,
     last_reload_status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -793,36 +784,21 @@ impl ControlApiRuntimePayload {
                     .iter()
                     .map(|(name, upstream)| {
                         let tls_policy = upstream.backend_tls_policy();
-                        let effective_tls = &upstream.effective_tls;
                         (
                             name.clone(),
                             ControlApiTlsUpstreamPayload {
                                 verify_certificates: tls_policy.verify_certificates,
                                 strict_sni: tls_policy.strict_sni,
-                                ca_file: tls_policy.ca_file.as_deref().map(sanitize_path),
-                                ca_file_fingerprint: tls_policy
-                                    .ca_file_fingerprint_sha256
-                                    .as_deref()
-                                    .map(fingerprint_surrogate),
-                                ca_dir: tls_policy.ca_dir.as_deref().map(sanitize_path),
-                                ca_dir_fingerprint: tls_policy
-                                    .ca_dir_fingerprint_sha256
-                                    .as_deref()
-                                    .map(fingerprint_surrogate),
+                                custom_ca_file_configured: option_is_present(
+                                    tls_policy.ca_file.as_deref(),
+                                ),
+                                custom_ca_dir_configured: option_is_present(
+                                    tls_policy.ca_dir.as_deref(),
+                                ),
                                 client_certificate: tls_policy.client_certificate.as_ref().map(
                                     |metadata| ControlApiSecretMaterialPayload {
                                         scope: format!("upstream.{name}.tls.client_certificate"),
                                         source_kind: metadata.source_kind.as_str(),
-                                        reference: sanitize_optional_secret_reference(
-                                            effective_tls
-                                                .client_certificate_ref
-                                                .as_ref()
-                                                .map(|secret_ref| secret_ref.reference.as_str()),
-                                            effective_tls.client_certificate.as_deref(),
-                                        ),
-                                        fingerprint: fingerprint_surrogate(
-                                            &metadata.fingerprint_sha256,
-                                        ),
                                         last_loaded_at_unix_ms: metadata.loaded_at_unix_ms,
                                         last_reload_status: "loaded".to_string(),
                                         expiry_not_after_unix_seconds: tls_policy
@@ -833,16 +809,6 @@ impl ControlApiRuntimePayload {
                                     ControlApiSecretMaterialPayload {
                                         scope: format!("upstream.{name}.tls.client_key"),
                                         source_kind: metadata.source_kind.as_str(),
-                                        reference: sanitize_optional_secret_reference(
-                                            effective_tls
-                                                .client_key_ref
-                                                .as_ref()
-                                                .map(|secret_ref| secret_ref.reference.as_str()),
-                                            effective_tls.client_key.as_deref(),
-                                        ),
-                                        fingerprint: fingerprint_surrogate(
-                                            &metadata.fingerprint_sha256,
-                                        ),
                                         last_loaded_at_unix_ms: metadata.loaded_at_unix_ms,
                                         last_reload_status: "loaded".to_string(),
                                         expiry_not_after_unix_seconds: None,
@@ -864,9 +830,9 @@ impl ControlApiRuntimePayload {
                         kind: match config {
                             SecretProvider::File { .. } => "file",
                         },
-                        base_dir: match config {
+                        base_dir_configured: match config {
                             SecretProvider::File { base_dir } => {
-                                base_dir.as_deref().map(sanitize_path)
+                                option_is_present(base_dir.as_deref())
                             }
                         },
                         default_provider: runtime
@@ -883,20 +849,11 @@ impl ControlApiRuntimePayload {
                     .iter()
                     .flat_map(|(name, upstream)| {
                         let tls_policy = upstream.backend_tls_policy();
-                        let effective_tls = &upstream.effective_tls;
                         let mut material = Vec::new();
                         if let Some(metadata) = tls_policy.client_certificate.as_ref() {
                             material.push(ControlApiSecretMaterialPayload {
                                 scope: format!("upstream.{name}.tls.client_certificate"),
                                 source_kind: metadata.source_kind.as_str(),
-                                reference: sanitize_optional_secret_reference(
-                                    effective_tls
-                                        .client_certificate_ref
-                                        .as_ref()
-                                        .map(|secret_ref| secret_ref.reference.as_str()),
-                                    effective_tls.client_certificate.as_deref(),
-                                ),
-                                fingerprint: fingerprint_surrogate(&metadata.fingerprint_sha256),
                                 last_loaded_at_unix_ms: metadata.loaded_at_unix_ms,
                                 last_reload_status: "loaded".to_string(),
                                 expiry_not_after_unix_seconds: tls_policy
@@ -907,14 +864,6 @@ impl ControlApiRuntimePayload {
                             material.push(ControlApiSecretMaterialPayload {
                                 scope: format!("upstream.{name}.tls.client_key"),
                                 source_kind: metadata.source_kind.as_str(),
-                                reference: sanitize_optional_secret_reference(
-                                    effective_tls
-                                        .client_key_ref
-                                        .as_ref()
-                                        .map(|secret_ref| secret_ref.reference.as_str()),
-                                    effective_tls.client_key.as_deref(),
-                                ),
-                                fingerprint: fingerprint_surrogate(&metadata.fingerprint_sha256),
                                 last_loaded_at_unix_ms: metadata.loaded_at_unix_ms,
                                 last_reload_status: "loaded".to_string(),
                                 expiry_not_after_unix_seconds: None,
@@ -950,27 +899,8 @@ fn sanitize_path(path: &str) -> String {
         .unwrap_or_else(|| "<path>".to_string())
 }
 
-fn sanitize_optional_secret_reference(
-    secret_ref: Option<&str>,
-    legacy_path: Option<&str>,
-) -> String {
-    if let Some(secret_ref) = secret_ref {
-        if let Some(path) = secret_ref.strip_prefix("file://") {
-            return format!("file://{}", sanitize_path(path));
-        }
-        if let Some((_scheme, _)) = secret_ref.split_once(':') {
-            return "<secret_ref>".to_string();
-        }
-    }
-    legacy_path
-        .map(sanitize_path)
-        .unwrap_or_else(|| "<unavailable>".to_string())
-}
-
-fn fingerprint_surrogate(fingerprint: &str) -> String {
-    let trimmed = fingerprint.trim();
-    let prefix_len = trimmed.len().min(12);
-    format!("sha256:{}", &trimmed[..prefix_len])
+fn option_is_present(value: Option<&str>) -> bool {
+    value.is_some_and(|value| !value.trim().is_empty())
 }
 
 impl ControlApiQuotaPayload {

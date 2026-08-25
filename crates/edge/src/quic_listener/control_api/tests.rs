@@ -10,7 +10,8 @@ use impulse_config::{
         DistributedQuotaSelector, DistributedQuotaSelectorSource, DistributedQuotaWindow,
         JwksStartupBehavior, JwtAlgorithm, JwtAuth, Listen, LoadBalancing, Log, LogFormat,
         Observability, Performance, QuotaBackendFailurePolicy, QuotaCounterBackend,
-        QuotaEnforcementMode, Resilience, RouteMatch, Security, Tls, Upstream, UpstreamTls,
+        QuotaEnforcementMode, Resilience, RouteMatch, SecretProvider, Security, Tls, Upstream,
+        UpstreamTls,
     },
     runtime::{RuntimeConfig, RuntimeJwtVerificationKey},
 };
@@ -1745,6 +1746,91 @@ async fn control_api_runtime_snapshot_includes_jwks_cache_visibility() {
         "RS256"
     );
     crate::quic_listener::admission::clear_jwks_cache_for_test(jwks_url);
+}
+
+#[tokio::test]
+async fn control_api_runtime_snapshot_coarsens_sensitive_tls_and_secret_details() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let ca_dir = dir.path().join("ca");
+    std::fs::create_dir_all(&ca_dir).expect("create ca dir");
+    std::fs::copy(&cert, ca_dir.join("root.pem")).expect("copy ca cert");
+
+    let mut config = test_config(cert.clone(), key.clone());
+    config.observability.control_api.enabled = true;
+    config.upstream.get_mut("api").expect("api upstream").tls = Some(UpstreamTls {
+        verify_certificates: true,
+        strict_sni: true,
+        ca_file: Some(cert.clone()),
+        ca_dir: Some(ca_dir.to_string_lossy().to_string()),
+        client_certificate: Some(cert),
+        client_certificate_ref: None,
+        client_key: Some(key),
+        client_key_ref: None,
+    });
+    config.secrets.providers.insert(
+        "files".to_string(),
+        SecretProvider::File {
+            base_dir: Some(dir.path().join("secrets").to_string_lossy().to_string()),
+        },
+    );
+    config.secrets.default_provider = Some("files".to_string());
+
+    let state = control_api_state_with_runtime_bundle(&config, &config);
+    let payload = json_body(QUICListener::render_control_api_runtime_snapshot(&state)).await;
+
+    let upstream_tls = &payload["tls"]["upstreams"]["api"];
+    assert_eq!(upstream_tls["custom_ca_file_configured"], true);
+    assert_eq!(upstream_tls["custom_ca_dir_configured"], true);
+    assert!(
+        upstream_tls.get("ca_file").is_none(),
+        "viewer payload must not expose CA file path surrogates"
+    );
+    assert!(
+        upstream_tls.get("ca_dir").is_none(),
+        "viewer payload must not expose CA directory path surrogates"
+    );
+    assert!(
+        upstream_tls.get("ca_file_fingerprint").is_none(),
+        "viewer payload must not expose CA fingerprint surrogates"
+    );
+    assert!(
+        upstream_tls.get("ca_dir_fingerprint").is_none(),
+        "viewer payload must not expose CA fingerprint surrogates"
+    );
+    assert!(
+        upstream_tls["client_certificate"].get("reference").is_none(),
+        "viewer payload must not expose secret references"
+    );
+    assert!(
+        upstream_tls["client_certificate"].get("fingerprint").is_none(),
+        "viewer payload must not expose secret fingerprints"
+    );
+    assert_eq!(upstream_tls["client_certificate"]["source_kind"], "file");
+
+    let provider = payload["secrets"]["providers"]
+        .as_array()
+        .expect("providers array")
+        .iter()
+        .find(|provider| provider["provider"] == "files")
+        .expect("files provider");
+    assert_eq!(provider["base_dir_configured"], true);
+    assert!(
+        provider.get("base_dir").is_none(),
+        "viewer payload must not expose secret-provider base_dir"
+    );
+
+    let material = payload["secrets"]["material"]
+        .as_array()
+        .expect("material array");
+    assert!(
+        material.iter().all(|entry| entry.get("reference").is_none()),
+        "viewer payload must not expose secret references"
+    );
+    assert!(
+        material.iter().all(|entry| entry.get("fingerprint").is_none()),
+        "viewer payload must not expose secret fingerprints"
+    );
 }
 
 #[test]
