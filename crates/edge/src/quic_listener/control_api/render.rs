@@ -917,11 +917,7 @@ fn sanitize_jwks_endpoint(endpoint: &str) -> String {
     let sanitized_path = remainder
         .split_once('/')
         .map(|(_, path)| path)
-        .and_then(|path| {
-            path.split('/')
-                .filter(|segment| !segment.is_empty())
-                .next_back()
-        })
+        .and_then(|path| path.split('/').rfind(|segment| !segment.is_empty()))
         .map(|segment| format!("/{}", segment))
         .unwrap_or_default();
 
