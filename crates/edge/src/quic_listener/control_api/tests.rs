@@ -1546,6 +1546,73 @@ fn control_api_builds_mtls_identity_from_subject_role_mapping() {
 }
 
 #[test]
+fn control_api_dual_auth_identity_uses_least_privileged_common_role() {
+    let request_context = super::admin_identity::ControlApiRequestContext {
+        peer_addr: "127.0.0.1:9443".parse().expect("peer socket addr"),
+        mtls_identity: Some(super::admin_identity::AdminMtlsIdentity {
+            subject: Some("CN=alice".to_string()),
+            common_name: Some("alice".to_string()),
+            san_dns: vec!["admin.example.com".to_string()],
+            san_uri: Vec::new(),
+            roles: vec![super::admin_identity::AdminRole::Admin],
+        }),
+        listener: Some("edge-primary".to_string()),
+        request_id: None,
+        trace_id: None,
+        span_id: None,
+    };
+    let token_match = super::admin_identity::AdminTokenMatch {
+        actor_id: Some("alice".to_string()),
+        role: super::admin_identity::AdminRole::Viewer,
+    };
+
+    let identity = QUICListener::build_admin_identity(Some(request_context), Some(token_match), None)
+        .expect("dual auth identity");
+
+    assert_eq!(
+        identity.roles,
+        vec![super::admin_identity::AdminRole::Viewer]
+    );
+    assert_eq!(
+        identity.authn_mechanisms,
+        vec![
+            super::admin_identity::AdminAuthnMechanism::BearerToken,
+            super::admin_identity::AdminAuthnMechanism::MutualTls,
+        ]
+    );
+}
+
+#[test]
+fn control_api_dual_auth_identity_keeps_token_role_when_mtls_has_no_role_mapping() {
+    let request_context = super::admin_identity::ControlApiRequestContext {
+        peer_addr: "127.0.0.1:9443".parse().expect("peer socket addr"),
+        mtls_identity: Some(super::admin_identity::AdminMtlsIdentity {
+            subject: Some("CN=alice".to_string()),
+            common_name: Some("alice".to_string()),
+            san_dns: vec!["admin.example.com".to_string()],
+            san_uri: Vec::new(),
+            roles: Vec::new(),
+        }),
+        listener: Some("edge-primary".to_string()),
+        request_id: None,
+        trace_id: None,
+        span_id: None,
+    };
+    let token_match = super::admin_identity::AdminTokenMatch {
+        actor_id: Some("alice".to_string()),
+        role: super::admin_identity::AdminRole::Operator,
+    };
+
+    let identity = QUICListener::build_admin_identity(Some(request_context), Some(token_match), None)
+        .expect("dual auth identity without mtls role");
+
+    assert_eq!(
+        identity.roles,
+        vec![super::admin_identity::AdminRole::Operator]
+    );
+}
+
+#[test]
 fn control_api_request_context_captures_operator_correlation_headers() {
     let request_context = super::admin_identity::ControlApiRequestContext {
         peer_addr: "127.0.0.1:9443".parse().expect("peer socket addr"),
