@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
+use hyper::body::Body;
 use http_body_util::{BodyExt, Full};
 use serde::{Deserialize, de::DeserializeOwned};
 
@@ -39,6 +40,8 @@ enum ControlApiActivationError {
     Response(Box<Response<Full<Bytes>>>),
     Activation(Box<ActivationResult>),
 }
+
+const MAX_CONTROL_API_JSON_BODY_BYTES: usize = 64 * 1024;
 
 impl QUICListener {
     pub(super) fn apply_live_log_level_reload(
@@ -1109,15 +1112,7 @@ impl QUICListener {
     where
         T: DeserializeOwned,
     {
-        let body = match req.into_body().collect().await {
-            Ok(collected) => collected.to_bytes(),
-            Err(err) => {
-                return Err(Box::new(Self::json_response(
-                    StatusCode::BAD_REQUEST,
-                    json!({ "error": format!("invalid request body: {err}") }),
-                )));
-            }
-        };
+        let body = Self::collect_control_api_json_body_bounded(req.into_body()).await?;
         if body.is_empty() {
             return Err(Box::new(Self::json_response(
                 StatusCode::BAD_REQUEST,
@@ -1138,15 +1133,7 @@ impl QUICListener {
     where
         T: DeserializeOwned + Default,
     {
-        let body = match req.into_body().collect().await {
-            Ok(collected) => collected.to_bytes(),
-            Err(err) => {
-                return Err(Box::new(Self::json_response(
-                    StatusCode::BAD_REQUEST,
-                    json!({ "error": format!("invalid request body: {err}") }),
-                )));
-            }
-        };
+        let body = Self::collect_control_api_json_body_bounded(req.into_body()).await?;
         if body.is_empty() {
             return Ok(T::default());
         }
@@ -1156,6 +1143,44 @@ impl QUICListener {
                 json!({ "error": format!("invalid request body: {err}") }),
             ))
         })
+    }
+
+    async fn collect_control_api_json_body_bounded<B>(
+        mut body: B,
+    ) -> Result<Vec<u8>, Box<Response<Full<Bytes>>>>
+    where
+        B: Body<Data = Bytes> + Unpin,
+        B::Error: std::fmt::Display,
+    {
+        let mut bytes = Vec::new();
+        while let Some(frame) = body.frame().await {
+            let frame = match frame {
+                Ok(frame) => frame,
+                Err(err) => {
+                    return Err(Box::new(Self::json_response(
+                        StatusCode::BAD_REQUEST,
+                        json!({ "error": format!("invalid request body: {err}") }),
+                    )));
+                }
+            };
+            let Ok(chunk) = frame.into_data() else {
+                continue;
+            };
+            let next_len = bytes.len().saturating_add(chunk.len());
+            if next_len > MAX_CONTROL_API_JSON_BODY_BYTES {
+                return Err(Box::new(Self::json_response(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    json!({
+                        "error": format!(
+                            "request body exceeded {} bytes",
+                            MAX_CONTROL_API_JSON_BODY_BYTES
+                        )
+                    }),
+                )));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        Ok(bytes)
     }
 
     fn control_api_reload_config_input(
