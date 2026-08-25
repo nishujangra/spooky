@@ -566,6 +566,25 @@ impl Metrics {
                 .load(Ordering::Relaxed)
         ));
 
+        out.push_str(
+            "# HELP impulse_control_api_audit_event_drops Total control API admin audit records dropped before persistence.\n",
+        );
+        out.push_str("# TYPE impulse_control_api_audit_event_drops counter\n");
+        out.push_str(&format!(
+            "impulse_control_api_audit_event_drops {}\n",
+            self.control_api_audit_event_drops.load(Ordering::Relaxed)
+        ));
+
+        out.push_str(
+            "# HELP impulse_control_api_audit_write_failures Total control API admin audit sink open or write failures.\n",
+        );
+        out.push_str("# TYPE impulse_control_api_audit_write_failures counter\n");
+        out.push_str(&format!(
+            "impulse_control_api_audit_write_failures {}\n",
+            self.control_api_audit_write_failures
+                .load(Ordering::Relaxed)
+        ));
+
         out.push_str("# HELP impulse_watchdog_restart_requests Total watchdog restart requests.\n");
         out.push_str("# TYPE impulse_watchdog_restart_requests counter\n");
         out.push_str(&format!(

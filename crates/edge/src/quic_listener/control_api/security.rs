@@ -6,6 +6,7 @@ use impulse_config::config::{
 };
 
 use super::audit::ControlApiAdminAuditEmitter;
+use crate::Metrics;
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(in crate::quic_listener) struct ControlApiSecurityPolicy {
@@ -18,7 +19,10 @@ pub(in crate::quic_listener) struct ControlApiSecurityPolicy {
 }
 
 impl ControlApiSecurityPolicy {
-    pub(in crate::quic_listener) fn from_config(config: &ControlApiConfig) -> Self {
+    pub(in crate::quic_listener) fn from_config(
+        config: &ControlApiConfig,
+        metrics: Arc<Metrics>,
+    ) -> Self {
         Self {
             client_auth: ControlApiClientAuthPolicy::from_config(config),
             bearer_tokens: Arc::new(runtime_bearer_tokens(config)),
@@ -29,7 +33,7 @@ impl ControlApiSecurityPolicy {
                 .map(ControlApiIdentitySourcePolicy::from_config),
             authorization: ControlApiAuthorizationPolicy::from_config(config),
             ip_allowlist: ControlApiIpAllowlistPolicy::from_config(config),
-            audit: ControlApiAdminAuditEmitter::from_config(config),
+            audit: ControlApiAdminAuditEmitter::from_config(config, metrics),
         }
     }
 }

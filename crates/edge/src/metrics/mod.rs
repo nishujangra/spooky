@@ -76,6 +76,8 @@ pub struct Metrics {
     pub response_prebuffer_limit_rejects: AtomicU64,
     pub scid_rotations: AtomicU64,
     pub control_api_connection_limit_drops: AtomicU64,
+    pub control_api_audit_event_drops: AtomicU64,
+    pub control_api_audit_write_failures: AtomicU64,
     pub watchdog_restart_requests: AtomicU64,
     pub watchdog_restart_hooks: AtomicU64,
     pub watchdog_degraded_windows: AtomicU64,
@@ -614,6 +616,8 @@ impl Metrics {
             response_prebuffer_limit_rejects: AtomicU64::new(0),
             scid_rotations: AtomicU64::new(0),
             control_api_connection_limit_drops: AtomicU64::new(0),
+            control_api_audit_event_drops: AtomicU64::new(0),
+            control_api_audit_write_failures: AtomicU64::new(0),
             watchdog_restart_requests: AtomicU64::new(0),
             watchdog_restart_hooks: AtomicU64::new(0),
             watchdog_degraded_windows: AtomicU64::new(0),
@@ -1621,6 +1625,16 @@ impl Metrics {
 
     pub fn inc_control_api_connection_limit_drop(&self) {
         self.control_api_connection_limit_drops
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn inc_control_api_audit_event_drop(&self) {
+        self.control_api_audit_event_drops
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn inc_control_api_audit_write_failure(&self) {
+        self.control_api_audit_write_failures
             .fetch_add(1, Ordering::Relaxed);
     }
 

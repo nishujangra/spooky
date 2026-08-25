@@ -1,4 +1,14 @@
-use std::{fs::OpenOptions, io::Write, sync::atomic::Ordering};
+use std::{
+    fmt,
+    fs::{File, OpenOptions},
+    io::Write,
+    sync::{
+        Arc,
+        atomic::Ordering,
+        mpsc::{self, SyncSender, TrySendError},
+    },
+    thread,
+};
 
 use impulse_config::config::{
     ControlApi as ControlApiConfig, ControlApiAuditFormat, ControlApiAuditSink,
@@ -13,36 +23,169 @@ use super::{
     security::ControlApiSecurityPolicy,
     *,
 };
-use crate::REQUEST_ID_COUNTER;
+use crate::{Metrics, REQUEST_ID_COUNTER};
 
 pub(super) const ADMIN_AUDIT_SCHEMA_VERSION: &str = "v1";
+const CONTROL_API_AUDIT_BUFFER_CAPACITY: usize = 1024;
 
-#[derive(Debug, Clone, Eq, PartialEq)]
 pub(in crate::quic_listener) struct ControlApiAdminAuditEmitter {
     pub(in crate::quic_listener) enabled: bool,
     pub(in crate::quic_listener) format: ControlApiAuditFormat,
     pub(in crate::quic_listener) sink: ControlApiAdminAuditTarget,
+    delivery: ControlApiAdminAuditDelivery,
 }
 
 impl ControlApiAdminAuditEmitter {
-    pub(in crate::quic_listener) fn from_config(config: &ControlApiConfig) -> Self {
+    pub(in crate::quic_listener) fn from_config(
+        config: &ControlApiConfig,
+        metrics: Arc<Metrics>,
+    ) -> Self {
+        let sink = match config.audit.sink {
+            ControlApiAuditSink::Log => ControlApiAdminAuditTarget::Log,
+            ControlApiAuditSink::File => ControlApiAdminAuditTarget::File(config.audit.file_path.clone()),
+        };
         Self {
             enabled: config.audit.enabled,
             format: config.audit.format,
-            sink: match config.audit.sink {
-                ControlApiAuditSink::Log => ControlApiAdminAuditTarget::Log,
-                ControlApiAuditSink::File => {
-                    ControlApiAdminAuditTarget::File(config.audit.file_path.clone())
-                }
-            },
+            delivery: ControlApiAdminAuditDelivery::for_target(&sink, metrics),
+            sink,
         }
     }
 }
+
+impl Clone for ControlApiAdminAuditEmitter {
+    fn clone(&self) -> Self {
+        Self {
+            enabled: self.enabled,
+            format: self.format,
+            sink: self.sink.clone(),
+            delivery: self.delivery.clone(),
+        }
+    }
+}
+
+impl fmt::Debug for ControlApiAdminAuditEmitter {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ControlApiAdminAuditEmitter")
+            .field("enabled", &self.enabled)
+            .field("format", &self.format)
+            .field("sink", &self.sink)
+            .finish()
+    }
+}
+
+impl PartialEq for ControlApiAdminAuditEmitter {
+    fn eq(&self, other: &Self) -> bool {
+        self.enabled == other.enabled
+            && self.format == other.format
+            && self.sink == other.sink
+    }
+}
+
+impl Eq for ControlApiAdminAuditEmitter {}
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(in crate::quic_listener) enum ControlApiAdminAuditTarget {
     Log,
     File(Option<String>),
+}
+
+#[derive(Clone)]
+enum ControlApiAdminAuditDelivery {
+    Inline,
+    BufferedFile(Arc<ControlApiBufferedAuditWriter>),
+}
+
+impl ControlApiAdminAuditDelivery {
+    fn for_target(target: &ControlApiAdminAuditTarget, metrics: Arc<Metrics>) -> Self {
+        match target {
+            ControlApiAdminAuditTarget::Log | ControlApiAdminAuditTarget::File(None) => Self::Inline,
+            ControlApiAdminAuditTarget::File(Some(path)) => {
+                Self::BufferedFile(Arc::new(ControlApiBufferedAuditWriter::spawn(
+                    path.clone(),
+                    metrics,
+                )))
+            }
+        }
+    }
+}
+
+struct ControlApiBufferedAuditWriter {
+    sender: SyncSender<String>,
+    path: String,
+    metrics: Arc<Metrics>,
+}
+
+impl ControlApiBufferedAuditWriter {
+    fn spawn(path: String, metrics: Arc<Metrics>) -> Self {
+        let (sender, receiver) = mpsc::sync_channel(CONTROL_API_AUDIT_BUFFER_CAPACITY);
+        let thread_path = path.clone();
+        let thread_metrics = Arc::clone(&metrics);
+
+        thread::Builder::new()
+            .name("control-api-audit-writer".to_string())
+            .spawn(move || {
+                let mut file = None;
+                while let Ok(serialized) = receiver.recv() {
+                    if file.is_none() {
+                        file = Self::open_sink(&thread_path, &thread_metrics);
+                    }
+
+                    let Some(open_file) = file.as_mut() else {
+                        continue;
+                    };
+
+                    if let Err(err) = writeln!(open_file, "{}", serialized)
+                        .and_then(|()| open_file.flush())
+                    {
+                        thread_metrics.inc_control_api_audit_write_failure();
+                        error!(
+                            "failed to write control API admin audit event to {}: {}",
+                            thread_path, err
+                        );
+                        file = None;
+                    }
+                }
+            })
+            .expect("control API audit writer thread must start");
+
+        Self {
+            sender,
+            path,
+            metrics,
+        }
+    }
+
+    fn try_emit(&self, serialized: String) {
+        match self.sender.try_send(serialized) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                self.metrics.inc_control_api_audit_event_drop();
+                warn!(
+                    "dropping control API admin audit event because buffered sink {} is full",
+                    self.path
+                );
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                self.metrics.inc_control_api_audit_event_drop();
+                error!(
+                    "dropping control API admin audit event because buffered sink {} is unavailable",
+                    self.path
+                );
+            }
+        }
+    }
+
+    fn open_sink(path: &str, metrics: &Metrics) -> Option<File> {
+        match OpenOptions::new().create(true).append(true).open(path) {
+            Ok(file) => Some(file),
+            Err(err) => {
+                metrics.inc_control_api_audit_write_failure();
+                error!("failed to open control API admin audit sink {}: {}", path, err);
+                None
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, Serialize)]
@@ -515,20 +658,9 @@ impl ControlApiAdminAuditEmitter {
             ControlApiAdminAuditTarget::Log => {
                 info!(target: CONTROL_API_AUDIT_LOG_TARGET, "{}", serialized)
             }
-            ControlApiAdminAuditTarget::File(Some(path)) => {
-                match OpenOptions::new().create(true).append(true).open(path) {
-                    Ok(mut file) => {
-                        if let Err(err) = writeln!(file, "{}", serialized) {
-                            error!(
-                                "failed to write control API admin audit event to {}: {}",
-                                path, err
-                            );
-                        }
-                    }
-                    Err(err) => error!(
-                        "failed to open control API admin audit sink {}: {}",
-                        path, err
-                    ),
+            ControlApiAdminAuditTarget::File(Some(_)) => {
+                if let ControlApiAdminAuditDelivery::BufferedFile(writer) = &self.delivery {
+                    writer.try_emit(serialized);
                 }
             }
             ControlApiAdminAuditTarget::File(None) => {

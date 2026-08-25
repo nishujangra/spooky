@@ -277,6 +277,20 @@ fn attach_control_api_peer_addr<B>(req: &mut Request<B>, peer_addr: &str) {
 }
 
 fn read_audit_events(path: &Path) -> Vec<serde_json::Value> {
+    for _ in 0..20 {
+        if let Ok(contents) = std::fs::read_to_string(path) {
+            let events = contents
+                .lines()
+                .filter(|line| !line.trim().is_empty())
+                .map(|line| serde_json::from_str(line).expect("parse audit event"))
+                .collect::<Vec<_>>();
+            if !events.is_empty() {
+                return events;
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
     let contents = std::fs::read_to_string(path).expect("read audit file");
     contents
         .lines()
