@@ -1195,6 +1195,32 @@ fn rejects_ambiguous_route_matchers_with_same_host_path_and_method() {
 }
 
 #[test]
+fn rejects_whitespace_only_route_host_without_path_prefix() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    let upstream = cfg.upstream.get_mut("test_upstream").expect("upstream");
+    upstream.route.host = Some("   ".to_string());
+    upstream.route.path_prefix = None;
+
+    assert!(validate(&cfg).is_err());
+}
+
+#[test]
+fn rejects_malformed_route_host_matcher() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    let upstream = cfg.upstream.get_mut("test_upstream").expect("upstream");
+    upstream.route.host = Some("[missing-end".to_string());
+    upstream.route.path_prefix = None;
+
+    assert!(validate(&cfg).is_err());
+}
+
+#[test]
 fn allows_same_host_and_path_when_methods_differ() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_certs(dir.path());

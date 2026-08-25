@@ -1377,14 +1377,31 @@ fn validate_inner(config: &Config) -> bool {
 
     // --- Validate upstream routes ---
     for (upstream_name, upstream) in &config.upstream {
-        // Validate route matcher has at least one condition
-        let has_host = upstream.route.host.is_some();
+        let normalized_route_host = upstream
+            .route
+            .host
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(normalize_route_host);
+        let has_host = normalized_route_host.is_some();
         let has_path = upstream.route.path_prefix.is_some();
 
         if !has_host && !has_path {
             validation_error!(
                 "Upstream '{}' must have either 'host' or 'path_prefix' route matcher",
                 upstream_name
+            );
+            return false;
+        }
+
+        if let Some(host) = upstream.route.host.as_deref()
+            && !valid_route_host_pattern(host)
+        {
+            validation_error!(
+                "Route host matcher must be a valid non-empty host pattern for upstream '{}': {}",
+                upstream_name,
+                host
             );
             return false;
         }
@@ -1441,7 +1458,13 @@ fn validate_inner(config: &Config) -> bool {
 
     for (upstream_name, upstream) in &config.upstream {
         let route_key = (
-            upstream.route.host.as_deref().map(normalize_route_host),
+            upstream
+                .route
+                .host
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(normalize_route_host),
             upstream.route.path_prefix.clone(),
             normalized_route_method(upstream.route.method.as_deref()),
         );
