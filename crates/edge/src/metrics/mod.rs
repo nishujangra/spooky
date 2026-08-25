@@ -897,6 +897,23 @@ thread_local! {
 }
 
 impl Metrics {
+    fn mark_quota_metrics_stale(&self) {
+        self.quota_metrics_version.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn mark_jwt_jwks_metrics_stale(&self) {
+        self.jwt_jwks_metrics_version
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn mark_backend_metrics_stale(&self) {
+        self.backend_metrics_version.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn mark_secret_metrics_stale(&self) {
+        self.secret_metrics_version.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn new<I>(worker_slots: usize, route_labels: I) -> Self
     where
         I: IntoIterator<Item = String>,
@@ -1138,7 +1155,7 @@ impl Metrics {
                 backend_mode: backend_mode.to_string(),
             };
             *guard.entry(key).or_default() += 1;
-            self.quota_metrics_version.fetch_add(1, Ordering::Relaxed);
+            self.mark_quota_metrics_stale();
         }
     }
 
@@ -1153,7 +1170,7 @@ impl Metrics {
                 reason: reason.slug().to_string(),
             };
             *guard.entry(key).or_default() += 1;
-            self.quota_metrics_version.fetch_add(1, Ordering::Relaxed);
+            self.mark_quota_metrics_stale();
         }
     }
 
@@ -1355,7 +1372,7 @@ impl Metrics {
                     resolved_address_count: resolved_address_count as u64,
                 },
             );
-            self.backend_metrics_version.fetch_add(1, Ordering::Relaxed);
+            self.mark_backend_metrics_stale();
         }
     }
 
@@ -1369,7 +1386,7 @@ impl Metrics {
             .fetch_add(1, Ordering::Relaxed);
         if let Ok(mut guard) = self.backend_rotation_state.write() {
             guard.entry(backend.to_string()).or_default().rotations += 1;
-            self.backend_metrics_version.fetch_add(1, Ordering::Relaxed);
+            self.mark_backend_metrics_stale();
         }
     }
 
@@ -1383,22 +1400,19 @@ impl Metrics {
 
     pub fn record_jwt_validation_failure(&self, reason: &str) {
         if increment_label_counter(&self.jwt_validation_failures, reason) {
-            self.jwt_jwks_metrics_version
-                .fetch_add(1, Ordering::Relaxed);
+            self.mark_jwt_jwks_metrics_stale();
         }
     }
 
     pub fn record_jwt_algorithm_rejection(&self, algorithm: &str) {
         if increment_label_counter(&self.jwt_algorithm_rejections, algorithm) {
-            self.jwt_jwks_metrics_version
-                .fetch_add(1, Ordering::Relaxed);
+            self.mark_jwt_jwks_metrics_stale();
         }
     }
 
     pub fn record_jwks_unknown_kid(&self, jwks_source_id: &str) {
         if increment_label_counter(&self.jwks_unknown_kid_events, jwks_source_id) {
-            self.jwt_jwks_metrics_version
-                .fetch_add(1, Ordering::Relaxed);
+            self.mark_jwt_jwks_metrics_stale();
         }
     }
 
@@ -1410,8 +1424,7 @@ impl Metrics {
         if let Ok(mut guard) = self.jwks_source_state.write() {
             let entry = jwks_source_state_entry_mut(&mut guard, jwks_source_id);
             entry.last_refresh_attempt_unix_seconds = refreshed_at;
-            self.jwt_jwks_metrics_version
-                .fetch_add(1, Ordering::Relaxed);
+            self.mark_jwt_jwks_metrics_stale();
         }
     }
 
@@ -1438,8 +1451,7 @@ impl Metrics {
             entry.last_refresh_attempt_unix_seconds = refreshed_at;
             entry.last_refresh_success_unix_seconds = last_success_at.or(refreshed_at);
             entry.last_failure_reason = None;
-            self.jwt_jwks_metrics_version
-                .fetch_add(1, Ordering::Relaxed);
+            self.mark_jwt_jwks_metrics_stale();
         }
     }
 
@@ -1469,8 +1481,7 @@ impl Metrics {
                 entry.last_refresh_success_unix_seconds = Some(last_success_at);
             }
             entry.last_failure_reason = failure_reason;
-            self.jwt_jwks_metrics_version
-                .fetch_add(1, Ordering::Relaxed);
+            self.mark_jwt_jwks_metrics_stale();
         }
     }
 
@@ -1482,17 +1493,20 @@ impl Metrics {
             .into_iter()
             .map(ToOwned::to_owned)
             .collect::<HashSet<_>>();
+        let mut marked_stale = false;
 
         if let Ok(mut guard) = self.jwks_unknown_kid_events.write() {
             guard.retain(|jwks_source_id, _| active_source_ids.contains(jwks_source_id));
-            self.jwt_jwks_metrics_version
-                .fetch_add(1, Ordering::Relaxed);
+            marked_stale = true;
         }
 
         if let Ok(mut guard) = self.jwks_source_state.write() {
             guard.retain(|jwks_source_id, _| active_source_ids.contains(jwks_source_id));
-            self.jwt_jwks_metrics_version
-                .fetch_add(1, Ordering::Relaxed);
+            marked_stale = true;
+        }
+
+        if marked_stale {
+            self.mark_jwt_jwks_metrics_stale();
         }
     }
 
@@ -1523,7 +1537,7 @@ impl Metrics {
                     })
                     .or_default() += 1;
             }
-            self.backend_metrics_version.fetch_add(1, Ordering::Relaxed);
+            self.mark_backend_metrics_stale();
         }
     }
 
@@ -2210,7 +2224,7 @@ impl Metrics {
                     reason: reason.to_string(),
                 })
                 .or_default() += 1;
-            self.secret_metrics_version.fetch_add(1, Ordering::Relaxed);
+            self.mark_secret_metrics_stale();
         }
     }
 
@@ -2223,7 +2237,7 @@ impl Metrics {
                     reason: reason.to_string(),
                 })
                 .or_default() += 1;
-            self.secret_metrics_version.fetch_add(1, Ordering::Relaxed);
+            self.mark_secret_metrics_stale();
         }
     }
 
@@ -2235,7 +2249,7 @@ impl Metrics {
                 },
                 unix_seconds,
             );
-            self.secret_metrics_version.fetch_add(1, Ordering::Relaxed);
+            self.mark_secret_metrics_stale();
         }
     }
 
@@ -2251,7 +2265,7 @@ impl Metrics {
                     not_after_unix_seconds,
                 );
             }
-            self.secret_metrics_version.fetch_add(1, Ordering::Relaxed);
+            self.mark_secret_metrics_stale();
         }
     }
 
@@ -2263,7 +2277,7 @@ impl Metrics {
                     reason: reason.to_string(),
                 })
                 .or_default() += 1;
-            self.secret_metrics_version.fetch_add(1, Ordering::Relaxed);
+            self.mark_secret_metrics_stale();
         }
     }
 
