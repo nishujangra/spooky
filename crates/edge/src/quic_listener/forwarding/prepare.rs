@@ -207,6 +207,7 @@ impl PendingForward {
         Cow::Owned(request_headers)
     }
 
+    #[cfg(test)]
     pub(super) fn request_headers(&self) -> Vec<quiche::h3::Header> {
         self.request_headers_cow().into_owned()
     }

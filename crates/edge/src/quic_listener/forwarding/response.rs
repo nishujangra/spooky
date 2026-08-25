@@ -109,6 +109,7 @@ fn admission_rejection_headers(
     headers
 }
 
+#[cfg(test)]
 fn response_headers_with_defaults(
     status: http::StatusCode,
     body: &[u8],
@@ -683,20 +684,6 @@ impl QUICListener {
 
         h3.send_response(quic, stream_id, &headers, false)?;
         h3.send_body(quic, stream_id, response.body, true)?;
-        Ok(())
-    }
-
-    pub(super) fn send_response_with_headers(
-        h3: &mut quiche::h3::Connection,
-        quic: &mut quiche::Connection,
-        stream_id: u64,
-        status: http::StatusCode,
-        body: &[u8],
-        headers: &[(String, String)],
-    ) -> Result<(), quiche::h3::Error> {
-        let resp_headers = response_headers_with_defaults_and_extra(status, body, headers, None);
-        h3.send_response(quic, stream_id, &resp_headers, false)?;
-        h3.send_body(quic, stream_id, body, true)?;
         Ok(())
     }
 

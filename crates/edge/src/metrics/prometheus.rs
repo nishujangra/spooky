@@ -997,7 +997,7 @@ impl Metrics {
         );
         out.push_str("# TYPE impulse_backend_connect_attempt_total counter\n");
         for (backend, state) in &backend_metrics.backend_dns_state {
-            let backend = escape_prometheus_label(&backend);
+            let backend = escape_prometheus_label(backend);
             out.push_str(&format!(
                 "impulse_backend_dns_last_refresh_success_seconds{{backend=\"{}\"}} {}\n",
                 backend, state.last_success_unix_seconds
@@ -1008,7 +1008,7 @@ impl Metrics {
             ));
         }
         for (backend, state) in &backend_metrics.backend_rotation_state {
-            let backend = escape_prometheus_label(&backend);
+            let backend = escape_prometheus_label(backend);
             out.push_str(&format!(
                 "impulse_backend_client_rotations{{backend=\"{}\"}} {}\n",
                 backend, state.rotations
