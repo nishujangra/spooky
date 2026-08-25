@@ -779,6 +779,23 @@ mod tests {
     }
 
     #[test]
+    fn file_provider_accepts_file_at_size_limit() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("secret.txt");
+        fs::write(&path, vec![b'x'; MAX_FILE_BACKED_SECRET_BYTES as usize]).expect("write");
+
+        let secret =
+            resolve_file_secret_path(path.to_string_lossy().as_ref(), "auth.jwt.secret_ref")
+                .expect("file at size limit");
+
+        assert_eq!(secret.bytes().len(), MAX_FILE_BACKED_SECRET_BYTES as usize);
+        assert_eq!(
+            secret.metadata().byte_len,
+            MAX_FILE_BACKED_SECRET_BYTES as usize
+        );
+    }
+
+    #[test]
     fn pem_helpers_reject_malformed_material() {
         let secret = resolved_secret(RuntimeSecretSourceKind::Literal, b"not-pem".to_vec());
         assert_eq!(

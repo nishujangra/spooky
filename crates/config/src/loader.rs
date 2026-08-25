@@ -122,7 +122,11 @@ fn ensure_mapping_has_lb(map: &mut Mapping, lb_key: &Value, global_lb: Value) {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_config_text;
+    use std::fs;
+
+    use tempfile::tempdir;
+
+    use super::{MAX_CONFIG_FILE_BYTES, parse_config_text, read_config};
 
     #[test]
     fn applies_global_lb_to_upstream_without_override() {
@@ -290,5 +294,47 @@ observability:
 
         let err = parse_config_text(yaml).expect_err("unknown_control_field should be rejected");
         assert!(err.contains("unknown field"));
+    }
+
+    #[test]
+    fn read_config_rejects_oversized_yaml_before_parse() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("oversized.yaml");
+        fs::write(&path, vec![b'x'; (MAX_CONFIG_FILE_BYTES as usize) + 1]).expect("write");
+
+        let err = read_config(path.to_string_lossy().as_ref()).expect_err("oversized config");
+
+        assert!(err.contains("exceeds maximum supported size"));
+    }
+
+    #[test]
+    fn read_config_accepts_normal_sized_valid_yaml() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("config.yaml");
+        let yaml = r#"
+version: 1
+listen:
+  protocol: http3
+  address: "127.0.0.1"
+  port: 9889
+  tls:
+    cert: "certs/cert.pem"
+    key: "certs/key.pem"
+upstream:
+  default:
+    route:
+      path_prefix: "/"
+    backends:
+      - id: b1
+        address: "http://127.0.0.1:7001"
+        weight: 1
+        health_check: {}
+"#;
+        fs::write(&path, yaml).expect("write");
+
+        let cfg = read_config(path.to_string_lossy().as_ref()).expect("valid config file");
+
+        assert_eq!(cfg.version, 1);
+        assert!(cfg.upstream.contains_key("default"));
     }
 }
