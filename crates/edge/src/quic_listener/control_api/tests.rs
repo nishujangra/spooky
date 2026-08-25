@@ -300,6 +300,21 @@ fn read_audit_events(path: &Path) -> Vec<serde_json::Value> {
         .collect()
 }
 
+fn wait_for_audit_event<F>(path: &Path, predicate: F) -> Vec<serde_json::Value>
+where
+    F: Fn(&serde_json::Value) -> bool,
+{
+    for _ in 0..40 {
+        let events = read_audit_events(path);
+        if events.iter().any(&predicate) {
+            return events;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    read_audit_events(path)
+}
+
 fn audit_enabled_control_api_state(
     config: ImpulseConfigConfig,
     config_path: &Path,
@@ -1758,6 +1773,12 @@ async fn control_api_runtime_snapshot_coarsens_sensitive_tls_and_secret_details(
 
     let mut config = test_config(cert.clone(), key.clone());
     config.observability.control_api.enabled = true;
+    config
+        .upstream
+        .get_mut("api")
+        .expect("api upstream")
+        .backends[0]
+        .address = "https://127.0.0.1:7001".to_string();
     config.upstream.get_mut("api").expect("api upstream").tls = Some(UpstreamTls {
         verify_certificates: true,
         strict_sni: true,
@@ -2059,7 +2080,11 @@ async fn control_api_snapshot_read_emits_audit_event() {
         None,
     );
 
-    let events = read_audit_events(&audit_path);
+    let events = wait_for_audit_event(&audit_path, |event| {
+        event["event_type"] == "runtime_snapshot"
+            && event["action"] == "runtime_snapshot.read"
+            && event["result"] == "success"
+    });
     assert!(events.iter().any(|event| {
         event["event_type"] == "runtime_snapshot"
             && event["action"] == "runtime_snapshot.read"
