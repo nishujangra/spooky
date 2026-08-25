@@ -709,7 +709,7 @@ impl ControlApiRuntimePayload {
                     .into_iter()
                     .map(|snapshot| ControlApiJwksSourcePayload {
                         jwks_source_id: snapshot.source_id,
-                        jwks_endpoint: snapshot.endpoint,
+                        jwks_endpoint: sanitize_jwks_endpoint(&snapshot.endpoint),
                         allowed_algorithms: snapshot.allowed_algorithms,
                         startup_behavior: snapshot.startup_behavior,
                         cache_state: snapshot.state,
@@ -897,6 +897,35 @@ fn sanitize_path(path: &str) -> String {
         .and_then(|name| name.to_str())
         .map(|name| format!(".../{name}"))
         .unwrap_or_else(|| "<path>".to_string())
+}
+
+fn sanitize_jwks_endpoint(endpoint: &str) -> String {
+    let trimmed = endpoint.trim();
+    if trimmed.is_empty() {
+        return "<empty>".to_string();
+    }
+
+    let without_fragment = trimmed.split('#').next().unwrap_or(trimmed);
+    let without_query = without_fragment
+        .split('?')
+        .next()
+        .unwrap_or(without_fragment);
+    let Some((scheme, remainder)) = without_query.split_once("://") else {
+        return sanitize_path(without_query);
+    };
+
+    let sanitized_path = remainder
+        .split_once('/')
+        .map(|(_, path)| path)
+        .and_then(|path| {
+            path.split('/')
+                .filter(|segment| !segment.is_empty())
+                .next_back()
+        })
+        .map(|segment| format!("/{}", segment))
+        .unwrap_or_default();
+
+    format!("{scheme}://...{sanitized_path}")
 }
 
 fn option_is_present(value: Option<&str>) -> bool {

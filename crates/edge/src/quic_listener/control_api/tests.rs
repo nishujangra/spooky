@@ -1581,6 +1581,7 @@ fn control_api_dual_auth_identity_uses_least_privileged_common_role() {
             super::admin_identity::AdminAuthnMechanism::MutualTls,
         ]
     );
+    assert_eq!(identity.actor_id.as_deref(), Some("alice"));
 }
 
 #[test]
@@ -1612,6 +1613,39 @@ fn control_api_dual_auth_identity_keeps_token_role_when_mtls_has_no_role_mapping
         identity.roles,
         vec![super::admin_identity::AdminRole::Operator]
     );
+    assert_eq!(identity.actor_id.as_deref(), Some("alice"));
+}
+
+#[test]
+fn control_api_dual_auth_identity_clears_actor_id_when_principals_disagree() {
+    let request_context = super::admin_identity::ControlApiRequestContext {
+        peer_addr: "127.0.0.1:9443".parse().expect("peer socket addr"),
+        mtls_identity: Some(super::admin_identity::AdminMtlsIdentity {
+            subject: Some("CN=bob".to_string()),
+            common_name: Some("bob".to_string()),
+            san_dns: vec!["admin.example.com".to_string()],
+            san_uri: Vec::new(),
+            roles: vec![super::admin_identity::AdminRole::Admin],
+        }),
+        listener: Some("edge-primary".to_string()),
+        request_id: None,
+        trace_id: None,
+        span_id: None,
+    };
+    let token_match = super::admin_identity::AdminTokenMatch {
+        actor_id: Some("alice".to_string()),
+        role: super::admin_identity::AdminRole::Viewer,
+    };
+
+    let identity =
+        QUICListener::build_admin_identity(Some(request_context), Some(token_match), None)
+            .expect("dual auth identity");
+
+    assert_eq!(
+        identity.roles,
+        vec![super::admin_identity::AdminRole::Viewer]
+    );
+    assert!(identity.actor_id.is_none());
 }
 
 #[test]
@@ -1816,7 +1850,7 @@ async fn control_api_runtime_snapshot_includes_jwks_cache_visibility() {
     let sources = payload["jwks"]["sources"].as_array().expect("jwks sources");
     assert_eq!(sources.len(), 1);
     assert_eq!(sources[0]["jwks_source_id"], jwks_source_id);
-    assert_eq!(sources[0]["jwks_endpoint"], jwks_url);
+    assert_eq!(sources[0]["jwks_endpoint"], "https://.../jwks.json");
     assert_eq!(sources[0]["startup_behavior"], "allow_degraded");
     assert_eq!(sources[0]["cache_state"], "fresh");
     assert_eq!(sources[0]["active_key_count"], 1);
@@ -1830,6 +1864,36 @@ async fn control_api_runtime_snapshot_includes_jwks_cache_visibility() {
         "RS256"
     );
     crate::quic_listener::admission::clear_jwks_cache_for_test(jwks_url);
+}
+
+#[tokio::test]
+async fn control_api_runtime_snapshot_sanitizes_jwks_endpoint_details() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let jwks_url = "https://user:secret@issuer.internal.example.com/reload-require-ready.json?token=secret#fragment";
+    let mut startup = test_config(cert, key);
+    startup
+        .upstream
+        .get_mut("api")
+        .expect("api upstream")
+        .auth
+        .jwt = Some(JwtAuth {
+        secret: String::new(),
+        allowed_algorithms: vec![JwtAlgorithm::Rs256],
+        jwks_url: Some(jwks_url.to_string()),
+        jwks_startup_behavior: JwksStartupBehavior::AllowDegraded,
+        ..JwtAuth::default()
+    });
+    let state = control_api_state_with_runtime_bundle(&startup, &startup);
+
+    let payload = json_body(QUICListener::render_control_api_runtime_snapshot(&state)).await;
+    let sources = payload["jwks"]["sources"].as_array().expect("jwks sources");
+
+    assert_eq!(sources.len(), 1);
+    assert_eq!(
+        sources[0]["jwks_endpoint"],
+        "https://.../reload-require-ready.json"
+    );
 }
 
 #[tokio::test]
