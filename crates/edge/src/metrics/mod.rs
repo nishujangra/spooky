@@ -1662,16 +1662,6 @@ impl Metrics {
         snapshot
     }
 
-    #[cfg(test)]
-    pub(crate) fn snapshot_backend_dns_state(&self) -> Vec<(String, BackendDnsState)> {
-        self.snapshot_backend_metrics().backend_dns_state
-    }
-
-    #[cfg(test)]
-    pub(crate) fn snapshot_backend_rotation_state(&self) -> Vec<(String, BackendRotationState)> {
-        self.snapshot_backend_metrics().backend_rotation_state
-    }
-
     pub(crate) fn snapshot_jwt_validation_failures(&self) -> Vec<(String, u64)> {
         self.snapshot_jwt_jwks_metrics().jwt_validation_failures
     }
@@ -1687,11 +1677,6 @@ impl Metrics {
     #[cfg(test)]
     pub(crate) fn snapshot_jwks_source_state(&self) -> Vec<JwksSourceState> {
         self.snapshot_jwt_jwks_metrics().jwks_source_state
-    }
-
-    #[cfg(test)]
-    pub(crate) fn snapshot_backend_connect_attempts(&self) -> Vec<(BackendConnectAttemptKey, u64)> {
-        self.snapshot_backend_metrics().backend_connect_attempts
     }
 
     pub(crate) fn snapshot_request_result_metrics(&self) -> RequestResultMetricsSnapshot {
@@ -1812,36 +1797,6 @@ impl Metrics {
                 entries
             })
             .unwrap_or_default()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn snapshot_secret_reload_totals(&self) -> Vec<(SecretReloadKey, u64)> {
-        self.snapshot_secret_metrics().secret_reload_totals
-    }
-
-    #[cfg(test)]
-    pub(crate) fn snapshot_secret_resolve_totals(&self) -> Vec<(SecretResolveKey, u64)> {
-        self.snapshot_secret_metrics().secret_resolve_totals
-    }
-
-    #[cfg(test)]
-    pub(crate) fn snapshot_secret_last_success_unixtime(&self) -> Vec<(SecretLastSuccessKey, u64)> {
-        self.snapshot_secret_metrics().secret_last_success_unixtime
-    }
-
-    #[cfg(test)]
-    pub(crate) fn snapshot_upstream_client_cert_expiry(
-        &self,
-    ) -> Vec<(UpstreamClientCertExpiryKey, i64)> {
-        self.snapshot_secret_metrics().upstream_client_cert_expiry
-    }
-
-    #[cfg(test)]
-    pub(crate) fn snapshot_control_plane_cert_reload_totals(
-        &self,
-    ) -> Vec<(ControlPlaneCertReloadKey, u64)> {
-        self.snapshot_secret_metrics()
-            .control_plane_cert_reload_totals
     }
 
     pub(crate) fn snapshot_downstream_tls_cert_expiry(
