@@ -420,6 +420,29 @@ pub(super) fn normalize_route_host(raw: &str) -> String {
     host.trim_end_matches('.').to_ascii_lowercase()
 }
 
+pub(super) fn valid_route_host_pattern(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.chars().any(char::is_whitespace) {
+        return false;
+    }
+
+    let normalized = normalize_route_host(trimmed);
+    if normalized.is_empty()
+        || normalized.contains('[')
+        || normalized.contains(']')
+        || normalized.contains('/')
+        || normalized.contains('?')
+        || normalized.contains('#')
+    {
+        return false;
+    }
+
+    match normalized.strip_prefix("*.") {
+        Some(wildcard_suffix) => !wildcard_suffix.is_empty() && !wildcard_suffix.contains('*'),
+        None => !normalized.contains('*'),
+    }
+}
+
 pub(super) fn normalized_route_method(method: Option<&str>) -> Option<String> {
     method
         .map(str::trim)

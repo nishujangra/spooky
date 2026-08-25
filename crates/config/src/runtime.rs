@@ -492,6 +492,32 @@ mod tests {
     }
 
     #[test]
+    fn runtime_config_rejects_whitespace_only_route_host_without_path_prefix() {
+        let mut config = sample_config();
+        let upstream = config.upstream.get_mut("api").expect("api upstream");
+        upstream.route = RouteMatch {
+            host: Some("   ".to_string()),
+            path_prefix: None,
+            method: None,
+        };
+
+        assert!(RuntimeConfig::from_config(&config).is_err());
+    }
+
+    #[test]
+    fn runtime_config_rejects_malformed_route_host() {
+        let mut config = sample_config();
+        let upstream = config.upstream.get_mut("api").expect("api upstream");
+        upstream.route = RouteMatch {
+            host: Some("[missing-end".to_string()),
+            path_prefix: None,
+            method: None,
+        };
+
+        assert!(RuntimeConfig::from_config(&config).is_err());
+    }
+
+    #[test]
     fn runtime_listeners_uses_legacy_listen_when_explicit_list_is_empty() {
         let config = sample_config();
         let listeners = runtime_listeners(&config).expect("legacy listeners");

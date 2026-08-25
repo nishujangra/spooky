@@ -1112,6 +1112,24 @@ fn rejects_control_api_identity_source_without_mtls() {
 }
 
 #[test]
+fn rejects_control_api_unknown_identity_source_kind() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.observability.control_api.enabled = true;
+    cfg.observability.control_api.tls.client_auth.mode = ControlApiClientAuthMode::Optional;
+    cfg.observability.control_api.tls.client_auth.ca_file = Some(cert.to_string_lossy().into());
+    cfg.observability.control_api.auth.identity_source =
+        Some(crate::config::ControlApiIdentitySource {
+            kind: "mtls_subjectc_cn".to_string(),
+            role_attribute: Some("ou".to_string()),
+        });
+    cfg.observability.control_api.auth_token = Some("token".to_string());
+
+    assert!(validate(&cfg).is_err());
+}
+
+#[test]
 fn rejects_legacy_watchdog_restart_hook() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_certs(dir.path());
@@ -1190,6 +1208,32 @@ fn rejects_ambiguous_route_matchers_with_same_host_path_and_method() {
     };
     cfg.upstream
         .insert("test_upstream_2".to_string(), duplicate);
+
+    assert!(validate(&cfg).is_err());
+}
+
+#[test]
+fn rejects_whitespace_only_route_host_without_path_prefix() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    let upstream = cfg.upstream.get_mut("test_upstream").expect("upstream");
+    upstream.route.host = Some("   ".to_string());
+    upstream.route.path_prefix = None;
+
+    assert!(validate(&cfg).is_err());
+}
+
+#[test]
+fn rejects_malformed_route_host_matcher() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    let upstream = cfg.upstream.get_mut("test_upstream").expect("upstream");
+    upstream.route.host = Some("[missing-end".to_string());
+    upstream.route.path_prefix = None;
 
     assert!(validate(&cfg).is_err());
 }

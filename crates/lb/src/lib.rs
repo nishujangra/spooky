@@ -9,7 +9,7 @@ mod algorithms;
 pub mod alternate_backend;
 mod backend;
 mod backend_pool;
-pub(crate) mod hash;
+pub mod hash;
 pub mod health;
 pub mod load_balancing;
 #[cfg(test)]

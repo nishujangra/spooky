@@ -732,7 +732,11 @@ mod tests {
                 auth: Default::default(),
                 host_policy: Default::default(),
                 forwarded_headers: Default::default(),
-                route: RouteMatch::default(),
+                route: RouteMatch {
+                    host: Some("api.example.com".to_string()),
+                    path_prefix: None,
+                    method: None,
+                },
                 backends: vec![Backend {
                     id: "backend-a".to_string(),
                     address: "127.0.0.1:8080".to_string(),

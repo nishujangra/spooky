@@ -607,6 +607,45 @@ fn quic_to_h2_upstream_mtls_requires_client_certificate() {
                 client_key: None,
                 client_key_ref: None,
             };
+            // This test exercises the per-request mTLS rejection path, not
+            // resilience/circuit-breaking behavior. With a single backend,
+            // repeated legitimate client-auth rejections would otherwise trip
+            // the circuit breaker and mask the intended 502 with a 503
+            // "no healthy backends" response for the remainder of the retry
+            // loop below.
+            config.resilience.circuit_breaker.enabled = false;
+
+            // The backend pool also applies its own passive-health ejection
+            // independent of the circuit breaker (see
+            // `impulse_lb::backend::BackendState::record_failure`): with no
+            // explicit health_check, a backend is passively marked unhealthy
+            // after 3 consecutive request failures and stays ejected for a
+            // 10s cooldown. Every attempt in the retry loop below is a
+            // legitimate client-auth rejection (502), so by the 3rd attempt
+            // the sole backend would otherwise be ejected and mask the real
+            // 502 behind a 503 "no healthy backends" for the rest of the
+            // loop.
+            //
+            // `BackendState::has_active_health_check` (interval > 0) is the
+            // sole switch that hands health-state authority to the active
+            // check loop and makes passive request-path failures a no-op for
+            // health transitions (`BackendPool::mark_request_failure`). Give
+            // this backend an explicit health_check with a very large
+            // interval so the active loop never actually fires within the
+            // test's lifetime, but passive ejection from the intentional 502s
+            // below is disabled.
+            if let Some(upstream) = config.upstream.get_mut("api") {
+                for backend in &mut upstream.backends {
+                    backend.health_check = Some(impulse_config::config::HealthCheck {
+                        path: "/health".to_string(),
+                        interval: 3_600_000,
+                        timeout_ms: 1_000,
+                        failure_threshold: 1,
+                        success_threshold: 1,
+                        cooldown_ms: 1,
+                    });
+                }
+            }
         },
     );
 
@@ -618,20 +657,22 @@ fn quic_to_h2_upstream_mtls_requires_client_certificate() {
     // client-auth rejection path rather than this unrelated startup race.
     let mut after_metrics = String::new();
     let mut observed_client_auth_rejection = false;
+    let mut last_status = 0u16;
     const MAX_ATTEMPTS: u32 = 10;
     for attempt in 0..MAX_ATTEMPTS {
         let response = harness
             .run_request(H3RequestSpec::get("public.example.com", "/mtls-required"))
             .expect("h3 request");
-        response.assert_status(502);
+        last_status = response.status;
 
         after_metrics = harness.metrics_text().unwrap_or_default();
-        observed_client_auth_rejection = after_metrics.contains("reason=\"client_auth_rejected\"")
-            || metrics_delta(
-                &before_metrics,
-                &after_metrics,
-                "impulse_request_outcome_total{outcome=\"failure\",reason=\"backend_tls_failed\"} ",
-            ) > 0;
+        observed_client_auth_rejection = last_status == 502
+            && (after_metrics.contains("reason=\"client_auth_rejected\"")
+                || metrics_delta(
+                    &before_metrics,
+                    &after_metrics,
+                    "impulse_request_outcome_total{outcome=\"failure\",reason=\"backend_tls_failed\"} ",
+                ) > 0);
         if observed_client_auth_rejection || attempt == MAX_ATTEMPTS - 1 {
             break;
         }
@@ -640,7 +681,7 @@ fn quic_to_h2_upstream_mtls_requires_client_certificate() {
 
     assert!(
         observed_client_auth_rejection,
-        "expected upstream mTLS failure metrics to record the backend TLS failure, metrics:\n{after_metrics}"
+        "expected upstream mTLS failure metrics to record the backend TLS failure (last status: {last_status}), metrics:\n{after_metrics}"
     );
 }
 

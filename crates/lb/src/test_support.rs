@@ -24,7 +24,11 @@ pub(crate) fn runtime_upstream_from_addresses(
             auth: Default::default(),
             host_policy: Default::default(),
             forwarded_headers: Default::default(),
-            route: RouteMatch::default(),
+            route: RouteMatch {
+                host: None,
+                path_prefix: Some("/".to_string()),
+                method: None,
+            },
             backends: addresses
                 .iter()
                 .enumerate()

@@ -91,6 +91,24 @@ fn parse_runtime_route_host_pattern(raw: &str) -> RuntimeRouteHostPattern {
     RuntimeRouteHostPattern::WildcardSuffix(wildcard_suffix.to_string())
 }
 
+fn valid_runtime_route_host_pattern(normalized: &str) -> bool {
+    if normalized.is_empty()
+        || normalized.contains('[')
+        || normalized.contains(']')
+        || normalized.contains('/')
+        || normalized.contains('?')
+        || normalized.contains('#')
+        || normalized.chars().any(char::is_whitespace)
+    {
+        return false;
+    }
+
+    match normalized.strip_prefix("*.") {
+        Some(wildcard_suffix) => !wildcard_suffix.is_empty() && !wildcard_suffix.contains('*'),
+        None => !normalized.contains('*'),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RuntimeRouteHostPattern {
     Exact(String),
@@ -123,8 +141,24 @@ impl RuntimeRouteMatchPolicy {
             )));
         }
 
-        let host = normalize_optional_string(route.host.as_deref())
-            .map(|host| normalize_route_host(&host));
+        let host = match normalize_optional_string(route.host.as_deref()) {
+            Some(host) => {
+                let normalized = normalize_route_host(&host);
+                if !valid_runtime_route_host_pattern(&normalized) {
+                    return Err(config_invalid(format!(
+                        "upstream '{upstream_name}' has an invalid route.host '{}'",
+                        route.host.as_deref().unwrap_or_default()
+                    )));
+                }
+                Some(normalized)
+            }
+            None => None,
+        };
+        if host.is_none() && path_prefix.is_none() {
+            return Err(config_invalid(format!(
+                "upstream '{upstream_name}' must configure a non-empty route.host or route.path_prefix"
+            )));
+        }
         let host_pattern = host.as_deref().map(parse_runtime_route_host_pattern);
         let method = normalized_route_method(route.method.as_deref());
 
