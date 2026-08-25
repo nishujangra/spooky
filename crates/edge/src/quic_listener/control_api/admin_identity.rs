@@ -78,6 +78,20 @@ pub(super) struct AdminTokenMatch {
 }
 
 impl QUICListener {
+    fn reconcile_dual_auth_actor_id(
+        token_actor_id: Option<String>,
+        mtls_actor_id: Option<String>,
+    ) -> Option<String> {
+        match (token_actor_id, mtls_actor_id) {
+            (Some(token_actor_id), Some(mtls_actor_id)) => {
+                (token_actor_id == mtls_actor_id).then_some(token_actor_id)
+            }
+            (Some(token_actor_id), None) => Some(token_actor_id),
+            (None, Some(mtls_actor_id)) => Some(mtls_actor_id),
+            (None, None) => None,
+        }
+    }
+
     pub(super) fn build_control_api_request_context(
         peer_addr: SocketAddr,
         peer_certificates: Option<&[CertificateDer<'static>]>,
@@ -251,14 +265,15 @@ impl QUICListener {
 
         let mut roles = BTreeSet::new();
         let mut mechanisms = Vec::new();
-        let mut actor_id = None;
+        let mut token_actor_id = None;
         let mut effective_role_limit = None;
         if let Some(token) = token_match {
             mechanisms.push(AdminAuthnMechanism::BearerToken);
             roles.insert(token.role);
             effective_role_limit = Some(token.role);
-            actor_id = token.actor_id.or(actor_id);
+            token_actor_id = token.actor_id;
         }
+        let mut mtls_actor_id = None;
         if let Some(mtls) = mtls_identity.as_ref() {
             mechanisms.push(AdminAuthnMechanism::MutualTls);
             for role in &mtls.roles {
@@ -271,14 +286,14 @@ impl QUICListener {
                         .unwrap_or(mtls_role_limit),
                 );
             }
-            actor_id =
-                actor_id.or_else(|| Self::actor_id_from_mtls_identity(mtls, identity_source));
+            mtls_actor_id = Self::actor_id_from_mtls_identity(mtls, identity_source);
         }
 
         let roles = match effective_role_limit {
             Some(role_limit) if mechanisms.len() > 1 => vec![role_limit],
             _ => roles.into_iter().collect(),
         };
+        let actor_id = Self::reconcile_dual_auth_actor_id(token_actor_id, mtls_actor_id);
 
         Some(AdminIdentity {
             actor_id,
