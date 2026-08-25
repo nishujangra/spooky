@@ -1630,6 +1630,56 @@ mod tests {
     }
 
     #[test]
+    fn external_auth_redirect_and_challenge_headers_match_historical_clone_contract() {
+        let redirect = ExternalAuthRedirectResponse {
+            status: http::StatusCode::TEMPORARY_REDIRECT,
+            headers: vec![("x-auth-reason".to_string(), "login".to_string())],
+            location: "https://login.example.com".to_string(),
+        };
+        let mut historical_redirect_headers = redirect.headers.clone();
+        historical_redirect_headers.push((
+            http::header::LOCATION.as_str().to_string(),
+            redirect.location.clone(),
+        ));
+        let historical_redirect =
+            response_headers_with_defaults(redirect.status, &[], &historical_redirect_headers);
+        let current_redirect = response_headers_with_defaults_and_extra(
+            redirect.status,
+            &[],
+            &redirect.headers,
+            Some((http::header::LOCATION.as_str(), redirect.location.as_str())),
+        );
+        assert_eq!(current_redirect, historical_redirect);
+
+        let challenge = ExternalAuthChallengeResponse {
+            status: http::StatusCode::UNAUTHORIZED,
+            headers: vec![("x-auth-reason".to_string(), "expired".to_string())],
+            www_authenticate: "Bearer".to_string(),
+            body: b"challenge\n".to_vec(),
+        };
+        let mut historical_challenge_headers = challenge.headers.clone();
+        historical_challenge_headers.push((
+            http::header::WWW_AUTHENTICATE.as_str().to_string(),
+            challenge.www_authenticate.clone(),
+        ));
+        let historical_challenge = response_headers_with_defaults(
+            challenge.status,
+            &challenge.body,
+            &historical_challenge_headers,
+        );
+        let current_challenge = response_headers_with_defaults_and_extra(
+            challenge.status,
+            &challenge.body,
+            &challenge.headers,
+            Some((
+                http::header::WWW_AUTHENTICATE.as_str(),
+                challenge.www_authenticate.as_str(),
+            )),
+        );
+        assert_eq!(current_challenge, historical_challenge);
+    }
+
+    #[test]
     fn deferred_response_start_chunk_moves_headers_only_for_deferred_metadata() {
         let deferred = QUICListener::into_deferred_response_start_chunk(ResponseStartMetadata {
             status: http::StatusCode::OK,

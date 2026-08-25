@@ -2631,4 +2631,104 @@ mod tests {
                 })
         );
     }
+
+    #[test]
+    fn prometheus_render_is_stable_across_repeated_cached_family_renders() {
+        let metrics = Metrics::default();
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+
+        metrics.record_quota_policy_outcome(
+            "tenant-write-quota",
+            QuotaPolicyDecision::Denied,
+            QuotaPolicyReason::BurstQuotaExhausted,
+            "route+tenant+token",
+            "redis",
+        );
+        metrics.record_quota_backend_health("redis", QuotaBackendHealthReason::Timeout);
+        metrics.record_jwt_validation_failure("issuer_mismatch");
+        metrics.record_jwks_unknown_kid("jwks:example");
+        metrics.record_jwks_refresh_success("jwks:example", "fresh", 2, now, Some(now));
+        metrics.record_backend_dns_refresh_success("backend-a", now, 2, false);
+        metrics.record_backend_connect(
+            "backend-a",
+            "origin.internal",
+            "127.0.0.1:443".parse().expect("socket address"),
+        );
+        metrics.record_secret_reload("listeners", "success", "cert_reload_applied");
+        metrics.set_secret_last_success_unixtime("upstreams", 1_700_000_123);
+        metrics.replace_upstream_client_cert_expiry([("payments".to_string(), 1_800_000_000)]);
+
+        let first = metrics.render_prometheus();
+        let second = metrics.render_prometheus();
+
+        assert_eq!(first, second);
+    }
+
+    #[test]
+    fn cached_metric_family_snapshots_refresh_after_targeted_updates() {
+        let metrics = Metrics::default();
+        let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+
+        metrics.record_quota_policy_outcome(
+            "tenant-write-quota",
+            QuotaPolicyDecision::Allowed,
+            QuotaPolicyReason::Allowed,
+            "route+tenant+client",
+            "redis",
+        );
+        let quota_before = metrics.snapshot_quota_metrics();
+        assert_eq!(quota_before.quota_policy_outcomes.len(), 1);
+        assert!(quota_before.quota_backend_health.is_empty());
+        metrics.record_quota_backend_health("redis", QuotaBackendHealthReason::Available);
+        let quota_after = metrics.snapshot_quota_metrics();
+        assert_eq!(quota_after.quota_policy_outcomes.len(), 1);
+        assert_eq!(quota_after.quota_backend_health.len(), 1);
+        assert_eq!(quota_after.quota_backend_health[0].1, 1);
+
+        metrics.record_jwt_validation_failure("issuer_mismatch");
+        let jwt_before = metrics.snapshot_jwt_jwks_metrics();
+        assert_eq!(
+            jwt_before.jwt_validation_failures,
+            vec![("issuer_mismatch".to_string(), 1)]
+        );
+        assert!(jwt_before.jwks_unknown_kid_events.is_empty());
+        metrics.record_jwks_unknown_kid("jwks:example");
+        let jwt_after = metrics.snapshot_jwt_jwks_metrics();
+        assert_eq!(
+            jwt_after.jwt_validation_failures,
+            vec![("issuer_mismatch".to_string(), 1)]
+        );
+        assert_eq!(
+            jwt_after.jwks_unknown_kid_events,
+            vec![("jwks:example".to_string(), 1)]
+        );
+
+        metrics.record_backend_dns_refresh_success("backend-a", now, 2, false);
+        let backend_before = metrics.snapshot_backend_metrics();
+        assert_eq!(backend_before.backend_dns_state.len(), 1);
+        assert!(backend_before.backend_rotation_state.is_empty());
+        metrics.inc_backend_client_rotation("backend-a");
+        let backend_after = metrics.snapshot_backend_metrics();
+        assert_eq!(backend_after.backend_dns_state.len(), 1);
+        assert_eq!(backend_after.backend_rotation_state.len(), 1);
+        assert_eq!(backend_after.backend_rotation_state[0].0, "backend-a");
+        assert_eq!(backend_after.backend_rotation_state[0].1.rotations, 1);
+
+        metrics.record_secret_reload("listeners", "success", "cert_reload_applied");
+        let secret_before = metrics.snapshot_secret_metrics();
+        assert_eq!(secret_before.secret_reload_totals.len(), 1);
+        assert!(secret_before.secret_last_success_unixtime.is_empty());
+        metrics.set_secret_last_success_unixtime("listeners", 1_700_000_123);
+        let secret_after = metrics.snapshot_secret_metrics();
+        assert_eq!(secret_after.secret_reload_totals.len(), 1);
+        assert_eq!(secret_after.secret_last_success_unixtime.len(), 1);
+        assert_eq!(
+            secret_after.secret_last_success_unixtime[0].0.scope,
+            "listeners"
+        );
+        assert_eq!(
+            secret_after.secret_last_success_unixtime[0].1,
+            1_700_000_123
+        );
+    }
 }

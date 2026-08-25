@@ -729,6 +729,19 @@ mod tests {
     }
 
     #[test]
+    fn authorization_header_lookup_reads_unmutated_request_headers() {
+        let pending_forward = PendingForward::sample_for_test(vec![quiche::h3::Header::new(
+            b"authorization",
+            b"Bearer route-token",
+        )]);
+
+        assert_eq!(
+            authorization_header_from_pending_forward(&pending_forward).as_deref(),
+            Some("Bearer route-token")
+        );
+    }
+
+    #[test]
     fn authorization_header_lookup_observes_pending_auth_mutations() {
         let pending_forward = PendingForward {
             auth_header_mutations: vec![
