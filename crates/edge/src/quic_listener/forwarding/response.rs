@@ -162,6 +162,21 @@ fn response_headers_with_defaults_and_extra(
 }
 
 impl QUICListener {
+    fn response_start_header_block(
+        status: http::StatusCode,
+        headers: &[(Vec<u8>, Vec<u8>)],
+    ) -> Vec<quiche::h3::Header> {
+        let mut h3_headers = Vec::with_capacity(headers.len() + 1);
+        h3_headers.push(quiche::h3::Header::new(
+            b":status",
+            status.as_str().as_bytes(),
+        ));
+        for (name, value) in headers {
+            h3_headers.push(quiche::h3::Header::new(name, value));
+        }
+        h3_headers
+    }
+
     fn into_deferred_response_start_chunk(
         metadata: ResponseStartMetadata,
     ) -> Option<ResponseChunk> {
@@ -751,14 +766,7 @@ impl QUICListener {
         metadata: &ResponseStartMetadata,
         end_stream: bool,
     ) -> Result<(), ProxyError> {
-        let mut h3_headers = Vec::with_capacity(metadata.headers.len() + 1);
-        h3_headers.push(quiche::h3::Header::new(
-            b":status",
-            metadata.status.as_str().as_bytes(),
-        ));
-        for (name, value) in &metadata.headers {
-            h3_headers.push(quiche::h3::Header::new(name, value));
-        }
+        let h3_headers = Self::response_start_header_block(metadata.status, &metadata.headers);
         h3.send_response(quic, stream_id, &h3_headers, end_stream)
             .map_err(|err| {
                 ProxyError::Protocol(format!("failed to send HTTP/3 response headers: {:?}", err))
@@ -1117,14 +1125,7 @@ impl QUICListener {
             };
             match chunk {
                 ResponseChunk::Start { status, headers } => {
-                    let mut h3_headers = Vec::with_capacity(headers.len() + 1);
-                    h3_headers.push(quiche::h3::Header::new(
-                        b":status",
-                        status.as_str().as_bytes(),
-                    ));
-                    for (name, value) in &headers {
-                        h3_headers.push(quiche::h3::Header::new(name, value));
-                    }
+                    let h3_headers = Self::response_start_header_block(status, &headers);
                     match h3.send_response(quic, stream_id, &h3_headers, false) {
                         Ok(_) => {
                             req.set_response_emission_state(ResponseEmissionState::HeadersSent);
