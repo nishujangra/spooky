@@ -464,6 +464,8 @@ mod tests {
     }
 
     mod snapshot_inventory {
+        use impulse_lb::HealthTransition;
+
         use super::*;
         use crate::runtime::backend::resolution::RuntimeBackendResolution;
         use crate::runtime::backend::state::BackendHealthState;
@@ -946,6 +948,8 @@ mod tests {
     }
 
     mod request_feedback_application {
+        use impulse_lb::HealthTransition;
+
         use super::*;
         use crate::runtime::backend::resolution::RuntimeBackendResolution;
         use crate::runtime::backend::state::BackendHealthState;
