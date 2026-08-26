@@ -174,10 +174,13 @@ mod tests {
     fn minimal_runtime_config() -> RuntimeConfig {
         let yaml = r#"
 listen:
-  tls: {}
+  tls:
+    cert: "/tmp/tls/default.pem"
+    key: "/tmp/tls/default.key"
 upstream:
   api:
-    route: {}
+    route:
+      path_prefix: "/"
     backends:
       - id: backend1
         address: "http://127.0.0.1:7001"
