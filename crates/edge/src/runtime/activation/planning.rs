@@ -3,7 +3,7 @@ use impulse_config::{loader::read_config, runtime::RuntimeConfig};
 use std::sync::Arc;
 
 use crate::runtime::{
-    bundle::{RuntimeBundle},
+    bundle::RuntimeBundle,
     generation::CarriedProcessSharedServices,
     listener::QUICListener,
     policy::{TransitionRejection, render_rejections},

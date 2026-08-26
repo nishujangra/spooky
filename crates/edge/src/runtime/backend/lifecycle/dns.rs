@@ -362,3 +362,355 @@ pub(crate) fn log_backend_dns_refresh(outcome: &BackendDnsRefreshApplication) {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    mod refresh_application {
+        use std::{net::SocketAddr, sync::Arc, time::SystemTime};
+
+        use impulse_transport::SharedDnsResolver;
+
+        use super::super::{
+            BackendDnsRefreshApplication, BackendLifecycleCoordinator,
+            BackendRefreshClassification, ClientRotationOutcome, observe_backend_dns_refresh,
+            test_support::test_transport_pool,
+        };
+        use crate::{
+            Metrics,
+            runtime::backend::{
+                resolution::RuntimeBackendResolution, store::RuntimeBackendResolutionStore,
+            },
+        };
+
+        fn updated_client_rotation(app: &BackendDnsRefreshApplication) -> &ClientRotationOutcome {
+            match app {
+                BackendDnsRefreshApplication::Updated {
+                    client_rotation, ..
+                } => client_rotation,
+                other => panic!("expected Updated, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn refresh_classification_maps_every_variant_and_preserves_traffic_on_failure() {
+            let updated = BackendDnsRefreshApplication::Updated {
+                backend_addr: "http://backend:8080".to_string(),
+                authority_host: "backend".to_string(),
+                previous_addrs: vec![],
+                current_addrs: vec!["10.0.0.1:8080".parse().expect("addr")],
+                generation: 1,
+                refreshed_at: SystemTime::UNIX_EPOCH,
+                client_rotation: ClientRotationOutcome::Rotated,
+            };
+            assert_eq!(
+                updated.classification(),
+                BackendRefreshClassification::Refreshed
+            );
+            assert!(!updated.traffic_continues_on_existing());
+
+            let unchanged = BackendDnsRefreshApplication::Unchanged {
+                backend_addr: "http://backend:8080".to_string(),
+                authority_host: "backend".to_string(),
+                current_addrs: vec!["10.0.0.1:8080".parse().expect("addr")],
+                generation: 1,
+                refreshed_at: SystemTime::UNIX_EPOCH,
+            };
+            assert_eq!(
+                unchanged.classification(),
+                BackendRefreshClassification::Unchanged
+            );
+            assert!(unchanged.traffic_continues_on_existing());
+
+            let empty = BackendDnsRefreshApplication::EmptyAnswerRetained {
+                backend_addr: "http://backend:8080".to_string(),
+                authority_host: "backend".to_string(),
+                retained_addrs: vec!["10.0.0.1:8080".parse().expect("addr")],
+            };
+            assert_eq!(
+                empty.classification(),
+                BackendRefreshClassification::Rejected
+            );
+            assert!(empty.traffic_continues_on_existing());
+            assert!(empty.classification().is_failure());
+
+            let failed = BackendDnsRefreshApplication::LookupFailed {
+                backend_addr: "http://backend:8080".to_string(),
+                authority_host: "backend".to_string(),
+                retained_addrs: vec!["10.0.0.1:8080".parse().expect("addr")],
+                error: "nxdomain".to_string(),
+            };
+            assert_eq!(
+                failed.classification(),
+                BackendRefreshClassification::FailedActivePreserved
+            );
+            assert!(failed.traffic_continues_on_existing());
+            assert!(failed.classification().is_failure());
+            assert_eq!(failed.backend_addr(), "http://backend:8080");
+            assert_eq!(failed.authority_host(), "backend");
+        }
+
+        #[test]
+        fn rotation_failure_is_metered_and_does_not_hide_refresh_success() {
+            let metrics = Metrics::default();
+            let updated = BackendDnsRefreshApplication::Updated {
+                backend_addr: "http://backend.internal:8080".to_string(),
+                authority_host: "backend.internal".to_string(),
+                previous_addrs: vec!["10.0.0.1:8080".parse().expect("addr")],
+                current_addrs: vec!["10.0.0.2:8080".parse().expect("addr")],
+                generation: 2,
+                refreshed_at: SystemTime::UNIX_EPOCH,
+                client_rotation: ClientRotationOutcome::Failed {
+                    error: "pool busy".to_string(),
+                },
+            };
+
+            observe_backend_dns_refresh(&metrics, &updated);
+
+            assert_eq!(
+                metrics
+                    .backend_client_rotation_failures
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                1,
+                "rotation failure must be metered, not silently dropped"
+            );
+            assert_eq!(
+                metrics
+                    .backend_client_rotations
+                    .load(std::sync::atomic::Ordering::Relaxed),
+                0
+            );
+            assert_eq!(
+                updated_client_rotation(&updated).failure(),
+                Some("pool busy")
+            );
+        }
+
+        #[test]
+        fn hostname_refresh_updates_resolved_addrs_and_generation() {
+            let backend_addr = "http://backend.internal:8080";
+            let store = Arc::new(RuntimeBackendResolutionStore::new([
+                RuntimeBackendResolution::hostname(
+                    backend_addr.to_string(),
+                    "backend.internal".to_string(),
+                    8080,
+                ),
+            ]));
+            let coordinator = BackendLifecycleCoordinator::new(Arc::clone(&store));
+            let resolver = SharedDnsResolver::new();
+            let transport_pool = test_transport_pool(backend_addr);
+            let backend = coordinator.backend(backend_addr).expect("backend");
+            let new_addrs = vec!["10.0.0.10:8080".parse::<SocketAddr>().expect("addr")];
+
+            let outcome = coordinator.apply_refresh(
+                &backend,
+                Ok(new_addrs.clone()),
+                &resolver,
+                &transport_pool,
+            );
+
+            let BackendDnsRefreshApplication::Updated {
+                current_addrs,
+                generation,
+                client_rotation,
+                ..
+            } = &outcome
+            else {
+                panic!("expected Updated outcome, got: {outcome:?}");
+            };
+            assert_eq!(current_addrs, &new_addrs);
+            assert_eq!(*generation, 1);
+            assert!(client_rotation.rotated());
+
+            let snapshot = coordinator
+                .snapshot_backend(backend_addr)
+                .expect("snapshot");
+            assert_eq!(snapshot.resolution.resolved_addrs, new_addrs);
+            assert_eq!(snapshot.resolution.refresh_generation, 1);
+            assert_eq!(
+                resolver.cached_addrs("backend.internal"),
+                Some(vec!["10.0.0.10:0".parse::<SocketAddr>().expect("addr")])
+            );
+        }
+
+        #[test]
+        fn unchanged_refresh_does_not_rotate_clients_unnecessarily() {
+            let backend_addr = "http://backend.internal:8080";
+            let initial_addrs = vec!["10.0.0.10:8080".parse::<SocketAddr>().expect("addr")];
+            let store = Arc::new(RuntimeBackendResolutionStore::new([
+                RuntimeBackendResolution::hostname(
+                    backend_addr.to_string(),
+                    "backend.internal".to_string(),
+                    8080,
+                ),
+            ]));
+            store
+                .apply_resolution_refresh(
+                    backend_addr,
+                    initial_addrs.clone(),
+                    SystemTime::UNIX_EPOCH,
+                )
+                .expect("seed refresh");
+            let coordinator = BackendLifecycleCoordinator::new(Arc::clone(&store));
+            let resolver = SharedDnsResolver::new();
+            let transport_pool = test_transport_pool(backend_addr);
+            let backend = coordinator.backend(backend_addr).expect("backend");
+
+            let outcome = coordinator.apply_refresh(
+                &backend,
+                Ok(initial_addrs.clone()),
+                &resolver,
+                &transport_pool,
+            );
+
+            assert!(matches!(
+                outcome,
+                BackendDnsRefreshApplication::Unchanged {
+                    current_addrs,
+                    generation: 2,
+                    ..
+                } if current_addrs == initial_addrs
+            ));
+        }
+
+        #[test]
+        fn successive_refreshes_increment_generation_across_outcomes() {
+            let backend_addr = "http://backend.internal:8080";
+            let initial_addrs = vec!["10.0.0.10:8080".parse::<SocketAddr>().expect("addr")];
+            let updated_addrs = vec!["10.0.0.11:8080".parse::<SocketAddr>().expect("addr")];
+            let store = Arc::new(RuntimeBackendResolutionStore::new([
+                RuntimeBackendResolution::hostname(
+                    backend_addr.to_string(),
+                    "backend.internal".to_string(),
+                    8080,
+                ),
+            ]));
+            store
+                .apply_resolution_refresh(backend_addr, initial_addrs, SystemTime::UNIX_EPOCH)
+                .expect("seed refresh");
+            let coordinator = BackendLifecycleCoordinator::new(Arc::clone(&store));
+            let resolver = SharedDnsResolver::new();
+            let transport_pool = test_transport_pool(backend_addr);
+            let backend = coordinator.backend(backend_addr).expect("backend");
+
+            let refreshed = coordinator.apply_refresh(
+                &backend,
+                Ok(updated_addrs.clone()),
+                &resolver,
+                &transport_pool,
+            );
+            assert!(matches!(
+                refreshed,
+                BackendDnsRefreshApplication::Updated {
+                    generation: 2,
+                    current_addrs,
+                    ..
+                } if current_addrs == updated_addrs
+            ));
+
+            let backend = coordinator.backend(backend_addr).expect("backend");
+            let unchanged = coordinator.apply_refresh(
+                &backend,
+                Ok(updated_addrs.clone()),
+                &resolver,
+                &transport_pool,
+            );
+            assert!(matches!(
+                unchanged,
+                BackendDnsRefreshApplication::Unchanged {
+                    generation: 3,
+                    current_addrs,
+                    ..
+                } if current_addrs == updated_addrs
+            ));
+
+            let snapshot = coordinator
+                .snapshot_backend(backend_addr)
+                .expect("snapshot");
+            assert_eq!(snapshot.resolution.resolved_addrs, updated_addrs);
+            assert_eq!(snapshot.resolution.refresh_generation, 3);
+        }
+
+        #[test]
+        fn empty_dns_answer_retains_prior_addresses() {
+            let backend_addr = "http://backend.internal:8080";
+            let retained_addrs = vec!["10.0.0.10:8080".parse::<SocketAddr>().expect("addr")];
+            let store = Arc::new(RuntimeBackendResolutionStore::new([
+                RuntimeBackendResolution::hostname(
+                    backend_addr.to_string(),
+                    "backend.internal".to_string(),
+                    8080,
+                ),
+            ]));
+            store
+                .apply_resolution_refresh(
+                    backend_addr,
+                    retained_addrs.clone(),
+                    SystemTime::UNIX_EPOCH,
+                )
+                .expect("seed refresh");
+            let coordinator = BackendLifecycleCoordinator::new(store);
+            let resolver = SharedDnsResolver::new();
+            let transport_pool = test_transport_pool(backend_addr);
+            let backend = coordinator.backend(backend_addr).expect("backend");
+
+            let outcome =
+                coordinator.apply_refresh(&backend, Ok(Vec::new()), &resolver, &transport_pool);
+
+            assert!(matches!(
+                outcome,
+                BackendDnsRefreshApplication::EmptyAnswerRetained {
+                    retained_addrs: actual,
+                    ..
+                } if actual == retained_addrs
+            ));
+        }
+
+        #[test]
+        fn failed_refresh_preserves_existing_resolution_and_generation() {
+            let backend_addr = "http://backend.internal:8080";
+            let retained_addrs = vec!["10.0.0.10:8080".parse::<SocketAddr>().expect("addr")];
+            let store = Arc::new(RuntimeBackendResolutionStore::new([
+                RuntimeBackendResolution::hostname(
+                    backend_addr.to_string(),
+                    "backend.internal".to_string(),
+                    8080,
+                ),
+            ]));
+            store
+                .apply_resolution_refresh(
+                    backend_addr,
+                    retained_addrs.clone(),
+                    SystemTime::UNIX_EPOCH,
+                )
+                .expect("seed refresh");
+            let coordinator = BackendLifecycleCoordinator::new(Arc::clone(&store));
+            let resolver = SharedDnsResolver::new();
+            let transport_pool = test_transport_pool(backend_addr);
+            let backend = coordinator.backend(backend_addr).expect("backend");
+
+            let outcome = coordinator.apply_refresh(
+                &backend,
+                Err("nxdomain".to_string()),
+                &resolver,
+                &transport_pool,
+            );
+
+            assert!(matches!(
+                outcome,
+                BackendDnsRefreshApplication::LookupFailed {
+                    retained_addrs: ref actual,
+                    ..
+                } if *actual == retained_addrs
+            ));
+            let snapshot = coordinator
+                .snapshot_backend(backend_addr)
+                .expect("snapshot after failed refresh");
+            assert_eq!(snapshot.resolution.resolved_addrs, retained_addrs);
+            assert_eq!(snapshot.resolution.refresh_generation, 1);
+            assert_eq!(
+                outcome.classification(),
+                BackendRefreshClassification::FailedActivePreserved
+            );
+        }
+    }
+}

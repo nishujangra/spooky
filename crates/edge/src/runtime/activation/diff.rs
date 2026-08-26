@@ -408,3 +408,52 @@ pub(super) fn rejected_startup_owned_domains(
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reload_diff_reports_noop_when_no_effective_changes_exist() {
+        assert!(ReloadDiff::default().is_noop());
+
+        let diff = ReloadDiff {
+            entries: vec![ReloadDiffEntry {
+                domain: "observability.metrics".to_string(),
+                change: ReloadChangeKind::Unchanged,
+                disposition: ReloadDiffDisposition::NoOp,
+                summary: "no effective change".to_string(),
+                secret_material_changed: false,
+            }],
+        };
+        assert!(diff.is_noop());
+    }
+
+    #[test]
+    fn compatibility_classification_distinguishes_reloadable_restart_required_and_rejected() {
+        assert_eq!(
+            classify_compatibility(&[]),
+            ReloadCompatibilityClassification::LiveReloadable
+        );
+
+        let restart_required = [TransitionRejection::restart_required(
+            "performance.worker_threads",
+            "1",
+            "8",
+        )];
+        assert_eq!(
+            classify_compatibility(&restart_required),
+            ReloadCompatibilityClassification::RestartRequired
+        );
+
+        let rejected = [TransitionRejection::resource_preflight_failed(
+            "metrics listener",
+            "127.0.0.1:9090",
+            "bind conflict on 127.0.0.1:9090",
+        )];
+        assert_eq!(
+            classify_compatibility(&rejected),
+            ReloadCompatibilityClassification::Rejected
+        );
+    }
+}
