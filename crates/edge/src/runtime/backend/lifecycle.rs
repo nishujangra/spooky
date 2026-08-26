@@ -1,710 +1,32 @@
-use std::{
-    collections::HashMap,
-    net::SocketAddr,
-    sync::{Arc, RwLock},
-    time::{Duration, SystemTime},
+mod coordinator;
+mod dns;
+mod health;
+
+pub(crate) use self::{
+    coordinator::BackendLifecycleCoordinator, coordinator::RuntimeBackendLifecycleState,
+    dns::BackendRefreshClassification,
 };
-
-use impulse_lb::{HealthTransition, upstream_pool::UpstreamPool};
-use impulse_transport::{SharedDnsResolver, UpstreamTransportPool};
-use log::{debug, info, warn};
-
-use super::{
-    event::{
-        BackendHealthObservation, BackendHealthObservationOutcome, BackendHealthObservationSource,
-        BackendLifecycleMutation, BackendRefreshOutcome, BackendRequestFeedback,
-        BackendRequestFeedbackOutcome,
+pub(crate) use self::{
+    dns::{BackendDnsRefreshApplication, log_backend_dns_refresh, observe_backend_dns_refresh},
+    health::{
+        ActiveHealthCheckEvaluation, apply_backend_health_observation,
+        apply_backend_request_accounting, apply_backend_request_feedback,
+        evaluate_active_health_check,
     },
-    resolution::RuntimeBackendResolution,
-    state::{
-        BackendHealthState, BackendIdentity, BackendLifecycleInventorySnapshot,
-        BackendLifecycleSnapshot, BackendMembershipState, BackendPoolPlacementSnapshot,
-        BackendResolutionState, CanonicalBackendLifecycleSnapshot,
-    },
-    store::RuntimeBackendResolutionStore,
 };
-use crate::Metrics;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RuntimeBackendLifecycleState {
-    pub identity: BackendIdentity,
-    pub resolution: BackendResolutionState,
-    pub health: BackendHealthState,
-    pub membership: BackendMembershipState,
-}
-
-impl RuntimeBackendLifecycleState {
-    pub fn new(
-        identity: BackendIdentity,
-        resolution: BackendResolutionState,
-        health: BackendHealthState,
-        membership: BackendMembershipState,
-    ) -> Self {
-        Self {
-            identity,
-            resolution,
-            health,
-            membership,
-        }
-    }
-
-    pub fn from_resolution_seed(resolution: &RuntimeBackendResolution) -> Self {
-        Self {
-            identity: BackendIdentity::from(resolution),
-            resolution: BackendResolutionState::from(resolution),
-            health: BackendHealthState::Unknown,
-            membership: BackendMembershipState::Active,
-        }
-    }
-
-    pub fn snapshot(&self) -> BackendLifecycleSnapshot {
-        BackendLifecycleSnapshot {
-            identity: self.identity.clone(),
-            resolution: self.resolution.clone(),
-            health: self.health.clone(),
-            membership: self.membership,
-        }
-    }
-}
-
-impl From<&RuntimeBackendResolution> for RuntimeBackendLifecycleState {
-    fn from(value: &RuntimeBackendResolution) -> Self {
-        Self::from_resolution_seed(value)
-    }
-}
-
-impl From<&RuntimeBackendLifecycleState> for BackendLifecycleSnapshot {
-    fn from(value: &RuntimeBackendLifecycleState) -> Self {
-        value.snapshot()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ActiveHealthCheckEvaluation {
-    pub observation: BackendHealthObservation,
-    pub next_consecutive_failures: u32,
-    pub next_delay: Duration,
-}
-
-/// Explicit outcome of rotating pooled transport clients after a backend's
-/// resolved addresses changed.
-///
-/// Phase 4: previously a bare `bool` collapsed a rotation *failure* into
-/// "not rotated", hiding it from operators. Rotation failure is now a distinct,
-/// operator-visible terminal state — the DNS refresh still succeeds (the new
-/// addresses are recorded), but stale pooled connections may linger, so the
-/// failure is logged and counted rather than silently dropped.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum ClientRotationOutcome {
-    /// Pooled clients were rotated to the new resolution.
-    Rotated,
-    /// No rotation was needed (transport reported the client already current).
-    NotRotated,
-    /// Rotation was attempted but failed; the DNS resolution update still stands.
-    Failed { error: String },
-}
-
-impl ClientRotationOutcome {
-    /// Whether pooled clients were actually rotated.
-    #[cfg(test)]
-    pub(crate) fn rotated(&self) -> bool {
-        matches!(self, Self::Rotated)
-    }
-
-    /// The failure reason, if rotation failed.
-    pub(crate) fn failure(&self) -> Option<&str> {
-        match self {
-            Self::Failed { error } => Some(error.as_str()),
-            Self::Rotated | Self::NotRotated => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum BackendDnsRefreshApplication {
-    Updated {
-        backend_addr: String,
-        authority_host: String,
-        previous_addrs: Vec<SocketAddr>,
-        current_addrs: Vec<SocketAddr>,
-        generation: u64,
-        refreshed_at: SystemTime,
-        client_rotation: ClientRotationOutcome,
-    },
-    Unchanged {
-        backend_addr: String,
-        authority_host: String,
-        current_addrs: Vec<SocketAddr>,
-        generation: u64,
-        refreshed_at: SystemTime,
-    },
-    EmptyAnswerRetained {
-        backend_addr: String,
-        authority_host: String,
-        retained_addrs: Vec<SocketAddr>,
-    },
-    LookupFailed {
-        backend_addr: String,
-        authority_host: String,
-        retained_addrs: Vec<SocketAddr>,
-        error: String,
-    },
-}
-
-/// The unified, operator-facing classification of a backend refresh outcome
-/// (Phase 7).
-///
-/// Every internal [`BackendDnsRefreshApplication`] variant maps onto exactly one
-/// of these so operators, logs, and metrics read a single result model instead of
-/// recomputing intent from the specific variant. It also makes the safety
-/// invariant explicit: no classification ever leaves partial hidden state — a
-/// failure always preserves the existing resolution and keeps traffic on it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BackendRefreshClassification {
-    /// The backend's resolved addresses changed and were applied.
-    Refreshed,
-    /// The refresh ran but the resolved addresses were unchanged.
-    Unchanged,
-    /// The refresh produced no usable answer (empty result); the previous
-    /// resolution is retained and serving.
-    Rejected,
-    /// The refresh failed; the active generation's resolution is preserved and
-    /// still serving traffic.
-    FailedActivePreserved,
-}
-
-impl BackendRefreshClassification {
-    /// Whether traffic continues on the existing (pre-refresh) resolution.
-    /// True for every non-`Refreshed` outcome — the whole point of the model is
-    /// that a failed or empty refresh never drops the backend.
-    pub fn traffic_continues_on_existing(self) -> bool {
-        !matches!(self, Self::Refreshed)
-    }
-
-    /// Whether this classification represents a failure operators should act on.
-    pub fn is_failure(self) -> bool {
-        matches!(self, Self::Rejected | Self::FailedActivePreserved)
-    }
-
-    /// A stable, machine-readable slug for metric labels and structured logs.
-    pub fn slug(self) -> &'static str {
-        match self {
-            Self::Refreshed => "refreshed",
-            Self::Unchanged => "unchanged",
-            Self::Rejected => "rejected_empty_answer",
-            Self::FailedActivePreserved => "failed_active_preserved",
-        }
-    }
-}
-
-impl BackendDnsRefreshApplication {
-    /// The backend identity (canonical address) this outcome concerns.
-    pub(crate) fn backend_addr(&self) -> &str {
-        match self {
-            Self::Updated { backend_addr, .. }
-            | Self::Unchanged { backend_addr, .. }
-            | Self::EmptyAnswerRetained { backend_addr, .. }
-            | Self::LookupFailed { backend_addr, .. } => backend_addr,
-        }
-    }
-
-    /// The authority host (upstream hostname) this outcome concerns.
-    pub(crate) fn authority_host(&self) -> &str {
-        match self {
-            Self::Updated { authority_host, .. }
-            | Self::Unchanged { authority_host, .. }
-            | Self::EmptyAnswerRetained { authority_host, .. }
-            | Self::LookupFailed { authority_host, .. } => authority_host,
-        }
-    }
-
-    /// The unified operator-facing classification of this outcome.
-    pub(crate) fn classification(&self) -> BackendRefreshClassification {
-        match self {
-            Self::Updated { .. } => BackendRefreshClassification::Refreshed,
-            Self::Unchanged { .. } => BackendRefreshClassification::Unchanged,
-            Self::EmptyAnswerRetained { .. } => BackendRefreshClassification::Rejected,
-            Self::LookupFailed { .. } => BackendRefreshClassification::FailedActivePreserved,
-        }
-    }
-
-    /// Whether traffic continues on the existing resolution after this outcome.
-    #[cfg(test)]
-    pub(crate) fn traffic_continues_on_existing(&self) -> bool {
-        self.classification().traffic_continues_on_existing()
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct BackendLifecycleCoordinator {
-    resolution_store: Arc<RuntimeBackendResolutionStore>,
-}
-
-impl BackendLifecycleCoordinator {
-    pub fn new(resolution_store: Arc<RuntimeBackendResolutionStore>) -> Self {
-        Self { resolution_store }
-    }
-
-    pub fn backend(&self, backend_addr: &str) -> Option<RuntimeBackendLifecycleState> {
-        self.resolution_store.backend(backend_addr)
-    }
-
-    pub fn hostname_backends(&self) -> Vec<RuntimeBackendLifecycleState> {
-        self.resolution_store.hostname_backends()
-    }
-
-    pub fn snapshot_backend(&self, backend_addr: &str) -> Option<BackendLifecycleSnapshot> {
-        self.backend(backend_addr).map(|backend| backend.snapshot())
-    }
-
-    pub fn snapshot_all(&self) -> HashMap<String, BackendLifecycleSnapshot> {
-        self.resolution_store.snapshot()
-    }
-
-    pub fn snapshot_inventory(
-        &self,
-        upstream_pools: &HashMap<String, Arc<RwLock<UpstreamPool>>>,
-    ) -> BackendLifecycleInventorySnapshot {
-        let mut snapshots = self
-            .snapshot_all()
-            .into_values()
-            .map(|snapshot| {
-                (
-                    snapshot.identity.backend_addr.clone(),
-                    CanonicalBackendLifecycleSnapshot {
-                        identity: snapshot.identity,
-                        resolution: snapshot.resolution,
-                        health: snapshot.health,
-                        membership: snapshot.membership,
-                        placements: Vec::new(),
-                    },
-                )
-            })
-            .collect::<HashMap<_, _>>();
-
-        for (upstream_name, pool) in upstream_pools {
-            let Ok(guard) = pool.read() else {
-                continue;
-            };
-            let membership_summary = guard.membership_summary();
-            for backend_index in guard.backend_indices() {
-                let Some(backend_addr) = guard.backend_address(backend_index) else {
-                    continue;
-                };
-                let Some(backend) = guard.backend_runtime_state(backend_index) else {
-                    continue;
-                };
-                let entry = snapshots
-                    .entry(backend_addr.to_string())
-                    .or_insert_with(|| CanonicalBackendLifecycleSnapshot {
-                        identity: BackendIdentity::new(backend_addr.to_string()),
-                        resolution: BackendResolutionState {
-                            authority_host: backend_addr.to_string(),
-                            authority_port: 0,
-                            address_kind: super::resolution::RuntimeBackendAddressKind::IpLiteral,
-                            resolved_addrs: Vec::new(),
-                            last_refresh_success_at: None,
-                            refresh_generation: 0,
-                        },
-                        health: BackendHealthState::Unknown,
-                        membership: BackendMembershipState::Removed,
-                        placements: Vec::new(),
-                    });
-                entry.placements.push(BackendPoolPlacementSnapshot {
-                    upstream_name: upstream_name.clone(),
-                    backend_index,
-                    healthy: backend.healthy,
-                    active_requests: backend.active_requests,
-                    ewma_latency_ms: backend.ewma_latency_ms,
-                    membership_epoch: membership_summary.membership_epoch,
-                });
-            }
-        }
-
-        let mut backends = snapshots.into_values().collect::<Vec<_>>();
-        for backend in &mut backends {
-            if backend.placements.is_empty() {
-                backend.membership = BackendMembershipState::Removed;
-                continue;
-            }
-
-            backend.membership = BackendMembershipState::Active;
-            backend.health = if backend.placements.iter().all(|placement| placement.healthy) {
-                BackendHealthState::Healthy
-            } else {
-                BackendHealthState::Unhealthy { reason: None }
-            };
-            backend.placements.sort_by(|left, right| {
-                left.upstream_name
-                    .cmp(&right.upstream_name)
-                    .then(left.backend_index.cmp(&right.backend_index))
-            });
-        }
-        backends
-            .sort_by(|left, right| left.identity.backend_addr.cmp(&right.identity.backend_addr));
-
-        BackendLifecycleInventorySnapshot { backends }
-    }
-
-    pub(crate) fn apply_refresh(
-        &self,
-        backend: &RuntimeBackendLifecycleState,
-        resolved_addrs: Result<Vec<SocketAddr>, String>,
-        backend_dns_resolver: &SharedDnsResolver,
-        transport_pool: &UpstreamTransportPool,
-    ) -> BackendDnsRefreshApplication {
-        apply_backend_dns_refresh(
-            backend,
-            resolved_addrs,
-            self.resolution_store.as_ref(),
-            backend_dns_resolver,
-            transport_pool,
-        )
-    }
-
-    pub(crate) fn apply_health_observation(
-        &self,
-        upstream_pool: Option<&Arc<RwLock<UpstreamPool>>>,
-        backend_index: Option<usize>,
-        observation: &BackendHealthObservation,
-    ) -> Option<HealthTransition> {
-        apply_backend_health_observation(upstream_pool, backend_index, observation)
-    }
-}
-
-pub(crate) fn apply_backend_request_accounting(
-    upstream_pool: Option<&Arc<RwLock<UpstreamPool>>>,
-    backend_index: Option<usize>,
-    elapsed: Duration,
-    status: Option<u16>,
-) {
-    if let (Some(pool), Some(index)) = (upstream_pool, backend_index)
-        && let Ok(mut guard) = pool.write()
-    {
-        guard.finish_request(index, elapsed, status);
-    }
-}
-
-pub(crate) fn apply_backend_request_feedback(
-    upstream_pool: Option<&Arc<RwLock<UpstreamPool>>>,
-    backend_index: Option<usize>,
-    feedback: &BackendRequestFeedback,
-) -> Option<HealthTransition> {
-    let (Some(pool), Some(index)) = (upstream_pool, backend_index) else {
-        return None;
-    };
-    let mut pool = pool.write().ok()?;
-    match feedback.outcome {
-        BackendRequestFeedbackOutcome::Success => pool.mark_backend_request_success(index),
-        BackendRequestFeedbackOutcome::Neutral => None,
-        BackendRequestFeedbackOutcome::Failure { reason } => {
-            pool.observe_backend_request_failure(index, feedback.elapsed, reason)
-        }
-    }
-}
-
-pub(crate) fn evaluate_active_health_check(
-    identity: BackendIdentity,
-    outcome: BackendHealthObservationOutcome,
-    reason: Option<impulse_lb::health::HealthFailureReason>,
-    base_interval_ms: u64,
-    consecutive_failures: u32,
-) -> ActiveHealthCheckEvaluation {
-    let next_consecutive_failures = match outcome {
-        BackendHealthObservationOutcome::Failure => consecutive_failures.saturating_add(1),
-        BackendHealthObservationOutcome::Success | BackendHealthObservationOutcome::Neutral => 0,
-    };
-    let backoff_multiplier = 1u64 << next_consecutive_failures.min(2);
-    let delay_ms = base_interval_ms.saturating_mul(backoff_multiplier);
-
-    ActiveHealthCheckEvaluation {
-        observation: BackendHealthObservation::active_check(identity, outcome, reason),
-        next_consecutive_failures,
-        next_delay: Duration::from_millis(delay_ms),
-    }
-}
-
-pub(crate) fn apply_backend_health_observation(
-    upstream_pool: Option<&Arc<RwLock<UpstreamPool>>>,
-    backend_index: Option<usize>,
-    observation: &BackendHealthObservation,
-) -> Option<HealthTransition> {
-    let (Some(pool), Some(index)) = (upstream_pool, backend_index) else {
-        return None;
-    };
-    let mut pool = pool.write().ok()?;
-    match (observation.source, observation.outcome) {
-        (BackendHealthObservationSource::ActiveCheck, BackendHealthObservationOutcome::Success) => {
-            pool.mark_backend_healthy(index)
-        }
-        (BackendHealthObservationSource::ActiveCheck, BackendHealthObservationOutcome::Failure) => {
-            pool.mark_backend_failure_from_active_check(index)
-        }
-        (BackendHealthObservationSource::ActiveCheck, BackendHealthObservationOutcome::Neutral) => {
-            None
-        }
-        (_, BackendHealthObservationOutcome::Success) => pool.mark_backend_request_success(index),
-        (_, BackendHealthObservationOutcome::Neutral) => None,
-        (_, BackendHealthObservationOutcome::Failure) => observation
-            .reason
-            .and_then(|reason| pool.mark_backend_request_failure(index, reason)),
-    }
-}
-
-pub(crate) fn apply_backend_dns_refresh(
-    backend: &RuntimeBackendLifecycleState,
-    resolved_addrs: Result<Vec<SocketAddr>, String>,
-    resolution_store: &RuntimeBackendResolutionStore,
-    backend_dns_resolver: &SharedDnsResolver,
-    transport_pool: &UpstreamTransportPool,
-) -> BackendDnsRefreshApplication {
-    match resolved_addrs {
-        Err(error) => BackendDnsRefreshApplication::LookupFailed {
-            backend_addr: backend.identity.backend_addr.clone(),
-            authority_host: backend.resolution.authority_host.clone(),
-            retained_addrs: backend.resolution.resolved_addrs.clone(),
-            error,
-        },
-        Ok(resolved) if resolved.is_empty() => BackendDnsRefreshApplication::EmptyAnswerRetained {
-            backend_addr: backend.identity.backend_addr.clone(),
-            authority_host: backend.resolution.authority_host.clone(),
-            retained_addrs: backend.resolution.resolved_addrs.clone(),
-        },
-        Ok(resolved) => {
-            let refreshed_at = SystemTime::now();
-            let Some(mutation) = resolution_store.apply_resolution_refresh(
-                &backend.identity.backend_addr,
-                resolved.clone(),
-                refreshed_at,
-            ) else {
-                return BackendDnsRefreshApplication::LookupFailed {
-                    backend_addr: backend.identity.backend_addr.clone(),
-                    authority_host: backend.resolution.authority_host.clone(),
-                    retained_addrs: backend.resolution.resolved_addrs.clone(),
-                    error: "hostname backend disappeared from resolution store".to_string(),
-                };
-            };
-
-            backend_dns_resolver.set_host_addrs(
-                &backend.resolution.authority_host,
-                resolved
-                    .into_iter()
-                    .map(|addr| SocketAddr::new(addr.ip(), 0)),
-            );
-
-            let BackendLifecycleMutation::ResolutionUpdated { result, .. } = mutation else {
-                return BackendDnsRefreshApplication::LookupFailed {
-                    backend_addr: backend.identity.backend_addr.clone(),
-                    authority_host: backend.resolution.authority_host.clone(),
-                    retained_addrs: backend.resolution.resolved_addrs.clone(),
-                    error: "unexpected backend lifecycle mutation during dns refresh".to_string(),
-                };
-            };
-
-            let client_rotation = if matches!(result.outcome, BackendRefreshOutcome::Updated { .. })
-            {
-                // Phase 4: no longer collapse a rotation error into "not rotated".
-                // A failure is preserved as an explicit outcome so it can be logged
-                // and metered downstream.
-                match transport_pool.rotate_backend_client(&result.identity.backend_addr) {
-                    Ok(rotation) if rotation.rotated() => ClientRotationOutcome::Rotated,
-                    Ok(_) => ClientRotationOutcome::NotRotated,
-                    Err(error) => ClientRotationOutcome::Failed { error },
-                }
-            } else {
-                ClientRotationOutcome::NotRotated
-            };
-
-            match result.outcome {
-                BackendRefreshOutcome::Updated {
-                    previous_addrs,
-                    current_addrs,
-                    refreshed_at,
-                    refresh_generation,
-                } => BackendDnsRefreshApplication::Updated {
-                    backend_addr: result.identity.backend_addr,
-                    authority_host: backend.resolution.authority_host.clone(),
-                    previous_addrs,
-                    current_addrs,
-                    generation: refresh_generation,
-                    refreshed_at: refreshed_at.unwrap_or_else(SystemTime::now),
-                    client_rotation,
-                },
-                BackendRefreshOutcome::Unchanged {
-                    current_addrs,
-                    refreshed_at,
-                    refresh_generation,
-                } => BackendDnsRefreshApplication::Unchanged {
-                    backend_addr: result.identity.backend_addr,
-                    authority_host: backend.resolution.authority_host.clone(),
-                    current_addrs,
-                    generation: refresh_generation,
-                    refreshed_at: refreshed_at.unwrap_or_else(SystemTime::now),
-                },
-                BackendRefreshOutcome::EmptyAnswerRetained { retained_addrs } => {
-                    BackendDnsRefreshApplication::EmptyAnswerRetained {
-                        backend_addr: result.identity.backend_addr,
-                        authority_host: backend.resolution.authority_host.clone(),
-                        retained_addrs,
-                    }
-                }
-                BackendRefreshOutcome::LookupFailed {
-                    retained_addrs,
-                    error,
-                } => BackendDnsRefreshApplication::LookupFailed {
-                    backend_addr: result.identity.backend_addr,
-                    authority_host: backend.resolution.authority_host.clone(),
-                    retained_addrs,
-                    error,
-                },
-            }
-        }
-    }
-}
-
-pub(crate) fn observe_backend_dns_refresh(
-    metrics: &Metrics,
-    outcome: &BackendDnsRefreshApplication,
-) {
-    // Phase 7: emit the unified classification so operators can read one result
-    // model, and record whether traffic still flows on the existing resolution.
-    let classification = outcome.classification();
-    if classification.is_failure() {
-        debug!(
-            "backend refresh classification for '{}' (backend '{}'): {} traffic_continues_on_existing={}",
-            outcome.authority_host(),
-            outcome.backend_addr(),
-            classification.slug(),
-            classification.traffic_continues_on_existing()
-        );
-    }
-
-    match outcome {
-        BackendDnsRefreshApplication::Updated {
-            backend_addr,
-            current_addrs,
-            refreshed_at,
-            client_rotation,
-            ..
-        } => {
-            metrics.record_backend_dns_refresh_success(
-                backend_addr,
-                *refreshed_at,
-                current_addrs.len(),
-                true,
-            );
-            match client_rotation {
-                ClientRotationOutcome::Rotated => {
-                    metrics.inc_backend_client_rotation(backend_addr);
-                }
-                ClientRotationOutcome::Failed { .. } => {
-                    metrics.inc_backend_client_rotation_failure();
-                }
-                ClientRotationOutcome::NotRotated => {}
-            }
-        }
-        BackendDnsRefreshApplication::Unchanged {
-            backend_addr,
-            current_addrs,
-            refreshed_at,
-            ..
-        } => {
-            metrics.record_backend_dns_refresh_success(
-                backend_addr,
-                *refreshed_at,
-                current_addrs.len(),
-                false,
-            );
-        }
-        BackendDnsRefreshApplication::EmptyAnswerRetained { .. }
-        | BackendDnsRefreshApplication::LookupFailed { .. } => {
-            metrics.inc_backend_dns_refresh_failure();
-        }
-    }
-}
-
-pub(crate) fn log_backend_dns_refresh(outcome: &BackendDnsRefreshApplication) {
-    match outcome {
-        BackendDnsRefreshApplication::Updated {
-            backend_addr,
-            authority_host,
-            previous_addrs,
-            current_addrs,
-            generation,
-            client_rotation,
-            ..
-        } => {
-            if previous_addrs.is_empty() {
-                info!(
-                    "backend DNS refresh populated '{}' (backend '{}') with {:?} generation={}",
-                    authority_host, backend_addr, current_addrs, generation
-                );
-            } else {
-                info!(
-                    "backend DNS refresh updated '{}' (backend '{}'): {:?} -> {:?} generation={} stale_pooled_connections=possible_until_idle_timeout",
-                    authority_host, backend_addr, previous_addrs, current_addrs, generation
-                );
-            }
-            // Phase 4: rotation failure is no longer silent. The resolution update
-            // above still stands, but surface that pooled clients were not rotated.
-            if let Some(error) = client_rotation.failure() {
-                warn!(
-                    "backend client rotation failed for '{}' (backend '{}') after DNS refresh: {}; stale pooled connections persist until idle timeout",
-                    authority_host, backend_addr, error
-                );
-            }
-        }
-        BackendDnsRefreshApplication::Unchanged {
-            backend_addr,
-            authority_host,
-            current_addrs,
-            generation,
-            ..
-        } => {
-            debug!(
-                "backend DNS refresh unchanged for '{}' (backend '{}') addrs={:?} generation={}",
-                authority_host, backend_addr, current_addrs, generation
-            );
-        }
-        BackendDnsRefreshApplication::EmptyAnswerRetained {
-            backend_addr,
-            authority_host,
-            retained_addrs,
-        } => {
-            warn!(
-                "backend DNS refresh returned no addresses for '{}' (backend '{}') [{}]; retaining {:?}; traffic continues on existing resolution (no manual action required unless persistent)",
-                authority_host,
-                backend_addr,
-                BackendRefreshClassification::Rejected.slug(),
-                retained_addrs
-            );
-        }
-        BackendDnsRefreshApplication::LookupFailed {
-            backend_addr,
-            authority_host,
-            retained_addrs,
-            error,
-        } => {
-            warn!(
-                "backend DNS refresh failed for '{}' (backend '{}') [{}]: {}; retaining {:?}; traffic continues on existing resolution (fix DNS/upstream if persistent)",
-                authority_host,
-                backend_addr,
-                BackendRefreshClassification::FailedActivePreserved.slug(),
-                error,
-                retained_addrs
-            );
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {
+    use crate::runtime::backend::lifecycle::dns::ClientRotationOutcome;
+    use std::sync::Arc;
+    use std::sync::RwLock;
     use std::{collections::HashMap, net::SocketAddr, time::Duration};
 
     use impulse_config::{
         config::{Backend, Config, HealthCheck, Listen, LoadBalancing, RouteMatch, Tls, Upstream},
         runtime::{RuntimeBackendTransportKind, RuntimeConfig},
     };
+    use impulse_lb::upstream_pool::UpstreamPool;
     use impulse_transport::{SharedDnsResolver, UpstreamTransportPool};
 
     use super::*;
@@ -809,6 +131,10 @@ mod tests {
 
     mod refresh_application {
         use super::*;
+        use crate::Metrics;
+        use crate::runtime::backend::resolution::RuntimeBackendResolution;
+        use crate::runtime::backend::store::RuntimeBackendResolutionStore;
+        use std::time::SystemTime;
 
         #[test]
         fn refresh_classification_maps_every_variant_and_preserves_traffic_on_failure() {
@@ -1139,6 +465,12 @@ mod tests {
 
     mod snapshot_inventory {
         use super::*;
+        use crate::runtime::backend::resolution::RuntimeBackendResolution;
+        use crate::runtime::backend::state::BackendHealthState;
+        use crate::runtime::backend::state::BackendIdentity;
+        use crate::runtime::backend::state::BackendMembershipState;
+        use crate::runtime::backend::store::RuntimeBackendResolutionStore;
+        use std::time::SystemTime;
 
         #[test]
         fn lifecycle_state_seeds_from_resolution_with_unknown_health() {
@@ -1364,7 +696,15 @@ mod tests {
     }
 
     mod health_observation_application {
+        use impulse_lb::HealthTransition;
+
         use super::*;
+        use crate::runtime::backend::event::BackendHealthObservation;
+        use crate::runtime::backend::event::BackendHealthObservationSource;
+        use crate::runtime::backend::resolution::RuntimeBackendResolution;
+        use crate::runtime::backend::state::BackendHealthState;
+        use crate::runtime::backend::state::BackendIdentity;
+        use crate::runtime::backend::store::RuntimeBackendResolutionStore;
 
         #[test]
         fn active_health_check_evaluation_tracks_backoff_and_transition() {
@@ -1607,6 +947,10 @@ mod tests {
 
     mod request_feedback_application {
         use super::*;
+        use crate::runtime::backend::resolution::RuntimeBackendResolution;
+        use crate::runtime::backend::state::BackendHealthState;
+        use crate::runtime::backend::state::BackendIdentity;
+        use crate::runtime::backend::store::RuntimeBackendResolutionStore;
 
         #[test]
         fn request_feedback_applier_marks_backend_unhealthy_after_failure_threshold() {
