@@ -220,8 +220,8 @@ mod tests {
         use impulse_lb::HealthTransition;
 
         use super::super::{
+            super::test_support::{test_active_health_upstream_pool, test_upstream_pool},
             BackendLifecycleCoordinator, RuntimeBackendLifecycleState,
-            test_support::{test_active_health_upstream_pool, test_upstream_pool},
         };
         use crate::runtime::backend::{
             event::BackendHealthObservationOutcome,

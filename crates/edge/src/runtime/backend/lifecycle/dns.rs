@@ -372,14 +372,14 @@ mod tests {
         use impulse_transport::SharedDnsResolver;
 
         use super::super::{
-            BackendDnsRefreshApplication, BackendLifecycleCoordinator,
+            super::test_support::test_transport_pool, BackendDnsRefreshApplication,
             BackendRefreshClassification, ClientRotationOutcome, observe_backend_dns_refresh,
-            test_support::test_transport_pool,
         };
         use crate::{
             Metrics,
             runtime::backend::{
-                resolution::RuntimeBackendResolution, store::RuntimeBackendResolutionStore,
+                lifecycle::BackendLifecycleCoordinator, resolution::RuntimeBackendResolution,
+                store::RuntimeBackendResolutionStore,
             },
         };
 

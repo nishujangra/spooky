@@ -107,15 +107,15 @@ mod tests {
         use impulse_lb::HealthTransition;
 
         use super::super::{
-            BackendLifecycleCoordinator, apply_backend_health_observation,
-            evaluate_active_health_check,
-            test_support::{test_active_health_upstream_pool, test_upstream_pool},
+            super::test_support::{test_active_health_upstream_pool, test_upstream_pool},
+            apply_backend_health_observation, evaluate_active_health_check,
         };
         use crate::runtime::backend::{
             event::{
                 BackendHealthObservation, BackendHealthObservationOutcome,
                 BackendHealthObservationSource,
             },
+            lifecycle::BackendLifecycleCoordinator,
             resolution::RuntimeBackendResolution,
             state::{BackendHealthState, BackendIdentity},
             store::RuntimeBackendResolutionStore,
@@ -366,12 +366,13 @@ mod tests {
         use impulse_lb::HealthTransition;
 
         use super::super::{
-            BackendLifecycleCoordinator, apply_backend_request_accounting,
-            apply_backend_request_feedback, evaluate_active_health_check,
-            test_support::{test_active_health_upstream_pool, test_upstream_pool},
+            super::test_support::{test_active_health_upstream_pool, test_upstream_pool},
+            apply_backend_request_accounting, apply_backend_request_feedback,
+            evaluate_active_health_check,
         };
         use crate::runtime::backend::{
             event::{BackendHealthObservationOutcome, BackendRequestFeedback},
+            lifecycle::BackendLifecycleCoordinator,
             resolution::RuntimeBackendResolution,
             state::{BackendHealthState, BackendIdentity},
             store::RuntimeBackendResolutionStore,
