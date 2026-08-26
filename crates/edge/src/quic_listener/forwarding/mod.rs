@@ -8,14 +8,14 @@ mod resolve;
 mod response;
 mod stream_progress;
 
-pub(in crate::quic_listener) use self::outcome::{
-    backend_failure_reason_for_proxy_error, rejection_reason_for_status, terminalize_stream,
-};
 use self::prepare::RequestFinalizationConfig;
 #[cfg(test)]
 pub(in crate::quic_listener) use self::resolve::TargetResolutionRequest as TestTargetResolutionRequest;
 pub(in crate::quic_listener) use self::{
     auth::evaluate_pending_forward_external_auth,
+    outcome::{
+        backend_failure_reason_for_proxy_error, rejection_reason_for_status, terminalize_stream,
+    },
     resolve::{
         BootstrapTargetResolutionInput, ResolutionContext, ResolutionObservation,
         TargetResolutionRequest,
@@ -84,8 +84,6 @@ impl H3RequestHandlingConfig {
 
 #[cfg(test)]
 mod tests {
-    use crate::runtime::connection::request::PendingForward;
-    use crate::runtime::connection::stream::BackendFailureReason;
     use std::time::UNIX_EPOCH;
 
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -111,7 +109,9 @@ mod tests {
     use sha2::Sha256;
 
     use super::{auth::append_auth_request_headers, *};
-    use crate::runtime::connection::auth::PendingHeaderMutation;
+    use crate::runtime::connection::{
+        auth::PendingHeaderMutation, request::PendingForward, stream::BackendFailureReason,
+    };
 
     fn sample_pending_forward(headers: Vec<quiche::h3::Header>) -> PendingForward {
         PendingForward {

@@ -1,8 +1,7 @@
 use std::collections::HashSet;
 
-use crate::runtime::{bundle::RuntimeBundle, policy::TransitionRejection};
-
 use super::*;
+use crate::runtime::{bundle::RuntimeBundle, policy::TransitionRejection};
 
 pub(super) fn classify_compatibility(
     rejections: &[TransitionRejection],

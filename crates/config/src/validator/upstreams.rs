@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 
 use super::*;
-use crate::validator::auth::validate_upstream_auth;
-use crate::validator::helpers::{
-    normalize_route_host, normalized_route_method, valid_route_host_pattern,
-    valid_static_host_header, validate_upstream_tls,
+use crate::validator::{
+    auth::validate_upstream_auth,
+    helpers::{
+        normalize_route_host, normalized_route_method, valid_route_host_pattern,
+        valid_static_host_header, validate_upstream_tls,
+    },
 };
 
 macro_rules! validation_error {

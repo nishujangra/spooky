@@ -1,9 +1,8 @@
-use crate::runtime::bundle::RuntimeBundleHandle;
-
 use super::{
     service::{RejectedActivationResultInput, RejectedRollbackResultInput},
     *,
 };
+use crate::runtime::bundle::RuntimeBundleHandle;
 
 pub(super) fn record_validation_result(handle: &RuntimeBundleHandle, plan: &ReloadPlan) {
     let validation_entry = validation_history_entry(plan);

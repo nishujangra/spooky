@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
-use super::request_body::ControlApiRuntimePlanRequest;
-use super::*;
+use super::{request_body::ControlApiRuntimePlanRequest, *};
 
 pub(super) enum ControlApiActivationError {
     Response(Box<Response<Full<Bytes>>>),

@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
-use super::request_body::ControlApiRuntimeRollbackPayload;
-use super::*;
+use super::{request_body::ControlApiRuntimeRollbackPayload, *};
 
 impl QUICListener {
     pub(in crate::quic_listener::control_api) async fn handle_control_api_runtime_rollback(

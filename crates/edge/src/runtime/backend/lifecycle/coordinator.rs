@@ -6,21 +6,19 @@ use std::{
 use impulse_lb::{HealthTransition, upstream_pool::UpstreamPool};
 use impulse_transport::{SharedDnsResolver, UpstreamTransportPool};
 
-use crate::runtime::backend::{event, resolution::RuntimeBackendAddressKind};
-
+use super::{
+    dns::{BackendDnsRefreshApplication, apply_backend_dns_refresh},
+    health::apply_backend_health_observation,
+};
 use crate::runtime::backend::{
-    resolution::RuntimeBackendResolution,
+    event,
+    resolution::{RuntimeBackendAddressKind, RuntimeBackendResolution},
     state::{
         BackendHealthState, BackendIdentity, BackendLifecycleInventorySnapshot,
         BackendLifecycleSnapshot, BackendMembershipState, BackendPoolPlacementSnapshot,
         BackendResolutionState, CanonicalBackendLifecycleSnapshot,
     },
     store::RuntimeBackendResolutionStore,
-};
-
-use super::{
-    dns::{BackendDnsRefreshApplication, apply_backend_dns_refresh},
-    health::apply_backend_health_observation,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -225,9 +223,9 @@ mod tests {
             BackendLifecycleCoordinator, RuntimeBackendLifecycleState,
             test_support::{test_active_health_upstream_pool, test_upstream_pool},
         };
-        use crate::runtime::backend::event::BackendHealthObservationOutcome;
-        use crate::runtime::backend::lifecycle::evaluate_active_health_check;
         use crate::runtime::backend::{
+            event::BackendHealthObservationOutcome,
+            lifecycle::evaluate_active_health_check,
             resolution::RuntimeBackendResolution,
             state::{BackendHealthState, BackendIdentity, BackendMembershipState},
             store::RuntimeBackendResolutionStore,

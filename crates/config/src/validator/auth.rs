@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 
 use super::*;
-use crate::validator::helpers::{is_valid_http_token, is_valid_http_url, is_valid_https_url};
-use crate::validator::secrets::validate_secret_source_exclusivity;
+use crate::validator::{
+    helpers::{is_valid_http_token, is_valid_http_url, is_valid_https_url},
+    secrets::validate_secret_source_exclusivity,
+};
 
 macro_rules! validation_error {
     ($($arg:tt)*) => {{

@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use impulse_errors::ProxyError;
 
+use super::{service::StagedRuntimeReloadPlan, *};
 use crate::runtime::{
     bundle::{
         ActiveRuntimeGeneration, RuntimeBundle, RuntimeBundleHandle, RuntimeGenerationRecordStatus,
@@ -9,8 +10,6 @@ use crate::runtime::{
     generation::CarriedProcessSharedServices,
     listener::QUICListener,
 };
-
-use super::{service::StagedRuntimeReloadPlan, *};
 
 pub(super) fn commit_staged_runtime_reload(
     handle: &RuntimeBundleHandle,

@@ -1,8 +1,7 @@
 use bytes::Bytes;
 use http_body_util::Full;
 use hyper::body::Body;
-use serde::Deserialize;
-use serde::de::DeserializeOwned;
+use serde::{Deserialize, de::DeserializeOwned};
 
 use super::*;
 

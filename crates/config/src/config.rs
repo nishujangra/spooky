@@ -22,11 +22,7 @@ mod tests;
 #[path = "config/upstream.rs"]
 mod upstream;
 
-pub use self::core::*;
-pub use self::listener::*;
-pub use self::observability::*;
-pub use self::performance::*;
-pub use self::resilience::*;
-pub use self::secrets::*;
-pub use self::security::*;
-pub use self::upstream::*;
+pub use self::{
+    core::*, listener::*, observability::*, performance::*, resilience::*, secrets::*, security::*,
+    upstream::*,
+};

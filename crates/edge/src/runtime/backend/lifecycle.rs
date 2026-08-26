@@ -3,11 +3,11 @@ mod dns;
 mod health;
 
 pub(crate) use self::{
-    coordinator::BackendLifecycleCoordinator, coordinator::RuntimeBackendLifecycleState,
-    dns::BackendRefreshClassification,
-};
-pub(crate) use self::{
-    dns::{BackendDnsRefreshApplication, log_backend_dns_refresh, observe_backend_dns_refresh},
+    coordinator::{BackendLifecycleCoordinator, RuntimeBackendLifecycleState},
+    dns::{
+        BackendDnsRefreshApplication, BackendRefreshClassification, log_backend_dns_refresh,
+        observe_backend_dns_refresh,
+    },
     health::{
         ActiveHealthCheckEvaluation, apply_backend_health_observation,
         apply_backend_request_accounting, apply_backend_request_feedback,

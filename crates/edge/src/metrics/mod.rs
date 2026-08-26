@@ -27,23 +27,26 @@ mod support;
 mod tests;
 mod types;
 
-use self::support::*;
 #[allow(unused_imports)]
 pub(crate) use self::types::RequestLatencyStats;
-use self::types::{
-    BACKEND_CONNECT_ATTEMPT_LABEL_CAP, BackendConnectAttemptKey, BackendDnsState,
-    BackendMetricsSnapshot, BackendMetricsSnapshotCache, BackendRequestCountKey,
-    BackendRotationState, ControlPlaneCertReloadKey, DownstreamTlsAlpnKey,
-    DownstreamTlsCertExpiryKey, DownstreamTlsCertSelectionKey, DownstreamTlsHandshakeFailureKey,
-    JwksSourceState, JwtJwksMetricsSnapshot, JwtJwksMetricsSnapshotCache, LATENCY_BUCKETS_MS,
-    METRIC_LABEL_OVER_CAP, QuotaBackendHealthKey, QuotaMetricsSnapshot, QuotaMetricsSnapshotCache,
-    QuotaPolicyOutcomeKey, ROUTE_LATENCY_SAMPLE_EVERY_ENV, RequestResultMetricsSnapshot,
-    RequestResultMetricsSnapshotCache, RequestResultMetricsStore, RouteStats, RouteStatsAtomic,
-    SecretLastSuccessKey, SecretMetricsSnapshot, SecretMetricsSnapshotCache, SecretReloadKey,
-    SecretResolveKey, UpstreamClientCertExpiryKey, UpstreamRequestCountKey,
-    UpstreamRequestLatencyKey, UpstreamTlsFailureKey, WorkerStats, WorkerStatsAtomic,
-};
 pub use self::types::{OverloadShedReason, RouteOutcome};
+use self::{
+    support::*,
+    types::{
+        BACKEND_CONNECT_ATTEMPT_LABEL_CAP, BackendConnectAttemptKey, BackendDnsState,
+        BackendMetricsSnapshot, BackendMetricsSnapshotCache, BackendRequestCountKey,
+        BackendRotationState, ControlPlaneCertReloadKey, DownstreamTlsAlpnKey,
+        DownstreamTlsCertExpiryKey, DownstreamTlsCertSelectionKey,
+        DownstreamTlsHandshakeFailureKey, JwksSourceState, JwtJwksMetricsSnapshot,
+        JwtJwksMetricsSnapshotCache, LATENCY_BUCKETS_MS, METRIC_LABEL_OVER_CAP,
+        QuotaBackendHealthKey, QuotaMetricsSnapshot, QuotaMetricsSnapshotCache,
+        QuotaPolicyOutcomeKey, ROUTE_LATENCY_SAMPLE_EVERY_ENV, RequestResultMetricsSnapshot,
+        RequestResultMetricsSnapshotCache, RequestResultMetricsStore, RouteStats, RouteStatsAtomic,
+        SecretLastSuccessKey, SecretMetricsSnapshot, SecretMetricsSnapshotCache, SecretReloadKey,
+        SecretResolveKey, UpstreamClientCertExpiryKey, UpstreamRequestCountKey,
+        UpstreamRequestLatencyKey, UpstreamTlsFailureKey, WorkerStats, WorkerStatsAtomic,
+    },
+};
 
 pub struct Metrics {
     pub requests_total: AtomicU64,

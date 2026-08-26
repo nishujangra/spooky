@@ -3,13 +3,14 @@ use std::{net::SocketAddr, time::SystemTime};
 use impulse_transport::{SharedDnsResolver, UpstreamTransportPool};
 use log::{debug, info, warn};
 
-use crate::runtime::backend::{
-    event::{BackendLifecycleMutation, BackendRefreshOutcome},
-    store::RuntimeBackendResolutionStore,
-};
-
 use super::coordinator::RuntimeBackendLifecycleState;
-use crate::Metrics;
+use crate::{
+    Metrics,
+    runtime::backend::{
+        event::{BackendLifecycleMutation, BackendRefreshOutcome},
+        store::RuntimeBackendResolutionStore,
+    },
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ClientRotationOutcome {

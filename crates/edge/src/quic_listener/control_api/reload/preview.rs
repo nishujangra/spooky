@@ -1,5 +1,4 @@
-use super::request_body::ControlApiRuntimePlanRequest;
-use super::*;
+use super::{request_body::ControlApiRuntimePlanRequest, *};
 
 impl QUICListener {
     pub(in crate::quic_listener::control_api) async fn handle_control_api_runtime_preview(

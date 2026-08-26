@@ -7,10 +7,6 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
-use crate::{
-    Metrics,
-    observability::{QuotaBackendHealthReason, QuotaPolicyDecision, QuotaPolicyReason},
-};
 use impulse_config::{
     config::{
         DistributedQuotaPolicy as RawDistributedQuotaPolicy,
@@ -34,6 +30,11 @@ use impulse_config::{
 };
 use log::{debug, warn};
 
+use crate::{
+    Metrics,
+    observability::{QuotaBackendHealthReason, QuotaPolicyDecision, QuotaPolicyReason},
+};
+
 mod backend;
 mod errors;
 mod evaluation;
@@ -43,17 +44,21 @@ mod observability;
 mod policy;
 mod redis;
 
-use self::errors::{
-    combine_primary_and_fallback_error, local_fallback_backend_mode, quota_rejection_decision,
-    quota_retry_after_seconds, should_attempt_local_fallback,
-};
-pub(crate) use self::evaluation::evaluate_admission_quota;
-pub(crate) use self::identity::extract_runtime_request_key;
-#[cfg(test)]
-use self::identity::{canonical_quota_identity_value, compose_quota_key};
-use self::observability::observe_quota_policy_outcome;
 pub use memory::{IN_MEMORY_QUOTA_PROTOCOL_VERSION, InMemoryDistributedQuotaCounterStore};
 pub use redis::{REDIS_QUOTA_PROTOCOL_VERSION, RedisDistributedQuotaCounterStore};
+
+#[cfg(test)]
+use self::identity::{canonical_quota_identity_value, compose_quota_key};
+use self::{
+    errors::{
+        combine_primary_and_fallback_error, local_fallback_backend_mode, quota_rejection_decision,
+        quota_retry_after_seconds, should_attempt_local_fallback,
+    },
+    observability::observe_quota_policy_outcome,
+};
+pub(crate) use self::{
+    evaluation::evaluate_admission_quota, identity::extract_runtime_request_key,
+};
 
 const LOCAL_FALLBACK_PROTOCOL_VERSION: &str = "degraded-local-fallback/v1";
 const LOCAL_FALLBACK_BACKEND_SEPARATOR: &str = "_local_fallback_";

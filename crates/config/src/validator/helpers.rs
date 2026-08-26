@@ -3,9 +3,11 @@ use std::{collections::HashMap, net::IpAddr};
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 
 use super::*;
-use crate::bounded_file::{BoundedFileReadError, read_file_with_limit};
-use crate::config::{Listen, UpstreamTls};
-use crate::validator::secrets::validate_secret_source_exclusivity;
+use crate::{
+    bounded_file::{BoundedFileReadError, read_file_with_limit},
+    config::{Listen, UpstreamTls},
+    validator::secrets::validate_secret_source_exclusivity,
+};
 
 const MAX_VALIDATION_PEM_BYTES: u64 = 1024 * 1024;
 

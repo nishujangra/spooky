@@ -1,9 +1,3 @@
-use crate::runtime::{
-    bundle::{RuntimeBundle, RuntimeBundleHandle, RuntimeGenerationRecordStatus},
-    listener::QUICListener,
-    policy::render_rejections,
-};
-
 use super::{
     diff::{build_reload_diff, rejected_startup_owned_domains},
     history::{
@@ -14,6 +8,11 @@ use super::{
     },
     swap::{commit_runtime_bundle_swap, commit_staged_runtime_reload, prepare_rollback_bundle},
     *,
+};
+use crate::runtime::{
+    bundle::{RuntimeBundle, RuntimeBundleHandle, RuntimeGenerationRecordStatus},
+    listener::QUICListener,
+    policy::render_rejections,
 };
 
 /// Internal, non-serialized staged runtime reload result.

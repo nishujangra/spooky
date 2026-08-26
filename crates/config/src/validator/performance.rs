@@ -1,10 +1,12 @@
 use std::collections::HashMap;
 
 use super::*;
-use crate::validator::control_plane::validate_control_api_security;
-use crate::validator::helpers::{
-    is_loopback_bind_address, is_valid_connect_authority, is_valid_http_token,
-    is_valid_request_key_spec, validate_listen_config,
+use crate::validator::{
+    control_plane::validate_control_api_security,
+    helpers::{
+        is_loopback_bind_address, is_valid_connect_authority, is_valid_http_token,
+        is_valid_request_key_spec, validate_listen_config,
+    },
 };
 
 macro_rules! validation_error {

@@ -1,13 +1,6 @@
-use crate::runtime::bundle::ActiveRuntimeGeneration;
-use impulse_config::{loader::read_config, runtime::RuntimeConfig};
 use std::sync::Arc;
 
-use crate::runtime::{
-    bundle::RuntimeBundle,
-    generation::CarriedProcessSharedServices,
-    listener::QUICListener,
-    policy::{TransitionRejection, render_rejections},
-};
+use impulse_config::{loader::read_config, runtime::RuntimeConfig};
 
 use super::{
     diff::{
@@ -16,6 +9,12 @@ use super::{
     },
     service::StagedRuntimeReloadPlan,
     *,
+};
+use crate::runtime::{
+    bundle::{ActiveRuntimeGeneration, RuntimeBundle},
+    generation::CarriedProcessSharedServices,
+    listener::QUICListener,
+    policy::{TransitionRejection, render_rejections},
 };
 
 pub(crate) fn plan_runtime_reload(
