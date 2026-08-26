@@ -37,7 +37,7 @@ pub(crate) enum JwtValidationFailureReason {
 }
 
 impl JwtValidationFailureReason {
-    pub(super) fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::MalformedToken => "malformed_token",
             Self::MalformedHeader => "malformed_header",
@@ -173,9 +173,9 @@ struct ParsedJwt<'a> {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct ParsedJoseHeader {
-    algorithm: JwtAlgorithm,
-    kid: Option<String>,
+pub(crate) struct ParsedJoseHeader {
+    pub(crate) algorithm: JwtAlgorithm,
+    pub(crate) kid: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -256,7 +256,9 @@ fn parse_compact_jwt(token: &str) -> Result<ParsedJwt<'_>, JwtValidationFailure>
     })
 }
 
-fn parse_jose_header(header_bytes: &[u8]) -> Result<ParsedJoseHeader, JwtValidationFailure> {
+pub(crate) fn parse_jose_header(
+    header_bytes: &[u8],
+) -> Result<ParsedJoseHeader, JwtValidationFailure> {
     let header = serde_json::from_slice::<Value>(header_bytes)
         .map_err(|_| JwtValidationFailure::new(JwtValidationFailureReason::MalformedHeader))?;
     let alg = header

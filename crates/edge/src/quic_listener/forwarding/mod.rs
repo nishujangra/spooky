@@ -84,6 +84,8 @@ impl H3RequestHandlingConfig {
 
 #[cfg(test)]
 mod tests {
+    use crate::runtime::connection::request::PendingForward;
+    use crate::runtime::connection::stream::BackendFailureReason;
     use std::time::UNIX_EPOCH;
 
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};

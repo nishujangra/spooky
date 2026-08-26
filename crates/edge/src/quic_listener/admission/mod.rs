@@ -73,23 +73,25 @@ mod startup;
 
 use self::{jwks_cache::*, jwks_refresh::*, jwt::*, key_resolution::*};
 
+pub(super) use self::jwks_cache::{
+    JwtJwksRuntimeSnapshot, runtime_jwks_source_identity, snapshot_runtime_jwks_sources,
+};
 #[cfg(test)]
 pub(super) use self::jwks_cache::{
     clear_jwks_cache_for_test, jwks_source_identity_for_test, mark_jwks_source_invalid_for_test,
     mark_jwks_source_unavailable_for_test, prime_jwks_cache_for_test,
 };
-pub(super) use self::jwks_cache::{
-    runtime_jwks_source_identity, snapshot_runtime_jwks_sources, JwtJwksRuntimeSnapshot,
-};
-#[cfg(test)]
-pub(super) use self::jwks_refresh::{normalize_jwks_document_for_test, script_jwks_fetches_for_test};
 pub(super) use self::jwks_refresh::{JwtJwksFetchFailure, JwtJwksFetchFailureReason};
+#[cfg(test)]
+pub(super) use self::jwks_refresh::{
+    normalize_jwks_document_for_test, script_jwks_fetches_for_test,
+};
 #[cfg(test)]
 pub(super) use self::jwt::validated_hs256_jwt_claims;
 #[allow(unused_imports)]
 pub(super) use self::jwt::{
-    jwt_claims_satisfy_rbac, validate_jwt_token, JwtValidationFailure,
-    JwtValidationFailureReason, ValidatedJwt,
+    JwtValidationFailure, JwtValidationFailureReason, ValidatedJwt, jwt_claims_satisfy_rbac,
+    validate_jwt_token,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -692,6 +694,8 @@ fn overload_from_route_queue_rejection(
 }
 #[cfg(test)]
 mod tests {
+    use crate::quic_listener::admission::jwks_refresh::collect_jwks_body_bounded;
+    use crate::quic_listener::admission::jwt::parse_jose_header;
     use std::{collections::HashMap, sync::Arc, time::Duration};
 
     use base64::{Engine as _engine, engine::general_purpose::URL_SAFE_NO_PAD};

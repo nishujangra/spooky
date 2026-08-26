@@ -390,7 +390,9 @@ async fn collect_jwks_body(body: Incoming) -> Result<Vec<u8>, JwtJwksFetchFailur
     collect_jwks_body_bounded(body).await
 }
 
-async fn collect_jwks_body_bounded<B>(mut body: B) -> Result<Vec<u8>, JwtJwksFetchFailure>
+pub(crate) async fn collect_jwks_body_bounded<B>(
+    mut body: B,
+) -> Result<Vec<u8>, JwtJwksFetchFailure>
 where
     B: Body<Data = Bytes> + Unpin,
     B::Error: std::fmt::Display,
