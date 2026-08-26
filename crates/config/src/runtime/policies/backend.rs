@@ -7,12 +7,15 @@ use x509_parser::parse_x509_certificate;
 use super::config_invalid;
 use crate::{
     backend_endpoint::{BackendEndpoint, BackendScheme},
+    bounded_file::{BoundedFileReadError, read_file_with_limit},
     config::{HealthCheck, Performance, UpstreamTls},
     runtime::{
         RuntimeConfigError, RuntimeResolvedSecretMetadata, RuntimeSecretResolver,
         resolve_file_secret_path,
     },
 };
+
+const MAX_CA_PEM_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuntimeBackendAddressKind {
@@ -370,11 +373,20 @@ fn load_optional_ca_dir(
     let mut loaded = 0usize;
     let mut pem_blobs = Vec::new();
     for path in pem_files {
-        let bytes = fs::read(&path).map_err(|err| {
-            RuntimeConfigError::TlsMaterialInvalid(format!(
-                "failed to read {field_name} entry '{}': {err}",
+        let bytes = read_file_with_limit(&path, MAX_CA_PEM_BYTES).map_err(|err| match err {
+            BoundedFileReadError::Io(io_err) => RuntimeConfigError::TlsMaterialInvalid(format!(
+                "failed to read {field_name} entry '{}': {io_err}",
                 path.display()
-            ))
+            )),
+            BoundedFileReadError::NotAFile => RuntimeConfigError::TlsMaterialInvalid(format!(
+                "{field_name} entry '{}' must be a file",
+                path.display()
+            )),
+            BoundedFileReadError::TooLarge => RuntimeConfigError::TlsMaterialInvalid(format!(
+                "{field_name} entry '{}' exceeds the maximum supported PEM size ({} bytes)",
+                path.display(),
+                MAX_CA_PEM_BYTES
+            )),
         })?;
         let certs = CertificateDer::pem_slice_iter(&bytes)
             .collect::<Result<Vec<_>, _>>()
@@ -632,6 +644,40 @@ mod tests {
 
         assert!(policy.refresh_enabled);
         assert_eq!(policy.refresh_interval, Duration::from_millis(45_000));
+    }
+
+    #[test]
+    fn runtime_backend_tls_policy_rejects_oversized_ca_dir_entry() {
+        let dir = tempdir().expect("tempdir");
+        let ca_dir = dir.path().join("ca.d");
+        std::fs::create_dir_all(&ca_dir).expect("create ca dir");
+        let huge_entry = ca_dir.join("huge.pem");
+        std::fs::write(&huge_entry, vec![b'A'; (MAX_CA_PEM_BYTES as usize) + 1]).expect("write");
+
+        let effective_tls = UpstreamTls {
+            verify_certificates: true,
+            strict_sni: true,
+            ca_file: None,
+            ca_dir: Some(ca_dir.to_string_lossy().to_string()),
+            client_certificate: None,
+            client_certificate_ref: None,
+            client_key: None,
+            client_key_ref: None,
+        };
+
+        let err = RuntimeBackendTlsPolicy::from_effective_tls(
+            &effective_tls,
+            "upstream 'payments' tls",
+            &RuntimeSecretResolver::default(),
+        )
+        .expect_err("oversized CA dir entry must be rejected");
+
+        assert_eq!(err.category(), "tls_material_invalid");
+        assert!(
+            err.to_string()
+                .contains("exceeds the maximum supported PEM size"),
+            "{err}"
+        );
     }
 
     #[test]
