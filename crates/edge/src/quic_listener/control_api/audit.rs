@@ -10,6 +10,9 @@ use std::{
     thread,
 };
 
+#[cfg(unix)]
+use std::os::unix::fs::OpenOptionsExt;
+
 use impulse_config::config::{
     ControlApi as ControlApiConfig, ControlApiAuditFormat, ControlApiAuditSink,
 };
@@ -186,7 +189,25 @@ impl ControlApiBufferedAuditWriter {
     }
 
     fn open_sink(path: &str, metrics: &Metrics) -> Option<File> {
-        match OpenOptions::new().create(true).append(true).open(path) {
+        #[cfg(unix)]
+        let options = {
+            let mut options = OpenOptions::new();
+            options
+                .create(true)
+                .append(true)
+                .mode(0o640)
+                .custom_flags(libc::O_NOFOLLOW);
+            options
+        };
+
+        #[cfg(not(unix))]
+        let mut options = {
+            let mut options = OpenOptions::new();
+            options.create(true).append(true);
+            options
+        };
+
+        match options.open(path) {
             Ok(file) => Some(file),
             Err(err) => {
                 metrics.inc_control_api_audit_write_failure();
@@ -687,6 +708,9 @@ impl ControlApiAdminAuditEmitter {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
     use super::*;
     use crate::quic_listener::control_api::admin_identity::{
         AdminAuthnMechanism, AdminIdentity, AdminRole,
@@ -797,5 +821,27 @@ mod tests {
             ),
             Some(AdminAuditFailureClass::Watchdog)
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn control_api_audit_file_sink_uses_restrictive_permissions() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("admin-audit.jsonl");
+        let metrics = Arc::new(Metrics::default());
+
+        let file = ControlApiBufferedAuditWriter::open_sink(
+            path.to_str().expect("utf-8 path"),
+            metrics.as_ref(),
+        )
+        .expect("open audit sink");
+        drop(file);
+
+        let mode = std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o640);
     }
 }
