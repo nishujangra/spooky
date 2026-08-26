@@ -1212,6 +1212,16 @@ fn rejects_empty_privilege_drop_user_or_group() {
 }
 
 #[test]
+fn rejects_relative_watchdog_restart_command_program() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.resilience.watchdog.restart_command = vec!["impulse".to_string(), "--restart".to_string()];
+
+    assert!(validate(&cfg).is_err());
+}
+
+#[test]
 fn rejects_ambiguous_route_matchers_with_same_host_path_and_method() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_certs(dir.path());

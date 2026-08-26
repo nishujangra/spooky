@@ -1,4 +1,4 @@
-use std::{ffi::OsString, sync::atomic::Ordering, time::Duration};
+use std::{ffi::OsString, path::Path, sync::atomic::Ordering, time::Duration};
 
 use log::{info, warn};
 
@@ -17,6 +17,14 @@ pub(crate) fn watchdog_restart_env(
         OsString::from(restart_reason),
     ));
     env_vars
+}
+
+fn watchdog_restart_program(restart_command: &[String]) -> Option<String> {
+    let program = restart_command.first()?.trim();
+    if program.is_empty() || !Path::new(program).is_absolute() {
+        return None;
+    }
+    Some(program.to_string())
 }
 
 pub(crate) async fn run_watchdog_service(state: WatchdogServiceState) {
@@ -39,12 +47,13 @@ pub(crate) async fn run_watchdog_service(state: WatchdogServiceState) {
     let mut interval =
         tokio::time::interval(Duration::from_millis(watchdog_config.check_interval_ms));
     interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    let restart_program = watchdog_config
-        .restart_command
-        .first()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty());
+    let restart_program = watchdog_restart_program(&watchdog_config.restart_command);
     let has_restart_command = restart_program.is_some();
+    if !watchdog_config.restart_command.is_empty() && !has_restart_command {
+        log::error!(
+            "Watchdog restart_command[0] must be an absolute executable path; refusing to execute relative restart command"
+        );
+    }
     if watchdog_config
         .restart_hook
         .as_deref()
@@ -211,9 +220,19 @@ mod tests {
             unhealthy_consecutive_windows: 2,
             drain_grace_ms: 60_000,
             restart_cooldown_ms: 1,
-            restart_command: vec!["true".to_string()],
+            restart_command: vec!["/bin/true".to_string()],
             restart_hook: None,
         }
+    }
+
+    #[test]
+    fn watchdog_restart_program_requires_absolute_path() {
+        assert_eq!(
+            watchdog_restart_program(&["/bin/true".to_string(), "--flag".to_string()]),
+            Some("/bin/true".to_string())
+        );
+        assert_eq!(watchdog_restart_program(&["true".to_string()]), None);
+        assert_eq!(watchdog_restart_program(&["  ".to_string()]), None);
     }
 
     fn test_service_state(
