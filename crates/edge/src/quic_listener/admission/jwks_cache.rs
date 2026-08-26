@@ -615,7 +615,10 @@ pub(crate) fn runtime_jwks_source_identity(jwt: &RuntimeJwtAuth) -> Option<Strin
     JwtJwksSourceConfig::from_jwt(jwt).map(|source| source.source_identity)
 }
 
-pub(super) fn jwt_jwks_source_identity(jwks_url: &str, allowed_algorithms: &[JwtAlgorithm]) -> String {
+pub(super) fn jwt_jwks_source_identity(
+    jwks_url: &str,
+    allowed_algorithms: &[JwtAlgorithm],
+) -> String {
     let _ = allowed_algorithms;
     let digest = Sha256::digest(jwks_url.as_bytes());
     format!("jwks:{}", hex::encode(&digest[..12]))
@@ -692,9 +695,7 @@ pub(super) fn jwt_jwks_cache_state_usable(state: JwtJwksCacheState) -> bool {
     )
 }
 
-pub(super) fn jwt_jwks_cache_stale_window_expired(
-    snapshot: &JwtJwksCacheSnapshot,
-) -> bool {
+pub(super) fn jwt_jwks_cache_stale_window_expired(snapshot: &JwtJwksCacheSnapshot) -> bool {
     matches!(snapshot.state, JwtJwksCacheState::EmptyUnusable) && snapshot.last_success_at.is_some()
 }
 
@@ -713,9 +714,7 @@ pub(crate) struct JwtJwksRuntimeSnapshot {
     pub(crate) last_error: Option<String>,
 }
 
-pub(crate) fn snapshot_runtime_jwks_sources(
-    config: &RuntimeConfig,
-) -> Vec<JwtJwksRuntimeSnapshot> {
+pub(crate) fn snapshot_runtime_jwks_sources(config: &RuntimeConfig) -> Vec<JwtJwksRuntimeSnapshot> {
     let now = Instant::now();
     let mut snapshots = runtime_jwks_sources(config)
         .into_iter()

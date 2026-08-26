@@ -245,14 +245,15 @@ pub(super) fn observe_quota_policy_outcome(
             QuotaDecision::NotApplied => None,
         })
         .unwrap_or("unmatched");
-    let selector_dimensions = policy
-        .map(|value| value.selector.dimensions())
-        .unwrap_or(QuotaSelectorDimensions {
-            route: false,
-            tenant: false,
-            token: false,
-            client: false,
-        });
+    let selector_dimensions =
+        policy
+            .map(|value| value.selector.dimensions())
+            .unwrap_or(QuotaSelectorDimensions {
+                route: false,
+                tenant: false,
+                token: false,
+                client: false,
+            });
     let selector_dimensions = selector_dimensions.slug();
     let backend_mode = backend_mode.unwrap_or(runtime.backend.backend_kind());
     let decision_kind = quota_policy_decision_kind(decision);

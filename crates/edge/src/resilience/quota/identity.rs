@@ -174,9 +174,7 @@ fn extract_quota_selector_key(
         }
         QuotaSelectorKeySpec::BearerToken => extract_bearer_token_value(context.header_lookup),
         QuotaSelectorKeySpec::Header(name) => extract_header_value(name, context.header_lookup),
-        QuotaSelectorKeySpec::Cookie(name) => {
-            extract_cookie_key_value(name, context.header_lookup)
-        }
+        QuotaSelectorKeySpec::Cookie(name) => extract_cookie_key_value(name, context.header_lookup),
         QuotaSelectorKeySpec::Query(name) => extract_query_key_value(context.path, name),
         QuotaSelectorKeySpec::LegacyFallback(inner) => {
             match extract_quota_selector_key(inner.as_ref(), context) {

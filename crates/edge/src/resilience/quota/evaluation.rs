@@ -72,53 +72,55 @@ async fn evaluate_quota_policy(
     };
 
     let backend_mode = runtime.backend.backend_kind();
-    let (decision, backend_observed, backend_mode, backend_error_detail) =
-        match backend.evaluate(policy.counter_request(composite_key)).await {
-            Ok(outcome) => match outcome.decision {
-                QuotaCounterEvaluationDecision::Allowed => (
-                    QuotaDecision::Allowed(QuotaAllowance {
+    let (decision, backend_observed, backend_mode, backend_error_detail) = match backend
+        .evaluate(policy.counter_request(composite_key))
+        .await
+    {
+        Ok(outcome) => match outcome.decision {
+            QuotaCounterEvaluationDecision::Allowed => (
+                QuotaDecision::Allowed(QuotaAllowance {
+                    policy_name: outcome.matched_policy,
+                    counter: Some(outcome.counter),
+                }),
+                true,
+                outcome.backend_metadata.backend_kind,
+                None,
+            ),
+            QuotaCounterEvaluationDecision::Denied(reason) => (
+                quota_rejection_decision(
+                    runtime.enforcement,
+                    QuotaDenial {
                         policy_name: outcome.matched_policy,
+                        reason,
+                        retry_after_seconds: quota_retry_after_seconds(reason, &outcome.counter),
                         counter: Some(outcome.counter),
-                    }),
-                    true,
-                    outcome.backend_metadata.backend_kind,
-                    None,
+                    },
                 ),
-                QuotaCounterEvaluationDecision::Denied(reason) => (
-                    quota_rejection_decision(
-                        runtime.enforcement,
-                        QuotaDenial {
-                            policy_name: outcome.matched_policy,
-                            reason,
-                            retry_after_seconds: quota_retry_after_seconds(reason, &outcome.counter),
-                            counter: Some(outcome.counter),
-                        },
-                    ),
-                    true,
-                    outcome.backend_metadata.backend_kind,
-                    None,
-                ),
-            },
-            Err(error) => {
-                let deny_reason = error.deny_reason();
-                let error_detail = error.detail.clone();
-                let decision = match runtime.backend_failure_policy {
-                    QuotaBackendFailurePolicy::FailOpen => {
-                        QuotaDecision::FailedOpen(QuotaBackendFailure {
-                            policy_name: error.policy_name.or_else(|| Some(policy.name.clone())),
-                            reason: deny_reason,
-                        })
-                    }
-                    QuotaBackendFailurePolicy::FailClosed => {
-                        QuotaDecision::FailedClosed(QuotaBackendFailure {
-                            policy_name: error.policy_name.or_else(|| Some(policy.name.clone())),
-                            reason: deny_reason,
-                        })
-                    }
-                };
-                (decision, true, backend_mode.to_string(), error_detail)
-            }
-        };
+                true,
+                outcome.backend_metadata.backend_kind,
+                None,
+            ),
+        },
+        Err(error) => {
+            let deny_reason = error.deny_reason();
+            let error_detail = error.detail.clone();
+            let decision = match runtime.backend_failure_policy {
+                QuotaBackendFailurePolicy::FailOpen => {
+                    QuotaDecision::FailedOpen(QuotaBackendFailure {
+                        policy_name: error.policy_name.or_else(|| Some(policy.name.clone())),
+                        reason: deny_reason,
+                    })
+                }
+                QuotaBackendFailurePolicy::FailClosed => {
+                    QuotaDecision::FailedClosed(QuotaBackendFailure {
+                        policy_name: error.policy_name.or_else(|| Some(policy.name.clone())),
+                        reason: deny_reason,
+                    })
+                }
+            };
+            (decision, true, backend_mode.to_string(), error_detail)
+        }
+    };
 
     observe_quota_policy_outcome(
         runtime,

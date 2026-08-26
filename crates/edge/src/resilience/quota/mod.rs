@@ -7,6 +7,10 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use crate::{
+    Metrics,
+    observability::{QuotaBackendHealthReason, QuotaPolicyDecision, QuotaPolicyReason},
+};
 use impulse_config::{
     config::{
         DistributedQuotaPolicy as RawDistributedQuotaPolicy,
@@ -29,10 +33,6 @@ use impulse_config::{
     },
 };
 use log::{debug, warn};
-use crate::{
-    Metrics,
-    observability::{QuotaBackendHealthReason, QuotaPolicyDecision, QuotaPolicyReason},
-};
 
 mod backend;
 mod errors;
@@ -263,7 +263,6 @@ pub struct DegradedQuotaCounterBackend {
     primary_backend_kind: String,
     local_fallback: Arc<InMemoryDistributedQuotaCounterStore>,
 }
-
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuotaIdentityRejection {
