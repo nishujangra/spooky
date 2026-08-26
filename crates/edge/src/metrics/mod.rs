@@ -28,6 +28,7 @@ mod tests;
 mod types;
 
 use self::support::*;
+#[allow(unused_imports)]
 pub(crate) use self::types::RequestLatencyStats;
 use self::types::{
     BACKEND_CONNECT_ATTEMPT_LABEL_CAP, BackendConnectAttemptKey, BackendDnsState,
@@ -43,8 +44,6 @@ use self::types::{
     UpstreamRequestLatencyKey, UpstreamTlsFailureKey, WorkerStats, WorkerStatsAtomic,
 };
 pub use self::types::{OverloadShedReason, RouteOutcome};
-
-const _: Option<RequestLatencyStats> = None;
 
 pub struct Metrics {
     pub requests_total: AtomicU64,

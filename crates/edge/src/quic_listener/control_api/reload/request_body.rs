@@ -1,9 +1,28 @@
 use bytes::Bytes;
 use http_body_util::Full;
 use hyper::body::Body;
+use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
 use super::*;
+
+pub(super) const MAX_CONTROL_API_JSON_BODY_BYTES: usize = 64 * 1024;
+
+#[derive(Default, Deserialize)]
+pub(super) struct ControlApiRuntimePlanRequest {
+    pub(super) config_path: Option<String>,
+    pub(super) requested_by: Option<String>,
+    pub(super) reason: Option<String>,
+    pub(super) expected_generation: Option<u64>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct ControlApiRuntimeRollbackPayload {
+    pub(super) target_generation: u64,
+    pub(super) requested_by: Option<String>,
+    pub(super) reason: Option<String>,
+    pub(super) expected_active_generation: Option<u64>,
+}
 
 impl QUICListener {
     pub(super) async fn control_api_json_body<T>(

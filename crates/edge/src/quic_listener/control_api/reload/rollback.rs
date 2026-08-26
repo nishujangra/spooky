@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use super::request_body::ControlApiRuntimeRollbackPayload;
 use super::*;
 
 impl QUICListener {

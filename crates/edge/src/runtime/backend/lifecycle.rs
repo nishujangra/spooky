@@ -16,7 +16,7 @@ pub(crate) use self::{
 };
 
 #[cfg(test)]
-pub(crate) mod test_support {
+mod test_support {
     use std::{
         collections::HashMap,
         sync::{Arc, RwLock},

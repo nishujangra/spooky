@@ -1,10 +1,12 @@
 use bytes::Bytes;
+#[cfg(test)]
+use http_body_util::BodyExt;
 use http_body_util::Full;
-use serde::Deserialize;
 
 #[cfg(test)]
 use self::{
     activate::{activation_result_status, legacy_reload_result_status},
+    request_body::MAX_CONTROL_API_JSON_BODY_BYTES,
     rollback::rollback_result_status,
 };
 use super::{
@@ -27,29 +29,6 @@ mod parse;
 mod preview;
 mod request_body;
 mod rollback;
-
-#[derive(Default, Deserialize)]
-struct ControlApiRuntimePlanRequest {
-    config_path: Option<String>,
-    requested_by: Option<String>,
-    reason: Option<String>,
-    expected_generation: Option<u64>,
-}
-
-#[derive(Deserialize)]
-struct ControlApiRuntimeRollbackPayload {
-    target_generation: u64,
-    requested_by: Option<String>,
-    reason: Option<String>,
-    expected_active_generation: Option<u64>,
-}
-
-enum ControlApiActivationError {
-    Response(Box<Response<Full<Bytes>>>),
-    Activation(Box<ActivationResult>),
-}
-
-const MAX_CONTROL_API_JSON_BODY_BYTES: usize = 64 * 1024;
 
 impl QUICListener {
     pub(super) fn apply_live_log_level_reload(

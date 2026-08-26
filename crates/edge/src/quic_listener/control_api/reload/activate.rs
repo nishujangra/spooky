@@ -1,6 +1,12 @@
 use std::sync::Arc;
 
+use super::request_body::ControlApiRuntimePlanRequest;
 use super::*;
+
+pub(super) enum ControlApiActivationError {
+    Response(Box<Response<Full<Bytes>>>),
+    Activation(Box<ActivationResult>),
+}
 
 impl QUICListener {
     pub(in crate::quic_listener::control_api) async fn handle_control_api_runtime_activate(
