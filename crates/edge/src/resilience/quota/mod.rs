@@ -50,10 +50,7 @@ use self::errors::{
 pub(crate) use self::evaluation::evaluate_admission_quota;
 pub(crate) use self::identity::extract_runtime_request_key;
 #[cfg(test)]
-use self::identity::{
-    canonical_quota_identity_value, canonical_stored_quota_identity, compose_quota_key,
-    is_canonical_hashed_quota_identity, normalize_route_identity,
-};
+use self::identity::{canonical_quota_identity_value, compose_quota_key};
 use self::observability::observe_quota_policy_outcome;
 pub use memory::{IN_MEMORY_QUOTA_PROTOCOL_VERSION, InMemoryDistributedQuotaCounterStore};
 pub use redis::{REDIS_QUOTA_PROTOCOL_VERSION, RedisDistributedQuotaCounterStore};

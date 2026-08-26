@@ -3,7 +3,7 @@ use sha2::{Digest, Sha256};
 use super::*;
 
 impl QuotaIdentityLabels {
-    fn canonicalize_for_storage(&self) -> Self {
+    pub(crate) fn canonicalize_for_storage(&self) -> Self {
         Self {
             route: canonical_stored_quota_identity(
                 QuotaIdentityDimension::Route,

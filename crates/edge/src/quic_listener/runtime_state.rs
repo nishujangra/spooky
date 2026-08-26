@@ -223,7 +223,7 @@ impl ControlPlaneRuntimeCtx {
 }
 
 #[derive(Clone)]
-pub(super) struct ControlApiServiceCtx {
+pub(crate) struct ControlApiServiceCtx {
     pub(super) runtime: ControlPlaneRuntimeCtx,
     pub(super) started_at: Instant,
 }

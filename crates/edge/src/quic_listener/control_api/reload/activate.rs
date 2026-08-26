@@ -71,7 +71,7 @@ impl QUICListener {
     }
 
     #[cfg(test)]
-    pub(super) async fn handle_control_api_runtime_reload_without_body_for_tests(
+    pub(crate) async fn handle_control_api_runtime_reload_without_body_for_tests(
         state: &crate::quic_listener::runtime_state::ControlApiServiceCtx,
         identity: Option<AdminIdentity>,
         request_context: Option<ControlApiRequestContext>,

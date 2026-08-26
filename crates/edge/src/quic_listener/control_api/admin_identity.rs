@@ -43,7 +43,7 @@ pub(super) enum AdminAuthnMechanism {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
-pub(super) struct AdminIdentity {
+pub(crate) struct AdminIdentity {
     pub(super) actor_id: Option<String>,
     pub(super) authn_mechanisms: Vec<AdminAuthnMechanism>,
     pub(super) roles: Vec<AdminRole>,
@@ -53,7 +53,7 @@ pub(super) struct AdminIdentity {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct ControlApiRequestContext {
+pub(crate) struct ControlApiRequestContext {
     pub(super) peer_addr: SocketAddr,
     pub(super) mtls_identity: Option<AdminMtlsIdentity>,
     pub(super) listener: Option<String>,
