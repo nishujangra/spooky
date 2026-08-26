@@ -6,7 +6,7 @@ use super::*;
 use crate::runtime::connection::{
     auth::ExternalAuthDecision,
     guardrails::{
-        BodyTimeoutKind, ProgressiveEmissionPolicy, RESPONSE_BODY_TOO_LARGE_BODY,
+        BodyLimitKind, BodyTimeoutKind, ProgressiveEmissionPolicy, RESPONSE_BODY_TOO_LARGE_BODY,
         ResponseBodyGuardrailConfig, ResponseBodyGuardrailDecision, ResponseBodyGuardrailInput,
         checked_response_body_guardrails, is_unknown_length_response_prebuffer_reason,
         response_body_limit_reason, response_chunk_ranges,

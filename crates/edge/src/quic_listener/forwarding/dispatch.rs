@@ -1,3 +1,5 @@
+use std::convert::Infallible;
+
 use impulse_errors::{
     HedgeOutcomeTelemetryReason, HedgePolicyDecision, HedgePolicyFacts, HedgePrimaryState,
     RetryPolicyDecision, RetryPolicyFacts, evaluate_hedge_policy, evaluate_retry_policy,
@@ -10,7 +12,7 @@ use impulse_lb::alternate_backend::{
 use super::*;
 use crate::{
     observability::{HedgeDecisionReason, RetryDecisionReason},
-    runtime::connection::response::ForwardingPolicyTelemetry,
+    runtime::connection::{request::PendingForward, response::ForwardingPolicyTelemetry},
 };
 
 const MAX_UPSTREAM_RETRY_ATTEMPTS: u8 = 1;
