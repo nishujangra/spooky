@@ -1,5 +1,11 @@
+use std::{collections::HashMap, net::IpAddr};
+
+use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
+
 use super::*;
 use crate::bounded_file::{BoundedFileReadError, read_file_with_limit};
+use crate::config::{Listen, UpstreamTls};
+use crate::validator::secrets::validate_secret_source_exclusivity;
 
 const MAX_VALIDATION_PEM_BYTES: u64 = 1024 * 1024;
 
@@ -130,7 +136,7 @@ pub(super) fn validate_upstream_tls(field_prefix: &str, tls: &UpstreamTls) -> bo
         }
     }
 
-    if !super::validate_secret_source_exclusivity(
+    if !validate_secret_source_exclusivity(
         tls.client_certificate
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty()),
@@ -141,7 +147,7 @@ pub(super) fn validate_upstream_tls(field_prefix: &str, tls: &UpstreamTls) -> bo
         return false;
     }
 
-    if !super::validate_secret_source_exclusivity(
+    if !validate_secret_source_exclusivity(
         tls.client_key
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty()),
