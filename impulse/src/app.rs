@@ -11,7 +11,10 @@ use clap::Parser;
 use impulse_config::{runtime::RuntimeConfig, validator::validate as validate_config};
 use impulse_edge::{
     configure_async_runtime,
-    runtime::{bundle::RuntimeBundleHandle, listener::QUICListener},
+    runtime::{
+        bundle::RuntimeBundleHandle, listener::QUICListener,
+        privilege_drop::apply_process_privilege_drop,
+    },
 };
 use log::{error, info, warn};
 
@@ -20,7 +23,7 @@ use crate::{
         allocate_worker_index_base, collect_finished_listener_groups, log_listener_startup,
         reconcile_listener_groups, shutdown_listener_groups, spawn_managed_listener_group,
     },
-    privilege_drop, runtime_guard,
+    runtime_guard,
 };
 
 #[derive(Parser)]
@@ -301,20 +304,17 @@ fn fatal_startup_error(message: &str, logger_ready: bool, exit_code: i32) -> ! {
 }
 
 fn apply_privilege_drop(uid: libc::uid_t, runtime_config: &RuntimeConfig) {
-    if uid != 0 || !runtime_config.security.privileges.enabled {
-        return;
-    }
-
-    let user = runtime_config.security.privileges.user.trim();
-    let group = runtime_config.security.privileges.group.trim();
-    match privilege_drop::drop_privileges(user, group) {
-        Ok(()) => {
+    match apply_process_privilege_drop(uid, runtime_config) {
+        Ok(Some(target)) => {
             info!(
                 "Dropped process privileges to user='{}' group='{}'",
-                user, group
+                target.user, target.group
             );
         }
+        Ok(None) => {}
         Err(err) => {
+            let user = runtime_config.security.privileges.user.trim();
+            let group = runtime_config.security.privileges.group.trim();
             fatal_startup_error(
                 &format!(
                     "Failed to drop process privileges to user='{}' group='{}': {}",
