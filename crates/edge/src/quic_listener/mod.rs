@@ -76,11 +76,6 @@ use crate::{
     runtime::{
         bundle::RuntimeBundle,
         connection::{
-            guardrails::{
-                BodyLimitKind, REQUEST_BODY_TOO_LARGE_BODY, RequestBodyGuardrailConfig,
-                RequestBodyGuardrailDecision, RequestBodyGuardrailInput,
-                checked_request_body_ingress,
-            },
             quic::{QuicConnection, QuicConnectionErrorSnapshot},
             request::RequestEnvelope,
             response::{ForwardResult, ForwardSuccess, ResponseChunk, UpstreamResult},
