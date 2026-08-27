@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::Path};
 
 use super::*;
 use crate::validator::{
@@ -638,6 +638,14 @@ fn validate_resilience(config: &Config) -> bool {
     {
         validation_error!(
             "resilience.watchdog.restart_command[0] must be a non-empty executable path"
+        );
+        return false;
+    }
+    if !config.resilience.watchdog.restart_command.is_empty()
+        && !Path::new(config.resilience.watchdog.restart_command[0].trim()).is_absolute()
+    {
+        validation_error!(
+            "resilience.watchdog.restart_command[0] must be an absolute executable path"
         );
         return false;
     }

@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 
 use super::config_invalid;
 use crate::{config::Resilience, runtime::RuntimeConfigError};
@@ -73,10 +73,22 @@ pub(crate) fn normalize_watchdog_policy(
             "resilience.watchdog.restart_command[0] must be a non-empty executable path",
         ));
     }
+    if !resilience.watchdog.restart_command.is_empty()
+        && !Path::new(resilience.watchdog.restart_command[0].trim()).is_absolute()
+    {
+        return Err(config_invalid(
+            "resilience.watchdog.restart_command[0] must be an absolute executable path",
+        ));
+    }
     if resilience.watchdog.restart_hook.is_some() {
         return Err(unsupported_policy(
             "resilience.watchdog.restart_hook is deprecated and unsupported; use restart_command instead",
         ));
+    }
+
+    let mut restart_command = resilience.watchdog.restart_command.clone();
+    if let Some(program) = restart_command.first_mut() {
+        *program = program.trim().to_string();
     }
 
     Ok(RuntimeWatchdogPolicy {
@@ -89,6 +101,6 @@ pub(crate) fn normalize_watchdog_policy(
         unhealthy_consecutive_windows: resilience.watchdog.unhealthy_consecutive_windows,
         drain_grace: Duration::from_millis(resilience.watchdog.drain_grace_ms),
         restart_cooldown: Duration::from_millis(resilience.watchdog.restart_cooldown_ms),
-        restart_command: resilience.watchdog.restart_command.clone(),
+        restart_command,
     })
 }

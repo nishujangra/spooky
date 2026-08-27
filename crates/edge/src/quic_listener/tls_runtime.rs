@@ -1,7 +1,11 @@
+use std::{fs::File, io::Read};
+
 use super::*;
 use crate::quic_listener::control_api::security::{
     ControlApiClientAuthPolicy, ControlApiClientVerifierState,
 };
+
+const MAX_TLS_PEM_BYTES: u64 = 1024 * 1024;
 
 #[derive(Debug)]
 struct FallbackServerCertResolver {
@@ -46,6 +50,45 @@ impl ResolvesServerCert for FallbackServerCertResolver {
 }
 
 impl QUICListener {
+    fn read_tls_pem_file_with_limit(path: &str, field_name: &str) -> Result<Vec<u8>, ProxyError> {
+        let file = File::open(path).map_err(|err| {
+            ProxyError::Tls(format!("failed to read {field_name} '{path}': {err}"))
+        })?;
+        let metadata = file.metadata().map_err(|err| {
+            ProxyError::Tls(format!("failed to read {field_name} '{path}': {err}"))
+        })?;
+        if !metadata.is_file() {
+            return Err(ProxyError::Tls(format!(
+                "{field_name} '{path}' must be a file"
+            )));
+        }
+        if metadata.len() > MAX_TLS_PEM_BYTES {
+            return Err(ProxyError::Tls(format!(
+                "{field_name} '{path}' exceeds the maximum supported PEM size ({} bytes)",
+                MAX_TLS_PEM_BYTES
+            )));
+        }
+
+        let mut bytes = Vec::with_capacity(
+            usize::try_from(metadata.len())
+                .unwrap_or(usize::MAX)
+                .min(usize::try_from(MAX_TLS_PEM_BYTES).unwrap_or(usize::MAX)),
+        );
+        file.take(MAX_TLS_PEM_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|err| {
+                ProxyError::Tls(format!("failed to read {field_name} '{path}': {err}"))
+            })?;
+        if bytes.len() > usize::try_from(MAX_TLS_PEM_BYTES).unwrap_or(usize::MAX) {
+            return Err(ProxyError::Tls(format!(
+                "{field_name} '{path}' exceeds the maximum supported PEM size ({} bytes)",
+                MAX_TLS_PEM_BYTES
+            )));
+        }
+
+        Ok(bytes)
+    }
+
     pub(super) fn runtime_listener_tls(
         config: &ListenerRuntimeConfig,
     ) -> Result<RuntimeListenerTls, ProxyError> {
@@ -132,12 +175,8 @@ impl QUICListener {
             HashMap::with_capacity(loaded_tls.sni_identities.len());
         for (server_name, identity) in &loaded_tls.sni_identities {
             Self::validate_loaded_sni_identity(server_name, identity)?;
-            let cert_pem = std::fs::read(&identity.identity.cert_path).map_err(|err| {
-                ProxyError::Tls(format!(
-                    "failed to read SNI cert '{}': {}",
-                    identity.identity.cert_path, err
-                ))
-            })?;
+            let cert_pem =
+                Self::read_tls_pem_file_with_limit(&identity.identity.cert_path, "SNI cert")?;
             let mut certs = X509::stack_from_pem(&cert_pem).map_err(|err| {
                 ProxyError::Tls(format!(
                     "failed to parse SNI cert '{}': {}",
@@ -152,12 +191,8 @@ impl QUICListener {
             }
             let leaf = certs.remove(0);
             let chain = certs;
-            let key_pem = std::fs::read(&identity.identity.key_path).map_err(|err| {
-                ProxyError::Tls(format!(
-                    "failed to read SNI key '{}': {}",
-                    identity.identity.key_path, err
-                ))
-            })?;
+            let key_pem =
+                Self::read_tls_pem_file_with_limit(&identity.identity.key_path, "SNI key")?;
             let key = PKey::private_key_from_pem(&key_pem).map_err(|err| {
                 ProxyError::Tls(format!(
                     "failed to parse SNI key '{}': {}",
@@ -1064,5 +1099,28 @@ impl QUICListener {
             reason,
             reason_text
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tempfile::tempdir;
+
+    use super::{MAX_TLS_PEM_BYTES, QUICListener};
+
+    #[test]
+    fn read_tls_pem_file_with_limit_rejects_oversized_file() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("oversized.pem");
+        std::fs::write(&path, vec![b'A'; (MAX_TLS_PEM_BYTES as usize) + 1]).expect("write");
+
+        let err = QUICListener::read_tls_pem_file_with_limit(
+            path.to_str().expect("utf-8 path"),
+            "SNI cert",
+        )
+        .expect_err("oversized PEM must be rejected");
+
+        let message = err.to_string();
+        assert!(message.contains("exceeds the maximum supported PEM size"));
     }
 }

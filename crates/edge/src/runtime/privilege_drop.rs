@@ -1,6 +1,31 @@
+use impulse_config::runtime::RuntimeConfig;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrivilegeDropTarget {
+    pub user: String,
+    pub group: String,
+}
+
+pub fn apply_process_privilege_drop(
+    startup_uid: libc::uid_t,
+    runtime_config: &RuntimeConfig,
+) -> Result<Option<PrivilegeDropTarget>, String> {
+    if startup_uid != 0 || !runtime_config.security.privileges.enabled {
+        return Ok(None);
+    }
+
+    let user = runtime_config.security.privileges.user.trim();
+    let group = runtime_config.security.privileges.group.trim();
+    drop_privileges(user, group)?;
+
+    Ok(Some(PrivilegeDropTarget {
+        user: user.to_string(),
+        group: group.to_string(),
+    }))
+}
+
 #[cfg(unix)]
-#[allow(dead_code)]
-pub fn drop_privileges(user: &str, group: &str) -> Result<(), String> {
+fn drop_privileges(user: &str, group: &str) -> Result<(), String> {
     use std::{ffi::CString, io};
 
     const DEFAULT_LOOKUP_BUF_LEN: usize = 16 * 1024;
@@ -136,24 +161,64 @@ pub fn drop_privileges(user: &str, group: &str) -> Result<(), String> {
 }
 
 #[cfg(not(unix))]
-#[allow(dead_code)]
-pub fn drop_privileges(_user: &str, _group: &str) -> Result<(), String> {
+fn drop_privileges(_user: &str, _group: &str) -> Result<(), String> {
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::drop_privileges;
+    use impulse_config::{config::Config, runtime::RuntimeConfig};
+
+    use super::apply_process_privilege_drop;
+
+    fn minimal_runtime_config() -> RuntimeConfig {
+        let yaml = r#"
+listen:
+  tls:
+    cert: "/tmp/tls/default.pem"
+    key: "/tmp/tls/default.key"
+upstream:
+  api:
+    route:
+      path_prefix: "/"
+    backends:
+      - id: backend1
+        address: "http://127.0.0.1:7001"
+"#;
+        let config: Config = serde_yaml::from_str(yaml).expect("minimal config");
+        RuntimeConfig::from_config(&config).expect("runtime config")
+    }
+
+    #[test]
+    fn skips_drop_when_startup_is_not_root() {
+        let runtime_config = minimal_runtime_config();
+        let result = apply_process_privilege_drop(1000, &runtime_config).expect("no-op");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn skips_drop_when_control_is_disabled() {
+        let mut runtime_config = minimal_runtime_config();
+        runtime_config.security.privileges.enabled = false;
+
+        let result = apply_process_privilege_drop(0, &runtime_config).expect("no-op");
+        assert!(result.is_none());
+    }
 
     #[cfg(unix)]
     #[test]
     fn rejects_unknown_group_or_user_before_system_calls() {
-        let missing_group = format!("missing-group-{}", std::process::id());
-        let result = drop_privileges("nobody", &missing_group);
+        let mut runtime_config = minimal_runtime_config();
+        runtime_config.security.privileges.user = "nobody".to_string();
+        runtime_config.security.privileges.group = format!("missing-group-{}", std::process::id());
+
+        let result = apply_process_privilege_drop(0, &runtime_config);
         assert!(result.is_err());
 
-        let missing_user = format!("missing-user-{}", std::process::id());
-        let result = drop_privileges(&missing_user, "nogroup");
+        runtime_config.security.privileges.user = format!("missing-user-{}", std::process::id());
+        runtime_config.security.privileges.group = "nogroup".to_string();
+
+        let result = apply_process_privilege_drop(0, &runtime_config);
         assert!(result.is_err());
     }
 }
