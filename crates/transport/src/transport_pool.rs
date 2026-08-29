@@ -313,11 +313,7 @@ impl UpstreamTransportPool {
         TransportClientRotation { rotation }
     }
 
-    async fn execute_with_timeout<F, T>(
-        &self,
-        _backend: &str,
-        send: F,
-    ) -> Result<T, ProxyError>
+    async fn execute_with_timeout<F, T>(&self, _backend: &str, send: F) -> Result<T, ProxyError>
     where
         F: Future<Output = Result<T, PoolError>>,
     {

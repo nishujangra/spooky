@@ -163,7 +163,10 @@ async fn http1_upgrade_requests_flow_through_shared_transport_and_hold_inflight_
         .send_http1_upgrade_request(&backend, websocket_upgrade_request_to_backend(&backend))
         .await
         .expect("upgrade response");
-    assert_eq!(upgrade_response.response().status(), StatusCode::SWITCHING_PROTOCOLS);
+    assert_eq!(
+        upgrade_response.response().status(),
+        StatusCode::SWITCHING_PROTOCOLS
+    );
 
     let on_upgrade = upgrade::on(upgrade_response.response_mut());
     let (_response, lease) = upgrade_response.into_parts();
@@ -173,13 +176,18 @@ async fn http1_upgrade_requests_flow_through_shared_transport_and_hold_inflight_
         .expect("upgrade should succeed");
     let mut upgraded = TokioIo::new(upgraded);
 
-    let overload = pool.send_backend_request(&backend, request_to_backend(&backend)).await;
+    let overload = pool
+        .send_backend_request(&backend, request_to_backend(&backend))
+        .await;
     assert!(matches!(
         overload,
         Err(ProxyError::Pool(PoolError::BackendOverloaded(_)))
     ));
 
-    upgraded.write_all(b"ping").await.expect("write tunnel payload");
+    upgraded
+        .write_all(b"ping")
+        .await
+        .expect("write tunnel payload");
     drop(upgraded);
     drop(lease);
     tokio::time::sleep(Duration::from_millis(25)).await;

@@ -28,7 +28,6 @@ impl<'a> TargetResolutionRequest<'a> {
             header_lookup,
         }
     }
-
 }
 
 #[derive(Clone, Copy)]
@@ -475,8 +474,8 @@ mod tests {
 
     use impulse_config::{
         config::{
-            Backend, Config, ForwardedHeaderPolicy, Listen, LoadBalancing, Resilience,
-            RouteAuth, RouteMatch, Tls, Upstream, UpstreamHostPolicy,
+            Backend, Config, ForwardedHeaderPolicy, Listen, LoadBalancing, Resilience, RouteAuth,
+            RouteMatch, Tls, Upstream, UpstreamHostPolicy,
         },
         runtime::RuntimeConfig,
     };
@@ -662,26 +661,29 @@ mod tests {
 
     #[test]
     fn resolve_forwarding_target_keeps_connect_method_for_websocket_routes() {
-        let runtime = runtime_config_with_connect(HashMap::from([
-            (
-                "websocket_get".to_string(),
-                upstream(
-                    "/chat",
-                    Some("ws.example.com"),
-                    Some("GET"),
-                    "http://127.0.0.1:7001",
+        let runtime = runtime_config_with_connect(
+            HashMap::from([
+                (
+                    "websocket_get".to_string(),
+                    upstream(
+                        "/chat",
+                        Some("ws.example.com"),
+                        Some("GET"),
+                        "http://127.0.0.1:7001",
+                    ),
                 ),
-            ),
-            (
-                "websocket_connect".to_string(),
-                upstream(
-                    "/chat",
-                    Some("ws.example.com"),
-                    Some("CONNECT"),
-                    "http://127.0.0.1:7002",
+                (
+                    "websocket_connect".to_string(),
+                    upstream(
+                        "/chat",
+                        Some("ws.example.com"),
+                        Some("CONNECT"),
+                        "http://127.0.0.1:7002",
+                    ),
                 ),
-            ),
-        ]), true);
+            ]),
+            true,
+        );
         let routing_index = RouteIndex::from_runtime_upstreams(&runtime.upstreams);
         let pools = upstream_pools(&runtime);
         let policies = runtime

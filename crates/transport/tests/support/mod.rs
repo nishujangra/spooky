@@ -18,10 +18,7 @@ use hyper::{Request, Response, StatusCode, body::Incoming, service::service_fn};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use impulse_config::runtime::{RuntimeBackendConnectionPolicy, RuntimeBackendTransportKind};
 use impulse_transport::{SharedDnsResolver, UpstreamTransportPool};
-use tokio::{
-    io::AsyncReadExt,
-    net::TcpListener,
-};
+use tokio::{io::AsyncReadExt, net::TcpListener};
 
 #[derive(Clone, Copy)]
 enum TestServerProtocol {
