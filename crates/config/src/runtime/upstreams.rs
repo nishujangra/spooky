@@ -1,4 +1,5 @@
 use super::*;
+use crate::validator::is_valid_https_or_loopback_http_url;
 
 type RouteMatcherKey = RuntimeRouteMatchPolicy;
 
@@ -454,33 +455,19 @@ fn validate_upstream_policy(
                     )));
                 }
                 if let Some(discovery_url) = discovery_url.as_deref() {
-                    let valid_discovery_url = discovery_url
-                        .trim()
-                        .parse::<http::Uri>()
-                        .ok()
-                        .is_some_and(|uri| {
-                            matches!(uri.scheme_str(), Some("http") | Some("https"))
-                                && uri.authority().is_some()
-                        });
+                    let valid_discovery_url =
+                        is_valid_https_or_loopback_http_url(discovery_url);
                     if !discovery_url.trim().is_empty() && !valid_discovery_url {
                         return Err(RuntimeConfigError::ConfigInvalid(format!(
-                            "upstream '{upstream_name}' auth.external_auth.oidc.discovery_url must be an absolute http(s) URL"
+                            "upstream '{upstream_name}' auth.external_auth.oidc.discovery_url must be an absolute https URL or loopback http URL"
                         )));
                     }
                 }
                 if let Some(issuer_url) = issuer_url.as_deref() {
-                    let valid_issuer_url =
-                        issuer_url
-                            .trim()
-                            .parse::<http::Uri>()
-                            .ok()
-                            .is_some_and(|uri| {
-                                matches!(uri.scheme_str(), Some("http") | Some("https"))
-                                    && uri.authority().is_some()
-                            });
+                    let valid_issuer_url = is_valid_https_or_loopback_http_url(issuer_url);
                     if !issuer_url.trim().is_empty() && !valid_issuer_url {
                         return Err(RuntimeConfigError::ConfigInvalid(format!(
-                            "upstream '{upstream_name}' auth.external_auth.oidc.issuer_url must be an absolute http(s) URL"
+                            "upstream '{upstream_name}' auth.external_auth.oidc.issuer_url must be an absolute https URL or loopback http URL"
                         )));
                     }
                 }
@@ -1010,6 +997,32 @@ mod tests {
             err,
             RuntimeConfigError::ConfigInvalid(
                 "upstream 'api' auth.external_auth.http.response_header_allowlist contains duplicate header names"
+                    .to_string()
+            )
+        );
+
+        let mut invalid_oidc = upstream(None, "/", None);
+        invalid_oidc.auth.external_auth = Some(ExternalAuth::Oidc {
+            discovery_url: Some("http://issuer.example.com/oidc".to_string()),
+            issuer_url: None,
+            client_id: "edge-gateway".to_string(),
+            client_secret: Some("secret-1".to_string()),
+            client_secret_ref: None,
+            audience: None,
+            scopes: vec!["openid".to_string()],
+            request_headers: Vec::new(),
+            response_header_allowlist: Vec::new(),
+            timeout_ms: 1_000,
+            failure_mode: ExternalAuthFailureMode::FailClosed,
+        });
+        let config = config_with_upstreams(HashMap::from([("api".to_string(), invalid_oidc)]));
+        let policies = RuntimePolicySet::from_config(&config).expect("policies");
+
+        let err = normalize_upstreams(&config, &policies).expect_err("invalid oidc url");
+        assert_eq!(
+            err,
+            RuntimeConfigError::ConfigInvalid(
+                "upstream 'api' auth.external_auth.oidc.discovery_url must be an absolute https URL or loopback http URL"
                     .to_string()
             )
         );

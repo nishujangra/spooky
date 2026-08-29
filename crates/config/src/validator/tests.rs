@@ -1855,6 +1855,35 @@ fn accepts_oidc_external_auth() {
 }
 
 #[test]
+fn accepts_oidc_external_auth_with_loopback_http_urls() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.upstream
+        .get_mut("test_upstream")
+        .expect("upstream")
+        .auth
+        .external_auth = Some(ExternalAuth::Oidc {
+        discovery_url: Some(
+            "http://127.0.0.1:9000/.well-known/openid-configuration".to_string(),
+        ),
+        issuer_url: Some("http://localhost:9000".to_string()),
+        client_id: "edge-gateway".to_string(),
+        client_secret: Some("secret-1".to_string()),
+        client_secret_ref: None,
+        audience: Some("impulse-api".to_string()),
+        scopes: vec!["openid".to_string(), "profile".to_string()],
+        request_headers: Vec::new(),
+        response_header_allowlist: Vec::new(),
+        timeout_ms: 1_500,
+        failure_mode: ExternalAuthFailureMode::FailClosed,
+    });
+
+    assert!(validate(&cfg).is_ok());
+}
+
+#[test]
 fn rejects_oidc_external_auth_without_discovery_or_issuer() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_certs(dir.path());
@@ -2056,6 +2085,35 @@ fn rejects_oidc_external_auth_with_non_https_discovery_url() {
             "http://issuer.example.com/.well-known/openid-configuration".to_string(),
         ),
         issuer_url: Some("https://issuer.example.com".to_string()),
+        client_id: "edge-gateway".to_string(),
+        client_secret: Some("secret-1".to_string()),
+        client_secret_ref: None,
+        audience: Some("impulse-api".to_string()),
+        scopes: vec!["openid".to_string()],
+        request_headers: Vec::new(),
+        response_header_allowlist: Vec::new(),
+        timeout_ms: 1_500,
+        failure_mode: ExternalAuthFailureMode::FailClosed,
+    });
+
+    assert!(validate(&cfg).is_err());
+}
+
+#[test]
+fn rejects_oidc_external_auth_with_non_loopback_http_issuer_url() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.upstream
+        .get_mut("test_upstream")
+        .expect("upstream")
+        .auth
+        .external_auth = Some(ExternalAuth::Oidc {
+        discovery_url: Some(
+            "https://issuer.example.com/.well-known/openid-configuration".to_string(),
+        ),
+        issuer_url: Some("http://issuer.example.com".to_string()),
         client_id: "edge-gateway".to_string(),
         client_secret: Some("secret-1".to_string()),
         client_secret_ref: None,

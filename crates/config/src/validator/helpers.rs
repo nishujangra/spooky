@@ -435,6 +435,23 @@ pub(super) fn is_valid_https_url(value: &str) -> bool {
     uri.scheme_str() == Some("https") && uri.authority().is_some()
 }
 
+pub(crate) fn is_valid_https_or_loopback_http_url(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let Ok(uri) = trimmed.parse::<http::Uri>() else {
+        return false;
+    };
+
+    match uri.scheme_str() {
+        Some("https") => uri.authority().is_some(),
+        Some("http") => uri.host().is_some_and(is_loopback_bind_address),
+        _ => false,
+    }
+}
+
 pub(super) fn is_valid_connect_authority(value: &str) -> bool {
     let trimmed = value.trim();
     if trimmed.is_empty() || trimmed.chars().any(char::is_whitespace) {

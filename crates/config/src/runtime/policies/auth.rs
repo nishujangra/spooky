@@ -2,6 +2,7 @@ use std::{collections::HashMap, time::Duration};
 
 use super::{config_invalid, normalize_optional_string};
 use crate::runtime::RuntimeConfigError;
+use crate::validator::is_valid_https_or_loopback_http_url;
 
 fn normalize_string_vec(values: &[String]) -> Vec<String> {
     values
@@ -530,6 +531,22 @@ impl RuntimeExternalAuth {
                         "upstream '{upstream_name}' auth.external_auth.oidc.timeout_ms must be greater than 0"
                     )));
                 }
+                if let Some(discovery_url) = discovery_url.as_deref()
+                    && !discovery_url.trim().is_empty()
+                    && !is_valid_https_or_loopback_http_url(discovery_url)
+                {
+                    return Err(config_invalid(format!(
+                        "upstream '{upstream_name}' auth.external_auth.oidc.discovery_url must be an absolute https URL or loopback http URL"
+                    )));
+                }
+                if let Some(issuer_url) = issuer_url.as_deref()
+                    && !issuer_url.trim().is_empty()
+                    && !is_valid_https_or_loopback_http_url(issuer_url)
+                {
+                    return Err(config_invalid(format!(
+                        "upstream '{upstream_name}' auth.external_auth.oidc.issuer_url must be an absolute https URL or loopback http URL"
+                    )));
+                }
                 let client_id = client_id.trim();
                 if client_id.is_empty() {
                     return Err(config_invalid(format!(
@@ -792,6 +809,67 @@ mod tests {
                 timeout: Duration::from_millis(3_000),
                 failure_mode: RuntimeExternalAuthFailureMode::FailClosed,
             }
+        );
+    }
+
+    #[test]
+    fn external_oidc_auth_normalization_accepts_loopback_http_urls() {
+        let external_auth = ExternalAuth::Oidc {
+            discovery_url: Some(" http://127.0.0.1:9000/oidc ".into()),
+            issuer_url: Some(" http://localhost:9000 ".into()),
+            client_id: " impulse-edge ".to_string(),
+            client_secret: None,
+            client_secret_ref: None,
+            audience: None,
+            scopes: vec!["openid".to_string()],
+            request_headers: Vec::new(),
+            response_header_allowlist: Vec::new(),
+            timeout_ms: 3_000,
+            failure_mode: ExternalAuthFailureMode::FailClosed,
+        };
+
+        let normalized =
+            RuntimeExternalAuth::normalize(&external_auth, "payments").expect("oidc auth");
+
+        assert_eq!(
+            normalized,
+            RuntimeExternalAuth::Oidc {
+                discovery_url: Some("http://127.0.0.1:9000/oidc".to_string()),
+                issuer_url: Some("http://localhost:9000".to_string()),
+                client_id: "impulse-edge".to_string(),
+                client_secret: None,
+                audience: None,
+                scopes: vec!["openid".to_string()],
+                request_headers: Vec::new(),
+                response_header_allowlist: Vec::new(),
+                timeout: Duration::from_millis(3_000),
+                failure_mode: RuntimeExternalAuthFailureMode::FailClosed,
+            }
+        );
+    }
+
+    #[test]
+    fn external_oidc_auth_normalization_rejects_non_loopback_http_urls() {
+        let external_auth = ExternalAuth::Oidc {
+            discovery_url: Some("http://issuer.example/oidc".into()),
+            issuer_url: None,
+            client_id: "impulse-edge".to_string(),
+            client_secret: None,
+            client_secret_ref: None,
+            audience: None,
+            scopes: vec!["openid".to_string()],
+            request_headers: Vec::new(),
+            response_header_allowlist: Vec::new(),
+            timeout_ms: 3_000,
+            failure_mode: ExternalAuthFailureMode::FailClosed,
+        };
+
+        let err = RuntimeExternalAuth::normalize(&external_auth, "payments")
+            .expect_err("non-loopback http oidc discovery must fail");
+
+        assert_config_invalid(
+            err,
+            "upstream 'payments' auth.external_auth.oidc.discovery_url must be an absolute https URL or loopback http URL",
         );
     }
 

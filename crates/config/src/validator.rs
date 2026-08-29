@@ -21,6 +21,8 @@ mod secrets;
 mod tests;
 mod upstreams;
 
+pub(crate) use helpers::is_valid_https_or_loopback_http_url;
+
 pub const VALID_LOG_LEVELS: &[&str] = &[
     "whisper",
     "haunt",
