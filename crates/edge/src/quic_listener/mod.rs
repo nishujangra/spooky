@@ -15,7 +15,7 @@ use std::{
 
 use boring::{
     pkey::{PKey, Private},
-    ssl::{NameType, SelectCertError, SslContextBuilder, SslFiletype, SslMethod, SslVerifyMode},
+    ssl::{NameType, SelectCertError, SslContextBuilder, SslMethod, SslVerifyMode},
     x509::X509,
 };
 use bytes::Bytes;
