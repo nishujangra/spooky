@@ -1097,6 +1097,51 @@ fn rejects_control_api_mtls_without_ca_material() {
 }
 
 #[test]
+fn rejects_control_api_client_auth_ca_dir_without_readable_pem_certificates() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+    let ca_dir = dir.path().join("ca.d");
+    std::fs::create_dir_all(&ca_dir).expect("create ca dir");
+    std::fs::write(ca_dir.join("notes.txt"), b"not a pem").expect("write notes");
+
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.observability.control_api.enabled = true;
+    cfg.observability.control_api.tls.client_auth.mode = ControlApiClientAuthMode::Required;
+    cfg.observability.control_api.tls.client_auth.ca_dir =
+        Some(ca_dir.to_string_lossy().to_string());
+
+    let err = validate(&cfg).expect_err("control api ca_dir without pem certs must fail");
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "observability.control_api.tls.client_auth.ca_dir '{}' did not contain any readable PEM certificates",
+            ca_dir.to_string_lossy()
+        )
+    );
+}
+
+#[test]
+fn rejects_control_api_client_auth_oversized_ca_dir_entry() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+    let ca_dir = dir.path().join("ca.d");
+    std::fs::create_dir_all(&ca_dir).expect("create ca dir");
+    std::fs::write(ca_dir.join("huge.pem"), vec![b'A'; (1024 * 1024) + 1]).expect("write huge");
+
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.observability.control_api.enabled = true;
+    cfg.observability.control_api.tls.client_auth.mode = ControlApiClientAuthMode::Required;
+    cfg.observability.control_api.tls.client_auth.ca_dir =
+        Some(ca_dir.to_string_lossy().to_string());
+
+    let err = validate(&cfg).expect_err("oversized control api ca_dir entry must fail");
+    assert!(
+        err.to_string()
+            .contains("exceeds the maximum supported PEM size")
+    );
+}
+
+#[test]
 fn rejects_control_api_invalid_role_ordering() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_certs(dir.path());

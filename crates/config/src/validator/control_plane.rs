@@ -1,7 +1,9 @@
 use std::net::IpAddr;
 
 use super::*;
-use crate::validator::secrets::validate_secret_source_exclusivity;
+use crate::validator::{
+    helpers::validate_pem_certificate_directory, secrets::validate_secret_source_exclusivity,
+};
 
 macro_rules! validation_error {
     ($($arg:tt)*) => {{
@@ -166,6 +168,14 @@ pub(super) fn validate_control_api_security(control_api: &ControlApi) -> bool {
         validation_error!(
             "observability.control_api.tls.client_auth.ca_dir cannot be empty when provided"
         );
+        return false;
+    }
+    if let Some(ca_dir) = client_auth.ca_dir.as_ref()
+        && !validate_pem_certificate_directory(
+            ca_dir,
+            "observability.control_api.tls.client_auth.ca_dir",
+        )
+    {
         return false;
     }
 

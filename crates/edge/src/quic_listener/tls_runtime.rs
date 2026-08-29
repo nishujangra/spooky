@@ -1,4 +1,4 @@
-use std::{fs::File, io::Read};
+use std::{ffi::OsStr, fs::File, io::Read, path::Path};
 
 use super::*;
 use crate::quic_listener::control_api::security::{
@@ -652,17 +652,21 @@ impl QUICListener {
                     ca_dir, err
                 ))
             })?;
-            for entry in entries {
-                let entry = entry.map_err(|err| {
+            let mut pem_files = entries
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|err| {
                     ProxyError::Tls(format!(
                         "failed to read entry in observability.control_api.tls.client_auth.ca_dir '{}': {}",
                         ca_dir, err
                     ))
-                })?;
-                let path = entry.path();
-                if !path.is_file() {
-                    continue;
-                }
+                })?
+                .into_iter()
+                .map(|entry| entry.path())
+                .filter(|path| path.is_file() && Self::is_pem_like_path(path))
+                .collect::<Vec<_>>();
+            pem_files.sort();
+
+            for path in pem_files {
                 let path_str = path.to_string_lossy().into_owned();
                 Self::load_root_store_from_pem_file(
                     &path_str,
@@ -680,6 +684,13 @@ impl QUICListener {
         }
 
         Ok(Some(Arc::new(roots)))
+    }
+
+    fn is_pem_like_path(path: &Path) -> bool {
+        matches!(
+            path.extension().and_then(OsStr::to_str),
+            Some("pem" | "crt" | "cer" | "PEM" | "CRT" | "CER")
+        )
     }
 
     pub(super) fn load_listener_tls_material(
@@ -1140,12 +1151,16 @@ impl QUICListener {
 mod tests {
     use std::sync::Arc;
 
+    use impulse_config::config::ControlApiClientAuthMode;
     use impulse_config::{config::ClientAuth, runtime::RuntimeTlsIdentity};
     use rcgen::{Certificate, CertificateParams, SanType};
     use rustls::RootCertStore;
     use tempfile::tempdir;
 
     use super::{LoadedClientAuthCa, MAX_TLS_PEM_BYTES, QUICListener};
+    use crate::quic_listener::control_api::security::{
+        ControlApiClientAuthPolicy, ControlApiClientCaMaterial, ControlApiClientVerifierState,
+    };
 
     fn write_test_identity_files(dir: &std::path::Path) -> RuntimeTlsIdentity {
         let mut params = CertificateParams::new(vec!["example.com".to_string()]);
@@ -1160,6 +1175,18 @@ mod tests {
         RuntimeTlsIdentity {
             cert_path: cert_path.to_string_lossy().to_string(),
             key_path: key_path.to_string_lossy().to_string(),
+        }
+    }
+
+    fn control_api_client_auth_policy(
+        ca_file: Option<String>,
+        ca_dir: Option<String>,
+    ) -> ControlApiClientAuthPolicy {
+        ControlApiClientAuthPolicy {
+            mode: ControlApiClientAuthMode::Required,
+            verifier: ControlApiClientVerifierState::Configured(
+                ControlApiClientCaMaterial { ca_file, ca_dir },
+            ),
         }
     }
 
@@ -1248,5 +1275,44 @@ mod tests {
         };
 
         assert!(err.to_string().contains("exceeds the maximum supported PEM size"));
+    }
+
+    #[test]
+    fn control_api_client_auth_ca_dir_rejects_oversized_pem_entry() {
+        let dir = tempdir().expect("tempdir");
+        let ca_dir = dir.path().join("ca.d");
+        std::fs::create_dir_all(&ca_dir).expect("create ca dir");
+        std::fs::write(
+            ca_dir.join("huge.pem"),
+            vec![b'A'; (MAX_TLS_PEM_BYTES as usize) + 1],
+        )
+        .expect("write huge pem");
+
+        let err = QUICListener::load_control_api_client_auth_roots(&control_api_client_auth_policy(
+            None,
+            Some(ca_dir.to_string_lossy().to_string()),
+        ))
+        .expect_err("oversized ca_dir entry must be rejected");
+
+        assert!(err.to_string().contains("exceeds the maximum supported PEM size"));
+    }
+
+    #[test]
+    fn control_api_client_auth_ca_dir_ignores_non_pem_entries() {
+        let dir = tempdir().expect("tempdir");
+        let ca_dir = dir.path().join("ca.d");
+        std::fs::create_dir_all(&ca_dir).expect("create ca dir");
+        std::fs::write(ca_dir.join("notes.txt"), b"not a pem").expect("write txt");
+        let identity = write_test_identity_files(&ca_dir);
+        std::fs::rename(&identity.cert_path, ca_dir.join("root.pem")).expect("rename cert");
+
+        let roots = QUICListener::load_control_api_client_auth_roots(&control_api_client_auth_policy(
+            None,
+            Some(ca_dir.to_string_lossy().to_string()),
+        ))
+        .expect("load roots")
+        .expect("configured roots");
+
+        assert_eq!(roots.len(), 1);
     }
 }

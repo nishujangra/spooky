@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::IpAddr};
+use std::{collections::HashMap, ffi::OsStr, net::IpAddr, path::Path};
 
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 
@@ -181,6 +181,66 @@ pub(super) fn validate_upstream_tls(field_prefix: &str, tls: &UpstreamTls) -> bo
     }
 
     true
+}
+
+pub(super) fn validate_pem_certificate_directory(path: &str, field_name: &str) -> bool {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) => {
+            validation_error!("Cannot stat {} '{}': {}", field_name, path, err);
+            return false;
+        }
+    };
+    if !metadata.is_dir() {
+        validation_error!("{} must be a directory: {}", field_name, path);
+        return false;
+    }
+
+    let entries = match std::fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(err) => {
+            validation_error!("Cannot read {} '{}': {}", field_name, path, err);
+            return false;
+        }
+    };
+
+    let mut loaded_any = false;
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                validation_error!("Cannot read entry in {} '{}': {}", field_name, path, err);
+                return false;
+            }
+        };
+        let entry_path = entry.path();
+        if !entry_path.is_file() || !is_pem_like_path(&entry_path) {
+            continue;
+        }
+        let entry_str = entry_path.to_string_lossy();
+        if !validate_pem_certificates(entry_str.as_ref(), field_name) {
+            return false;
+        }
+        loaded_any = true;
+    }
+
+    if !loaded_any {
+        validation_error!(
+            "{} '{}' did not contain any readable PEM certificates",
+            field_name,
+            path
+        );
+        return false;
+    }
+
+    true
+}
+
+fn is_pem_like_path(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(OsStr::to_str),
+        Some("pem" | "crt" | "cer" | "PEM" | "CRT" | "CER")
+    )
 }
 
 pub(super) fn validate_listen_config(listen: &Listen, field_prefix: &str) -> bool {
