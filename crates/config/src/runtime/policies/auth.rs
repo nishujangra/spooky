@@ -750,8 +750,8 @@ mod tests {
             ..JwtAuth::default()
         };
 
-        let err = RuntimeJwtAuth::normalize(&jwt, "payments")
-            .expect_err("non-https jwks url must fail");
+        let err =
+            RuntimeJwtAuth::normalize(&jwt, "payments").expect_err("non-https jwks url must fail");
 
         assert_config_invalid(
             err,

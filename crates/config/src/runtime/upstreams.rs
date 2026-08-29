@@ -455,8 +455,7 @@ fn validate_upstream_policy(
                     )));
                 }
                 if let Some(discovery_url) = discovery_url.as_deref() {
-                    let valid_discovery_url =
-                        is_valid_https_or_loopback_http_url(discovery_url);
+                    let valid_discovery_url = is_valid_https_or_loopback_http_url(discovery_url);
                     if !discovery_url.trim().is_empty() && !valid_discovery_url {
                         return Err(RuntimeConfigError::ConfigInvalid(format!(
                             "upstream '{upstream_name}' auth.external_auth.oidc.discovery_url must be an absolute https URL or loopback http URL"

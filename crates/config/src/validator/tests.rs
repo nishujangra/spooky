@@ -1885,9 +1885,7 @@ fn accepts_oidc_external_auth_with_loopback_http_urls() {
         .expect("upstream")
         .auth
         .external_auth = Some(ExternalAuth::Oidc {
-        discovery_url: Some(
-            "http://127.0.0.1:9000/.well-known/openid-configuration".to_string(),
-        ),
+        discovery_url: Some("http://127.0.0.1:9000/.well-known/openid-configuration".to_string()),
         issuer_url: Some("http://localhost:9000".to_string()),
         client_id: "edge-gateway".to_string(),
         client_secret: Some("secret-1".to_string()),

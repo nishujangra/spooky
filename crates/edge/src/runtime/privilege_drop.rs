@@ -68,7 +68,8 @@ fn has_effective_net_bind_service_capability() -> bool {
         let Ok(line) = line else {
             return false;
         };
-        if let Some(has_capability) = has_effective_net_bind_service_capability_from_status_line(&line)
+        if let Some(has_capability) =
+            has_effective_net_bind_service_capability_from_status_line(&line)
         {
             return has_capability;
         }
@@ -266,8 +267,8 @@ upstream:
     #[test]
     fn skips_drop_when_startup_is_not_root() {
         let runtime_config = minimal_runtime_config();
-        let result =
-            apply_process_privilege_drop(privilege_state(1000, 1000), &runtime_config).expect("no-op");
+        let result = apply_process_privilege_drop(privilege_state(1000, 1000), &runtime_config)
+            .expect("no-op");
         assert!(result.is_none());
     }
 
@@ -286,8 +287,8 @@ upstream:
         let mut runtime_config = minimal_runtime_config();
         runtime_config.security.privileges.enabled = false;
 
-        let result = apply_process_privilege_drop(privilege_state(0, 0), &runtime_config)
-            .expect("no-op");
+        let result =
+            apply_process_privilege_drop(privilege_state(0, 0), &runtime_config).expect("no-op");
         assert!(result.is_none());
     }
 

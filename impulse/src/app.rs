@@ -12,7 +12,8 @@ use impulse_config::{runtime::RuntimeConfig, validator::validate as validate_con
 use impulse_edge::{
     configure_async_runtime,
     runtime::{
-        bundle::RuntimeBundleHandle, listener::QUICListener,
+        bundle::RuntimeBundleHandle,
+        listener::QUICListener,
         privilege_drop::{apply_process_privilege_drop, current_process_privilege_state},
     },
 };
