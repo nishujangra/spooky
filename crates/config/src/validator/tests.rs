@@ -1754,6 +1754,26 @@ fn accepts_upstream_asymmetric_jwt_auth_with_jwks_url_and_no_secret() {
 }
 
 #[test]
+fn rejects_upstream_asymmetric_jwt_auth_with_non_https_jwks_url() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.upstream
+        .get_mut("test_upstream")
+        .expect("upstream")
+        .auth
+        .jwt = Some(JwtAuth {
+        secret: String::new(),
+        allowed_algorithms: vec![JwtAlgorithm::Rs256],
+        jwks_url: Some("http://issuer.example.com/.well-known/jwks.json".to_string()),
+        ..JwtAuth::default()
+    });
+
+    assert!(validate(&cfg).is_err());
+}
+
+#[test]
 fn rejects_upstream_jwt_auth_with_secret_and_no_hs256_algorithm() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_certs(dir.path());

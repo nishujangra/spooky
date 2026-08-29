@@ -422,7 +422,7 @@ pub(super) fn is_valid_http_url(value: &str) -> bool {
     matches!(uri.scheme_str(), Some("http") | Some("https")) && uri.authority().is_some()
 }
 
-pub(super) fn is_valid_https_url(value: &str) -> bool {
+pub(crate) fn is_valid_https_url(value: &str) -> bool {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return false;

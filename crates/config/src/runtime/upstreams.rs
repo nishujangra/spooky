@@ -591,11 +591,10 @@ fn validate_upstream_policy(
             )));
         }
         if let Some(jwks_url) = jwt.jwks_url.as_deref() {
-            let valid_jwks_url =
-                jwks_url.starts_with("https://") || jwks_url.starts_with("http://");
+            let valid_jwks_url = crate::validator::is_valid_https_url(jwks_url);
             if !jwks_url.trim().is_empty() && !valid_jwks_url {
                 return Err(RuntimeConfigError::ConfigInvalid(format!(
-                    "upstream '{upstream_name}' auth.jwt.jwks_url must be an absolute http(s) URL"
+                    "upstream '{upstream_name}' auth.jwt.jwks_url must be an absolute https URL"
                 )));
             }
         }
@@ -1024,6 +1023,24 @@ mod tests {
             RuntimeConfigError::ConfigInvalid(
                 "upstream 'api' auth.external_auth.oidc.discovery_url must be an absolute https URL or loopback http URL"
                     .to_string()
+            )
+        );
+
+        let mut invalid_jwks = upstream(None, "/", None);
+        invalid_jwks.auth.jwt = Some(crate::config::JwtAuth {
+            secret: String::new(),
+            allowed_algorithms: vec![crate::config::JwtAlgorithm::Rs256],
+            jwks_url: Some("http://issuer.example.com/.well-known/jwks.json".to_string()),
+            ..crate::config::JwtAuth::default()
+        });
+        let config = config_with_upstreams(HashMap::from([("api".to_string(), invalid_jwks)]));
+        let policies = RuntimePolicySet::from_config(&config).expect("policies");
+
+        let err = normalize_upstreams(&config, &policies).expect_err("invalid jwks url");
+        assert_eq!(
+            err,
+            RuntimeConfigError::ConfigInvalid(
+                "upstream 'api' auth.jwt.jwks_url must be an absolute https URL".to_string()
             )
         );
     }

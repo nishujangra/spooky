@@ -2,7 +2,7 @@ use std::{collections::HashMap, time::Duration};
 
 use super::{config_invalid, normalize_optional_string};
 use crate::runtime::RuntimeConfigError;
-use crate::validator::is_valid_https_or_loopback_http_url;
+use crate::validator::{is_valid_https_or_loopback_http_url, is_valid_https_url};
 
 fn normalize_string_vec(values: &[String]) -> Vec<String> {
     values
@@ -158,6 +158,13 @@ impl RuntimeJwtAuth {
         let static_keys =
             normalize_static_keys(&jwt.static_keys, upstream_name, has_asymmetric_alg)?;
         let jwks_url = normalize_optional_string(jwt.jwks_url.as_deref());
+        if let Some(jwks_url) = jwks_url.as_deref()
+            && !is_valid_https_url(jwks_url)
+        {
+            return Err(config_invalid(format!(
+                "upstream '{upstream_name}' auth.jwt.jwks_url must be an absolute https URL"
+            )));
+        }
 
         if jwks_url.is_some() && !has_asymmetric_alg {
             return Err(config_invalid(format!(
@@ -732,6 +739,24 @@ mod tests {
         assert_eq!(normalized.issuer.as_deref(), Some("issuer.example"));
         assert_eq!(normalized.audience.as_deref(), Some("payments-api"));
         assert_eq!(normalized.clock_skew, Duration::from_secs(45));
+    }
+
+    #[test]
+    fn jwt_auth_normalization_rejects_non_https_jwks_url() {
+        let jwt = JwtAuth {
+            secret: String::new(),
+            allowed_algorithms: vec![crate::config::JwtAlgorithm::Rs256],
+            jwks_url: Some("http://issuer.example/.well-known/jwks.json".to_string()),
+            ..JwtAuth::default()
+        };
+
+        let err = RuntimeJwtAuth::normalize(&jwt, "payments")
+            .expect_err("non-https jwks url must fail");
+
+        assert_config_invalid(
+            err,
+            "upstream 'payments' auth.jwt.jwks_url must be an absolute https URL",
+        );
     }
 
     #[test]
