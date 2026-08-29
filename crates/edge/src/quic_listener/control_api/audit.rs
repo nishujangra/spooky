@@ -11,7 +11,7 @@ use std::{
 };
 
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 use impulse_config::config::{
     ControlApi as ControlApiConfig, ControlApiAuditFormat, ControlApiAuditSink,
@@ -208,7 +208,19 @@ impl ControlApiBufferedAuditWriter {
         };
 
         match options.open(path) {
-            Ok(file) => Some(file),
+            Ok(file) => {
+                #[cfg(unix)]
+                if let Err(err) = file.set_permissions(std::fs::Permissions::from_mode(0o640)) {
+                    metrics.inc_control_api_audit_write_failure();
+                    error!(
+                        "failed to set restrictive permissions on control API admin audit sink {}: {}",
+                        path, err
+                    );
+                    return None;
+                }
+
+                Some(file)
+            }
             Err(err) => {
                 metrics.inc_control_api_audit_write_failure();
                 error!(
@@ -829,6 +841,31 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("admin-audit.jsonl");
         let metrics = Arc::new(Metrics::default());
+
+        let file = ControlApiBufferedAuditWriter::open_sink(
+            path.to_str().expect("utf-8 path"),
+            metrics.as_ref(),
+        )
+        .expect("open audit sink");
+        drop(file);
+
+        let mode = std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o640);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn control_api_audit_file_sink_corrects_permissions_for_preexisting_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("admin-audit.jsonl");
+        let metrics = Arc::new(Metrics::default());
+        std::fs::write(&path, b"existing audit data\n").expect("seed file");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666))
+            .expect("set permissive mode");
 
         let file = ControlApiBufferedAuditWriter::open_sink(
             path.to_str().expect("utf-8 path"),
