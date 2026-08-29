@@ -286,10 +286,15 @@ impl QUICListener {
             })?;
         }
 
-        let key_pem =
-            Self::read_tls_pem_file_with_limit(&identity.key_path, "listen.tls.default_identity.key")?;
+        let key_pem = Self::read_tls_pem_file_with_limit(
+            &identity.key_path,
+            "listen.tls.default_identity.key",
+        )?;
         let key = PKey::private_key_from_pem(&key_pem).map_err(|err| {
-            ProxyError::Tls(format!("failed to parse key '{}': {}", identity.key_path, err))
+            ProxyError::Tls(format!(
+                "failed to parse key '{}': {}",
+                identity.key_path, err
+            ))
         })?;
         builder.set_private_key(&key).map_err(|err| {
             ProxyError::Tls(format!(
@@ -1184,9 +1189,10 @@ mod tests {
     ) -> ControlApiClientAuthPolicy {
         ControlApiClientAuthPolicy {
             mode: ControlApiClientAuthMode::Required,
-            verifier: ControlApiClientVerifierState::Configured(
-                ControlApiClientCaMaterial { ca_file, ca_dir },
-            ),
+            verifier: ControlApiClientVerifierState::Configured(ControlApiClientCaMaterial {
+                ca_file,
+                ca_dir,
+            }),
         }
     }
 
@@ -1225,15 +1231,21 @@ mod tests {
             Err(err) => err,
         };
 
-        assert!(err.to_string().contains("exceeds the maximum supported PEM size"));
+        assert!(
+            err.to_string()
+                .contains("exceeds the maximum supported PEM size")
+        );
     }
 
     #[test]
     fn default_quic_identity_rejects_oversized_key_file() {
         let dir = tempdir().expect("tempdir");
         let identity = write_test_identity_files(dir.path());
-        std::fs::write(&identity.key_path, vec![b'A'; (MAX_TLS_PEM_BYTES as usize) + 1])
-            .expect("oversized key");
+        std::fs::write(
+            &identity.key_path,
+            vec![b'A'; (MAX_TLS_PEM_BYTES as usize) + 1],
+        )
+        .expect("oversized key");
 
         let err = match QUICListener::build_quic_ssl_context_builder_for_identity(
             &identity,
@@ -1244,7 +1256,10 @@ mod tests {
             Err(err) => err,
         };
 
-        assert!(err.to_string().contains("exceeds the maximum supported PEM size"));
+        assert!(
+            err.to_string()
+                .contains("exceeds the maximum supported PEM size")
+        );
     }
 
     #[test]
@@ -1274,7 +1289,10 @@ mod tests {
             Err(err) => err,
         };
 
-        assert!(err.to_string().contains("exceeds the maximum supported PEM size"));
+        assert!(
+            err.to_string()
+                .contains("exceeds the maximum supported PEM size")
+        );
     }
 
     #[test]
@@ -1288,13 +1306,15 @@ mod tests {
         )
         .expect("write huge pem");
 
-        let err = QUICListener::load_control_api_client_auth_roots(&control_api_client_auth_policy(
-            None,
-            Some(ca_dir.to_string_lossy().to_string()),
-        ))
+        let err = QUICListener::load_control_api_client_auth_roots(
+            &control_api_client_auth_policy(None, Some(ca_dir.to_string_lossy().to_string())),
+        )
         .expect_err("oversized ca_dir entry must be rejected");
 
-        assert!(err.to_string().contains("exceeds the maximum supported PEM size"));
+        assert!(
+            err.to_string()
+                .contains("exceeds the maximum supported PEM size")
+        );
     }
 
     #[test]
@@ -1306,10 +1326,9 @@ mod tests {
         let identity = write_test_identity_files(&ca_dir);
         std::fs::rename(&identity.cert_path, ca_dir.join("root.pem")).expect("rename cert");
 
-        let roots = QUICListener::load_control_api_client_auth_roots(&control_api_client_auth_policy(
-            None,
-            Some(ca_dir.to_string_lossy().to_string()),
-        ))
+        let roots = QUICListener::load_control_api_client_auth_roots(
+            &control_api_client_auth_policy(None, Some(ca_dir.to_string_lossy().to_string())),
+        )
         .expect("load roots")
         .expect("configured roots");
 
