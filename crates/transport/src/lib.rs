@@ -13,4 +13,6 @@ mod h2_pool;
 mod transport_pool;
 
 pub use h2_client::{ConnectObservation, ConnectObserver, SharedDnsResolver, TlsClientConfig};
-pub use transport_pool::{TransportClientRotation, UpstreamTransportPool};
+pub use transport_pool::{
+    BackendUpgradeLease, BackendUpgradeResponse, TransportClientRotation, UpstreamTransportPool,
+};

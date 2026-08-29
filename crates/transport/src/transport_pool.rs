@@ -5,7 +5,7 @@
 //! should hand it a backend identity plus a canonical request and avoid
 //! reconstructing H1/H2 selection logic themselves.
 
-use std::{collections::HashMap, convert::Infallible, time::Duration};
+use std::{collections::HashMap, convert::Infallible, future::Future, time::Duration};
 
 use http_body_util::combinators::BoxBody;
 use hyper::{
@@ -16,6 +16,7 @@ use impulse_config::runtime::{
     RuntimeBackendConnectionPolicy, RuntimeBackendTransportKind, RuntimeUpstream,
 };
 use impulse_errors::{PoolError, ProxyError};
+use tokio::sync::OwnedSemaphorePermit;
 
 use crate::{
     client_rotation::BackendClientRotation,
@@ -55,6 +56,38 @@ pub struct UpstreamTransportPool {
     execution_timeout: Duration,
 }
 
+pub struct BackendUpgradeResponse {
+    response: hyper::Response<Incoming>,
+    permit: OwnedSemaphorePermit,
+}
+
+pub struct BackendUpgradeLease {
+    _permit: OwnedSemaphorePermit,
+}
+
+impl BackendUpgradeResponse {
+    pub fn response(&self) -> &hyper::Response<Incoming> {
+        &self.response
+    }
+
+    pub fn response_mut(&mut self) -> &mut hyper::Response<Incoming> {
+        &mut self.response
+    }
+
+    pub fn into_response(self) -> hyper::Response<Incoming> {
+        self.response
+    }
+
+    pub fn into_parts(self) -> (hyper::Response<Incoming>, BackendUpgradeLease) {
+        (
+            self.response,
+            BackendUpgradeLease {
+                _permit: self.permit,
+            },
+        )
+    }
+}
+
 impl UpstreamTransportPool {
     /// Execute a canonical upstream request against the resolved backend target.
     pub async fn send_backend_request(
@@ -63,6 +96,29 @@ impl UpstreamTransportPool {
         req: Request<BoxBody<Bytes, Infallible>>,
     ) -> Result<hyper::Response<Incoming>, ProxyError> {
         self.execute(backend, req).await
+    }
+
+    /// Execute an HTTP/1 backend request that may upgrade into a long-lived tunnel.
+    ///
+    /// The returned lease keeps the per-backend inflight permit held until the
+    /// caller finishes with the upgraded connection.
+    pub async fn send_http1_upgrade_request(
+        &self,
+        backend: &str,
+        req: Request<BoxBody<Bytes, Infallible>>,
+    ) -> Result<BackendUpgradeResponse, ProxyError> {
+        match self.backend_entry(backend) {
+            Some(BackendTransportEntry::Http1) => self
+                .execute_with_timeout(backend, self.h1_pool.send_upgrade(backend, req))
+                .await
+                .map(|(response, permit)| BackendUpgradeResponse { response, permit }),
+            Some(BackendTransportEntry::H2) => Err(ProxyError::Protocol(format!(
+                "backend '{backend}' does not support HTTP/1 upgrades"
+            ))),
+            None => Err(ProxyError::Pool(PoolError::UnknownBackend(
+                backend.to_string(),
+            ))),
+        }
     }
 
     /// Build a transport pool from already-interpreted backend transport entries.
@@ -257,13 +313,13 @@ impl UpstreamTransportPool {
         TransportClientRotation { rotation }
     }
 
-    async fn execute_with_timeout<F>(
+    async fn execute_with_timeout<F, T>(
         &self,
         _backend: &str,
         send: F,
-    ) -> Result<hyper::Response<Incoming>, ProxyError>
+    ) -> Result<T, ProxyError>
     where
-        F: std::future::Future<Output = Result<hyper::Response<Incoming>, PoolError>>,
+        F: Future<Output = Result<T, PoolError>>,
     {
         tokio::time::timeout(self.execution_timeout, send)
             .await

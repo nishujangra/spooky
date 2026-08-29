@@ -47,11 +47,10 @@ struct AlternateBodylessCandidate {
 }
 
 struct WebsocketTunnelForwardInput {
+    backend: Arc<str>,
     endpoint: BackendEndpoint,
     pending_forward: Arc<PendingForward>,
     body_rx: mpsc::Receiver<Bytes>,
-    backend_timeout: Duration,
-    metrics: Arc<Metrics>,
 }
 
 struct RetryExecutionCtx<'a> {
@@ -186,45 +185,48 @@ impl QUICListener {
         send_result
     }
 
-    async fn forward_http1_websocket_tunnel(input: WebsocketTunnelForwardInput) -> ForwardResult {
+    async fn send_upstream_upgrade_request(
+        backend: &str,
+        request: UpstreamRequest,
+        circuit_breakers: &crate::resilience::circuit_breaker::CircuitBreakers,
+        transport: &UpstreamTransportPool,
+    ) -> Result<impulse_transport::BackendUpgradeResponse, ProxyError> {
+        if !circuit_breakers.allow_request(backend) {
+            return Err(ProxyError::Pool(PoolError::CircuitOpen(
+                backend.to_string(),
+            )));
+        }
+
+        let send_result = transport.send_http1_upgrade_request(backend, request).await;
+        match &send_result {
+            Ok(_) => circuit_breakers.record_success(backend),
+            _ => circuit_breakers.record_failure(backend),
+        }
+        send_result
+    }
+
+    async fn forward_http1_websocket_tunnel(
+        input: WebsocketTunnelForwardInput,
+        circuit_breakers: &crate::resilience::circuit_breaker::CircuitBreakers,
+        transport: &UpstreamTransportPool,
+    ) -> ForwardResult {
         let WebsocketTunnelForwardInput {
+            backend,
             endpoint,
             pending_forward,
             mut body_rx,
-            backend_timeout,
-            metrics,
         } = input;
         let request = pending_forward.build_http1_websocket_tunnel_request(&endpoint)?;
-
-        let stream = tokio::time::timeout(
-            backend_timeout,
-            tokio::net::TcpStream::connect(endpoint.authority()),
+        let mut response = Self::send_upstream_upgrade_request(
+            backend.as_ref(),
+            request,
+            circuit_breakers,
+            transport,
         )
-        .await
-        .map_err(|_| ProxyError::Timeout)?
-        .map_err(|err| ProxyError::Transport(err.to_string()))?;
-        let resolved_addr = stream
-            .peer_addr()
-            .map_err(|err| ProxyError::Transport(err.to_string()))?;
-        metrics.record_backend_connect(
-            endpoint.authority(),
-            endpoint.authority_host(),
-            resolved_addr,
-        );
-        let io = TokioIo::new(stream);
-        let (mut sender, conn) = client_http1::handshake(io)
-            .await
-            .map_err(|err| ProxyError::Transport(err.to_string()))?;
-        tokio::spawn(async move {
-            let _ = conn.with_upgrades().await;
-        });
+        .await?;
 
-        let mut response = tokio::time::timeout(backend_timeout, sender.send_request(request))
-            .await
-            .map_err(|_| ProxyError::Timeout)?
-            .map_err(|err| ProxyError::Transport(err.to_string()))?;
-
-        if response.status() != StatusCode::SWITCHING_PROTOCOLS {
+        if response.response().status() != StatusCode::SWITCHING_PROTOCOLS {
+            let response = response.into_response();
             let status = response.status();
             let headers = response.headers().clone();
             return Ok(ForwardSuccess::Response {
@@ -234,10 +236,12 @@ impl QUICListener {
             });
         }
 
-        let upgraded = upgrade::on(&mut response);
-        let headers = response.headers().clone();
+        let upgraded = upgrade::on(response.response_mut());
+        let headers = response.response().headers().clone();
+        let (_response, tunnel_lease) = response.into_parts();
         let (chunk_tx, chunk_rx) = mpsc::channel(RESPONSE_CHUNK_CHANNEL_CAPACITY);
         let fut = async move {
+            let _tunnel_lease = tunnel_lease;
             let upgraded = match upgraded.await {
                 Ok(upgraded) => upgraded,
                 Err(err) => {
@@ -421,11 +425,9 @@ impl QUICListener {
         exec_ctx: &ForwardingExecutionCtx<'_>,
         shared_ctx: &ForwardingSharedCtx<'_>,
     ) -> Result<oneshot::Receiver<UpstreamResult>, ProxyError> {
-        let metrics = Arc::clone(&shared_ctx.metrics);
         let resilience = shared_ctx.resilience;
         let circuit_breakers = Arc::clone(&resilience.circuit_breakers);
         let retry_budget = Arc::clone(&resilience.retry_budget);
-        let backend_timeout = exec_ctx.backend_timeout;
         let backend_endpoints = Arc::clone(&exec_ctx.backend_endpoints);
         let transport = Arc::clone(&exec_ctx.transport_pool);
         let hedge_delay = resilience.hedging_delay;
@@ -468,12 +470,11 @@ impl QUICListener {
                         ));
                     };
                     Self::forward_http1_websocket_tunnel(WebsocketTunnelForwardInput {
+                        backend: Arc::clone(&pending_forward.backend_addr),
                         endpoint: backend_endpoint.clone(),
                         pending_forward: Arc::clone(&pending_forward),
                         body_rx,
-                        backend_timeout,
-                        metrics: Arc::clone(&metrics),
-                    })
+                    }, circuit_breakers, transport_pool)
                     .await?
                 } else {
                     let request = request.ok_or_else(|| {
