@@ -50,9 +50,6 @@ pub(crate) fn build_h2_request_for_target(
         preserve_upgrade: false,
         forwarded,
     })?;
-    for (header_name, header_value) in &resolved_headers.passthrough_headers {
-        builder = builder.header(header_name, header_value);
-    }
     let host_value = resolved_headers.host_value.as_str();
 
     let uri = if websocket_extended_connect {
