@@ -1649,6 +1649,84 @@ fn control_api_dual_auth_identity_clears_actor_id_when_principals_disagree() {
 }
 
 #[test]
+fn control_api_dual_auth_identity_cross_checks_bearer_actor_id_against_mtls_san() {
+    let identity_source = super::security::ControlApiIdentitySourcePolicy {
+        kind: "mtls_san_uri".to_string(),
+        role_attribute: None,
+    };
+    let request_context = super::admin_identity::ControlApiRequestContext {
+        peer_addr: "127.0.0.1:9443".parse().expect("peer socket addr"),
+        mtls_identity: Some(super::admin_identity::AdminMtlsIdentity {
+            subject: Some("CN=alice".to_string()),
+            common_name: Some("alice".to_string()),
+            san_dns: vec!["admin.example.com".to_string()],
+            san_uri: vec!["spiffe://alice".to_string()],
+            roles: Vec::new(),
+        }),
+        listener: Some("edge-primary".to_string()),
+        request_id: None,
+        trace_id: None,
+        span_id: None,
+    };
+    let token_match = super::admin_identity::AdminTokenMatch {
+        actor_id: Some("admin.example.com".to_string()),
+        role: super::admin_identity::AdminRole::Operator,
+    };
+
+    let identity = QUICListener::build_admin_identity(
+        Some(request_context),
+        Some(token_match),
+        Some(&identity_source),
+    )
+    .expect("dual auth identity");
+
+    assert_eq!(identity.actor_id.as_deref(), Some("admin.example.com"));
+    assert_eq!(
+        identity.roles,
+        vec![super::admin_identity::AdminRole::Operator]
+    );
+}
+
+#[test]
+fn control_api_dual_auth_identity_clears_bearer_actor_id_when_no_mtls_principal_matches() {
+    let identity_source = super::security::ControlApiIdentitySourcePolicy {
+        kind: "mtls_san_uri".to_string(),
+        role_attribute: None,
+    };
+    let request_context = super::admin_identity::ControlApiRequestContext {
+        peer_addr: "127.0.0.1:9443".parse().expect("peer socket addr"),
+        mtls_identity: Some(super::admin_identity::AdminMtlsIdentity {
+            subject: Some("CN=alice".to_string()),
+            common_name: Some("alice".to_string()),
+            san_dns: vec!["admin.example.com".to_string()],
+            san_uri: vec!["spiffe://alice".to_string()],
+            roles: Vec::new(),
+        }),
+        listener: Some("edge-primary".to_string()),
+        request_id: None,
+        trace_id: None,
+        span_id: None,
+    };
+    let token_match = super::admin_identity::AdminTokenMatch {
+        actor_id: Some("mallory".to_string()),
+        role: super::admin_identity::AdminRole::Operator,
+    };
+
+    let identity = QUICListener::build_admin_identity(
+        Some(request_context),
+        Some(token_match),
+        Some(&identity_source),
+    )
+    .expect("dual auth identity");
+
+    assert!(identity.actor_id.is_none());
+    assert_eq!(
+        identity.roles,
+        vec![super::admin_identity::AdminRole::Operator]
+    );
+}
+
+#[test]
 fn control_api_request_context_captures_operator_correlation_headers() {
     let request_context = super::admin_identity::ControlApiRequestContext {
         peer_addr: "127.0.0.1:9443".parse().expect("peer socket addr"),

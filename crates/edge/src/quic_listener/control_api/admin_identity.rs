@@ -78,17 +78,51 @@ pub(super) struct AdminTokenMatch {
 }
 
 impl QUICListener {
+    fn mtls_identity_principals(mtls: &AdminMtlsIdentity) -> BTreeSet<&str> {
+        let mut principals = BTreeSet::new();
+        if let Some(subject) = mtls.subject.as_deref() {
+            principals.insert(subject);
+        }
+        if let Some(common_name) = mtls.common_name.as_deref() {
+            principals.insert(common_name);
+        }
+        for san_dns in &mtls.san_dns {
+            principals.insert(san_dns.as_str());
+        }
+        for san_uri in &mtls.san_uri {
+            principals.insert(san_uri.as_str());
+        }
+        principals
+    }
+
+    fn token_actor_matches_mtls_identity(token_actor_id: &str, mtls: &AdminMtlsIdentity) -> bool {
+        Self::mtls_identity_principals(mtls)
+            .into_iter()
+            .any(|principal| principal == token_actor_id)
+    }
+
     fn reconcile_dual_auth_actor_id(
         token_actor_id: Option<String>,
         mtls_actor_id: Option<String>,
+        mtls_identity: Option<&AdminMtlsIdentity>,
     ) -> Option<String> {
-        match (token_actor_id, mtls_actor_id) {
-            (Some(token_actor_id), Some(mtls_actor_id)) => {
+        match (token_actor_id, mtls_actor_id, mtls_identity) {
+            (Some(token_actor_id), Some(mtls_actor_id), Some(mtls_identity)) => ((token_actor_id
+                == mtls_actor_id)
+                || Self::token_actor_matches_mtls_identity(&token_actor_id, mtls_identity))
+            .then_some(token_actor_id),
+            (Some(token_actor_id), Some(mtls_actor_id), None) => {
                 (token_actor_id == mtls_actor_id).then_some(token_actor_id)
             }
-            (Some(token_actor_id), None) => Some(token_actor_id),
-            (None, Some(mtls_actor_id)) => Some(mtls_actor_id),
-            (None, None) => None,
+            (Some(token_actor_id), None, Some(mtls_identity)) => Self::token_actor_matches_mtls_identity(
+                &token_actor_id,
+                mtls_identity,
+            )
+            .then_some(token_actor_id),
+            (Some(token_actor_id), None, None) => Some(token_actor_id),
+            (None, Some(mtls_actor_id), _) => Some(mtls_actor_id),
+            (None, None, Some(_)) => None,
+            (None, None, None) => None,
         }
     }
 
@@ -293,7 +327,8 @@ impl QUICListener {
             Some(role_limit) if mechanisms.len() > 1 => vec![role_limit],
             _ => roles.into_iter().collect(),
         };
-        let actor_id = Self::reconcile_dual_auth_actor_id(token_actor_id, mtls_actor_id);
+        let actor_id =
+            Self::reconcile_dual_auth_actor_id(token_actor_id, mtls_actor_id, mtls_identity.as_ref());
 
         Some(AdminIdentity {
             actor_id,
