@@ -163,6 +163,7 @@ fn response_headers_with_defaults_and_extra(
 }
 
 impl QUICListener {
+    #[allow(clippy::too_many_arguments)]
     fn fail_response_start_state_transition(
         stream_id: u64,
         req: &mut RequestEnvelope,

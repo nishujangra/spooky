@@ -76,7 +76,7 @@ pub(crate) enum RequestStateError {
 }
 
 impl RequestStateError {
-    pub(crate) fn attempted(self) -> &'static str {
+    pub(crate) fn attempted(&self) -> &'static str {
         match self {
             Self::InvalidTransition { attempted, .. } => attempted,
         }
