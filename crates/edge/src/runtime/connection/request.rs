@@ -1317,7 +1317,9 @@ mod tests {
         req.set_body_bytes_received(77);
         req.set_last_body_activity(start + std::time::Duration::from_secs(1));
 
-        assert!(!req.request_fin_received());
+        // Terminal request-body state always derives to `ClosedToUpstream`, which
+        // reports fin-received regardless of the (no-op) runtime flag set above.
+        assert!(req.request_fin_received());
         assert!(req.body_buf().is_empty());
         assert_eq!(req.body_buf_bytes(), 99);
         assert_eq!(req.body_bytes_received(), 77);
