@@ -38,9 +38,6 @@ pub(crate) fn read_file_with_limit(
     if !metadata.is_file() {
         return Err(BoundedFileReadError::NotAFile);
     }
-    if metadata.len() > max_bytes {
-        return Err(BoundedFileReadError::TooLarge);
-    }
 
     read_with_limit(
         file,
@@ -104,6 +101,17 @@ mod tests {
         let bytes = read_file_with_limit(&path, 64).expect("file at size limit should load");
 
         assert_eq!(bytes.len(), 64);
+    }
+
+    #[test]
+    fn read_file_with_limit_rejects_file_larger_than_limit() {
+        let dir = tempdir().expect("tempdir");
+        let path = dir.path().join("too-large.txt");
+        fs::write(&path, vec![b'x'; 65]).expect("write");
+
+        let err = read_file_with_limit(&path, 64).expect_err("oversized file must be rejected");
+
+        assert!(matches!(err, BoundedFileReadError::TooLarge));
     }
 
     #[test]
