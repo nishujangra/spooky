@@ -5,13 +5,13 @@ use bytes::Bytes;
 use http_body_util::BodyExt;
 use impulse_config::{
     config::{
-        Backend, ClientAuth, Config as ImpulseConfigConfig, ControlApiAuditSink,
+        ApiKeyAuth, Backend, ClientAuth, Config as ImpulseConfigConfig, ControlApiAuditSink,
         ControlApiBearerToken, ControlApiClientAuthMode, ControlApiRole, DistributedQuotaPolicy,
         DistributedQuotaSelector, DistributedQuotaSelectorSource, DistributedQuotaWindow,
         JwksStartupBehavior, JwtAlgorithm, JwtAuth, Listen, LoadBalancing, Log, LogFormat,
         Observability, Performance, QuotaBackendFailurePolicy, QuotaCounterBackend,
-        QuotaEnforcementMode, Resilience, RouteMatch, SecretProvider, Security, Tls, Upstream,
-        UpstreamTls,
+        QuotaEnforcementMode, Resilience, RouteAuth, RouteMatch, SecretProvider, Security, Tls,
+        Upstream, UpstreamTls,
     },
     runtime::{RuntimeConfig, RuntimeJwtVerificationKey},
 };
@@ -1869,14 +1869,22 @@ async fn control_api_runtime_snapshot_includes_jwks_cache_visibility() {
         .upstream
         .get_mut("api")
         .expect("api upstream")
-        .auth
-        .jwt = Some(JwtAuth {
+        .auth = RouteAuth {
+        api_key: Some(ApiKeyAuth {
+            header_name: "x-api-key".to_string(),
+            keys: vec!["secret".to_string()],
+        }),
+        jwt: Some(JwtAuth {
         secret: String::new(),
         allowed_algorithms: vec![JwtAlgorithm::Rs256],
         jwks_url: Some(jwks_url.to_string()),
         jwks_startup_behavior: JwksStartupBehavior::AllowDegraded,
         ..JwtAuth::default()
-    });
+    }),
+        external_auth: None,
+        required_scopes: vec!["payments:read".to_string()],
+        required_roles: vec!["operator".to_string()],
+    };
     crate::quic_listener::admission::prime_jwks_cache_for_test(
         jwks_url,
         false,
@@ -1899,8 +1907,22 @@ async fn control_api_runtime_snapshot_includes_jwks_cache_visibility() {
         .expect("auth providers");
     assert_eq!(providers.len(), 1);
     assert_eq!(providers[0]["upstream"], "api");
-    assert_eq!(providers[0]["api_key_configured"], false);
-    assert_eq!(providers[0]["external_auth_configured"], false);
+    assert!(
+        providers[0].get("api_key_configured").is_none(),
+        "runtime snapshot must not expose api key posture"
+    );
+    assert!(
+        providers[0].get("external_auth_configured").is_none(),
+        "runtime snapshot must not expose external auth posture"
+    );
+    assert!(
+        providers[0].get("required_scopes").is_none(),
+        "runtime snapshot must not expose required scopes"
+    );
+    assert!(
+        providers[0].get("required_roles").is_none(),
+        "runtime snapshot must not expose required roles"
+    );
     assert_eq!(providers[0]["jwt"]["provider_mode"], "remote_jwks");
     assert_eq!(providers[0]["jwt"]["jwks_configured"], true);
     assert_eq!(providers[0]["jwt"]["jwks_active"], true);
@@ -1928,7 +1950,10 @@ async fn control_api_runtime_snapshot_includes_jwks_cache_visibility() {
     let sources = payload["jwks"]["sources"].as_array().expect("jwks sources");
     assert_eq!(sources.len(), 1);
     assert_eq!(sources[0]["jwks_source_id"], jwks_source_id);
-    assert_eq!(sources[0]["jwks_endpoint"], "https://.../jwks.json");
+    assert!(
+        sources[0].get("jwks_endpoint").is_none(),
+        "runtime snapshot must not expose jwks endpoint"
+    );
     assert_eq!(sources[0]["startup_behavior"], "allow_degraded");
     assert_eq!(sources[0]["cache_state"], "fresh");
     assert_eq!(sources[0]["active_key_count"], 1);
@@ -1945,7 +1970,7 @@ async fn control_api_runtime_snapshot_includes_jwks_cache_visibility() {
 }
 
 #[tokio::test]
-async fn control_api_runtime_snapshot_sanitizes_jwks_endpoint_details() {
+async fn control_api_runtime_snapshot_omits_jwks_endpoint_details() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
     let jwks_url = "https://user:secret@issuer.internal.example.com/reload-require-ready.json?token=secret#fragment";
@@ -1968,9 +1993,9 @@ async fn control_api_runtime_snapshot_sanitizes_jwks_endpoint_details() {
     let sources = payload["jwks"]["sources"].as_array().expect("jwks sources");
 
     assert_eq!(sources.len(), 1);
-    assert_eq!(
-        sources[0]["jwks_endpoint"],
-        "https://.../reload-require-ready.json"
+    assert!(
+        sources[0].get("jwks_endpoint").is_none(),
+        "viewer payload must not expose jwks endpoint details"
     );
 }
 
