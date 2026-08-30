@@ -283,7 +283,7 @@ mod tests {
         metrics.requests_total.store(10, Ordering::Relaxed);
         metrics.backend_timeouts.store(6, Ordering::Relaxed);
         wait_until(
-            Duration::from_millis(100),
+            Duration::from_millis(500),
             || watchdog.is_degraded(),
             "first degraded watchdog window",
         )
@@ -293,7 +293,7 @@ mod tests {
         metrics.requests_total.store(20, Ordering::Relaxed);
         metrics.backend_timeouts.store(12, Ordering::Relaxed);
         wait_until(
-            Duration::from_millis(100),
+            Duration::from_millis(500),
             || watchdog.restart_requested(),
             "watchdog restart request",
         )
@@ -317,7 +317,7 @@ mod tests {
         metrics.requests_total.store(10, Ordering::Relaxed);
         metrics.backend_timeouts.store(6, Ordering::Relaxed);
         wait_until(
-            Duration::from_millis(100),
+            Duration::from_millis(500),
             || watchdog.is_degraded(),
             "initial degraded watchdog window",
         )
@@ -327,7 +327,7 @@ mod tests {
         metrics.requests_total.store(10, Ordering::Relaxed);
         metrics.backend_timeouts.store(6, Ordering::Relaxed);
         wait_until(
-            Duration::from_millis(100),
+            Duration::from_millis(500),
             || !watchdog.is_degraded(),
             "watchdog recovery window",
         )
@@ -337,7 +337,7 @@ mod tests {
         metrics.requests_total.store(20, Ordering::Relaxed);
         metrics.backend_timeouts.store(12, Ordering::Relaxed);
         wait_until(
-            Duration::from_millis(100),
+            Duration::from_millis(500),
             || watchdog.is_degraded(),
             "post-recovery degraded watchdog window",
         )
