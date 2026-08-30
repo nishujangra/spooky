@@ -192,8 +192,8 @@ fn authorization_header_from_pending_forward(pending_forward: &PendingForward) -
         }
     }
 
-    let request_headers = pending_forward.request_headers_read_only();
-    request_headers
+    pending_forward
+        .original_request_headers()
         .iter()
         .find(|header| {
             header

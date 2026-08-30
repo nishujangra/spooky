@@ -171,12 +171,16 @@ pub(super) struct RequestFinalizationConfig {
 }
 
 impl PendingForward {
+    pub(super) fn original_request_headers(&self) -> &[quiche::h3::Header] {
+        self.headers.as_ref()
+    }
+
     fn request_headers_cow(&self) -> Cow<'_, [quiche::h3::Header]> {
         if self.auth_header_mutations.is_empty() {
-            return Cow::Borrowed(self.headers.as_ref());
+            return Cow::Borrowed(self.original_request_headers());
         }
 
-        let mut headers = self.headers.as_ref().to_vec();
+        let mut headers = self.original_request_headers().to_vec();
         apply_auth_request_mutations(&mut headers, &self.auth_header_mutations);
         Cow::Owned(headers)
     }
@@ -208,7 +212,7 @@ impl PendingForward {
     }
 
     #[cfg(test)]
-    pub(super) fn request_headers(&self) -> Vec<quiche::h3::Header> {
+    pub(super) fn owned_request_headers(&self) -> Vec<quiche::h3::Header> {
         self.request_headers_cow().into_owned()
     }
 

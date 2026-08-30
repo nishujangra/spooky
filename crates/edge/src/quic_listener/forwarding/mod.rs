@@ -1563,7 +1563,7 @@ mod tests {
             ])
         };
 
-        let headers = pending_forward.request_headers();
+        let headers = pending_forward.owned_request_headers();
         assert!(headers.iter().any(|header| header.name() == b":method"));
         assert!(
             headers
