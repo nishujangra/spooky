@@ -24,6 +24,7 @@ pub(crate) fn build_h2_request_for_target(
         path,
         authority,
         headers,
+        auth_header_mutations,
         body,
         content_length,
         body_mode: _body_mode,
@@ -47,10 +48,11 @@ pub(crate) fn build_h2_request_for_target(
         target: RequestBuildTarget { endpoint, policies },
         authority,
         headers,
+        auth_header_mutations,
         preserve_upgrade: false,
         forwarded,
     })?;
-    let host_value = resolved_headers.host_value.as_str();
+    let host_value = resolved_headers.host_value.as_ref();
 
     let uri = if websocket_extended_connect {
         let request_path = if path.is_empty() { "/" } else { path };

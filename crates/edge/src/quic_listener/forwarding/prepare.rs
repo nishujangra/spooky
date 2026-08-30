@@ -2,6 +2,7 @@ use std::{borrow::Cow, collections::VecDeque, convert::Infallible};
 
 use http_body_util::Full;
 use impulse_config::runtime::RuntimeExternalAuth;
+use smallvec::SmallVec;
 use tokio::{sync::oneshot, task::AbortHandle};
 
 use super::{
@@ -20,7 +21,7 @@ use crate::{
     runtime::connection::{
         auth::{
             ExternalAuthCompletion, ExternalAuthFailureDisposition, ExternalAuthResult,
-            ExternalAuthTaskConfig, apply_auth_request_mutations,
+            ExternalAuthTaskConfig, PendingHeaderMutation, apply_auth_request_mutations,
             evaluate_external_auth_completion,
         },
         outcome::{
@@ -233,6 +234,7 @@ impl PendingForward {
         &'a self,
         method: &'a str,
         headers: &'a [quiche::h3::Header],
+        auth_header_mutations: &'a [impulse_bridge::request::RequestHeaderMutationRef<'a>],
         body: BoxBody<Bytes, Infallible>,
         content_length: Option<usize>,
     ) -> impulse_bridge::request::RequestBuildInput<'a, BoxBody<Bytes, Infallible>> {
@@ -241,6 +243,7 @@ impl PendingForward {
             path: &self.path,
             authority: self.authority.as_deref(),
             headers,
+            auth_header_mutations,
             body,
             content_length,
             body_mode:
@@ -255,23 +258,57 @@ impl PendingForward {
         }
     }
 
+    fn request_header_mutation_refs(
+        &self,
+    ) -> SmallVec<[impulse_bridge::request::RequestHeaderMutationRef<'_>; 8]> {
+        self.auth_header_mutations
+            .iter()
+            .map(|mutation| match mutation {
+                PendingHeaderMutation::Upsert { name, value } => {
+                    impulse_bridge::request::RequestHeaderMutationRef {
+                        name: name.as_slice(),
+                        value: Some(value.as_slice()),
+                    }
+                }
+                PendingHeaderMutation::Remove { name } => {
+                    impulse_bridge::request::RequestHeaderMutationRef {
+                        name: name.as_slice(),
+                        value: None,
+                    }
+                }
+            })
+            .collect()
+    }
+
     pub(super) fn build_request(
         &self,
         endpoint: &BackendEndpoint,
         body: BoxBody<Bytes, Infallible>,
         content_length: Option<usize>,
     ) -> Result<Request<BoxBody<Bytes, Infallible>>, ProxyError> {
-        let headers = self.request_headers_cow();
+        let auth_header_mutations = self.request_header_mutation_refs();
         if endpoint.scheme() == BackendScheme::Http {
             impulse_bridge::request::build_h1_request(
                 self.request_build_target(endpoint),
-                self.request_build_input(&self.method, headers.as_ref(), body, content_length),
+                self.request_build_input(
+                    &self.method,
+                    self.original_request_headers(),
+                    auth_header_mutations.as_slice(),
+                    body,
+                    content_length,
+                ),
             )
             .map_err(ProxyError::from)
         } else {
             impulse_bridge::request::build_h2_request_for_target(
                 self.request_build_target(endpoint),
-                self.request_build_input(&self.method, headers.as_ref(), body, content_length),
+                self.request_build_input(
+                    &self.method,
+                    self.original_request_headers(),
+                    auth_header_mutations.as_slice(),
+                    body,
+                    content_length,
+                ),
             )
             .map_err(ProxyError::from)
         }
@@ -295,6 +332,7 @@ impl PendingForward {
             self.request_build_input(
                 "GET",
                 request_headers.as_ref(),
+                &[],
                 BoxBody::new(Full::new(Bytes::new())),
                 None,
             ),

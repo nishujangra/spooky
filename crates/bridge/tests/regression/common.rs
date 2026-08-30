@@ -64,6 +64,7 @@ pub(crate) fn request_input<'a>(
         path,
         authority: meta.authority,
         headers,
+        auth_header_mutations: &[],
         body: Empty::<Bytes>::new().boxed(),
         content_length: meta.content_length,
         body_mode: RequestBuildInput::<BoxBody<Bytes, Infallible>>::body_mode_for_length(

@@ -39,6 +39,7 @@ subtle.workspace = true
 x509-parser = "0.16"
 core_affinity.workspace = true
 libc.workspace = true
+smallvec.workspace = true
 
 [[test]]
 name = "regression"

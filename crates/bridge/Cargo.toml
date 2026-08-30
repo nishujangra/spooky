@@ -10,6 +10,8 @@ quiche.workspace = true
 bytes.workspace = true
 http-body-util.workspace = true
 hyper.workspace = true
+itoa.workspace = true
+smallvec.workspace = true
 impulse-errors = { path = "../errors" }
 impulse-config = { path = "../config" }
 
