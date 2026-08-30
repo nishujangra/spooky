@@ -3,6 +3,7 @@ use http_body_util::Full;
 use serde::Serialize;
 
 use super::{
+    super::audit::ControlApiAdminAuditTarget,
     redaction::sanitize_path,
     secrets_jwks::{build_auth_and_jwks_payloads, build_secrets_payload, build_tls_upstreams},
     *,
@@ -339,6 +340,15 @@ impl ControlApiObservabilityPayload {
         Self {
             contract_version: OBSERVABILITY_CONTRACT_VERSION,
             audit_schema_version: ADMIN_AUDIT_SCHEMA_VERSION,
+            audit_sink: ControlApiAuditSinkPayload {
+                enabled: state.security.audit.enabled,
+                target: match state.security.audit.sink {
+                    ControlApiAdminAuditTarget::Log => "log",
+                    ControlApiAdminAuditTarget::File(_) => "file",
+                },
+                degraded: state.security.audit.delivery_degraded(),
+                reason: state.security.audit.delivery_reason(),
+            },
             current_generation: state
                 .generation
                 .as_ref()

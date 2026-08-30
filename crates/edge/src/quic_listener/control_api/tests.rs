@@ -2951,6 +2951,11 @@ async fn control_api_runtime_history_observability_view_stays_stable_without_adm
         serde_json::json!({
             "contract_version": "v1",
             "audit_schema_version": "v1",
+            "audit_sink": {
+                "enabled": false,
+                "target": "log",
+                "degraded": false
+            },
             "current_generation": 0,
             "documentation": {
                 "observability_contract": "docs/architecture/observability-contract.md",
@@ -3248,6 +3253,11 @@ async fn control_api_runtime_snapshot_exposes_quota_policy_and_backend_status() 
         serde_json::json!({
             "contract_version": "v1",
             "audit_schema_version": "v1",
+            "audit_sink": {
+                "enabled": false,
+                "target": "log",
+                "degraded": false
+            },
             "current_generation": 0,
             "documentation": {
                 "observability_contract": "docs/architecture/observability-contract.md",
@@ -3307,6 +3317,31 @@ async fn control_api_runtime_snapshot_exposes_quota_policy_and_backend_status() 
             },
             "recent_admin_actions": []
         })
+    );
+}
+
+#[tokio::test]
+async fn control_api_runtime_snapshot_surfaces_degraded_file_audit_sink() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let audit_path = dir.path().join("admin-audit.jsonl");
+    let mut config = test_config(cert, key);
+    config.observability.control_api.enabled = true;
+    config.observability.control_api.audit.enabled = true;
+    config.observability.control_api.audit.sink = ControlApiAuditSink::File;
+    config.observability.control_api.audit.file_path =
+        Some(audit_path.to_string_lossy().to_string());
+
+    super::audit::force_audit_writer_thread_spawn_failure_for_test(true);
+    let state = control_api_state_with_runtime_bundle(&config, &config);
+    let payload = json_body(QUICListener::render_control_api_runtime_snapshot(&state)).await;
+    super::audit::force_audit_writer_thread_spawn_failure_for_test(false);
+    assert_eq!(payload["observability"]["audit_sink"]["enabled"], true);
+    assert_eq!(payload["observability"]["audit_sink"]["target"], "file");
+    assert_eq!(payload["observability"]["audit_sink"]["degraded"], true);
+    assert_eq!(
+        payload["observability"]["audit_sink"]["reason"],
+        "writer_thread_start_failed"
     );
 }
 

@@ -159,12 +159,22 @@ struct ControlApiQuotaWindowPayload {
 struct ControlApiObservabilityPayload {
     contract_version: &'static str,
     audit_schema_version: &'static str,
+    audit_sink: ControlApiAuditSinkPayload,
     current_generation: Option<u64>,
     documentation: ControlApiObservabilityDocumentationPayload,
     dashboard_packages: Vec<ControlApiObservabilityDashboardPayload>,
     backend_health_summary: ControlApiBackendHealthSummaryPayload,
     quota_backend_health_summary: ControlApiQuotaBackendHealthSummaryPayload,
     recent_admin_actions: Vec<ControlApiRecentAdminActionPayload>,
+}
+
+#[derive(Serialize)]
+struct ControlApiAuditSinkPayload {
+    enabled: bool,
+    target: &'static str,
+    degraded: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<&'static str>,
 }
 
 #[derive(Serialize)]

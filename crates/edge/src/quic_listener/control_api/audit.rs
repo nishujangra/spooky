@@ -97,6 +97,7 @@ pub(in crate::quic_listener) enum ControlApiAdminAuditTarget {
 enum ControlApiAdminAuditDelivery {
     Inline,
     BufferedFile(Arc<ControlApiBufferedAuditWriter>),
+    UnavailableFile { path: String, reason: &'static str },
 }
 
 impl ControlApiAdminAuditDelivery {
@@ -111,10 +112,13 @@ impl ControlApiAdminAuditDelivery {
                     None => {
                         metrics.inc_control_api_audit_write_failure();
                         error!(
-                            "failed to start control API admin audit sink thread for {}; falling back to inline log sink",
+                            "failed to start control API admin audit sink thread for {}; file audit sink is degraded and audit events will be dropped until the process is restarted",
                             path
                         );
-                        Self::Inline
+                        Self::UnavailableFile {
+                            path: path.clone(),
+                            reason: "writer_thread_start_failed",
+                        }
                     }
                 }
             }
@@ -130,6 +134,11 @@ struct ControlApiBufferedAuditWriter {
 
 impl ControlApiBufferedAuditWriter {
     fn try_spawn(path: String, metrics: Arc<Metrics>) -> Option<Self> {
+        #[cfg(test)]
+        if FORCE_AUDIT_WRITER_THREAD_SPAWN_FAILURE.load(std::sync::atomic::Ordering::Relaxed) {
+            return None;
+        }
+
         let (sender, receiver) = mpsc::sync_channel(CONTROL_API_AUDIT_BUFFER_CAPACITY);
         let thread_path = path.clone();
         let thread_metrics = Arc::clone(&metrics);
@@ -704,8 +713,19 @@ impl ControlApiAdminAuditEmitter {
                 info!(target: CONTROL_API_AUDIT_LOG_TARGET, "{}", serialized)
             }
             ControlApiAdminAuditTarget::File(Some(_)) => {
-                if let ControlApiAdminAuditDelivery::BufferedFile(writer) = &self.delivery {
-                    writer.try_emit(serialized);
+                match &self.delivery {
+                    ControlApiAdminAuditDelivery::BufferedFile(writer) => writer.try_emit(serialized),
+                    ControlApiAdminAuditDelivery::UnavailableFile { path, reason } => {
+                        error!(
+                            "dropping control API admin audit event because file sink {} is unavailable: {}",
+                            path, reason
+                        );
+                    }
+                    ControlApiAdminAuditDelivery::Inline => {
+                        error!(
+                            "dropping control API admin audit event because file sink configuration unexpectedly resolved to inline delivery"
+                        );
+                    }
                 }
             }
             ControlApiAdminAuditTarget::File(None) => {
@@ -716,6 +736,32 @@ impl ControlApiAdminAuditEmitter {
             }
         }
     }
+}
+
+impl ControlApiAdminAuditEmitter {
+    pub(super) fn delivery_degraded(&self) -> bool {
+        matches!(
+            self.delivery,
+            ControlApiAdminAuditDelivery::UnavailableFile { .. }
+        )
+    }
+
+    pub(super) fn delivery_reason(&self) -> Option<&'static str> {
+        match &self.delivery {
+            ControlApiAdminAuditDelivery::UnavailableFile { reason, .. } => Some(reason),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+static FORCE_AUDIT_WRITER_THREAD_SPAWN_FAILURE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(test)]
+pub(super) fn force_audit_writer_thread_spawn_failure_for_test(enabled: bool) {
+    FORCE_AUDIT_WRITER_THREAD_SPAWN_FAILURE
+        .store(enabled, std::sync::atomic::Ordering::Relaxed);
 }
 
 #[cfg(test)]
