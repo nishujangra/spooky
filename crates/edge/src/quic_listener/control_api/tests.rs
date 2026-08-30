@@ -1865,22 +1865,18 @@ async fn control_api_runtime_snapshot_includes_jwks_cache_visibility() {
     let jwks_url = "https://issuer.example.com/.well-known/jwks.json";
     let jwks_source_id = crate::quic_listener::admission::jwks_source_identity_for_test(jwks_url);
     let mut startup = test_config(cert, key);
-    startup
-        .upstream
-        .get_mut("api")
-        .expect("api upstream")
-        .auth = RouteAuth {
+    startup.upstream.get_mut("api").expect("api upstream").auth = RouteAuth {
         api_key: Some(ApiKeyAuth {
             header_name: "x-api-key".to_string(),
             keys: vec!["secret".to_string()],
         }),
         jwt: Some(JwtAuth {
-        secret: String::new(),
-        allowed_algorithms: vec![JwtAlgorithm::Rs256],
-        jwks_url: Some(jwks_url.to_string()),
-        jwks_startup_behavior: JwksStartupBehavior::AllowDegraded,
-        ..JwtAuth::default()
-    }),
+            secret: String::new(),
+            allowed_algorithms: vec![JwtAlgorithm::Rs256],
+            jwks_url: Some(jwks_url.to_string()),
+            jwks_startup_behavior: JwksStartupBehavior::AllowDegraded,
+            ..JwtAuth::default()
+        }),
         external_auth: None,
         required_scopes: vec!["payments:read".to_string()],
         required_roles: vec!["operator".to_string()],

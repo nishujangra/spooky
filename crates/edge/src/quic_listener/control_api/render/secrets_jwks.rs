@@ -2,10 +2,7 @@ use std::collections::HashMap;
 
 use impulse_config::{config::SecretProvider, runtime::RuntimeJwtAuth};
 
-use super::{
-    redaction::option_is_present,
-    *,
-};
+use super::{redaction::option_is_present, *};
 
 pub(super) fn build_auth_and_jwks_payloads(
     runtime_config: &impulse_config::runtime::RuntimeConfig,

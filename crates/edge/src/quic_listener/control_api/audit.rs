@@ -719,22 +719,20 @@ impl ControlApiAdminAuditEmitter {
             ControlApiAdminAuditTarget::Log => {
                 info!(target: CONTROL_API_AUDIT_LOG_TARGET, "{}", serialized)
             }
-            ControlApiAdminAuditTarget::File(Some(_)) => {
-                match &self.delivery {
-                    ControlApiAdminAuditDelivery::BufferedFile(writer) => writer.emit(serialized),
-                    ControlApiAdminAuditDelivery::UnavailableFile { path, reason } => {
-                        error!(
-                            "dropping control API admin audit event because file sink {} is unavailable: {}",
-                            path, reason
-                        );
-                    }
-                    ControlApiAdminAuditDelivery::Inline => {
-                        error!(
-                            "dropping control API admin audit event because file sink configuration unexpectedly resolved to inline delivery"
-                        );
-                    }
+            ControlApiAdminAuditTarget::File(Some(_)) => match &self.delivery {
+                ControlApiAdminAuditDelivery::BufferedFile(writer) => writer.emit(serialized),
+                ControlApiAdminAuditDelivery::UnavailableFile { path, reason } => {
+                    error!(
+                        "dropping control API admin audit event because file sink {} is unavailable: {}",
+                        path, reason
+                    );
                 }
-            }
+                ControlApiAdminAuditDelivery::Inline => {
+                    error!(
+                        "dropping control API admin audit event because file sink configuration unexpectedly resolved to inline delivery"
+                    );
+                }
+            },
             ControlApiAdminAuditTarget::File(None) => {
                 warn!(
                     "control API admin audit sink configured as file without file_path; falling back to log"
@@ -767,8 +765,7 @@ static FORCE_AUDIT_WRITER_THREAD_SPAWN_FAILURE: std::sync::atomic::AtomicBool =
 
 #[cfg(test)]
 pub(super) fn force_audit_writer_thread_spawn_failure_for_test(enabled: bool) {
-    FORCE_AUDIT_WRITER_THREAD_SPAWN_FAILURE
-        .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    FORCE_AUDIT_WRITER_THREAD_SPAWN_FAILURE.store(enabled, std::sync::atomic::Ordering::Relaxed);
 }
 
 #[cfg(test)]
