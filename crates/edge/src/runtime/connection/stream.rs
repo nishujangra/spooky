@@ -329,6 +329,18 @@ pub struct RequestBodyRuntime {
     pub request_fin_received: bool,
 }
 
+impl RequestBodyRuntime {
+    pub fn empty(now: Instant) -> Self {
+        Self {
+            body_buf: VecDeque::new(),
+            body_buf_bytes: 0,
+            body_bytes_received: 0,
+            last_body_activity: now,
+            request_fin_received: false,
+        }
+    }
+}
+
 #[allow(dead_code)]
 pub struct AdmissionPermits {
     pub global: OwnedSemaphorePermit,

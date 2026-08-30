@@ -63,7 +63,24 @@ pub struct RequestEnvelope {
     pub error_kind: Option<&'static str>,
     pub terminal_overload_reason: Option<OverloadShedReason>,
     pub terminal_outcome_recorded: bool,
+    pub(crate) empty_request_body_runtime: RequestBodyRuntime,
     pub execution: RequestExecutionState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RequestStateError {
+    InvalidTransition {
+        from: StreamPhase,
+        attempted: &'static str,
+    },
+}
+
+impl RequestStateError {
+    pub(crate) fn attempted(self) -> &'static str {
+        match self {
+            Self::InvalidTransition { attempted, .. } => attempted,
+        }
+    }
 }
 
 impl RequestEnvelope {
@@ -120,6 +137,7 @@ impl RequestEnvelope {
             error_kind,
             terminal_overload_reason: None,
             terminal_outcome_recorded: false,
+            empty_request_body_runtime: RequestBodyRuntime::empty(context.start),
             execution: RequestExecutionState::DispatchReady(state),
         }
     }
@@ -173,6 +191,7 @@ impl RequestEnvelope {
             error_kind,
             terminal_overload_reason: None,
             terminal_outcome_recorded: false,
+            empty_request_body_runtime: RequestBodyRuntime::empty(context.start),
             execution: RequestExecutionState::AwaitingAuth(state),
         }
     }
@@ -576,7 +595,10 @@ impl RequestEnvelope {
         )
     }
 
-    pub(crate) fn transition_to_admitted(&mut self, permits: AdmissionPermits) {
+    pub(crate) fn transition_to_admitted(
+        &mut self,
+        permits: AdmissionPermits,
+    ) -> Result<(), RequestStateError> {
         let snapshot = self.terminal_snapshot();
         let state = match std::mem::replace(
             &mut self.execution,
@@ -588,7 +610,10 @@ impl RequestEnvelope {
             RequestExecutionState::DispatchReady(state) => state,
             other => {
                 self.execution = other;
-                panic!("admission transition attempted outside DispatchReady state");
+                return Err(RequestStateError::InvalidTransition {
+                    from: self.phase(),
+                    attempted: "transition_to_admitted",
+                });
             }
         };
         self.execution = RequestExecutionState::Admitted(AdmittedState {
@@ -600,13 +625,14 @@ impl RequestEnvelope {
             pending_forward: state.pending_forward,
             permits,
         });
+        Ok(())
     }
 
     pub(crate) fn transition_admitted_to_awaiting_upstream(
         &mut self,
         body_tx: Option<mpsc::Sender<Bytes>>,
         upstream_result_rx: oneshot::Receiver<UpstreamResult>,
-    ) {
+    ) -> Result<(), RequestStateError> {
         let snapshot = self.terminal_snapshot();
         let admitted = match std::mem::replace(
             &mut self.execution,
@@ -618,7 +644,10 @@ impl RequestEnvelope {
             RequestExecutionState::Admitted(state) => state,
             other => {
                 self.execution = other;
-                panic!("dispatch transition attempted outside Admitted state");
+                return Err(RequestStateError::InvalidTransition {
+                    from: self.phase(),
+                    attempted: "transition_admitted_to_awaiting_upstream",
+                });
             }
         };
         let dispatch_body_tx = if admitted.request_body_runtime.request_fin_received
@@ -660,6 +689,7 @@ impl RequestEnvelope {
                 backend_accounting,
             },
         });
+        Ok(())
     }
 
     pub(crate) fn transition_to_streaming_response(
@@ -667,7 +697,7 @@ impl RequestEnvelope {
         response_chunk_rx: mpsc::Receiver<ResponseChunk>,
         emission: ResponseEmissionState,
         final_status: http::StatusCode,
-    ) {
+    ) -> Result<(), RequestStateError> {
         let snapshot = self.terminal_snapshot();
         match std::mem::replace(
             &mut self.execution,
@@ -689,10 +719,14 @@ impl RequestEnvelope {
                     backpressure: ResponseBackpressureState::Ready,
                     backend_accounting: state.dispatch.backend_accounting,
                 });
+                Ok(())
             }
             other => {
                 self.execution = other;
-                panic!("streaming transition attempted from unsupported execution state");
+                Err(RequestStateError::InvalidTransition {
+                    from: self.phase(),
+                    attempted: "transition_to_streaming_response",
+                })
             }
         }
     }
@@ -728,7 +762,10 @@ impl RequestEnvelope {
         self.execution = RequestExecutionState::Terminal(terminal);
     }
 
-    pub(crate) fn transition_awaiting_auth_to_dispatch_ready<I>(&mut self, mutations: I)
+    pub(crate) fn transition_awaiting_auth_to_dispatch_ready<I>(
+        &mut self,
+        mutations: I,
+    ) -> Result<(), RequestStateError>
     where
         I: IntoIterator<Item = PendingHeaderMutation>,
     {
@@ -741,7 +778,12 @@ impl RequestEnvelope {
                 );
                 state
             }
-            None => panic!("awaiting-auth transition attempted outside AwaitingAuth state"),
+            None => {
+                return Err(RequestStateError::InvalidTransition {
+                    from: self.phase(),
+                    attempted: "transition_awaiting_auth_to_dispatch_ready",
+                });
+            }
         };
         self.execution = RequestExecutionState::DispatchReady(DispatchReadyState {
             context: state.context,
@@ -751,6 +793,7 @@ impl RequestEnvelope {
             request_body_runtime: state.request_body_runtime,
             pending_forward: state.pending_forward,
         });
+        Ok(())
     }
 
     pub(crate) fn take_awaiting_auth_state(&mut self) -> Option<AwaitingAuthState> {
@@ -828,33 +871,25 @@ impl RequestEnvelope {
 
     fn request_body_runtime(&self) -> &RequestBodyRuntime {
         match &self.execution {
-            RequestExecutionState::Intake(_) => {
-                panic!("request body runtime unavailable in intake state")
-            }
+            RequestExecutionState::Intake(_) => &self.empty_request_body_runtime,
             RequestExecutionState::AwaitingAuth(state) => &state.request_body_runtime,
             RequestExecutionState::DispatchReady(state) => &state.request_body_runtime,
             RequestExecutionState::Admitted(state) => &state.request_body_runtime,
             RequestExecutionState::AwaitingUpstream(state) => &state.request_body_runtime,
             RequestExecutionState::StreamingResponse(state) => &state.request_body_runtime,
-            RequestExecutionState::Terminal(_) => {
-                panic!("request body runtime unavailable in current execution state")
-            }
+            RequestExecutionState::Terminal(_) => &self.empty_request_body_runtime,
         }
     }
 
     fn request_body_runtime_mut(&mut self) -> &mut RequestBodyRuntime {
         match &mut self.execution {
-            RequestExecutionState::Intake(_) => {
-                panic!("request body runtime mutation unavailable in intake state")
-            }
+            RequestExecutionState::Intake(_) => &mut self.empty_request_body_runtime,
             RequestExecutionState::AwaitingAuth(state) => &mut state.request_body_runtime,
             RequestExecutionState::DispatchReady(state) => &mut state.request_body_runtime,
             RequestExecutionState::Admitted(state) => &mut state.request_body_runtime,
             RequestExecutionState::AwaitingUpstream(state) => &mut state.request_body_runtime,
             RequestExecutionState::StreamingResponse(state) => &mut state.request_body_runtime,
-            RequestExecutionState::Terminal(_) => {
-                panic!("request body runtime mutation unavailable in current execution state")
-            }
+            RequestExecutionState::Terminal(_) => &mut self.empty_request_body_runtime,
         }
     }
 
@@ -1091,6 +1126,7 @@ mod tests {
             error_kind: None,
             terminal_overload_reason: None,
             terminal_outcome_recorded: false,
+            empty_request_body_runtime: RequestBodyRuntime::empty(start),
             execution: RequestExecutionState::Admitted(AdmittedState {
                 context,
                 routing,
@@ -1172,12 +1208,14 @@ mod tests {
         let (_result_tx, result_rx) = oneshot::channel();
         let (_chunk_tx, chunk_rx) = mpsc::channel(1);
 
-        req.transition_admitted_to_awaiting_upstream(None, result_rx);
+        req.transition_admitted_to_awaiting_upstream(None, result_rx)
+            .expect("admitted to awaiting upstream");
         req.transition_to_streaming_response(
             chunk_rx,
             ResponseEmissionState::HeadersSent,
             StatusCode::OK,
-        );
+        )
+        .expect("awaiting upstream to streaming response");
         req.mark_terminal_outcome_recorded();
 
         let phase = req.transition_to_terminal_with_cleanup(
@@ -1192,5 +1230,101 @@ mod tests {
         assert_eq!(global_sem.available_permits(), 1);
         assert_eq!(upstream_sem.available_permits(), 1);
         assert!(route_limiter.try_acquire("test").is_ok());
+    }
+
+    #[test]
+    fn invalid_transitions_return_error_instead_of_panicking() {
+        let start = Instant::now();
+        let mut dispatch_ready = RequestEnvelope {
+            request_id: 1,
+            trace_id: None,
+            span_id: None,
+            traceparent: None,
+            trace_span: None,
+            method: "GET".into(),
+            path: "/".into(),
+            authority: None,
+            backend_addr: None,
+            backend_index: None,
+            upstream_name: None,
+            route_reason: None,
+            route_path_len: None,
+            route_host_specific: None,
+            backend_lb: None,
+            upstream_pool: None,
+            routing_transparency_enabled: false,
+            routing_transparency_include_reason: false,
+            response_status: None,
+            start,
+            total_request_deadline: start,
+            bodyless_mode: false,
+            tunnel_mode: TunnelMode::None,
+            retry_count: 0,
+            error_kind: None,
+            terminal_overload_reason: None,
+            terminal_outcome_recorded: false,
+            empty_request_body_runtime: RequestBodyRuntime::empty(start),
+            execution: RequestExecutionState::DispatchReady(DispatchReadyState {
+                context: make_request_context(start),
+                routing: make_routing_snapshot(),
+                request_mode: RequestMode::Normal,
+                request_body: RequestBodyState::Open,
+                request_body_runtime: RequestBodyRuntime::empty(start),
+                pending_forward: make_pending_forward(),
+            }),
+        };
+        let err = dispatch_ready
+            .transition_admitted_to_awaiting_upstream(None, oneshot::channel().1)
+            .expect_err("dispatch-ready must reject admitted-only transition");
+        assert_eq!(
+            err,
+            RequestStateError::InvalidTransition {
+                from: StreamPhase::ReceivingRequest,
+                attempted: "transition_admitted_to_awaiting_upstream",
+            }
+        );
+
+        let (mut admitted, ..) = make_admitted_envelope(start, VecDeque::new(), 0, false);
+        let err = admitted
+            .transition_to_streaming_response(
+                mpsc::channel(1).1,
+                ResponseEmissionState::HeadersSent,
+                StatusCode::OK,
+            )
+            .expect_err("admitted must reject streaming transition");
+        assert_eq!(
+            err,
+            RequestStateError::InvalidTransition {
+                from: StreamPhase::ReceivingRequest,
+                attempted: "transition_to_streaming_response",
+            }
+        );
+    }
+
+    #[test]
+    fn terminal_body_runtime_access_uses_empty_fallback() {
+        let metrics = Metrics::default();
+        let start = Instant::now();
+        let (mut req, ..) = make_admitted_envelope(start, VecDeque::new(), 0, false);
+
+        req.transition_to_terminal_with_cleanup(
+            TerminalReason::Cancelled(CancellationReason::ClientReset),
+            &metrics,
+        );
+
+        req.set_request_fin_received(true);
+        req.set_body_buf_bytes(99);
+        req.set_body_bytes_received(77);
+        req.set_last_body_activity(start + std::time::Duration::from_secs(1));
+
+        assert!(!req.request_fin_received());
+        assert!(req.body_buf().is_empty());
+        assert_eq!(req.body_buf_bytes(), 99);
+        assert_eq!(req.body_bytes_received(), 77);
+        assert_eq!(
+            req.last_body_activity(),
+            start + std::time::Duration::from_secs(1)
+        );
+        assert_eq!(req.request_body_state(), RequestBodyState::ClosedToUpstream);
     }
 }

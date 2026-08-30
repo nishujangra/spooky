@@ -511,7 +511,43 @@ impl QUICListener {
                 request_header_mutations,
             } => {
                 metrics.inc_external_auth_allowed();
-                req.transition_awaiting_auth_to_dispatch_ready(request_header_mutations);
+                if let Err(state_err) =
+                    req.transition_awaiting_auth_to_dispatch_ready(request_header_mutations)
+                {
+                    let proxy_err = ProxyError::Transport(format!(
+                        "invalid request execution transition: {} from {:?}",
+                        state_err.attempted(),
+                        req.phase(),
+                    ));
+                    let _ = crate::runtime::connection::outcome::observe_proxy_error_outcome(
+                        metrics,
+                        RouteOutcomeTarget {
+                            route: req.upstream_name.as_deref().unwrap_or("unrouted"),
+                        },
+                        Some(BackendOutcomeTarget {
+                            upstream: req.upstream_name.as_deref().unwrap_or("unrouted"),
+                            backend_addr: req.backend_addr.as_deref(),
+                            backend_index: req.backend_index,
+                        }),
+                        req.start.elapsed(),
+                        Some(http::StatusCode::INTERNAL_SERVER_ERROR),
+                        &proxy_err,
+                        None,
+                    );
+                    error!("auth completion state transition failed: {:?}", state_err);
+                    Self::send_simple_response(
+                        h3,
+                        quic,
+                        stream_id,
+                        http::StatusCode::INTERNAL_SERVER_ERROR,
+                        b"internal server error\n",
+                    )?;
+                    req.transition_to_terminal_with_cleanup(
+                        TerminalReason::Rejected(RejectionReason::ValidationFailed),
+                        metrics,
+                    );
+                    return Ok(false);
+                }
                 Self::materialize_forward_after_auth(stream_id, req, h3, quic, exec_ctx, shared_ctx)
             }
             ExternalAuthStateTransition::RejectedAuthDenied { decision } => {

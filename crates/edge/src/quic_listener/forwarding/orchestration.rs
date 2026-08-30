@@ -226,12 +226,47 @@ impl QUICListener {
                 return Ok(false);
             }
         };
-        req.transition_to_admitted(AdmissionPermits {
+        if let Err(state_err) = req.transition_to_admitted(AdmissionPermits {
             global: global_permit,
             upstream: upstream_permit,
             adaptive: adaptive_permit,
             route_queue: route_queue_permit,
-        });
+        }) {
+            let proxy_err = ProxyError::Transport(format!(
+                "invalid request execution transition: {} from {:?}",
+                state_err.attempted(),
+                req.phase(),
+            ));
+            let _ = observe_proxy_error_outcome(
+                metrics,
+                RouteOutcomeTarget {
+                    route: &upstream_name,
+                },
+                Some(BackendOutcomeTarget {
+                    upstream: &upstream_name,
+                    backend_addr: Some(pending_forward.backend_addr.as_ref()),
+                    backend_index: Some(backend_index),
+                }),
+                req.start.elapsed(),
+                Some(http::StatusCode::INTERNAL_SERVER_ERROR),
+                &proxy_err,
+                None,
+            );
+            error!("admission state transition failed: {:?}", state_err);
+            Self::send_simple_response(
+                h3,
+                quic,
+                stream_id,
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                b"internal server error\n",
+            )?;
+            terminalize_stream(
+                req,
+                TerminalReason::Rejected(RejectionReason::ValidationFailed),
+                metrics,
+            );
+            return Ok(false);
+        }
 
         let Some(backend_endpoint) = exec_ctx
             .backend_endpoints
@@ -376,7 +411,42 @@ impl QUICListener {
         if let Ok(pool) = upstream_pool.write() {
             pool.begin_request_for_accounting(backend_index);
         }
-        req.transition_admitted_to_awaiting_upstream(body_tx, result_rx);
+        if let Err(state_err) = req.transition_admitted_to_awaiting_upstream(body_tx, result_rx) {
+            let proxy_err = ProxyError::Transport(format!(
+                "invalid request execution transition: {} from {:?}",
+                state_err.attempted(),
+                req.phase(),
+            ));
+            let _ = observe_proxy_error_outcome(
+                metrics,
+                RouteOutcomeTarget {
+                    route: &upstream_name,
+                },
+                Some(BackendOutcomeTarget {
+                    upstream: &upstream_name,
+                    backend_addr: Some(pending_forward.backend_addr.as_ref()),
+                    backend_index: Some(backend_index),
+                }),
+                req.start.elapsed(),
+                Some(http::StatusCode::INTERNAL_SERVER_ERROR),
+                &proxy_err,
+                None,
+            );
+            error!("dispatch state transition failed: {:?}", state_err);
+            Self::send_simple_response(
+                h3,
+                quic,
+                stream_id,
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                b"internal server error\n",
+            )?;
+            terminalize_stream(
+                req,
+                TerminalReason::Rejected(RejectionReason::ValidationFailed),
+                metrics,
+            );
+            return Ok(false);
+        }
         let _ = Self::flush_request_buffer(req, metrics);
         Ok(true)
     }

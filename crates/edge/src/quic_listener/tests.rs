@@ -2287,6 +2287,7 @@ fn make_dispatch_ready_envelope(
         error_kind: None,
         terminal_overload_reason: None,
         terminal_outcome_recorded: false,
+        empty_request_body_runtime: RequestBodyRuntime::empty(start),
         execution: RequestExecutionState::DispatchReady(DispatchReadyState {
             context,
             routing,
@@ -2304,7 +2305,8 @@ fn make_dispatch_ready_envelope(
 
 fn make_admitted_envelope(start: Instant, permits: AdmissionPermits) -> RequestEnvelope {
     let mut req = make_dispatch_ready_envelope(start, "GET", false);
-    req.transition_to_admitted(permits);
+    req.transition_to_admitted(permits)
+        .expect("dispatch ready to admitted");
     req
 }
 
@@ -2327,7 +2329,8 @@ fn make_awaiting_upstream_envelope(
         state.request_body_runtime.request_fin_received = request_fin_received;
     }
     let (_tx, rx) = oneshot::channel::<crate::runtime::connection::response::UpstreamResult>();
-    req.transition_admitted_to_awaiting_upstream(None, rx);
+    req.transition_admitted_to_awaiting_upstream(None, rx)
+        .expect("admitted to awaiting upstream");
     req
 }
 
@@ -2338,7 +2341,8 @@ fn make_streaming_envelope(
 ) -> RequestEnvelope {
     let mut req = make_awaiting_upstream_envelope(start, "GET", true);
     let (_tx, rx) = mpsc::channel::<crate::runtime::connection::response::ResponseChunk>(4);
-    req.transition_to_streaming_response(rx, ResponseEmissionState::HeadersSent, status);
+    req.transition_to_streaming_response(rx, ResponseEmissionState::HeadersSent, status)
+        .expect("awaiting upstream to streaming response");
     if let Some(chunk) = pending_chunk {
         req.set_pending_chunk(Some(chunk));
     }
@@ -2485,7 +2489,8 @@ fn abort_stream_awaiting_upstream_cancels_oneshot() {
 
     let start = Instant::now();
     let mut req = make_admitted_envelope(start, make_test_permits());
-    req.transition_admitted_to_awaiting_upstream(None, result_rx);
+    req.transition_admitted_to_awaiting_upstream(None, result_rx)
+        .expect("admitted to awaiting upstream");
 
     let phase = terminalize_stream(
         &mut req,
@@ -2525,7 +2530,8 @@ fn abort_stream_sending_response_closes_chunk_channel() {
         chunk_rx,
         ResponseEmissionState::HeadersSent,
         StatusCode::OK,
-    );
+    )
+    .expect("awaiting upstream to streaming response");
     req.set_pending_chunk(Some(
         crate::runtime::connection::response::ResponseChunk::End,
     ));
@@ -2576,12 +2582,14 @@ fn abort_stream_upstream_error_releases_all_resources() {
             route_queue: route_limiter.try_acquire("test").unwrap(),
         },
     );
-    req.transition_admitted_to_awaiting_upstream(None, oneshot::channel().1);
+    req.transition_admitted_to_awaiting_upstream(None, oneshot::channel().1)
+        .expect("admitted to awaiting upstream");
     req.transition_to_streaming_response(
         chunk_rx,
         ResponseEmissionState::HeadersSent,
         StatusCode::OK,
-    );
+    )
+    .expect("awaiting upstream to streaming response");
     req.set_pending_chunk(Some(
         crate::runtime::connection::response::ResponseChunk::End,
     ));
