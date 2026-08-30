@@ -415,6 +415,7 @@ fn bootstrap_request_build_input<'a>(
         path: &intake.path,
         authority: intake.authority.as_deref(),
         headers,
+        auth_header_mutations: &[],
         body,
         content_length,
         body_mode: RequestBuildInput::<BoxBody<Bytes, Infallible>>::body_mode_for_length(
@@ -943,6 +944,7 @@ mod tests {
                 path: &pending_forward.path,
                 authority: pending_forward.authority.as_deref(),
                 headers: &quic_headers,
+                auth_header_mutations: &[],
                 body: boxed_full(Bytes::new()),
                 content_length: Some(0),
                 body_mode: RequestBuildInput::<BoxBody<Bytes, Infallible>>::body_mode_for_length(
@@ -983,6 +985,7 @@ mod tests {
                 path: &intake.path,
                 authority: intake.authority.as_deref(),
                 headers: &bridge_headers,
+                auth_header_mutations: &[],
                 body: boxed_full(Bytes::new()),
                 content_length: intake.content_length,
                 body_mode: RequestBuildInput::<BoxBody<Bytes, Infallible>>::body_mode_for_length(
@@ -1030,6 +1033,7 @@ mod tests {
                 path: "/v1/chat",
                 authority: Some("api.example.com"),
                 headers: &bridge_headers,
+                auth_header_mutations: &[],
                 body: boxed_full(Bytes::new()),
                 content_length: Some(0),
                 body_mode: RequestBuildInput::<BoxBody<Bytes, Infallible>>::body_mode_for_length(

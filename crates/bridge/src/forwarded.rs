@@ -6,10 +6,10 @@ use impulse_errors::BridgeError;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ForwardedHeaderChains<'a> {
-    pub(crate) forwarded: &'a [Vec<u8>],
-    pub(crate) x_forwarded_for: &'a [Vec<u8>],
-    pub(crate) x_forwarded_proto: &'a [Vec<u8>],
-    pub(crate) x_forwarded_host: &'a [Vec<u8>],
+    pub(crate) forwarded: &'a [&'a [u8]],
+    pub(crate) x_forwarded_for: &'a [&'a [u8]],
+    pub(crate) x_forwarded_proto: &'a [&'a [u8]],
+    pub(crate) x_forwarded_host: &'a [&'a [u8]],
 }
 
 #[derive(Debug, Default)]
@@ -61,15 +61,16 @@ pub fn build_forwarded_header_values(
 
 pub fn merge_forwarded_chain(
     mode: ForwardedHeaderPolicyMode,
-    inbound: &[Vec<u8>],
+    inbound: &[&[u8]],
     current: Option<&[u8]>,
 ) -> Result<Option<HeaderValue>, BridgeError> {
     match mode {
         ForwardedHeaderPolicyMode::Preserve => join_header_chain(inbound),
         ForwardedHeaderPolicyMode::Append => {
-            let mut values = inbound.to_vec();
+            let mut values = smallvec::SmallVec::<[&[u8]; 4]>::with_capacity(inbound.len() + 1);
+            values.extend_from_slice(inbound);
             if let Some(current) = current {
-                values.push(current.to_vec());
+                values.push(current);
             }
             join_header_chain(&values)
         }
@@ -80,7 +81,7 @@ pub fn merge_forwarded_chain(
     }
 }
 
-pub fn join_header_chain(values: &[Vec<u8>]) -> Result<Option<HeaderValue>, BridgeError> {
+pub fn join_header_chain(values: &[&[u8]]) -> Result<Option<HeaderValue>, BridgeError> {
     if values.is_empty() {
         return Ok(None);
     }
@@ -145,7 +146,7 @@ mod tests {
 
     #[test]
     fn merge_forwarded_chain_preserve_append_overwrite() {
-        let inbound = vec![b"for=1.1.1.1".to_vec()];
+        let inbound = [b"for=1.1.1.1".as_slice()];
         let current = b"for=2.2.2.2";
 
         let preserved =
@@ -175,10 +176,10 @@ mod tests {
         let policy = ForwardedHeaderPolicy {
             mode: ForwardedHeaderPolicyMode::Overwrite,
         };
-        let inbound_fwd = [b"for=9.9.9.9".to_vec()];
-        let inbound_xff = [b"9.9.9.9".to_vec()];
-        let inbound_xfp = [b"http".to_vec()];
-        let inbound_xfh = [b"old.example".to_vec()];
+        let inbound_fwd = [b"for=9.9.9.9".as_slice()];
+        let inbound_xff = [b"9.9.9.9".as_slice()];
+        let inbound_xfp = [b"http".as_slice()];
+        let inbound_xfh = [b"old.example".as_slice()];
         let inbound = ForwardedHeaderChains {
             forwarded: &inbound_fwd,
             x_forwarded_for: &inbound_xff,
@@ -207,7 +208,7 @@ mod tests {
         let policy = ForwardedHeaderPolicy {
             mode: ForwardedHeaderPolicyMode::Append,
         };
-        let inbound_xff = [b"1.1.1.1".to_vec()];
+        let inbound_xff = [b"1.1.1.1".as_slice()];
         let inbound = ForwardedHeaderChains {
             forwarded: &[],
             x_forwarded_for: &inbound_xff,
@@ -224,7 +225,7 @@ mod tests {
         let policy = ForwardedHeaderPolicy {
             mode: ForwardedHeaderPolicyMode::Preserve,
         };
-        let inbound_xff = [b"8.8.8.8".to_vec()];
+        let inbound_xff = [b"8.8.8.8".as_slice()];
         let inbound = ForwardedHeaderChains {
             forwarded: &[],
             x_forwarded_for: &inbound_xff,

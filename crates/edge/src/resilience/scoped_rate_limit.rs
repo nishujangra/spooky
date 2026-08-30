@@ -1,6 +1,10 @@
 use std::{
-    collections::{HashMap, HashSet},
-    sync::{Arc, Mutex},
+    collections::{HashMap, HashSet, hash_map::RandomState},
+    hash::BuildHasher,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -21,49 +25,106 @@ const LEGACY_SCOPED_BACKEND_KIND: &str = "legacy_scoped_rate_limit";
 const LEGACY_SCOPED_KEY_PREFIX: &str = "impulse:legacy-scoped-rate-limit";
 const MAX_SCOPED_RATE_LIMIT_BUCKETS_PER_RULE: usize = 1024;
 const SCOPED_RATE_LIMIT_PRUNE_INTERVAL: Duration = Duration::from_secs(1);
+const SCOPED_RATE_LIMIT_BUCKET_SHARDS: usize = 16;
 
 struct ScopedRateLimitBucketAccess {
     storage_key: String,
     evaluation: ScopedRateLimitBucketEvaluation,
 }
 
-enum ScopedRateLimitBucketAdmission {
-    Existing,
-    New,
-    Saturated,
-}
-
 struct ScopedRateLimitBucketStore {
-    buckets: HashMap<String, ScopedRateLimitBucket>,
-    last_pruned_at: Instant,
+    hash_builder: RandomState,
+    shards: Box<[Mutex<ScopedRateLimitBucketShard>]>,
+    live_buckets: AtomicUsize,
+    prune_state: Mutex<ScopedRateLimitPruneState>,
 }
 
 impl ScopedRateLimitBucketStore {
     fn new() -> Self {
         Self {
-            buckets: HashMap::new(),
-            last_pruned_at: Instant::now(),
+            hash_builder: RandomState::new(),
+            shards: (0..SCOPED_RATE_LIMIT_BUCKET_SHARDS)
+                .map(|_| Mutex::new(ScopedRateLimitBucketShard::default()))
+                .collect(),
+            live_buckets: AtomicUsize::new(0),
+            prune_state: Mutex::new(ScopedRateLimitPruneState::new()),
         }
     }
 
-    fn prune_expired_if_due(&mut self, now: Instant, idle_ttl: Duration) {
-        if now.saturating_duration_since(self.last_pruned_at) < SCOPED_RATE_LIMIT_PRUNE_INTERVAL {
+    fn prune_expired_if_due(&self, now: Instant, idle_ttl: Duration) {
+        let Some(shard_index) = self.claim_prune_shard(now) else {
             return;
-        }
+        };
 
-        self.last_pruned_at = now;
-        self.buckets
+        let Ok(mut shard) = self.shards[shard_index].lock() else {
+            return;
+        };
+        let before = shard.buckets.len();
+        shard
+            .buckets
             .retain(|_, bucket| now.saturating_duration_since(bucket.last_seen) < idle_ttl);
+        let removed = before.saturating_sub(shard.buckets.len());
+        if removed != 0 {
+            self.live_buckets.fetch_sub(removed, Ordering::Relaxed);
+        }
     }
 
-    fn admit(&mut self, storage_key: &str) -> ScopedRateLimitBucketAdmission {
-        if self.buckets.contains_key(storage_key) {
-            return ScopedRateLimitBucketAdmission::Existing;
+    fn claim_prune_shard(&self, now: Instant) -> Option<usize> {
+        let mut prune_state = self.prune_state.lock().ok()?;
+        if now.saturating_duration_since(prune_state.last_pruned_at)
+            < SCOPED_RATE_LIMIT_PRUNE_INTERVAL
+        {
+            return None;
         }
-        if self.buckets.len() >= MAX_SCOPED_RATE_LIMIT_BUCKETS_PER_RULE {
-            return ScopedRateLimitBucketAdmission::Saturated;
+        prune_state.last_pruned_at = now;
+        let shard_index = prune_state.next_shard;
+        prune_state.next_shard = (prune_state.next_shard + 1) % self.shards.len();
+        Some(shard_index)
+    }
+
+    fn shard_index(&self, storage_key: &str) -> usize {
+        (self.hash_builder.hash_one(storage_key) as usize) % self.shards.len()
+    }
+
+    fn reserve_bucket_slot(&self) -> bool {
+        self.live_buckets
+            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                (count < MAX_SCOPED_RATE_LIMIT_BUCKETS_PER_RULE).then_some(count + 1)
+            })
+            .is_ok()
+    }
+
+    #[cfg(test)]
+    fn bucket_count(&self) -> usize {
+        self.live_buckets.load(Ordering::Relaxed)
+    }
+
+    #[cfg(test)]
+    fn insert_for_test(&self, storage_key: String, bucket: ScopedRateLimitBucket) {
+        let shard_index = self.shard_index(&storage_key);
+        let mut shard = self.shards[shard_index].lock().expect("bucket shard lock");
+        if shard.buckets.insert(storage_key, bucket).is_none() {
+            self.live_buckets.fetch_add(1, Ordering::Relaxed);
         }
-        ScopedRateLimitBucketAdmission::New
+    }
+}
+
+#[derive(Default)]
+struct ScopedRateLimitBucketShard {
+    buckets: HashMap<String, ScopedRateLimitBucket>,
+}
+
+struct ScopedRateLimitPruneState {
+    last_pruned_at: Instant,
+    next_shard: usize,
+}
+
+impl ScopedRateLimitPruneState {
+    fn new() -> Self {
+        Self {
+            last_pruned_at: Instant::now(),
+            next_shard: 0,
+        }
     }
 }
 
@@ -142,7 +203,7 @@ pub struct ScopedRateLimitRule {
     retry_after_seconds: u32,
     rate_per_sec: u32,
     burst: u32,
-    buckets: Mutex<ScopedRateLimitBucketStore>,
+    buckets: ScopedRateLimitBucketStore,
 }
 
 impl ScopedRateLimitRule {
@@ -157,7 +218,7 @@ impl ScopedRateLimitRule {
                 .max(1),
             rate_per_sec: config.requests_per_sec.max(1),
             burst: config.burst.max(1),
-            buckets: Mutex::new(ScopedRateLimitBucketStore::new()),
+            buckets: ScopedRateLimitBucketStore::new(),
         }
     }
 
@@ -236,22 +297,26 @@ impl ScopedRateLimitRule {
     }
 
     fn evaluate_bucket(&self, key: &str, cost: u64) -> Option<ScopedRateLimitBucketAccess> {
-        let mut bucket_store = match self.buckets.lock() {
+        let now = Instant::now();
+        let storage_key = self.canonical_bucket_storage_key(key);
+        self.buckets.prune_expired_if_due(now, self.idle_ttl);
+
+        let shard_index = self.buckets.shard_index(&storage_key);
+        let mut shard = match self.buckets.shards[shard_index].lock() {
             Ok(guard) => guard,
             Err(_) => return None,
         };
-        let now = Instant::now();
-        let storage_key = self.canonical_bucket_storage_key(key);
-        bucket_store.prune_expired_if_due(now, self.idle_ttl);
-
-        if matches!(
-            bucket_store.admit(&storage_key),
-            ScopedRateLimitBucketAdmission::Saturated
-        ) {
+        if let Some(bucket) = shard.buckets.get_mut(&storage_key) {
+            return Some(ScopedRateLimitBucketAccess {
+                storage_key,
+                evaluation: bucket.evaluate(cost),
+            });
+        }
+        if !self.buckets.reserve_bucket_slot() {
             return None;
         }
 
-        let bucket = bucket_store
+        let bucket = shard
             .buckets
             .entry(storage_key.clone())
             .or_insert_with(|| ScopedRateLimitBucket::new(self.rate_per_sec, self.burst));
@@ -398,9 +463,8 @@ mod tests {
     fn evaluate_bucket_prunes_expired_entries_on_deterministic_cadence() {
         let rule = test_rule(ScopedRateLimitScope::Route);
         {
-            let mut store = rule.buckets.lock().expect("bucket store lock");
             let now = Instant::now();
-            store.buckets.insert(
+            rule.buckets.insert_for_test(
                 "expired".to_string(),
                 ScopedRateLimitBucket {
                     burst: 1.0,
@@ -410,7 +474,7 @@ mod tests {
                     last_seen: now - Duration::from_secs(120),
                 },
             );
-            store.buckets.insert(
+            rule.buckets.insert_for_test(
                 "live".to_string(),
                 ScopedRateLimitBucket {
                     burst: 1.0,
@@ -420,25 +484,39 @@ mod tests {
                     last_seen: now,
                 },
             );
-            store.last_pruned_at = now - SCOPED_RATE_LIMIT_PRUNE_INTERVAL;
+            let mut prune_state = rule.buckets.prune_state.lock().expect("prune state lock");
+            prune_state.last_pruned_at = now - SCOPED_RATE_LIMIT_PRUNE_INTERVAL;
+            prune_state.next_shard = rule.buckets.shard_index("expired");
         }
 
         let _ = rule.evaluate_bucket("live", 1).expect("bucket evaluation");
 
-        let store = rule.buckets.lock().expect("bucket store lock");
-        assert!(!store.buckets.contains_key("expired"));
-        assert!(store.buckets.contains_key("live"));
+        let expired_shard = rule.buckets.shard_index("expired");
+        let live_shard = rule.buckets.shard_index("live");
+        let expired_present = rule.buckets.shards[expired_shard]
+            .lock()
+            .expect("bucket shard lock")
+            .buckets
+            .contains_key("expired");
+        let live_present = rule.buckets.shards[live_shard]
+            .lock()
+            .expect("bucket shard lock")
+            .buckets
+            .contains_key("live");
+        assert!(!expired_present);
+        assert!(live_present);
     }
 
     #[test]
     fn evaluate_bucket_rejects_new_entry_when_cap_is_reached_without_expiry() {
         let rule = test_rule(ScopedRateLimitScope::Route);
         {
-            let mut store = rule.buckets.lock().expect("bucket store lock");
             let now = Instant::now();
-            store.last_pruned_at = now;
+            let mut prune_state = rule.buckets.prune_state.lock().expect("prune state lock");
+            prune_state.last_pruned_at = now;
+            drop(prune_state);
             for index in 0..MAX_SCOPED_RATE_LIMIT_BUCKETS_PER_RULE {
-                store.buckets.insert(
+                rule.buckets.insert_for_test(
                     format!("bucket-{index}"),
                     ScopedRateLimitBucket {
                         burst: 1.0,
@@ -454,12 +532,28 @@ mod tests {
         let inserted = rule.evaluate_bucket("fresh-bucket", 1);
         let existing = rule.evaluate_bucket("bucket-0", 1);
 
-        let store = rule.buckets.lock().expect("bucket store lock");
         assert!(inserted.is_none());
         assert!(existing.is_some());
-        assert_eq!(store.buckets.len(), MAX_SCOPED_RATE_LIMIT_BUCKETS_PER_RULE);
-        assert!(!store.buckets.contains_key("fresh-bucket"));
-        assert!(store.buckets.contains_key("bucket-0"));
+        assert_eq!(
+            rule.buckets.bucket_count(),
+            MAX_SCOPED_RATE_LIMIT_BUCKETS_PER_RULE
+        );
+        let fresh_shard = rule.buckets.shard_index("fresh-bucket");
+        let existing_shard = rule.buckets.shard_index("bucket-0");
+        assert!(
+            !rule.buckets.shards[fresh_shard]
+                .lock()
+                .expect("bucket shard lock")
+                .buckets
+                .contains_key("fresh-bucket")
+        );
+        assert!(
+            rule.buckets.shards[existing_shard]
+                .lock()
+                .expect("bucket shard lock")
+                .buckets
+                .contains_key("bucket-0")
+        );
     }
 
     #[test]
@@ -481,8 +575,20 @@ mod tests {
             .evaluate_bucket(&second_key, 1)
             .expect("second bucket evaluation");
 
-        let store = rule.buckets.lock().expect("bucket store lock");
-        let keys = store.buckets.keys().cloned().collect::<Vec<_>>();
+        let keys = rule
+            .buckets
+            .shards
+            .iter()
+            .flat_map(|shard| {
+                shard
+                    .lock()
+                    .expect("bucket shard lock")
+                    .buckets
+                    .keys()
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
         assert_eq!(keys.len(), 2);
         assert_ne!(keys[0], keys[1]);
         for key in keys {

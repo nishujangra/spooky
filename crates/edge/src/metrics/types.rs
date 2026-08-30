@@ -90,6 +90,7 @@ pub(crate) struct QuotaMetricsSnapshot {
 pub(super) struct QuotaMetricsSnapshotCache {
     pub(super) version: u64,
     pub(super) snapshot: QuotaMetricsSnapshot,
+    pub(super) rendered: String,
 }
 
 #[derive(Default, Clone)]
@@ -104,6 +105,7 @@ pub(crate) struct JwtJwksMetricsSnapshot {
 pub(super) struct JwtJwksMetricsSnapshotCache {
     pub(super) version: u64,
     pub(super) snapshot: JwtJwksMetricsSnapshot,
+    pub(super) rendered: String,
 }
 
 #[derive(Default, Clone)]
@@ -117,6 +119,7 @@ pub(crate) struct BackendMetricsSnapshot {
 pub(super) struct BackendMetricsSnapshotCache {
     pub(super) version: u64,
     pub(super) snapshot: BackendMetricsSnapshot,
+    pub(super) rendered: String,
 }
 
 #[derive(Default, Clone)]
@@ -132,6 +135,12 @@ pub(crate) struct SecretMetricsSnapshot {
 pub(super) struct SecretMetricsSnapshotCache {
     pub(super) version: u64,
     pub(super) snapshot: SecretMetricsSnapshot,
+}
+
+#[derive(Default, Clone)]
+pub(super) struct RouteWorkerMetricsRenderCache {
+    pub(super) version: u64,
+    pub(super) rendered: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

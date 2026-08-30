@@ -28,6 +28,7 @@ pub(crate) fn build_h1_request(
         path,
         authority,
         headers,
+        auth_header_mutations,
         body,
         content_length,
         body_mode: _body_mode,
@@ -44,6 +45,7 @@ pub(crate) fn build_h1_request(
         target: RequestBuildTarget { endpoint, policies },
         authority,
         headers,
+        auth_header_mutations,
         preserve_upgrade,
         forwarded,
     })?;

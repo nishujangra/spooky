@@ -1,13 +1,435 @@
 use super::*;
 use crate::runtime::activation::{RuntimeOperationOutcomeReason, RuntimeRejectionReason};
 
+fn render_quota_metrics_families(snapshot: &QuotaMetricsSnapshot) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "# HELP impulse_quota_policy_outcomes_total Total quota policy outcomes grouped by policy, decision, reason, selector dimensions, and backend mode.\n",
+    );
+    out.push_str("# TYPE impulse_quota_policy_outcomes_total counter\n");
+    for (key, count) in &snapshot.quota_policy_outcomes {
+        out.push_str(&format!(
+            "impulse_quota_policy_outcomes_total{{policy=\"{}\",decision=\"{}\",reason=\"{}\",selector_dimensions=\"{}\",backend_mode=\"{}\"}} {}\n",
+            escape_prometheus_label(&key.policy),
+            escape_prometheus_label(&key.decision),
+            escape_prometheus_label(&key.reason),
+            escape_prometheus_label(&key.selector_dimensions),
+            escape_prometheus_label(&key.backend_mode),
+            count
+        ));
+    }
+    out.push_str(
+        "# HELP impulse_quota_backend_health_total Total quota backend health/error observations grouped by backend mode and reason.\n",
+    );
+    out.push_str("# TYPE impulse_quota_backend_health_total counter\n");
+    for (key, count) in &snapshot.quota_backend_health {
+        out.push_str(&format!(
+            "impulse_quota_backend_health_total{{backend_mode=\"{}\",reason=\"{}\"}} {}\n",
+            escape_prometheus_label(&key.backend_mode),
+            escape_prometheus_label(&key.reason),
+            count
+        ));
+    }
+    out
+}
+
+fn render_jwt_jwks_metrics_static_families(snapshot: &JwtJwksMetricsSnapshot) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "# HELP impulse_jwt_validation_failures_total Total JWT validation failures grouped by stable rejection reason.\n",
+    );
+    out.push_str("# TYPE impulse_jwt_validation_failures_total counter\n");
+    for (reason, count) in &snapshot.jwt_validation_failures {
+        out.push_str(&format!(
+            "impulse_jwt_validation_failures_total{{reason=\"{}\"}} {}\n",
+            escape_prometheus_label(reason),
+            count
+        ));
+    }
+    out.push_str(
+        "# HELP impulse_jwt_algorithm_rejections_total Total JWT algorithm rejections grouped by JOSE alg.\n",
+    );
+    out.push_str("# TYPE impulse_jwt_algorithm_rejections_total counter\n");
+    for (algorithm, count) in &snapshot.jwt_algorithm_rejections {
+        out.push_str(&format!(
+            "impulse_jwt_algorithm_rejections_total{{algorithm=\"{}\"}} {}\n",
+            escape_prometheus_label(algorithm),
+            count
+        ));
+    }
+    out.push_str(
+        "# HELP impulse_jwks_unknown_kid_total Total unknown-kid events that triggered JWKS miss handling.\n",
+    );
+    out.push_str("# TYPE impulse_jwks_unknown_kid_total counter\n");
+    for (jwks_source_id, count) in &snapshot.jwks_unknown_kid_events {
+        out.push_str(&format!(
+            "impulse_jwks_unknown_kid_total{{jwks_source_id=\"{}\"}} {}\n",
+            escape_prometheus_label(jwks_source_id),
+            count
+        ));
+    }
+    out.push_str(
+        "# HELP impulse_jwks_refresh_success_total Total successful JWKS refreshes grouped by JWKS source identity.\n",
+    );
+    out.push_str("# TYPE impulse_jwks_refresh_success_total counter\n");
+    out.push_str(
+        "# HELP impulse_jwks_refresh_failure_total Total failed JWKS refreshes grouped by JWKS source identity.\n",
+    );
+    out.push_str("# TYPE impulse_jwks_refresh_failure_total counter\n");
+    out.push_str(
+        "# HELP impulse_jwks_age_seconds Current age of the active JWKS key set in seconds.\n",
+    );
+    out.push_str("# TYPE impulse_jwks_age_seconds gauge\n");
+    out.push_str(
+        "# HELP impulse_jwks_state Current JWKS cache state for a configured JWKS source.\n",
+    );
+    out.push_str("# TYPE impulse_jwks_state gauge\n");
+    out.push_str(
+        "# HELP impulse_jwks_active_keys Current count of active verification keys retained for a configured JWKS source.\n",
+    );
+    out.push_str("# TYPE impulse_jwks_active_keys gauge\n");
+    out.push_str(
+        "# HELP impulse_jwks_last_refresh_attempt_seconds Unix timestamp of the last JWKS refresh attempt.\n",
+    );
+    out.push_str("# TYPE impulse_jwks_last_refresh_attempt_seconds gauge\n");
+    out.push_str(
+        "# HELP impulse_jwks_last_refresh_success_seconds Unix timestamp of the last successful JWKS refresh.\n",
+    );
+    out.push_str("# TYPE impulse_jwks_last_refresh_success_seconds gauge\n");
+    for state in &snapshot.jwks_source_state {
+        let jwks_source_id = escape_prometheus_label(&state.jwks_source_id);
+        out.push_str(&format!(
+            "impulse_jwks_refresh_success_total{{jwks_source_id=\"{}\"}} {}\n",
+            jwks_source_id, state.refresh_success_total
+        ));
+        out.push_str(&format!(
+            "impulse_jwks_refresh_failure_total{{jwks_source_id=\"{}\"}} {}\n",
+            jwks_source_id, state.refresh_failure_total
+        ));
+        out.push_str(&format!(
+            "impulse_jwks_state{{jwks_source_id=\"{}\",state=\"{}\"}} 1\n",
+            jwks_source_id,
+            escape_prometheus_label(state.state)
+        ));
+        out.push_str(&format!(
+            "impulse_jwks_active_keys{{jwks_source_id=\"{}\"}} {}\n",
+            jwks_source_id, state.active_key_count
+        ));
+        out.push_str(&format!(
+            "impulse_jwks_last_refresh_attempt_seconds{{jwks_source_id=\"{}\"}} {}\n",
+            jwks_source_id,
+            state.last_refresh_attempt_unix_seconds.unwrap_or_default()
+        ));
+        out.push_str(&format!(
+            "impulse_jwks_last_refresh_success_seconds{{jwks_source_id=\"{}\"}} {}\n",
+            jwks_source_id,
+            state.last_refresh_success_unix_seconds.unwrap_or_default()
+        ));
+    }
+    out
+}
+
+fn append_jwks_age_series(
+    out: &mut String,
+    snapshot: &JwtJwksMetricsSnapshot,
+    jwks_now_unix_seconds: u64,
+) {
+    for state in &snapshot.jwks_source_state {
+        let age_seconds = state
+            .last_refresh_success_unix_seconds
+            .map(|last_success| jwks_now_unix_seconds.saturating_sub(last_success))
+            .unwrap_or_default();
+        out.push_str(&format!(
+            "impulse_jwks_age_seconds{{jwks_source_id=\"{}\"}} {}\n",
+            escape_prometheus_label(&state.jwks_source_id),
+            age_seconds
+        ));
+    }
+}
+
+fn render_backend_metrics_families(snapshot: &BackendMetricsSnapshot) -> String {
+    let mut out = String::new();
+    out.push_str(
+        "# HELP impulse_backend_dns_last_refresh_success_seconds Unix timestamp of the last successful backend DNS refresh.\n",
+    );
+    out.push_str("# TYPE impulse_backend_dns_last_refresh_success_seconds gauge\n");
+    out.push_str(
+        "# HELP impulse_backend_dns_resolved_addresses Current number of resolved addresses retained for a backend identity.\n",
+    );
+    out.push_str("# TYPE impulse_backend_dns_resolved_addresses gauge\n");
+    out.push_str(
+        "# HELP impulse_backend_client_rotations Per-backend client rotation count triggered by DNS changes.\n",
+    );
+    out.push_str("# TYPE impulse_backend_client_rotations counter\n");
+    out.push_str(
+        "# HELP impulse_backend_connect_attempt_total Observed upstream socket connects grouped by backend identity, hostname, and resolved address.\n",
+    );
+    out.push_str("# TYPE impulse_backend_connect_attempt_total counter\n");
+    for (backend, state) in &snapshot.backend_dns_state {
+        let backend = escape_prometheus_label(backend);
+        out.push_str(&format!(
+            "impulse_backend_dns_last_refresh_success_seconds{{backend=\"{}\"}} {}\n",
+            backend, state.last_success_unix_seconds
+        ));
+        out.push_str(&format!(
+            "impulse_backend_dns_resolved_addresses{{backend=\"{}\"}} {}\n",
+            backend, state.resolved_address_count
+        ));
+    }
+    for (backend, state) in &snapshot.backend_rotation_state {
+        let backend = escape_prometheus_label(backend);
+        out.push_str(&format!(
+            "impulse_backend_client_rotations{{backend=\"{}\"}} {}\n",
+            backend, state.rotations
+        ));
+    }
+    for (key, count) in &snapshot.backend_connect_attempts {
+        let backend = escape_prometheus_label(&key.backend);
+        let hostname = escape_prometheus_label(&key.hostname);
+        let resolved_addr = escape_prometheus_label(&key.resolved_addr);
+        out.push_str(&format!(
+            "impulse_backend_connect_attempt_total{{backend=\"{}\",hostname=\"{}\",resolved_addr=\"{}\"}} {}\n",
+            backend, hostname, resolved_addr, count
+        ));
+    }
+    out
+}
+
 impl Metrics {
+    fn append_cached_quota_metrics_families(&self, out: &mut String) {
+        let version = self.quota_metrics_version.load(Ordering::Relaxed);
+        if let Ok(cache) = self.quota_metrics_cache.read()
+            && cache.version == version
+            && !cache.rendered.is_empty()
+        {
+            out.push_str(&cache.rendered);
+            return;
+        }
+
+        let snapshot = self.snapshot_quota_metrics();
+        let rendered = render_quota_metrics_families(&snapshot);
+        out.push_str(&rendered);
+        if let Ok(mut cache) = self.quota_metrics_cache.write()
+            && cache.version == version
+        {
+            cache.rendered = rendered;
+        }
+    }
+
+    fn append_cached_jwt_jwks_metrics_families(&self, out: &mut String) {
+        let version = self.jwt_jwks_metrics_version.load(Ordering::Relaxed);
+        let jwks_now_unix_seconds = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .map(|duration| duration.as_secs())
+            .unwrap_or_default();
+        if let Ok(cache) = self.jwt_jwks_metrics_cache.read()
+            && cache.version == version
+            && !cache.rendered.is_empty()
+        {
+            out.push_str(&cache.rendered);
+            append_jwks_age_series(out, &cache.snapshot, jwks_now_unix_seconds);
+            return;
+        }
+
+        let snapshot = self.snapshot_jwt_jwks_metrics();
+        let rendered = render_jwt_jwks_metrics_static_families(&snapshot);
+        out.push_str(&rendered);
+        append_jwks_age_series(out, &snapshot, jwks_now_unix_seconds);
+        if let Ok(mut cache) = self.jwt_jwks_metrics_cache.write()
+            && cache.version == version
+        {
+            cache.rendered = rendered;
+        }
+    }
+
+    fn append_cached_backend_metrics_families(&self, out: &mut String) {
+        let version = self.backend_metrics_version.load(Ordering::Relaxed);
+        if let Ok(cache) = self.backend_metrics_cache.read()
+            && cache.version == version
+            && !cache.rendered.is_empty()
+        {
+            out.push_str(&cache.rendered);
+            return;
+        }
+
+        let snapshot = self.snapshot_backend_metrics();
+        let rendered = render_backend_metrics_families(&snapshot);
+        out.push_str(&rendered);
+        if let Ok(mut cache) = self.backend_metrics_cache.write()
+            && cache.version == version
+        {
+            cache.rendered = rendered;
+        }
+    }
+
+    fn render_route_worker_metrics_families(&self) -> String {
+        let mut out = String::new();
+        out.push_str(
+            "# HELP impulse_route_requests_total Total completed requests grouped by route label.\n",
+        );
+        out.push_str("# TYPE impulse_route_requests_total counter\n");
+        out.push_str(
+            "# HELP impulse_route_success_total Total successful requests grouped by route label.\n",
+        );
+        out.push_str("# TYPE impulse_route_success_total counter\n");
+        out.push_str(
+            "# HELP impulse_route_failure_total Total failed requests grouped by route label.\n",
+        );
+        out.push_str("# TYPE impulse_route_failure_total counter\n");
+        out.push_str(
+            "# HELP impulse_route_timeout_total Total timed-out requests grouped by route label.\n",
+        );
+        out.push_str("# TYPE impulse_route_timeout_total counter\n");
+        out.push_str(
+            "# HELP impulse_route_rate_limited_total Total rate-limited requests grouped by route label.\n",
+        );
+        out.push_str("# TYPE impulse_route_rate_limited_total counter\n");
+        out.push_str(
+            "# HELP impulse_route_backend_error_total Total backend-error requests grouped by route label.\n",
+        );
+        out.push_str("# TYPE impulse_route_backend_error_total counter\n");
+        out.push_str(
+            "# HELP impulse_route_overload_shed_total Total overload-shed requests grouped by route label.\n",
+        );
+        out.push_str("# TYPE impulse_route_overload_shed_total counter\n");
+        out.push_str(
+            "# HELP impulse_route_latency_sample_every Route latency histogram sampling interval (1 = every request).\n",
+        );
+        out.push_str("# TYPE impulse_route_latency_sample_every gauge\n");
+        out.push_str(&format!(
+            "impulse_route_latency_sample_every {}\n",
+            self.route_latency_sample_every
+        ));
+
+        for (idx, route) in &self.route_render_order {
+            let Some(stats) = self.route_stats.get(*idx).map(RouteStatsAtomic::snapshot) else {
+                continue;
+            };
+            let route = escape_prometheus_label(route);
+            out.push_str(&format!(
+                "impulse_route_requests_total{{route=\"{}\"}} {}\n",
+                route, stats.requests_total
+            ));
+            out.push_str(&format!(
+                "impulse_route_success_total{{route=\"{}\"}} {}\n",
+                route, stats.success
+            ));
+            out.push_str(&format!(
+                "impulse_route_failure_total{{route=\"{}\"}} {}\n",
+                route, stats.failure
+            ));
+            out.push_str(&format!(
+                "impulse_route_timeout_total{{route=\"{}\"}} {}\n",
+                route, stats.timeout
+            ));
+            out.push_str(&format!(
+                "impulse_route_rate_limited_total{{route=\"{}\"}} {}\n",
+                route, stats.rate_limited
+            ));
+            out.push_str(&format!(
+                "impulse_route_backend_error_total{{route=\"{}\"}} {}\n",
+                route, stats.backend_error
+            ));
+            out.push_str(&format!(
+                "impulse_route_overload_shed_total{{route=\"{}\"}} {}\n",
+                route, stats.overload_shed
+            ));
+            out.push_str(&format!(
+                "impulse_route_latency_ms_p50{{route=\"{}\"}} {:.2}\n",
+                route,
+                percentile_ms(&stats, 0.50)
+            ));
+            out.push_str(&format!(
+                "impulse_route_latency_ms_p95{{route=\"{}\"}} {:.2}\n",
+                route,
+                percentile_ms(&stats, 0.95)
+            ));
+            out.push_str(&format!(
+                "impulse_route_latency_ms_p99{{route=\"{}\"}} {:.2}\n",
+                route,
+                percentile_ms(&stats, 0.99)
+            ));
+        }
+
+        out.push_str(
+            "# HELP impulse_worker_requests_total Total requests handled by each worker thread.\n",
+        );
+        out.push_str("# TYPE impulse_worker_requests_total counter\n");
+        out.push_str(
+            "# HELP impulse_worker_requests_success Total successful requests by worker thread.\n",
+        );
+        out.push_str("# TYPE impulse_worker_requests_success counter\n");
+        out.push_str(
+            "# HELP impulse_worker_requests_failure Total failed requests by worker thread.\n",
+        );
+        out.push_str("# TYPE impulse_worker_requests_failure counter\n");
+        out.push_str(
+            "# HELP impulse_worker_ingress_packets_total Total ingress packets by worker thread.\n",
+        );
+        out.push_str("# TYPE impulse_worker_ingress_packets_total counter\n");
+        out.push_str(
+            "# HELP impulse_worker_ingress_queue_drops Total ingress queue drops by worker thread.\n",
+        );
+        out.push_str("# TYPE impulse_worker_ingress_queue_drops counter\n");
+        out.push_str(
+            "# HELP impulse_worker_ingress_queue_drop_bytes Total ingress queue drop bytes by worker thread.\n",
+        );
+        out.push_str("# TYPE impulse_worker_ingress_queue_drop_bytes counter\n");
+        for (idx, worker) in &self.worker_render_order {
+            let Some(stats) = self.worker_stats.get(*idx).map(WorkerStatsAtomic::snapshot) else {
+                continue;
+            };
+            let worker = escape_prometheus_label(worker);
+            out.push_str(&format!(
+                "impulse_worker_requests_total{{worker=\"{}\"}} {}\n",
+                worker, stats.requests_total
+            ));
+            out.push_str(&format!(
+                "impulse_worker_requests_success{{worker=\"{}\"}} {}\n",
+                worker, stats.requests_success
+            ));
+            out.push_str(&format!(
+                "impulse_worker_requests_failure{{worker=\"{}\"}} {}\n",
+                worker, stats.requests_failure
+            ));
+            out.push_str(&format!(
+                "impulse_worker_ingress_packets_total{{worker=\"{}\"}} {}\n",
+                worker, stats.ingress_packets_total
+            ));
+            out.push_str(&format!(
+                "impulse_worker_ingress_queue_drops{{worker=\"{}\"}} {}\n",
+                worker, stats.ingress_queue_drops
+            ));
+            out.push_str(&format!(
+                "impulse_worker_ingress_queue_drop_bytes{{worker=\"{}\"}} {}\n",
+                worker, stats.ingress_queue_drop_bytes
+            ));
+        }
+        out
+    }
+
+    fn append_cached_route_worker_metrics_families(&self, out: &mut String) {
+        let version = self.route_worker_metrics_version.load(Ordering::Relaxed);
+        if let Ok(cache) = self.route_worker_metrics_cache.read()
+            && cache.version == version
+            && !cache.rendered.is_empty()
+        {
+            out.push_str(&cache.rendered);
+            return;
+        }
+
+        let rendered = self.render_route_worker_metrics_families();
+        out.push_str(&rendered);
+        if let Ok(mut cache) = self.route_worker_metrics_cache.write() {
+            cache.version = version;
+            cache.rendered = rendered;
+        }
+    }
+
     pub fn render_prometheus(&self) -> String {
         let mut out = String::with_capacity(8 * 1024);
         let request_result_metrics = self.snapshot_request_result_metrics();
-        let quota_metrics = self.snapshot_quota_metrics();
-        let jwt_jwks_metrics = self.snapshot_jwt_jwks_metrics();
-        let backend_metrics = self.snapshot_backend_metrics();
         let secret_metrics = self.snapshot_secret_metrics();
         out.push_str("# HELP impulse_requests_total Total requests seen by impulse.\n");
         out.push_str("# TYPE impulse_requests_total counter\n");
@@ -93,34 +515,7 @@ impl Metrics {
             self.request_rate_limited.load(Ordering::Relaxed)
         ));
 
-        out.push_str(
-            "# HELP impulse_quota_policy_outcomes_total Total quota policy outcomes grouped by policy, decision, reason, selector dimensions, and backend mode.\n",
-        );
-        out.push_str("# TYPE impulse_quota_policy_outcomes_total counter\n");
-        for (key, count) in &quota_metrics.quota_policy_outcomes {
-            out.push_str(&format!(
-                "impulse_quota_policy_outcomes_total{{policy=\"{}\",decision=\"{}\",reason=\"{}\",selector_dimensions=\"{}\",backend_mode=\"{}\"}} {}\n",
-                escape_prometheus_label(&key.policy),
-                escape_prometheus_label(&key.decision),
-                escape_prometheus_label(&key.reason),
-                escape_prometheus_label(&key.selector_dimensions),
-                escape_prometheus_label(&key.backend_mode),
-                count
-            ));
-        }
-
-        out.push_str(
-            "# HELP impulse_quota_backend_health_total Total quota backend health/error observations grouped by backend mode and reason.\n",
-        );
-        out.push_str("# TYPE impulse_quota_backend_health_total counter\n");
-        for (key, count) in &quota_metrics.quota_backend_health {
-            out.push_str(&format!(
-                "impulse_quota_backend_health_total{{backend_mode=\"{}\",reason=\"{}\"}} {}\n",
-                escape_prometheus_label(&key.backend_mode),
-                escape_prometheus_label(&key.reason),
-                count
-            ));
-        }
+        self.append_cached_quota_metrics_families(&mut out);
 
         out.push_str("# HELP impulse_early_data_accepted Total requests accepted in early data.\n");
         out.push_str("# TYPE impulse_early_data_accepted counter\n");
@@ -876,153 +1271,8 @@ impl Metrics {
             self.backend_client_rotation_failures
                 .load(Ordering::Relaxed)
         ));
-        out.push_str(
-            "# HELP impulse_jwt_validation_failures_total Total JWT validation failures grouped by stable rejection reason.\n",
-        );
-        out.push_str("# TYPE impulse_jwt_validation_failures_total counter\n");
-        for (reason, count) in &jwt_jwks_metrics.jwt_validation_failures {
-            out.push_str(&format!(
-                "impulse_jwt_validation_failures_total{{reason=\"{}\"}} {}\n",
-                escape_prometheus_label(reason),
-                count
-            ));
-        }
-        out.push_str(
-            "# HELP impulse_jwt_algorithm_rejections_total Total JWT algorithm rejections grouped by JOSE alg.\n",
-        );
-        out.push_str("# TYPE impulse_jwt_algorithm_rejections_total counter\n");
-        for (algorithm, count) in &jwt_jwks_metrics.jwt_algorithm_rejections {
-            out.push_str(&format!(
-                "impulse_jwt_algorithm_rejections_total{{algorithm=\"{}\"}} {}\n",
-                escape_prometheus_label(algorithm),
-                count
-            ));
-        }
-        out.push_str(
-            "# HELP impulse_jwks_unknown_kid_total Total unknown-kid events that triggered JWKS miss handling.\n",
-        );
-        out.push_str("# TYPE impulse_jwks_unknown_kid_total counter\n");
-        for (jwks_source_id, count) in &jwt_jwks_metrics.jwks_unknown_kid_events {
-            out.push_str(&format!(
-                "impulse_jwks_unknown_kid_total{{jwks_source_id=\"{}\"}} {}\n",
-                escape_prometheus_label(jwks_source_id),
-                count
-            ));
-        }
-        out.push_str(
-            "# HELP impulse_jwks_refresh_success_total Total successful JWKS refreshes grouped by JWKS source identity.\n",
-        );
-        out.push_str("# TYPE impulse_jwks_refresh_success_total counter\n");
-        out.push_str(
-            "# HELP impulse_jwks_refresh_failure_total Total failed JWKS refreshes grouped by JWKS source identity.\n",
-        );
-        out.push_str("# TYPE impulse_jwks_refresh_failure_total counter\n");
-        out.push_str(
-            "# HELP impulse_jwks_age_seconds Current age of the active JWKS key set in seconds.\n",
-        );
-        out.push_str("# TYPE impulse_jwks_age_seconds gauge\n");
-        out.push_str(
-            "# HELP impulse_jwks_state Current JWKS cache state for a configured JWKS source.\n",
-        );
-        out.push_str("# TYPE impulse_jwks_state gauge\n");
-        out.push_str(
-            "# HELP impulse_jwks_active_keys Current count of active verification keys retained for a configured JWKS source.\n",
-        );
-        out.push_str("# TYPE impulse_jwks_active_keys gauge\n");
-        out.push_str(
-            "# HELP impulse_jwks_last_refresh_attempt_seconds Unix timestamp of the last JWKS refresh attempt.\n",
-        );
-        out.push_str("# TYPE impulse_jwks_last_refresh_attempt_seconds gauge\n");
-        out.push_str(
-            "# HELP impulse_jwks_last_refresh_success_seconds Unix timestamp of the last successful JWKS refresh.\n",
-        );
-        out.push_str("# TYPE impulse_jwks_last_refresh_success_seconds gauge\n");
-        let jwks_now_unix_seconds = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .ok()
-            .map(|duration| duration.as_secs())
-            .unwrap_or_default();
-        for state in &jwt_jwks_metrics.jwks_source_state {
-            let jwks_source_id = escape_prometheus_label(&state.jwks_source_id);
-            out.push_str(&format!(
-                "impulse_jwks_refresh_success_total{{jwks_source_id=\"{}\"}} {}\n",
-                jwks_source_id, state.refresh_success_total
-            ));
-            out.push_str(&format!(
-                "impulse_jwks_refresh_failure_total{{jwks_source_id=\"{}\"}} {}\n",
-                jwks_source_id, state.refresh_failure_total
-            ));
-            out.push_str(&format!(
-                "impulse_jwks_state{{jwks_source_id=\"{}\",state=\"{}\"}} 1\n",
-                jwks_source_id,
-                escape_prometheus_label(state.state)
-            ));
-            out.push_str(&format!(
-                "impulse_jwks_active_keys{{jwks_source_id=\"{}\"}} {}\n",
-                jwks_source_id, state.active_key_count
-            ));
-            out.push_str(&format!(
-                "impulse_jwks_last_refresh_attempt_seconds{{jwks_source_id=\"{}\"}} {}\n",
-                jwks_source_id,
-                state.last_refresh_attempt_unix_seconds.unwrap_or_default()
-            ));
-            out.push_str(&format!(
-                "impulse_jwks_last_refresh_success_seconds{{jwks_source_id=\"{}\"}} {}\n",
-                jwks_source_id,
-                state.last_refresh_success_unix_seconds.unwrap_or_default()
-            ));
-            let age_seconds = state
-                .last_refresh_success_unix_seconds
-                .map(|last_success| jwks_now_unix_seconds.saturating_sub(last_success))
-                .unwrap_or_default();
-            out.push_str(&format!(
-                "impulse_jwks_age_seconds{{jwks_source_id=\"{}\"}} {}\n",
-                jwks_source_id, age_seconds
-            ));
-        }
-        out.push_str(
-            "# HELP impulse_backend_dns_last_refresh_success_seconds Unix timestamp of the last successful backend DNS refresh.\n",
-        );
-        out.push_str("# TYPE impulse_backend_dns_last_refresh_success_seconds gauge\n");
-        out.push_str(
-            "# HELP impulse_backend_dns_resolved_addresses Current number of resolved addresses retained for a backend identity.\n",
-        );
-        out.push_str("# TYPE impulse_backend_dns_resolved_addresses gauge\n");
-        out.push_str(
-            "# HELP impulse_backend_client_rotations Per-backend client rotation count triggered by DNS changes.\n",
-        );
-        out.push_str("# TYPE impulse_backend_client_rotations counter\n");
-        out.push_str(
-            "# HELP impulse_backend_connect_attempt_total Observed upstream socket connects grouped by backend identity, hostname, and resolved address.\n",
-        );
-        out.push_str("# TYPE impulse_backend_connect_attempt_total counter\n");
-        for (backend, state) in &backend_metrics.backend_dns_state {
-            let backend = escape_prometheus_label(backend);
-            out.push_str(&format!(
-                "impulse_backend_dns_last_refresh_success_seconds{{backend=\"{}\"}} {}\n",
-                backend, state.last_success_unix_seconds
-            ));
-            out.push_str(&format!(
-                "impulse_backend_dns_resolved_addresses{{backend=\"{}\"}} {}\n",
-                backend, state.resolved_address_count
-            ));
-        }
-        for (backend, state) in &backend_metrics.backend_rotation_state {
-            let backend = escape_prometheus_label(backend);
-            out.push_str(&format!(
-                "impulse_backend_client_rotations{{backend=\"{}\"}} {}\n",
-                backend, state.rotations
-            ));
-        }
-        for (key, count) in &backend_metrics.backend_connect_attempts {
-            let backend = escape_prometheus_label(&key.backend);
-            let hostname = escape_prometheus_label(&key.hostname);
-            let resolved_addr = escape_prometheus_label(&key.resolved_addr);
-            out.push_str(&format!(
-                "impulse_backend_connect_attempt_total{{backend=\"{}\",hostname=\"{}\",resolved_addr=\"{}\"}} {}\n",
-                backend, hostname, resolved_addr, count
-            ));
-        }
+        self.append_cached_jwt_jwks_metrics_families(&mut out);
+        self.append_cached_backend_metrics_families(&mut out);
         out.push_str(
             "# HELP impulse_upstream_requests_total Total completed requests grouped by upstream, status class, and outcome.\n",
         );
@@ -1078,138 +1328,7 @@ impl Metrics {
                 upstream, outcome, stats.count
             ));
         }
-        out.push_str(
-            "# HELP impulse_route_latency_sample_every Route latency histogram sampling interval (1 = every request).\n",
-        );
-        out.push_str("# TYPE impulse_route_latency_sample_every gauge\n");
-        out.push_str(&format!(
-            "impulse_route_latency_sample_every {}\n",
-            self.route_latency_sample_every
-        ));
-
-        let mut snapshot: Vec<(String, RouteStats)> = self
-            .route_labels
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, route)| {
-                self.route_stats
-                    .get(idx)
-                    .map(|stats| (route.clone(), stats.snapshot()))
-            })
-            .collect();
-        snapshot.sort_by(|(left, _), (right, _)| left.cmp(right));
-
-        for (route, stats) in snapshot {
-            let route = escape_prometheus_label(&route);
-            out.push_str(&format!(
-                "impulse_route_requests_total{{route=\"{}\"}} {}\n",
-                route, stats.requests_total
-            ));
-            out.push_str(&format!(
-                "impulse_route_success_total{{route=\"{}\"}} {}\n",
-                route, stats.success
-            ));
-            out.push_str(&format!(
-                "impulse_route_failure_total{{route=\"{}\"}} {}\n",
-                route, stats.failure
-            ));
-            out.push_str(&format!(
-                "impulse_route_timeout_total{{route=\"{}\"}} {}\n",
-                route, stats.timeout
-            ));
-            out.push_str(&format!(
-                "impulse_route_rate_limited_total{{route=\"{}\"}} {}\n",
-                route, stats.rate_limited
-            ));
-            out.push_str(&format!(
-                "impulse_route_backend_error_total{{route=\"{}\"}} {}\n",
-                route, stats.backend_error
-            ));
-            out.push_str(&format!(
-                "impulse_route_overload_shed_total{{route=\"{}\"}} {}\n",
-                route, stats.overload_shed
-            ));
-            out.push_str(&format!(
-                "impulse_route_latency_ms_p50{{route=\"{}\"}} {:.2}\n",
-                route,
-                percentile_ms(&stats, 0.50)
-            ));
-            out.push_str(&format!(
-                "impulse_route_latency_ms_p95{{route=\"{}\"}} {:.2}\n",
-                route,
-                percentile_ms(&stats, 0.95)
-            ));
-            out.push_str(&format!(
-                "impulse_route_latency_ms_p99{{route=\"{}\"}} {:.2}\n",
-                route,
-                percentile_ms(&stats, 0.99)
-            ));
-        }
-
-        let mut worker_snapshot: Vec<(String, WorkerStats)> = self
-            .worker_labels
-            .iter()
-            .enumerate()
-            .filter_map(|(idx, worker)| {
-                self.worker_stats
-                    .get(idx)
-                    .map(|stats| (worker.clone(), stats.snapshot()))
-            })
-            .collect();
-        worker_snapshot.sort_by(|(left, _), (right, _)| left.cmp(right));
-
-        out.push_str(
-            "# HELP impulse_worker_requests_total Total requests handled by each worker thread.\n",
-        );
-        out.push_str("# TYPE impulse_worker_requests_total counter\n");
-        out.push_str(
-            "# HELP impulse_worker_requests_success Total successful requests by worker thread.\n",
-        );
-        out.push_str("# TYPE impulse_worker_requests_success counter\n");
-        out.push_str(
-            "# HELP impulse_worker_requests_failure Total failed requests by worker thread.\n",
-        );
-        out.push_str("# TYPE impulse_worker_requests_failure counter\n");
-        out.push_str(
-            "# HELP impulse_worker_ingress_packets_total Total ingress packets by worker thread.\n",
-        );
-        out.push_str("# TYPE impulse_worker_ingress_packets_total counter\n");
-        out.push_str(
-            "# HELP impulse_worker_ingress_queue_drops Total ingress queue drops by worker thread.\n",
-        );
-        out.push_str("# TYPE impulse_worker_ingress_queue_drops counter\n");
-        out.push_str(
-            "# HELP impulse_worker_ingress_queue_drop_bytes Total ingress queue drop bytes by worker thread.\n",
-        );
-        out.push_str("# TYPE impulse_worker_ingress_queue_drop_bytes counter\n");
-
-        for (worker, stats) in worker_snapshot {
-            let worker = escape_prometheus_label(&worker);
-            out.push_str(&format!(
-                "impulse_worker_requests_total{{worker=\"{}\"}} {}\n",
-                worker, stats.requests_total
-            ));
-            out.push_str(&format!(
-                "impulse_worker_requests_success{{worker=\"{}\"}} {}\n",
-                worker, stats.requests_success
-            ));
-            out.push_str(&format!(
-                "impulse_worker_requests_failure{{worker=\"{}\"}} {}\n",
-                worker, stats.requests_failure
-            ));
-            out.push_str(&format!(
-                "impulse_worker_ingress_packets_total{{worker=\"{}\"}} {}\n",
-                worker, stats.ingress_packets_total
-            ));
-            out.push_str(&format!(
-                "impulse_worker_ingress_queue_drops{{worker=\"{}\"}} {}\n",
-                worker, stats.ingress_queue_drops
-            ));
-            out.push_str(&format!(
-                "impulse_worker_ingress_queue_drop_bytes{{worker=\"{}\"}} {}\n",
-                worker, stats.ingress_queue_drop_bytes
-            ));
-        }
+        self.append_cached_route_worker_metrics_families(&mut out);
 
         out
     }

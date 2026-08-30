@@ -118,14 +118,35 @@ fn response_headers_with_defaults(
     response_headers_with_defaults_and_extra(status, body, headers, None)
 }
 
+#[cfg(test)]
 fn response_headers_with_defaults_and_extra(
     status: http::StatusCode,
     body: &[u8],
     headers: &[(String, String)],
     extra_header: Option<(&str, &str)>,
 ) -> Vec<quiche::h3::Header> {
+    response_headers_with_defaults_and_extra_bytes(
+        status,
+        body,
+        headers
+            .iter()
+            .map(|(name, value)| (name.as_bytes(), value.as_bytes())),
+        extra_header.map(|(name, value)| (name.as_bytes(), value.as_bytes())),
+    )
+}
+
+fn response_headers_with_defaults_and_extra_bytes<'a, I>(
+    status: http::StatusCode,
+    body: &[u8],
+    headers: I,
+    extra_header: Option<(&'a [u8], &'a [u8])>,
+) -> Vec<quiche::h3::Header>
+where
+    I: IntoIterator<Item = (&'a [u8], &'a [u8])>,
+{
+    let headers = headers.into_iter();
     let mut resp_headers =
-        Vec::with_capacity(headers.len() + usize::from(extra_header.is_some()) + 3);
+        Vec::with_capacity(headers.size_hint().0 + usize::from(extra_header.is_some()) + 3);
     resp_headers.push(quiche::h3::Header::new(
         b":status",
         status.as_str().as_bytes(),
@@ -133,22 +154,22 @@ fn response_headers_with_defaults_and_extra(
     let mut has_content_type = false;
     let mut has_content_length = false;
     for (name, value) in headers {
-        if name.eq_ignore_ascii_case(http::header::CONTENT_TYPE.as_str()) {
+        if name.eq_ignore_ascii_case(http::header::CONTENT_TYPE.as_str().as_bytes()) {
             has_content_type = true;
         }
-        if name.eq_ignore_ascii_case(http::header::CONTENT_LENGTH.as_str()) {
+        if name.eq_ignore_ascii_case(http::header::CONTENT_LENGTH.as_str().as_bytes()) {
             has_content_length = true;
         }
-        resp_headers.push(quiche::h3::Header::new(name.as_bytes(), value.as_bytes()));
+        resp_headers.push(quiche::h3::Header::new(name, value));
     }
     if let Some((name, value)) = extra_header {
-        if name.eq_ignore_ascii_case(http::header::CONTENT_TYPE.as_str()) {
+        if name.eq_ignore_ascii_case(http::header::CONTENT_TYPE.as_str().as_bytes()) {
             has_content_type = true;
         }
-        if name.eq_ignore_ascii_case(http::header::CONTENT_LENGTH.as_str()) {
+        if name.eq_ignore_ascii_case(http::header::CONTENT_LENGTH.as_str().as_bytes()) {
             has_content_length = true;
         }
-        resp_headers.push(quiche::h3::Header::new(name.as_bytes(), value.as_bytes()));
+        resp_headers.push(quiche::h3::Header::new(name, value));
     }
     if !has_content_type {
         resp_headers.push(quiche::h3::Header::new(b"content-type", b"text/plain"));
@@ -163,6 +184,64 @@ fn response_headers_with_defaults_and_extra(
 }
 
 impl QUICListener {
+    #[allow(clippy::too_many_arguments)]
+    fn fail_response_start_state_transition(
+        stream_id: u64,
+        req: &mut RequestEnvelope,
+        h3: &mut quiche::h3::Connection,
+        quic: &mut quiche::Connection,
+        shared_ctx: &ForwardingSharedCtx<'_>,
+        status: http::StatusCode,
+        headers_sent: bool,
+        attempted: &'static str,
+    ) -> Result<bool, ProxyError> {
+        let metrics = shared_ctx.metrics.as_ref();
+        let proxy_err = ProxyError::Transport(format!(
+            "invalid request execution transition: {} from {:?}",
+            attempted,
+            req.phase(),
+        ));
+        let _ = crate::runtime::connection::outcome::observe_proxy_error_outcome(
+            metrics,
+            Self::request_outcome_route_target(req),
+            Self::request_outcome_backend_target(req),
+            req.start.elapsed(),
+            Some(http::StatusCode::INTERNAL_SERVER_ERROR),
+            &proxy_err,
+            None,
+        );
+        error!(
+            "response start state transition failed on stream {}: {} from {:?}",
+            stream_id,
+            attempted,
+            req.phase(),
+        );
+        if !headers_sent {
+            Self::send_simple_response(
+                h3,
+                quic,
+                stream_id,
+                http::StatusCode::INTERNAL_SERVER_ERROR,
+                b"internal server error\n",
+            )
+            .map_err(|err| {
+                ProxyError::Protocol(format!(
+                    "failed to send internal error response after state transition failure: {:?}",
+                    err
+                ))
+            })?;
+            req.response_status = Some(http::StatusCode::INTERNAL_SERVER_ERROR.as_u16());
+        } else {
+            req.response_status = Some(status.as_u16());
+            let _ = h3.send_body(quic, stream_id, b"", true);
+        }
+        req.transition_to_terminal_with_cleanup(
+            TerminalReason::BackendFailed(BackendFailureReason::UpstreamProtocol),
+            metrics,
+        );
+        Ok(true)
+    }
+
     fn response_start_header_block(
         status: http::StatusCode,
         headers: &[(Vec<u8>, Vec<u8>)],
@@ -696,8 +775,14 @@ impl QUICListener {
         headers: &[(String, String)],
         extra_header: Option<(&str, &str)>,
     ) -> Result<(), quiche::h3::Error> {
-        let resp_headers =
-            response_headers_with_defaults_and_extra(status, body, headers, extra_header);
+        let resp_headers = response_headers_with_defaults_and_extra_bytes(
+            status,
+            body,
+            headers
+                .iter()
+                .map(|(name, value)| (name.as_bytes(), value.as_bytes())),
+            extra_header.map(|(name, value)| (name.as_bytes(), value.as_bytes())),
+        );
         h3.send_response(quic, stream_id, &resp_headers, false)?;
         h3.send_body(quic, stream_id, body, true)?;
         Ok(())
@@ -1038,11 +1123,22 @@ impl QUICListener {
             } => {
                 Self::send_response_start_headers(h3, quic, stream_id, &metadata, false)?;
                 req.response_status = Some(metadata.status.as_u16());
-                req.transition_to_streaming_response(
+                if let Err(state_err) = req.transition_to_streaming_response(
                     response_chunk_rx,
                     ResponseEmissionState::HeadersSent,
                     metadata.status,
-                );
+                ) {
+                    return Self::fail_response_start_state_transition(
+                        stream_id,
+                        req,
+                        h3,
+                        quic,
+                        shared_ctx,
+                        metadata.status,
+                        true,
+                        state_err.attempted(),
+                    );
+                }
                 Self::observe_response_start_transition(req, &observation, shared_ctx);
                 Ok(false)
             }
@@ -1061,7 +1157,7 @@ impl QUICListener {
                 let chunk_rx =
                     Self::spawn_response_body_pump(req, response_body, deferred_start, pump);
                 req.response_status = Some(response_status.as_u16());
-                req.transition_to_streaming_response(
+                if let Err(state_err) = req.transition_to_streaming_response(
                     chunk_rx,
                     if response_headers_sent {
                         ResponseEmissionState::HeadersSent
@@ -1069,7 +1165,18 @@ impl QUICListener {
                         ResponseEmissionState::DeferredHeaders
                     },
                     response_status,
-                );
+                ) {
+                    return Self::fail_response_start_state_transition(
+                        stream_id,
+                        req,
+                        h3,
+                        quic,
+                        shared_ctx,
+                        response_status,
+                        response_headers_sent,
+                        state_err.attempted(),
+                    );
+                }
                 Self::observe_response_start_transition(req, &observation, shared_ctx);
                 Ok(false)
             }
