@@ -2362,7 +2362,9 @@ async fn control_api_reload_emits_attempt_and_result_audit_events() {
     )
     .await;
 
-    let events = read_audit_events(&audit_path);
+    let events = wait_for_audit_event(&audit_path, |event| {
+        event["action"] == "runtime_reload.result"
+    });
     assert!(
         events
             .iter()
@@ -2406,7 +2408,9 @@ async fn control_api_restart_emits_attempt_and_result_audit_events() {
     );
     assert_eq!(response.status(), StatusCode::ACCEPTED);
 
-    let events = read_audit_events(&audit_path);
+    let events = wait_for_audit_event(&audit_path, |event| {
+        event["action"] == "runtime_restart.result"
+    });
     assert!(
         events
             .iter()
