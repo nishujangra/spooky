@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, HashSet, hash_map::RandomState},
-    hash::{BuildHasher, Hash, Hasher},
+    hash::BuildHasher,
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -83,9 +83,7 @@ impl ScopedRateLimitBucketStore {
     }
 
     fn shard_index(&self, storage_key: &str) -> usize {
-        let mut hasher = self.hash_builder.build_hasher();
-        storage_key.hash(&mut hasher);
-        (hasher.finish() as usize) % self.shards.len()
+        (self.hash_builder.hash_one(storage_key) as usize) % self.shards.len()
     }
 
     fn reserve_bucket_slot(&self) -> bool {

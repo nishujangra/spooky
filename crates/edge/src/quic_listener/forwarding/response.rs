@@ -118,6 +118,7 @@ fn response_headers_with_defaults(
     response_headers_with_defaults_and_extra(status, body, headers, None)
 }
 
+#[cfg(test)]
 fn response_headers_with_defaults_and_extra(
     status: http::StatusCode,
     body: &[u8],
