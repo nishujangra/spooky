@@ -37,7 +37,6 @@ pub(in crate::quic_listener) struct ForwardingExecutionCtx<'a> {
     pub(in crate::quic_listener) backend_endpoints: Arc<HashMap<String, BackendEndpoint>>,
     pub(in crate::quic_listener) upstream_inflight: &'a HashMap<String, Arc<Semaphore>>,
     pub(in crate::quic_listener) global_inflight: Arc<Semaphore>,
-    pub(in crate::quic_listener) backend_timeout: Duration,
     pub(in crate::quic_listener) inflight_acquire_wait: Duration,
 }
 

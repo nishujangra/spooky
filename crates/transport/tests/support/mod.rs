@@ -14,11 +14,11 @@ use std::{
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full, combinators::BoxBody};
-use hyper::{Request, Response, body::Incoming, service::service_fn};
+use hyper::{Request, Response, StatusCode, body::Incoming, service::service_fn};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use impulse_config::runtime::{RuntimeBackendConnectionPolicy, RuntimeBackendTransportKind};
 use impulse_transport::{SharedDnsResolver, UpstreamTransportPool};
-use tokio::net::TcpListener;
+use tokio::{io::AsyncReadExt, net::TcpListener};
 
 #[derive(Clone, Copy)]
 enum TestServerProtocol {
@@ -101,6 +101,18 @@ pub(crate) fn request_to_backend(
     backend: &str,
 ) -> Request<BoxBody<Bytes, std::convert::Infallible>> {
     request(&format!("http://{backend}/"))
+}
+
+pub(crate) fn websocket_upgrade_request_to_backend(
+    backend: &str,
+) -> Request<BoxBody<Bytes, std::convert::Infallible>> {
+    Request::builder()
+        .method("GET")
+        .uri(format!("http://{backend}/"))
+        .header("connection", "upgrade")
+        .header("upgrade", "websocket")
+        .body(Full::new(Bytes::new()).boxed())
+        .expect("websocket upgrade request")
 }
 
 pub(crate) fn reserve_unused_port() -> u16 {
@@ -285,4 +297,69 @@ async fn start_server(
     });
 
     Ok(port)
+}
+
+pub(crate) async fn start_h1_upgrade_server(
+    tracker: Option<Arc<ConcurrencyTracker>>,
+) -> std::io::Result<String> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let backend = backend_address(listener.local_addr()?.port());
+
+    tokio::spawn(async move {
+        loop {
+            let (stream, _) = match listener.accept().await {
+                Ok(v) => v,
+                Err(_) => break,
+            };
+            let tracker = tracker.clone();
+            let service = service_fn(move |mut req: Request<Incoming>| {
+                let tracker = tracker.clone();
+                async move {
+                    let upgrade_requested = req
+                        .headers()
+                        .get("upgrade")
+                        .and_then(|value| value.to_str().ok())
+                        .is_some_and(|value| value.eq_ignore_ascii_case("websocket"));
+                    if upgrade_requested {
+                        if let Some(tracker) = &tracker {
+                            tracker.enter();
+                        }
+                        let on_upgrade = hyper::upgrade::on(&mut req);
+                        tokio::spawn(async move {
+                            if let Ok(upgraded) = on_upgrade.await {
+                                let mut upgraded = TokioIo::new(upgraded);
+                                let mut buf = [0u8; 16];
+                                let _ = upgraded.read(&mut buf).await;
+                            }
+                            if let Some(tracker) = &tracker {
+                                tracker.exit();
+                            }
+                        });
+                        Ok::<_, std::convert::Infallible>(
+                            Response::builder()
+                                .status(StatusCode::SWITCHING_PROTOCOLS)
+                                .header("connection", "upgrade")
+                                .header("upgrade", "websocket")
+                                .body(Full::new(Bytes::new()))
+                                .expect("upgrade response"),
+                        )
+                    } else {
+                        Ok::<_, std::convert::Infallible>(Response::new(Full::new(
+                            Bytes::from_static(b"ok"),
+                        )))
+                    }
+                }
+            });
+
+            tokio::spawn(async move {
+                let io = TokioIo::new(stream);
+                let _ = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(io, service)
+                    .with_upgrades()
+                    .await;
+            });
+        }
+    });
+
+    Ok(backend)
 }

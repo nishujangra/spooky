@@ -1,4 +1,4 @@
-use std::{fs::File, io::Read};
+use std::{ffi::OsStr, fs::File, io::Read, path::Path};
 
 use super::*;
 use crate::quic_listener::control_api::security::{
@@ -255,22 +255,53 @@ impl QUICListener {
             ))
         })?;
 
-        builder
-            .set_certificate_chain_file(&identity.cert_path)
-            .map_err(|err| {
+        let cert_pem = Self::read_tls_pem_file_with_limit(
+            &identity.cert_path,
+            "listen.tls.default_identity.cert",
+        )?;
+        let mut certs = X509::stack_from_pem(&cert_pem).map_err(|err| {
+            ProxyError::Tls(format!(
+                "failed to parse certificate '{}': {}",
+                identity.cert_path, err
+            ))
+        })?;
+        if certs.is_empty() {
+            return Err(ProxyError::Tls(format!(
+                "certificate '{}' contains no certificates",
+                identity.cert_path
+            )));
+        }
+        builder.set_certificate(&certs.remove(0)).map_err(|err| {
+            ProxyError::Tls(format!(
+                "failed to load certificate '{}': {}",
+                identity.cert_path, err
+            ))
+        })?;
+        for cert in certs {
+            builder.add_extra_chain_cert(cert).map_err(|err| {
                 ProxyError::Tls(format!(
-                    "failed to load certificate '{}': {}",
+                    "failed to load certificate chain '{}': {}",
                     identity.cert_path, err
                 ))
             })?;
-        builder
-            .set_private_key_file(&identity.key_path, SslFiletype::PEM)
-            .map_err(|err| {
-                ProxyError::Tls(format!(
-                    "failed to load key '{}': {}",
-                    identity.key_path, err
-                ))
-            })?;
+        }
+
+        let key_pem = Self::read_tls_pem_file_with_limit(
+            &identity.key_path,
+            "listen.tls.default_identity.key",
+        )?;
+        let key = PKey::private_key_from_pem(&key_pem).map_err(|err| {
+            ProxyError::Tls(format!(
+                "failed to parse key '{}': {}",
+                identity.key_path, err
+            ))
+        })?;
+        builder.set_private_key(&key).map_err(|err| {
+            ProxyError::Tls(format!(
+                "failed to load key '{}': {}",
+                identity.key_path, err
+            ))
+        })?;
 
         if client_auth.enabled {
             let client_auth_ca = client_auth_ca.ok_or_else(|| {
@@ -278,8 +309,38 @@ impl QUICListener {
                     "listen.tls.client_auth.ca_file is required when mTLS is enabled".to_string(),
                 )
             })?;
+            let ca_pem = Self::read_tls_pem_file_with_limit(
+                &client_auth_ca.ca_file,
+                "listen.tls.client_auth.ca_file",
+            )?;
+            let ca_certs = X509::stack_from_pem(&ca_pem).map_err(|err| {
+                ProxyError::Tls(format!(
+                    "failed to parse listen.tls.client_auth.ca_file '{}': {}",
+                    client_auth_ca.ca_file, err
+                ))
+            })?;
+            let mut verify_store = boring::x509::store::X509StoreBuilder::new().map_err(|err| {
+                ProxyError::Tls(format!(
+                    "failed to initialize listen.tls.client_auth.ca_file '{}': {}",
+                    client_auth_ca.ca_file, err
+                ))
+            })?;
+            for cert in ca_certs {
+                verify_store.add_cert(cert.clone()).map_err(|err| {
+                    ProxyError::Tls(format!(
+                        "failed to load listen.tls.client_auth.ca_file '{}': {}",
+                        client_auth_ca.ca_file, err
+                    ))
+                })?;
+                builder.add_client_ca(&cert).map_err(|err| {
+                    ProxyError::Tls(format!(
+                        "failed to advertise client CA from listen.tls.client_auth.ca_file '{}': {}",
+                        client_auth_ca.ca_file, err
+                    ))
+                })?;
+            }
             builder
-                .set_ca_file(&client_auth_ca.ca_file)
+                .set_verify_cert_store(verify_store.build())
                 .map_err(|err| {
                     ProxyError::Tls(format!(
                         "failed to load listen.tls.client_auth.ca_file '{}': {}",
@@ -416,10 +477,8 @@ impl QUICListener {
         path: &str,
         field_name: &str,
     ) -> Result<Vec<CertificateDer<'static>>, ProxyError> {
-        CertificateDer::pem_file_iter(path)
-            .map_err(|err| {
-                ProxyError::Tls(format!("failed to read {field_name} '{}': {}", path, err))
-            })?
+        let pem = Self::read_tls_pem_file_with_limit(path, field_name)?;
+        CertificateDer::pem_slice_iter(&pem)
             .collect::<Result<_, _>>()
             .map_err(|err| ProxyError::Tls(format!("failed to parse {field_name} PEM: {err}")))
     }
@@ -428,7 +487,8 @@ impl QUICListener {
         path: &str,
         field_name: &str,
     ) -> Result<PrivateKeyDer<'static>, ProxyError> {
-        PrivateKeyDer::from_pem_file(path).map_err(|err| {
+        let pem = Self::read_tls_pem_file_with_limit(path, field_name)?;
+        PrivateKeyDer::from_pem_slice(&pem).map_err(|err| {
             ProxyError::Tls(format!(
                 "failed to parse {field_name} PEM from '{}': {err}",
                 path
@@ -535,21 +595,8 @@ impl QUICListener {
                 "listen.tls.client_auth.ca_file is required when mTLS is enabled".to_string(),
             )
         })?;
-        let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
-            CertificateDer::pem_file_iter(ca_file)
-                .map_err(|err| {
-                    ProxyError::Tls(format!(
-                        "failed to read listen.tls.client_auth.ca_file '{}': {}",
-                        ca_file, err
-                    ))
-                })?
-                .collect::<Result<_, _>>()
-                .map_err(|err| {
-                    ProxyError::Tls(format!(
-                        "failed to parse listen.tls.client_auth.ca_file PEM: {}",
-                        err
-                    ))
-                })?;
+        let certs =
+            Self::load_tls_cert_chain_from_pem_file(ca_file, "listen.tls.client_auth.ca_file")?;
         let mut roots = RootCertStore::empty();
         for cert in certs {
             roots.add(cert).map_err(|err| {
@@ -572,15 +619,7 @@ impl QUICListener {
         field_name: &str,
         roots: &mut RootCertStore,
     ) -> Result<usize, ProxyError> {
-        let certs: Vec<rustls::pki_types::CertificateDer<'static>> =
-            CertificateDer::pem_file_iter(path)
-                .map_err(|err| {
-                    ProxyError::Tls(format!("failed to read {field_name} '{path}': {err}"))
-                })?
-                .collect::<Result<_, _>>()
-                .map_err(|err| {
-                    ProxyError::Tls(format!("failed to parse {field_name} PEM '{path}': {err}"))
-                })?;
+        let certs = Self::load_tls_cert_chain_from_pem_file(path, field_name)?;
         let mut count = 0usize;
         for cert in certs {
             roots.add(cert).map_err(|err| {
@@ -618,17 +657,21 @@ impl QUICListener {
                     ca_dir, err
                 ))
             })?;
-            for entry in entries {
-                let entry = entry.map_err(|err| {
+            let mut pem_files = entries
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|err| {
                     ProxyError::Tls(format!(
                         "failed to read entry in observability.control_api.tls.client_auth.ca_dir '{}': {}",
                         ca_dir, err
                     ))
-                })?;
-                let path = entry.path();
-                if !path.is_file() {
-                    continue;
-                }
+                })?
+                .into_iter()
+                .map(|entry| entry.path())
+                .filter(|path| path.is_file() && Self::is_pem_like_path(path))
+                .collect::<Vec<_>>();
+            pem_files.sort();
+
+            for path in pem_files {
                 let path_str = path.to_string_lossy().into_owned();
                 Self::load_root_store_from_pem_file(
                     &path_str,
@@ -646,6 +689,13 @@ impl QUICListener {
         }
 
         Ok(Some(Arc::new(roots)))
+    }
+
+    fn is_pem_like_path(path: &Path) -> bool {
+        matches!(
+            path.extension().and_then(OsStr::to_str),
+            Some("pem" | "crt" | "cer" | "PEM" | "CRT" | "CER")
+        )
     }
 
     pub(super) fn load_listener_tls_material(
@@ -1104,9 +1154,47 @@ impl QUICListener {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
+    use impulse_config::config::ControlApiClientAuthMode;
+    use impulse_config::{config::ClientAuth, runtime::RuntimeTlsIdentity};
+    use rcgen::{Certificate, CertificateParams, SanType};
+    use rustls::RootCertStore;
     use tempfile::tempdir;
 
-    use super::{MAX_TLS_PEM_BYTES, QUICListener};
+    use super::{LoadedClientAuthCa, MAX_TLS_PEM_BYTES, QUICListener};
+    use crate::quic_listener::control_api::security::{
+        ControlApiClientAuthPolicy, ControlApiClientCaMaterial, ControlApiClientVerifierState,
+    };
+
+    fn write_test_identity_files(dir: &std::path::Path) -> RuntimeTlsIdentity {
+        let mut params = CertificateParams::new(vec!["example.com".to_string()]);
+        params
+            .subject_alt_names
+            .push(SanType::DnsName("example.com".to_string()));
+        let cert = Certificate::from_params(params).expect("certificate");
+        let cert_path = dir.join("listener.pem");
+        let key_path = dir.join("listener.key.pem");
+        std::fs::write(&cert_path, cert.serialize_pem().expect("serialize cert")).expect("cert");
+        std::fs::write(&key_path, cert.serialize_private_key_pem()).expect("key");
+        RuntimeTlsIdentity {
+            cert_path: cert_path.to_string_lossy().to_string(),
+            key_path: key_path.to_string_lossy().to_string(),
+        }
+    }
+
+    fn control_api_client_auth_policy(
+        ca_file: Option<String>,
+        ca_dir: Option<String>,
+    ) -> ControlApiClientAuthPolicy {
+        ControlApiClientAuthPolicy {
+            mode: ControlApiClientAuthMode::Required,
+            verifier: ControlApiClientVerifierState::Configured(ControlApiClientCaMaterial {
+                ca_file,
+                ca_dir,
+            }),
+        }
+    }
 
     #[test]
     fn read_tls_pem_file_with_limit_rejects_oversized_file() {
@@ -1122,5 +1210,128 @@ mod tests {
 
         let message = err.to_string();
         assert!(message.contains("exceeds the maximum supported PEM size"));
+    }
+
+    #[test]
+    fn default_quic_identity_rejects_oversized_cert_file() {
+        let dir = tempdir().expect("tempdir");
+        let identity = write_test_identity_files(dir.path());
+        std::fs::write(
+            &identity.cert_path,
+            vec![b'A'; (MAX_TLS_PEM_BYTES as usize) + 1],
+        )
+        .expect("oversized cert");
+
+        let err = match QUICListener::build_quic_ssl_context_builder_for_identity(
+            &identity,
+            &ClientAuth::default(),
+            None,
+        ) {
+            Ok(_) => panic!("oversized default cert must be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("exceeds the maximum supported PEM size")
+        );
+    }
+
+    #[test]
+    fn default_quic_identity_rejects_oversized_key_file() {
+        let dir = tempdir().expect("tempdir");
+        let identity = write_test_identity_files(dir.path());
+        std::fs::write(
+            &identity.key_path,
+            vec![b'A'; (MAX_TLS_PEM_BYTES as usize) + 1],
+        )
+        .expect("oversized key");
+
+        let err = match QUICListener::build_quic_ssl_context_builder_for_identity(
+            &identity,
+            &ClientAuth::default(),
+            None,
+        ) {
+            Ok(_) => panic!("oversized default key must be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("exceeds the maximum supported PEM size")
+        );
+    }
+
+    #[test]
+    fn default_quic_identity_rejects_oversized_client_auth_ca_file() {
+        let dir = tempdir().expect("tempdir");
+        let identity = write_test_identity_files(dir.path());
+        let ca_path = dir.path().join("ca.pem");
+        std::fs::write(&ca_path, vec![b'A'; (MAX_TLS_PEM_BYTES as usize) + 1])
+            .expect("oversized ca");
+        let client_auth = ClientAuth {
+            enabled: true,
+            require_client_cert: true,
+            ca_file: Some(ca_path.to_string_lossy().to_string()),
+        };
+        let loaded_ca = LoadedClientAuthCa {
+            ca_file: ca_path.to_string_lossy().to_string(),
+            certificate_count: 0,
+            roots: Arc::new(RootCertStore::empty()),
+        };
+
+        let err = match QUICListener::build_quic_ssl_context_builder_for_identity(
+            &identity,
+            &client_auth,
+            Some(&loaded_ca),
+        ) {
+            Ok(_) => panic!("oversized client-auth ca must be rejected"),
+            Err(err) => err,
+        };
+
+        assert!(
+            err.to_string()
+                .contains("exceeds the maximum supported PEM size")
+        );
+    }
+
+    #[test]
+    fn control_api_client_auth_ca_dir_rejects_oversized_pem_entry() {
+        let dir = tempdir().expect("tempdir");
+        let ca_dir = dir.path().join("ca.d");
+        std::fs::create_dir_all(&ca_dir).expect("create ca dir");
+        std::fs::write(
+            ca_dir.join("huge.pem"),
+            vec![b'A'; (MAX_TLS_PEM_BYTES as usize) + 1],
+        )
+        .expect("write huge pem");
+
+        let err = QUICListener::load_control_api_client_auth_roots(
+            &control_api_client_auth_policy(None, Some(ca_dir.to_string_lossy().to_string())),
+        )
+        .expect_err("oversized ca_dir entry must be rejected");
+
+        assert!(
+            err.to_string()
+                .contains("exceeds the maximum supported PEM size")
+        );
+    }
+
+    #[test]
+    fn control_api_client_auth_ca_dir_ignores_non_pem_entries() {
+        let dir = tempdir().expect("tempdir");
+        let ca_dir = dir.path().join("ca.d");
+        std::fs::create_dir_all(&ca_dir).expect("create ca dir");
+        std::fs::write(ca_dir.join("notes.txt"), b"not a pem").expect("write txt");
+        let identity = write_test_identity_files(&ca_dir);
+        std::fs::rename(&identity.cert_path, ca_dir.join("root.pem")).expect("rename cert");
+
+        let roots = QUICListener::load_control_api_client_auth_roots(
+            &control_api_client_auth_policy(None, Some(ca_dir.to_string_lossy().to_string())),
+        )
+        .expect("load roots")
+        .expect("configured roots");
+
+        assert_eq!(roots.len(), 1);
     }
 }

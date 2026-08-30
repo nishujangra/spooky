@@ -5,13 +5,13 @@ use bytes::Bytes;
 use http_body_util::BodyExt;
 use impulse_config::{
     config::{
-        Backend, ClientAuth, Config as ImpulseConfigConfig, ControlApiAuditSink,
+        ApiKeyAuth, Backend, ClientAuth, Config as ImpulseConfigConfig, ControlApiAuditSink,
         ControlApiBearerToken, ControlApiClientAuthMode, ControlApiRole, DistributedQuotaPolicy,
         DistributedQuotaSelector, DistributedQuotaSelectorSource, DistributedQuotaWindow,
         JwksStartupBehavior, JwtAlgorithm, JwtAuth, Listen, LoadBalancing, Log, LogFormat,
         Observability, Performance, QuotaBackendFailurePolicy, QuotaCounterBackend,
-        QuotaEnforcementMode, Resilience, RouteMatch, SecretProvider, Security, Tls, Upstream,
-        UpstreamTls,
+        QuotaEnforcementMode, Resilience, RouteAuth, RouteMatch, SecretProvider, Security, Tls,
+        Upstream, UpstreamTls,
     },
     runtime::{RuntimeConfig, RuntimeJwtVerificationKey},
 };
@@ -1649,6 +1649,84 @@ fn control_api_dual_auth_identity_clears_actor_id_when_principals_disagree() {
 }
 
 #[test]
+fn control_api_dual_auth_identity_cross_checks_bearer_actor_id_against_mtls_san() {
+    let identity_source = super::security::ControlApiIdentitySourcePolicy {
+        kind: "mtls_san_uri".to_string(),
+        role_attribute: None,
+    };
+    let request_context = super::admin_identity::ControlApiRequestContext {
+        peer_addr: "127.0.0.1:9443".parse().expect("peer socket addr"),
+        mtls_identity: Some(super::admin_identity::AdminMtlsIdentity {
+            subject: Some("CN=alice".to_string()),
+            common_name: Some("alice".to_string()),
+            san_dns: vec!["admin.example.com".to_string()],
+            san_uri: vec!["spiffe://alice".to_string()],
+            roles: Vec::new(),
+        }),
+        listener: Some("edge-primary".to_string()),
+        request_id: None,
+        trace_id: None,
+        span_id: None,
+    };
+    let token_match = super::admin_identity::AdminTokenMatch {
+        actor_id: Some("admin.example.com".to_string()),
+        role: super::admin_identity::AdminRole::Operator,
+    };
+
+    let identity = QUICListener::build_admin_identity(
+        Some(request_context),
+        Some(token_match),
+        Some(&identity_source),
+    )
+    .expect("dual auth identity");
+
+    assert_eq!(identity.actor_id.as_deref(), Some("admin.example.com"));
+    assert_eq!(
+        identity.roles,
+        vec![super::admin_identity::AdminRole::Operator]
+    );
+}
+
+#[test]
+fn control_api_dual_auth_identity_clears_bearer_actor_id_when_no_mtls_principal_matches() {
+    let identity_source = super::security::ControlApiIdentitySourcePolicy {
+        kind: "mtls_san_uri".to_string(),
+        role_attribute: None,
+    };
+    let request_context = super::admin_identity::ControlApiRequestContext {
+        peer_addr: "127.0.0.1:9443".parse().expect("peer socket addr"),
+        mtls_identity: Some(super::admin_identity::AdminMtlsIdentity {
+            subject: Some("CN=alice".to_string()),
+            common_name: Some("alice".to_string()),
+            san_dns: vec!["admin.example.com".to_string()],
+            san_uri: vec!["spiffe://alice".to_string()],
+            roles: Vec::new(),
+        }),
+        listener: Some("edge-primary".to_string()),
+        request_id: None,
+        trace_id: None,
+        span_id: None,
+    };
+    let token_match = super::admin_identity::AdminTokenMatch {
+        actor_id: Some("mallory".to_string()),
+        role: super::admin_identity::AdminRole::Operator,
+    };
+
+    let identity = QUICListener::build_admin_identity(
+        Some(request_context),
+        Some(token_match),
+        Some(&identity_source),
+    )
+    .expect("dual auth identity");
+
+    assert!(identity.actor_id.is_none());
+    assert_eq!(
+        identity.roles,
+        vec![super::admin_identity::AdminRole::Operator]
+    );
+}
+
+#[test]
 fn control_api_request_context_captures_operator_correlation_headers() {
     let request_context = super::admin_identity::ControlApiRequestContext {
         peer_addr: "127.0.0.1:9443".parse().expect("peer socket addr"),
@@ -1787,18 +1865,22 @@ async fn control_api_runtime_snapshot_includes_jwks_cache_visibility() {
     let jwks_url = "https://issuer.example.com/.well-known/jwks.json";
     let jwks_source_id = crate::quic_listener::admission::jwks_source_identity_for_test(jwks_url);
     let mut startup = test_config(cert, key);
-    startup
-        .upstream
-        .get_mut("api")
-        .expect("api upstream")
-        .auth
-        .jwt = Some(JwtAuth {
-        secret: String::new(),
-        allowed_algorithms: vec![JwtAlgorithm::Rs256],
-        jwks_url: Some(jwks_url.to_string()),
-        jwks_startup_behavior: JwksStartupBehavior::AllowDegraded,
-        ..JwtAuth::default()
-    });
+    startup.upstream.get_mut("api").expect("api upstream").auth = RouteAuth {
+        api_key: Some(ApiKeyAuth {
+            header_name: "x-api-key".to_string(),
+            keys: vec!["secret".to_string()],
+        }),
+        jwt: Some(JwtAuth {
+            secret: String::new(),
+            allowed_algorithms: vec![JwtAlgorithm::Rs256],
+            jwks_url: Some(jwks_url.to_string()),
+            jwks_startup_behavior: JwksStartupBehavior::AllowDegraded,
+            ..JwtAuth::default()
+        }),
+        external_auth: None,
+        required_scopes: vec!["payments:read".to_string()],
+        required_roles: vec!["operator".to_string()],
+    };
     crate::quic_listener::admission::prime_jwks_cache_for_test(
         jwks_url,
         false,
@@ -1821,8 +1903,22 @@ async fn control_api_runtime_snapshot_includes_jwks_cache_visibility() {
         .expect("auth providers");
     assert_eq!(providers.len(), 1);
     assert_eq!(providers[0]["upstream"], "api");
-    assert_eq!(providers[0]["api_key_configured"], false);
-    assert_eq!(providers[0]["external_auth_configured"], false);
+    assert!(
+        providers[0].get("api_key_configured").is_none(),
+        "runtime snapshot must not expose api key posture"
+    );
+    assert!(
+        providers[0].get("external_auth_configured").is_none(),
+        "runtime snapshot must not expose external auth posture"
+    );
+    assert!(
+        providers[0].get("required_scopes").is_none(),
+        "runtime snapshot must not expose required scopes"
+    );
+    assert!(
+        providers[0].get("required_roles").is_none(),
+        "runtime snapshot must not expose required roles"
+    );
     assert_eq!(providers[0]["jwt"]["provider_mode"], "remote_jwks");
     assert_eq!(providers[0]["jwt"]["jwks_configured"], true);
     assert_eq!(providers[0]["jwt"]["jwks_active"], true);
@@ -1850,7 +1946,10 @@ async fn control_api_runtime_snapshot_includes_jwks_cache_visibility() {
     let sources = payload["jwks"]["sources"].as_array().expect("jwks sources");
     assert_eq!(sources.len(), 1);
     assert_eq!(sources[0]["jwks_source_id"], jwks_source_id);
-    assert_eq!(sources[0]["jwks_endpoint"], "https://.../jwks.json");
+    assert!(
+        sources[0].get("jwks_endpoint").is_none(),
+        "runtime snapshot must not expose jwks endpoint"
+    );
     assert_eq!(sources[0]["startup_behavior"], "allow_degraded");
     assert_eq!(sources[0]["cache_state"], "fresh");
     assert_eq!(sources[0]["active_key_count"], 1);
@@ -1867,7 +1966,7 @@ async fn control_api_runtime_snapshot_includes_jwks_cache_visibility() {
 }
 
 #[tokio::test]
-async fn control_api_runtime_snapshot_sanitizes_jwks_endpoint_details() {
+async fn control_api_runtime_snapshot_omits_jwks_endpoint_details() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
     let jwks_url = "https://user:secret@issuer.internal.example.com/reload-require-ready.json?token=secret#fragment";
@@ -1890,9 +1989,9 @@ async fn control_api_runtime_snapshot_sanitizes_jwks_endpoint_details() {
     let sources = payload["jwks"]["sources"].as_array().expect("jwks sources");
 
     assert_eq!(sources.len(), 1);
-    assert_eq!(
-        sources[0]["jwks_endpoint"],
-        "https://.../reload-require-ready.json"
+    assert!(
+        sources[0].get("jwks_endpoint").is_none(),
+        "viewer payload must not expose jwks endpoint details"
     );
 }
 
@@ -2848,6 +2947,11 @@ async fn control_api_runtime_history_observability_view_stays_stable_without_adm
         serde_json::json!({
             "contract_version": "v1",
             "audit_schema_version": "v1",
+            "audit_sink": {
+                "enabled": false,
+                "target": "log",
+                "degraded": false
+            },
             "current_generation": 0,
             "documentation": {
                 "observability_contract": "docs/architecture/observability-contract.md",
@@ -3145,6 +3249,11 @@ async fn control_api_runtime_snapshot_exposes_quota_policy_and_backend_status() 
         serde_json::json!({
             "contract_version": "v1",
             "audit_schema_version": "v1",
+            "audit_sink": {
+                "enabled": false,
+                "target": "log",
+                "degraded": false
+            },
             "current_generation": 0,
             "documentation": {
                 "observability_contract": "docs/architecture/observability-contract.md",
@@ -3204,6 +3313,31 @@ async fn control_api_runtime_snapshot_exposes_quota_policy_and_backend_status() 
             },
             "recent_admin_actions": []
         })
+    );
+}
+
+#[tokio::test]
+async fn control_api_runtime_snapshot_surfaces_degraded_file_audit_sink() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let audit_path = dir.path().join("admin-audit.jsonl");
+    let mut config = test_config(cert, key);
+    config.observability.control_api.enabled = true;
+    config.observability.control_api.audit.enabled = true;
+    config.observability.control_api.audit.sink = ControlApiAuditSink::File;
+    config.observability.control_api.audit.file_path =
+        Some(audit_path.to_string_lossy().to_string());
+
+    super::audit::force_audit_writer_thread_spawn_failure_for_test(true);
+    let state = control_api_state_with_runtime_bundle(&config, &config);
+    let payload = json_body(QUICListener::render_control_api_runtime_snapshot(&state)).await;
+    super::audit::force_audit_writer_thread_spawn_failure_for_test(false);
+    assert_eq!(payload["observability"]["audit_sink"]["enabled"], true);
+    assert_eq!(payload["observability"]["audit_sink"]["target"], "file");
+    assert_eq!(payload["observability"]["audit_sink"]["degraded"], true);
+    assert_eq!(
+        payload["observability"]["audit_sink"]["reason"],
+        "writer_thread_start_failed"
     );
 }
 

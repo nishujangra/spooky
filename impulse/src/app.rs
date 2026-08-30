@@ -12,8 +12,9 @@ use impulse_config::{runtime::RuntimeConfig, validator::validate as validate_con
 use impulse_edge::{
     configure_async_runtime,
     runtime::{
-        bundle::RuntimeBundleHandle, listener::QUICListener,
-        privilege_drop::apply_process_privilege_drop,
+        bundle::RuntimeBundleHandle,
+        listener::QUICListener,
+        privilege_drop::{apply_process_privilege_drop, current_process_privilege_state},
     },
 };
 use log::{error, info, warn};
@@ -75,7 +76,7 @@ pub(crate) fn main_entry() {
     // before the runtime exists.
     runtime_guard::install_panic_hook();
 
-    let uid = unsafe { libc::getuid() };
+    let privilege_state = current_process_privilege_state();
 
     if let Err(err) = validate_config(&config_yaml) {
         fatal_startup_error(&format!("Configuration validation failed: {err}"), true, 1);
@@ -92,7 +93,7 @@ pub(crate) fn main_entry() {
         }
     };
 
-    if uid != 0
+    if !privilege_state.can_bind_privileged_ports()
         && runtime_config
             .listeners
             .iter()
@@ -131,7 +132,7 @@ pub(crate) fn main_entry() {
         runtime_config,
         config_yaml.log.clone(),
         config_yaml.observability.tracing.clone(),
-        uid,
+        privilege_state,
         config_path,
     ));
 }
@@ -140,7 +141,7 @@ async fn run(
     runtime_config: RuntimeConfig,
     log_config: impulse_config::config::Log,
     tracing_config: impulse_config::config::Tracing,
-    uid: libc::uid_t,
+    privilege_state: impulse_edge::runtime::privilege_drop::ProcessPrivilegeState,
     config_path: String,
 ) {
     // Must happen inside the runtime: the OTLP tonic exporter spawns a task on
@@ -180,7 +181,7 @@ async fn run(
         .listeners
         .iter()
         .any(|listener| listener.listen.port < 1024);
-    if uid != 0 && binds_privileged_port {
+    if !privilege_state.can_bind_privileged_ports() && binds_privileged_port {
         fatal_startup_error(
             "binding a privileged port requires root or CAP_NET_BIND_SERVICE. Use ports >= 1024 for unprivileged startup.",
             true,
@@ -220,7 +221,7 @@ async fn run(
     }
 
     log_listener_startup(&runtime_config, &listener_groups);
-    apply_privilege_drop(uid, &runtime_config);
+    apply_privilege_drop(privilege_state, &runtime_config);
 
     let mut worker_failed = false;
     while !shutdown.load(Ordering::Relaxed) {
@@ -303,8 +304,11 @@ fn fatal_startup_error(message: &str, logger_ready: bool, exit_code: i32) -> ! {
     std::process::exit(exit_code);
 }
 
-fn apply_privilege_drop(uid: libc::uid_t, runtime_config: &RuntimeConfig) {
-    match apply_process_privilege_drop(uid, runtime_config) {
+fn apply_privilege_drop(
+    privilege_state: impulse_edge::runtime::privilege_drop::ProcessPrivilegeState,
+    runtime_config: &RuntimeConfig,
+) {
+    match apply_process_privilege_drop(privilege_state, runtime_config) {
         Ok(Some(target)) => {
             info!(
                 "Dropped process privileges to user='{}' group='{}'",

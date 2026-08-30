@@ -2,10 +2,7 @@ use std::collections::HashMap;
 
 use impulse_config::{config::SecretProvider, runtime::RuntimeJwtAuth};
 
-use super::{
-    redaction::{option_is_present, sanitize_jwks_endpoint},
-    *,
-};
+use super::{redaction::option_is_present, *};
 
 pub(super) fn build_auth_and_jwks_payloads(
     runtime_config: &impulse_config::runtime::RuntimeConfig,
@@ -22,10 +19,6 @@ pub(super) fn build_auth_and_jwks_payloads(
         .iter()
         .map(|(name, upstream)| ControlApiAuthProviderPayload {
             upstream: name.clone(),
-            api_key_configured: upstream.policy.upstream_auth.api_key.is_some(),
-            external_auth_configured: upstream.policy.upstream_auth.external_auth.is_some(),
-            required_scopes: upstream.policy.upstream_auth.required_scopes.clone(),
-            required_roles: upstream.policy.upstream_auth.required_roles.clone(),
             jwt: upstream
                 .policy
                 .upstream_auth
@@ -41,7 +34,6 @@ pub(super) fn build_auth_and_jwks_payloads(
             .into_iter()
             .map(|snapshot| ControlApiJwksSourcePayload {
                 jwks_source_id: snapshot.source_id,
-                jwks_endpoint: sanitize_jwks_endpoint(&snapshot.endpoint),
                 allowed_algorithms: snapshot.allowed_algorithms,
                 startup_behavior: snapshot.startup_behavior,
                 cache_state: snapshot.state,

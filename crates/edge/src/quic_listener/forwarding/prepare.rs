@@ -447,7 +447,6 @@ impl QUICListener {
                 Some(sticky_cid_key),
                 Some(&lb_header_lookup),
             ),
-            tunnel_mode,
             context: resolution_context,
             observation: ResolutionObservation::new(metrics, request_start.elapsed()),
         });

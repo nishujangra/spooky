@@ -1,4 +1,4 @@
-use std::{collections::HashMap, net::IpAddr};
+use std::{collections::HashMap, ffi::OsStr, net::IpAddr, path::Path};
 
 use rustls_pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 
@@ -183,6 +183,66 @@ pub(super) fn validate_upstream_tls(field_prefix: &str, tls: &UpstreamTls) -> bo
     true
 }
 
+pub(super) fn validate_pem_certificate_directory(path: &str, field_name: &str) -> bool {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(err) => {
+            validation_error!("Cannot stat {} '{}': {}", field_name, path, err);
+            return false;
+        }
+    };
+    if !metadata.is_dir() {
+        validation_error!("{} must be a directory: {}", field_name, path);
+        return false;
+    }
+
+    let entries = match std::fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(err) => {
+            validation_error!("Cannot read {} '{}': {}", field_name, path, err);
+            return false;
+        }
+    };
+
+    let mut loaded_any = false;
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(err) => {
+                validation_error!("Cannot read entry in {} '{}': {}", field_name, path, err);
+                return false;
+            }
+        };
+        let entry_path = entry.path();
+        if !entry_path.is_file() || !is_pem_like_path(&entry_path) {
+            continue;
+        }
+        let entry_str = entry_path.to_string_lossy();
+        if !validate_pem_certificates(entry_str.as_ref(), field_name) {
+            return false;
+        }
+        loaded_any = true;
+    }
+
+    if !loaded_any {
+        validation_error!(
+            "{} '{}' did not contain any readable PEM certificates",
+            field_name,
+            path
+        );
+        return false;
+    }
+
+    true
+}
+
+fn is_pem_like_path(path: &Path) -> bool {
+    matches!(
+        path.extension().and_then(OsStr::to_str),
+        Some("pem" | "crt" | "cer" | "PEM" | "CRT" | "CER")
+    )
+}
+
 pub(super) fn validate_listen_config(listen: &Listen, field_prefix: &str) -> bool {
     if listen.protocol != "http3" {
         validation_error!(
@@ -362,7 +422,7 @@ pub(super) fn is_valid_http_url(value: &str) -> bool {
     matches!(uri.scheme_str(), Some("http") | Some("https")) && uri.authority().is_some()
 }
 
-pub(super) fn is_valid_https_url(value: &str) -> bool {
+pub(crate) fn is_valid_https_url(value: &str) -> bool {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return false;
@@ -373,6 +433,23 @@ pub(super) fn is_valid_https_url(value: &str) -> bool {
     };
 
     uri.scheme_str() == Some("https") && uri.authority().is_some()
+}
+
+pub(crate) fn is_valid_https_or_loopback_http_url(value: &str) -> bool {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let Ok(uri) = trimmed.parse::<http::Uri>() else {
+        return false;
+    };
+
+    match uri.scheme_str() {
+        Some("https") => uri.authority().is_some(),
+        Some("http") => uri.host().is_some_and(is_loopback_bind_address),
+        _ => false,
+    }
 }
 
 pub(super) fn is_valid_connect_authority(value: &str) -> bool {

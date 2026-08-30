@@ -5,13 +5,13 @@ use std::{
     sync::{
         Arc,
         atomic::Ordering,
-        mpsc::{self, SyncSender, TrySendError},
+        mpsc::{self, SyncSender},
     },
     thread,
 };
 
 #[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
 use impulse_config::config::{
     ControlApi as ControlApiConfig, ControlApiAuditFormat, ControlApiAuditSink,
@@ -97,6 +97,7 @@ pub(in crate::quic_listener) enum ControlApiAdminAuditTarget {
 enum ControlApiAdminAuditDelivery {
     Inline,
     BufferedFile(Arc<ControlApiBufferedAuditWriter>),
+    UnavailableFile { path: String, reason: &'static str },
 }
 
 impl ControlApiAdminAuditDelivery {
@@ -111,10 +112,13 @@ impl ControlApiAdminAuditDelivery {
                     None => {
                         metrics.inc_control_api_audit_write_failure();
                         error!(
-                            "failed to start control API admin audit sink thread for {}; falling back to inline log sink",
+                            "failed to start control API admin audit sink thread for {}; file audit sink is degraded and audit events will be dropped until the process is restarted",
                             path
                         );
-                        Self::Inline
+                        Self::UnavailableFile {
+                            path: path.clone(),
+                            reason: "writer_thread_start_failed",
+                        }
                     }
                 }
             }
@@ -130,6 +134,11 @@ struct ControlApiBufferedAuditWriter {
 
 impl ControlApiBufferedAuditWriter {
     fn try_spawn(path: String, metrics: Arc<Metrics>) -> Option<Self> {
+        #[cfg(test)]
+        if FORCE_AUDIT_WRITER_THREAD_SPAWN_FAILURE.load(std::sync::atomic::Ordering::Relaxed) {
+            return None;
+        }
+
         let (sender, receiver) = mpsc::sync_channel(CONTROL_API_AUDIT_BUFFER_CAPACITY);
         let thread_path = path.clone();
         let thread_metrics = Arc::clone(&metrics);
@@ -168,23 +177,30 @@ impl ControlApiBufferedAuditWriter {
         })
     }
 
-    fn try_emit(&self, serialized: String) {
-        match self.sender.try_send(serialized) {
-            Ok(()) => {}
-            Err(TrySendError::Full(_)) => {
-                self.metrics.inc_control_api_audit_event_drop();
-                warn!(
-                    "dropping control API admin audit event because buffered sink {} is full",
-                    self.path
-                );
-            }
-            Err(TrySendError::Disconnected(_)) => {
-                self.metrics.inc_control_api_audit_event_drop();
-                error!(
-                    "dropping control API admin audit event because buffered sink {} is unavailable",
-                    self.path
-                );
-            }
+    fn emit(&self, serialized: String) {
+        if self.sender.send(serialized.clone()).is_ok() {
+            return;
+        }
+
+        self.metrics.inc_control_api_audit_write_failure();
+        error!(
+            "control API admin audit writer thread for {} is unavailable; falling back to synchronous file append",
+            self.path
+        );
+        self.write_synchronously(serialized);
+    }
+
+    fn write_synchronously(&self, serialized: String) {
+        let Some(mut file) = Self::open_sink(&self.path, self.metrics.as_ref()) else {
+            return;
+        };
+
+        if let Err(err) = writeln!(file, "{}", serialized).and_then(|()| file.flush()) {
+            self.metrics.inc_control_api_audit_write_failure();
+            error!(
+                "failed to synchronously write control API admin audit event to {}: {}",
+                self.path, err
+            );
         }
     }
 
@@ -208,7 +224,19 @@ impl ControlApiBufferedAuditWriter {
         };
 
         match options.open(path) {
-            Ok(file) => Some(file),
+            Ok(file) => {
+                #[cfg(unix)]
+                if let Err(err) = file.set_permissions(std::fs::Permissions::from_mode(0o640)) {
+                    metrics.inc_control_api_audit_write_failure();
+                    error!(
+                        "failed to set restrictive permissions on control API admin audit sink {}: {}",
+                        path, err
+                    );
+                    return None;
+                }
+
+                Some(file)
+            }
             Err(err) => {
                 metrics.inc_control_api_audit_write_failure();
                 error!(
@@ -691,11 +719,20 @@ impl ControlApiAdminAuditEmitter {
             ControlApiAdminAuditTarget::Log => {
                 info!(target: CONTROL_API_AUDIT_LOG_TARGET, "{}", serialized)
             }
-            ControlApiAdminAuditTarget::File(Some(_)) => {
-                if let ControlApiAdminAuditDelivery::BufferedFile(writer) = &self.delivery {
-                    writer.try_emit(serialized);
+            ControlApiAdminAuditTarget::File(Some(_)) => match &self.delivery {
+                ControlApiAdminAuditDelivery::BufferedFile(writer) => writer.emit(serialized),
+                ControlApiAdminAuditDelivery::UnavailableFile { path, reason } => {
+                    error!(
+                        "dropping control API admin audit event because file sink {} is unavailable: {}",
+                        path, reason
+                    );
                 }
-            }
+                ControlApiAdminAuditDelivery::Inline => {
+                    error!(
+                        "dropping control API admin audit event because file sink configuration unexpectedly resolved to inline delivery"
+                    );
+                }
+            },
             ControlApiAdminAuditTarget::File(None) => {
                 warn!(
                     "control API admin audit sink configured as file without file_path; falling back to log"
@@ -704,6 +741,31 @@ impl ControlApiAdminAuditEmitter {
             }
         }
     }
+}
+
+impl ControlApiAdminAuditEmitter {
+    pub(super) fn delivery_degraded(&self) -> bool {
+        matches!(
+            self.delivery,
+            ControlApiAdminAuditDelivery::UnavailableFile { .. }
+        )
+    }
+
+    pub(super) fn delivery_reason(&self) -> Option<&'static str> {
+        match &self.delivery {
+            ControlApiAdminAuditDelivery::UnavailableFile { reason, .. } => Some(reason),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(test)]
+static FORCE_AUDIT_WRITER_THREAD_SPAWN_FAILURE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(test)]
+pub(super) fn force_audit_writer_thread_spawn_failure_for_test(enabled: bool) {
+    FORCE_AUDIT_WRITER_THREAD_SPAWN_FAILURE.store(enabled, std::sync::atomic::Ordering::Relaxed);
 }
 
 #[cfg(test)]
@@ -843,5 +905,61 @@ mod tests {
             .mode()
             & 0o777;
         assert_eq!(mode, 0o640);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn control_api_audit_file_sink_corrects_permissions_for_preexisting_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("admin-audit.jsonl");
+        let metrics = Arc::new(Metrics::default());
+        std::fs::write(&path, b"existing audit data\n").expect("seed file");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o666))
+            .expect("set permissive mode");
+
+        let file = ControlApiBufferedAuditWriter::open_sink(
+            path.to_str().expect("utf-8 path"),
+            metrics.as_ref(),
+        )
+        .expect("open audit sink");
+        drop(file);
+
+        let mode = std::fs::metadata(&path)
+            .expect("metadata")
+            .permissions()
+            .mode()
+            & 0o777;
+        assert_eq!(mode, 0o640);
+    }
+
+    #[test]
+    fn control_api_audit_buffered_writer_sync_fallback_preserves_event_when_thread_is_gone() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("admin-audit.jsonl");
+        let metrics = Arc::new(Metrics::default());
+        let (sender, receiver) = mpsc::sync_channel(1);
+        drop(receiver);
+        let writer = ControlApiBufferedAuditWriter {
+            sender,
+            path: path.to_string_lossy().to_string(),
+            metrics: Arc::clone(&metrics),
+        };
+
+        writer.emit("{\"event\":\"audit\"}".to_string());
+
+        let contents = std::fs::read_to_string(&path).expect("read audit file");
+        assert_eq!(contents, "{\"event\":\"audit\"}\n");
+        assert_eq!(
+            metrics
+                .control_api_audit_event_drops
+                .load(std::sync::atomic::Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            metrics
+                .control_api_audit_write_failures
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
     }
 }

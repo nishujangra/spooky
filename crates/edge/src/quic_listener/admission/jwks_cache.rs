@@ -702,7 +702,6 @@ pub(super) fn jwt_jwks_cache_stale_window_expired(snapshot: &JwtJwksCacheSnapsho
 #[derive(Debug, Clone)]
 pub(crate) struct JwtJwksRuntimeSnapshot {
     pub(crate) source_id: String,
-    pub(crate) endpoint: String,
     pub(crate) allowed_algorithms: Vec<String>,
     pub(crate) startup_behavior: &'static str,
     pub(crate) state: &'static str,
@@ -739,7 +738,6 @@ pub(crate) fn snapshot_runtime_jwks_sources(config: &RuntimeConfig) -> Vec<JwtJw
             });
             JwtJwksRuntimeSnapshot {
                 source_id: source.source_identity.clone(),
-                endpoint: source.public_endpoint(),
                 allowed_algorithms: source
                     .allowed_algorithms
                     .iter()

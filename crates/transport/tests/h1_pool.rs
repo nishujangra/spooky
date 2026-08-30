@@ -4,12 +4,16 @@ mod support;
 
 use std::{sync::Arc, time::Duration};
 
+use hyper::{StatusCode, upgrade};
+use hyper_util::rt::TokioIo;
 use impulse_errors::{PoolError, ProxyError};
 use impulse_transport::SharedDnsResolver;
+use tokio::io::AsyncWriteExt;
 
 use crate::support::{
     ConcurrencyTracker, TransportTestProtocol, build_single_backend_pool, loopback_bind_restricted,
-    request_to_backend, start_shared_backend_pool,
+    request_to_backend, start_h1_upgrade_server, start_shared_backend_pool,
+    websocket_upgrade_request_to_backend,
 };
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -137,4 +141,62 @@ fn http1_transport_rotation_contract_is_effective_for_known_backends_and_noop_fo
             .expect("unknown backend should be ignored")
             .rotated()
     );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn http1_upgrade_requests_flow_through_shared_transport_and_hold_inflight_until_tunnel_ends()
+{
+    let tracker = Arc::new(ConcurrencyTracker::new());
+    let backend = match start_h1_upgrade_server(Some(Arc::clone(&tracker))).await {
+        Ok(backend) => backend,
+        Err(err) if loopback_bind_restricted(&err) => return,
+        Err(err) => panic!("failed to start h1 upgrade test server: {err}"),
+    };
+    let pool = Arc::new(build_single_backend_pool(
+        backend.clone(),
+        TransportTestProtocol::Http1.runtime_kind(),
+        1,
+        SharedDnsResolver::new(),
+    ));
+
+    let mut upgrade_response = pool
+        .send_http1_upgrade_request(&backend, websocket_upgrade_request_to_backend(&backend))
+        .await
+        .expect("upgrade response");
+    assert_eq!(
+        upgrade_response.response().status(),
+        StatusCode::SWITCHING_PROTOCOLS
+    );
+
+    let on_upgrade = upgrade::on(upgrade_response.response_mut());
+    let (_response, lease) = upgrade_response.into_parts();
+    let upgraded = tokio::time::timeout(Duration::from_secs(1), on_upgrade)
+        .await
+        .expect("upgrade timeout")
+        .expect("upgrade should succeed");
+    let mut upgraded = TokioIo::new(upgraded);
+
+    let overload = pool
+        .send_backend_request(&backend, request_to_backend(&backend))
+        .await;
+    assert!(matches!(
+        overload,
+        Err(ProxyError::Pool(PoolError::BackendOverloaded(_)))
+    ));
+
+    upgraded
+        .write_all(b"ping")
+        .await
+        .expect("write tunnel payload");
+    drop(upgraded);
+    drop(lease);
+    tokio::time::sleep(Duration::from_millis(25)).await;
+
+    let response = pool
+        .send_backend_request(&backend, request_to_backend(&backend))
+        .await
+        .expect("request after tunnel close");
+    let body = crate::support::read_body(response).await;
+    assert_eq!(body, bytes::Bytes::from_static(b"ok"));
+    assert_eq!(tracker.max_observed(), 1);
 }

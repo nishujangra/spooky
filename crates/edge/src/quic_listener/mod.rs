@@ -15,13 +15,13 @@ use std::{
 
 use boring::{
     pkey::{PKey, Private},
-    ssl::{NameType, SelectCertError, SslContextBuilder, SslFiletype, SslMethod, SslVerifyMode},
+    ssl::{NameType, SelectCertError, SslContextBuilder, SslMethod, SslVerifyMode},
     x509::X509,
 };
 use bytes::Bytes;
 use http::{Request, Response, StatusCode};
 use http_body_util::{BodyExt, combinators::BoxBody};
-use hyper::{body::Incoming, client::conn::http1 as client_http1, upgrade};
+use hyper::{body::Incoming, upgrade};
 use hyper_util::rt::TokioIo;
 #[cfg(test)]
 use impulse_bridge::response::should_strip_response_header;
@@ -402,7 +402,6 @@ impl QUICListener {
             backend_endpoints: Arc::clone(&self.backend_endpoints),
             upstream_inflight: &self.upstream_inflight,
             global_inflight: Arc::clone(&self.global_inflight),
-            backend_timeout: self.backend_timeout,
             inflight_acquire_wait: self.inflight_acquire_wait,
         };
         let progress_config = StreamProgressConfig {
@@ -486,7 +485,6 @@ impl QUICListener {
             backend_endpoints: Arc::clone(&self.backend_endpoints),
             upstream_inflight: &self.upstream_inflight,
             global_inflight: Arc::clone(&self.global_inflight),
-            backend_timeout: self.backend_timeout,
             inflight_acquire_wait: self.inflight_acquire_wait,
         };
         let progress_config = StreamProgressConfig {

@@ -11,7 +11,7 @@ use hyper::{
     body::{Bytes, Incoming},
 };
 use impulse_errors::PoolError;
-use tokio::sync::{Semaphore, TryAcquireError};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, TryAcquireError};
 
 use crate::{
     client_rotation::BackendClientRotation,
@@ -90,6 +90,18 @@ impl H1Pool {
         let client = Self::current_client(handle)?;
 
         client.send(req).await.map_err(PoolError::Send)
+    }
+
+    pub(crate) async fn send_upgrade(
+        &self,
+        backend: &str,
+        req: Request<BoxBody<Bytes, Infallible>>,
+    ) -> Result<(hyper::Response<Incoming>, OwnedSemaphorePermit), PoolError> {
+        let handle = self.backend_handle(backend)?;
+        let permit = Self::acquire_inflight_permit(handle, backend)?;
+        let client = Self::current_client(handle)?;
+        let response = client.send(req).await.map_err(PoolError::Send)?;
+        Ok((response, permit))
     }
 
     pub(crate) fn rotate_backend_client(

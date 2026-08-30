@@ -481,6 +481,29 @@ mod tests {
     }
 
     #[test]
+    fn lookup_for_method_preserves_connect_matches_for_websocket_routes() {
+        let upstreams = HashMap::from([
+            ("get_only".to_string(), upstream("/chat", None, Some("GET"))),
+            (
+                "connect_only".to_string(),
+                upstream("/chat", None, Some("CONNECT")),
+            ),
+        ]);
+        let index = RouteIndex::from_upstreams(&upstreams);
+
+        assert_eq!(
+            index.lookup_for_method("/chat/socket", None, Some("CONNECT")),
+            Some("connect_only")
+        );
+
+        let decision = index
+            .lookup_with_decision_for_method("/chat/socket", None, Some("CONNECT"))
+            .expect("route decision");
+        assert_eq!(decision.upstream, "connect_only");
+        assert_eq!(decision.reason, RouteDecisionReason::DefaultPathLonger);
+    }
+
+    #[test]
     fn lookup_with_decision_prefers_longer_default_path_when_host_route_is_shorter() {
         let upstreams = HashMap::from([
             (

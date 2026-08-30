@@ -1097,6 +1097,51 @@ fn rejects_control_api_mtls_without_ca_material() {
 }
 
 #[test]
+fn rejects_control_api_client_auth_ca_dir_without_readable_pem_certificates() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+    let ca_dir = dir.path().join("ca.d");
+    std::fs::create_dir_all(&ca_dir).expect("create ca dir");
+    std::fs::write(ca_dir.join("notes.txt"), b"not a pem").expect("write notes");
+
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.observability.control_api.enabled = true;
+    cfg.observability.control_api.tls.client_auth.mode = ControlApiClientAuthMode::Required;
+    cfg.observability.control_api.tls.client_auth.ca_dir =
+        Some(ca_dir.to_string_lossy().to_string());
+
+    let err = validate(&cfg).expect_err("control api ca_dir without pem certs must fail");
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "observability.control_api.tls.client_auth.ca_dir '{}' did not contain any readable PEM certificates",
+            ca_dir.to_string_lossy()
+        )
+    );
+}
+
+#[test]
+fn rejects_control_api_client_auth_oversized_ca_dir_entry() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+    let ca_dir = dir.path().join("ca.d");
+    std::fs::create_dir_all(&ca_dir).expect("create ca dir");
+    std::fs::write(ca_dir.join("huge.pem"), vec![b'A'; (1024 * 1024) + 1]).expect("write huge");
+
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.observability.control_api.enabled = true;
+    cfg.observability.control_api.tls.client_auth.mode = ControlApiClientAuthMode::Required;
+    cfg.observability.control_api.tls.client_auth.ca_dir =
+        Some(ca_dir.to_string_lossy().to_string());
+
+    let err = validate(&cfg).expect_err("oversized control api ca_dir entry must fail");
+    assert!(
+        err.to_string()
+            .contains("exceeds the maximum supported PEM size")
+    );
+}
+
+#[test]
 fn rejects_control_api_invalid_role_ordering() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_certs(dir.path());
@@ -1709,6 +1754,26 @@ fn accepts_upstream_asymmetric_jwt_auth_with_jwks_url_and_no_secret() {
 }
 
 #[test]
+fn rejects_upstream_asymmetric_jwt_auth_with_non_https_jwks_url() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.upstream
+        .get_mut("test_upstream")
+        .expect("upstream")
+        .auth
+        .jwt = Some(JwtAuth {
+        secret: String::new(),
+        allowed_algorithms: vec![JwtAlgorithm::Rs256],
+        jwks_url: Some("http://issuer.example.com/.well-known/jwks.json".to_string()),
+        ..JwtAuth::default()
+    });
+
+    assert!(validate(&cfg).is_err());
+}
+
+#[test]
 fn rejects_upstream_jwt_auth_with_secret_and_no_hs256_algorithm() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_certs(dir.path());
@@ -1795,6 +1860,33 @@ fn accepts_oidc_external_auth() {
             "https://issuer.example.com/.well-known/openid-configuration".to_string(),
         ),
         issuer_url: Some("https://issuer.example.com".to_string()),
+        client_id: "edge-gateway".to_string(),
+        client_secret: Some("secret-1".to_string()),
+        client_secret_ref: None,
+        audience: Some("impulse-api".to_string()),
+        scopes: vec!["openid".to_string(), "profile".to_string()],
+        request_headers: Vec::new(),
+        response_header_allowlist: Vec::new(),
+        timeout_ms: 1_500,
+        failure_mode: ExternalAuthFailureMode::FailClosed,
+    });
+
+    assert!(validate(&cfg).is_ok());
+}
+
+#[test]
+fn accepts_oidc_external_auth_with_loopback_http_urls() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.upstream
+        .get_mut("test_upstream")
+        .expect("upstream")
+        .auth
+        .external_auth = Some(ExternalAuth::Oidc {
+        discovery_url: Some("http://127.0.0.1:9000/.well-known/openid-configuration".to_string()),
+        issuer_url: Some("http://localhost:9000".to_string()),
         client_id: "edge-gateway".to_string(),
         client_secret: Some("secret-1".to_string()),
         client_secret_ref: None,
@@ -2011,6 +2103,35 @@ fn rejects_oidc_external_auth_with_non_https_discovery_url() {
             "http://issuer.example.com/.well-known/openid-configuration".to_string(),
         ),
         issuer_url: Some("https://issuer.example.com".to_string()),
+        client_id: "edge-gateway".to_string(),
+        client_secret: Some("secret-1".to_string()),
+        client_secret_ref: None,
+        audience: Some("impulse-api".to_string()),
+        scopes: vec!["openid".to_string()],
+        request_headers: Vec::new(),
+        response_header_allowlist: Vec::new(),
+        timeout_ms: 1_500,
+        failure_mode: ExternalAuthFailureMode::FailClosed,
+    });
+
+    assert!(validate(&cfg).is_err());
+}
+
+#[test]
+fn rejects_oidc_external_auth_with_non_loopback_http_issuer_url() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.upstream
+        .get_mut("test_upstream")
+        .expect("upstream")
+        .auth
+        .external_auth = Some(ExternalAuth::Oidc {
+        discovery_url: Some(
+            "https://issuer.example.com/.well-known/openid-configuration".to_string(),
+        ),
+        issuer_url: Some("http://issuer.example.com".to_string()),
         client_id: "edge-gateway".to_string(),
         client_secret: Some("secret-1".to_string()),
         client_secret_ref: None,

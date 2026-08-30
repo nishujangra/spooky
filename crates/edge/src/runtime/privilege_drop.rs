@@ -6,11 +6,42 @@ pub struct PrivilegeDropTarget {
     pub group: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ProcessPrivilegeState {
+    pub real_uid: libc::uid_t,
+    pub effective_uid: libc::uid_t,
+    pub has_net_bind_service_capability: bool,
+}
+
+impl ProcessPrivilegeState {
+    pub fn can_bind_privileged_ports(self) -> bool {
+        self.effective_uid == 0 || self.has_net_bind_service_capability
+    }
+
+    pub fn can_drop_privileges(self) -> bool {
+        self.effective_uid == 0
+    }
+}
+
+pub fn current_process_privilege_state() -> ProcessPrivilegeState {
+    ProcessPrivilegeState {
+        real_uid: unsafe {
+            // SAFETY: simple libc getter.
+            libc::getuid()
+        },
+        effective_uid: unsafe {
+            // SAFETY: simple libc getter.
+            libc::geteuid()
+        },
+        has_net_bind_service_capability: has_effective_net_bind_service_capability(),
+    }
+}
+
 pub fn apply_process_privilege_drop(
-    startup_uid: libc::uid_t,
+    startup_privileges: ProcessPrivilegeState,
     runtime_config: &RuntimeConfig,
 ) -> Result<Option<PrivilegeDropTarget>, String> {
-    if startup_uid != 0 || !runtime_config.security.privileges.enabled {
+    if !startup_privileges.can_drop_privileges() || !runtime_config.security.privileges.enabled {
         return Ok(None);
     }
 
@@ -22,6 +53,42 @@ pub fn apply_process_privilege_drop(
         user: user.to_string(),
         group: group.to_string(),
     }))
+}
+
+#[cfg(target_os = "linux")]
+fn has_effective_net_bind_service_capability() -> bool {
+    use std::io::{BufRead, BufReader};
+
+    let file = match std::fs::File::open("/proc/self/status") {
+        Ok(file) => file,
+        Err(_) => return false,
+    };
+    let reader = BufReader::new(file);
+    for line in reader.lines() {
+        let Ok(line) = line else {
+            return false;
+        };
+        if let Some(has_capability) =
+            has_effective_net_bind_service_capability_from_status_line(&line)
+        {
+            return has_capability;
+        }
+    }
+    false
+}
+
+#[cfg(target_os = "linux")]
+fn has_effective_net_bind_service_capability_from_status_line(line: &str) -> Option<bool> {
+    const CAP_NET_BIND_SERVICE_BIT: u32 = 10;
+
+    let value = line.strip_prefix("CapEff:\t")?;
+    let mask = u64::from_str_radix(value.trim(), 16).ok()?;
+    Some((mask & (1u64 << CAP_NET_BIND_SERVICE_BIT)) != 0)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn has_effective_net_bind_service_capability() -> bool {
+    false
 }
 
 #[cfg(unix)]
@@ -169,7 +236,7 @@ fn drop_privileges(_user: &str, _group: &str) -> Result<(), String> {
 mod tests {
     use impulse_config::{config::Config, runtime::RuntimeConfig};
 
-    use super::apply_process_privilege_drop;
+    use super::{ProcessPrivilegeState, apply_process_privilege_drop};
 
     fn minimal_runtime_config() -> RuntimeConfig {
         let yaml = r#"
@@ -189,11 +256,30 @@ upstream:
         RuntimeConfig::from_config(&config).expect("runtime config")
     }
 
+    fn privilege_state(real_uid: libc::uid_t, effective_uid: libc::uid_t) -> ProcessPrivilegeState {
+        ProcessPrivilegeState {
+            real_uid,
+            effective_uid,
+            has_net_bind_service_capability: false,
+        }
+    }
+
     #[test]
     fn skips_drop_when_startup_is_not_root() {
         let runtime_config = minimal_runtime_config();
-        let result = apply_process_privilege_drop(1000, &runtime_config).expect("no-op");
+        let result = apply_process_privilege_drop(privilege_state(1000, 1000), &runtime_config)
+            .expect("no-op");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn attempts_drop_when_effective_uid_is_root() {
+        let mut runtime_config = minimal_runtime_config();
+        runtime_config.security.privileges.user = format!("missing-user-{}", std::process::id());
+        runtime_config.security.privileges.group = format!("missing-group-{}", std::process::id());
+
+        let result = apply_process_privilege_drop(privilege_state(1000, 0), &runtime_config);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -201,7 +287,8 @@ upstream:
         let mut runtime_config = minimal_runtime_config();
         runtime_config.security.privileges.enabled = false;
 
-        let result = apply_process_privilege_drop(0, &runtime_config).expect("no-op");
+        let result =
+            apply_process_privilege_drop(privilege_state(0, 0), &runtime_config).expect("no-op");
         assert!(result.is_none());
     }
 
@@ -212,13 +299,30 @@ upstream:
         runtime_config.security.privileges.user = "nobody".to_string();
         runtime_config.security.privileges.group = format!("missing-group-{}", std::process::id());
 
-        let result = apply_process_privilege_drop(0, &runtime_config);
+        let result = apply_process_privilege_drop(privilege_state(0, 0), &runtime_config);
         assert!(result.is_err());
 
         runtime_config.security.privileges.user = format!("missing-user-{}", std::process::id());
         runtime_config.security.privileges.group = "nogroup".to_string();
 
-        let result = apply_process_privilege_drop(0, &runtime_config);
+        let result = apply_process_privilege_drop(privilege_state(0, 0), &runtime_config);
         assert!(result.is_err());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn parses_linux_cap_eff_net_bind_service_bit() {
+        assert_eq!(
+            super::has_effective_net_bind_service_capability_from_status_line(
+                "CapEff:\t0000000000000400"
+            ),
+            Some(true)
+        );
+        assert_eq!(
+            super::has_effective_net_bind_service_capability_from_status_line(
+                "CapEff:\t0000000000000000"
+            ),
+            Some(false)
+        );
     }
 }

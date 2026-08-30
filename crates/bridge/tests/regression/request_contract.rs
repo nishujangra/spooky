@@ -85,6 +85,41 @@ fn canonical_known_length_inputs_shape_h1_and_h2_requests_consistently() {
             .and_then(|value| value.to_str().ok()),
         Some("00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01")
     );
+    assert_eq!(h1.headers().get_all("x-custom").iter().count(), 1);
+    assert_eq!(h2.headers().get_all("x-custom").iter().count(), 1);
+}
+
+#[test]
+fn passthrough_headers_are_not_duplicated_in_h1_or_h2() {
+    let endpoint = BackendEndpoint::parse("payments.internal:443").expect("endpoint");
+    let headers = vec![
+        Header::new(b"authorization", b"Bearer token"),
+        Header::new(b"cookie", b"session=abc"),
+        Header::new(b"x-custom-auth", b"opaque"),
+    ];
+
+    let (h1, h2) = build_h1_and_h2_requests(
+        &endpoint,
+        &UpstreamHostPolicy::default(),
+        &ForwardedHeaderPolicy::default(),
+        "GET",
+        "/v1/payments",
+        &headers,
+        RequestInputMeta {
+            authority: Some("api.example.com"),
+            content_length: None,
+            request_id: 78,
+            traceparent: None,
+            client_addr: "198.51.100.44:7000".parse().expect("client"),
+        },
+    )
+    .expect("requests");
+
+    for req in [&h1, &h2] {
+        assert_eq!(req.headers().get_all("authorization").iter().count(), 1);
+        assert_eq!(req.headers().get_all("cookie").iter().count(), 1);
+        assert_eq!(req.headers().get_all("x-custom-auth").iter().count(), 1);
+    }
 }
 
 #[test]

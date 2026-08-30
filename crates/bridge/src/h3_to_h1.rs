@@ -47,9 +47,6 @@ pub(crate) fn build_h1_request(
         preserve_upgrade,
         forwarded,
     })?;
-    for (header_name, header_value) in &resolved_headers.passthrough_headers {
-        builder = builder.header(header_name, header_value);
-    }
 
     let request_path = if path.is_empty() { "/" } else { path };
     let uri =

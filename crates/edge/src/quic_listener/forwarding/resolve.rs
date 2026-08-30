@@ -28,10 +28,6 @@ impl<'a> TargetResolutionRequest<'a> {
             header_lookup,
         }
     }
-
-    fn with_method(self, method: &'a str) -> Self {
-        Self { method, ..self }
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -101,7 +97,6 @@ pub(super) struct ForwardTargetResolution {
 
 pub(super) struct ForwardTargetResolutionInput<'a> {
     pub(super) request: TargetResolutionRequest<'a>,
-    pub(super) tunnel_mode: TunnelMode,
     pub(super) context: ResolutionContext<'a>,
     pub(super) observation: ResolutionObservation<'a>,
 }
@@ -231,21 +226,15 @@ impl QUICListener {
     ) -> Result<ForwardTargetResolution, ProxyError> {
         let ForwardTargetResolutionInput {
             request,
-            tunnel_mode,
             context,
             observation,
         } = input;
-        let resolution_request = if matches!(tunnel_mode, TunnelMode::Websocket) {
-            request.with_method("GET")
-        } else {
-            request
-        };
         let TargetResolution { route, backend } =
-            match Self::resolve_backend_without_inflight_request(&resolution_request, &context) {
+            match Self::resolve_backend_without_inflight_request(&request, &context) {
                 Ok(resolved) => resolved,
                 Err(err) => {
                     Self::observe_route_resolution_failure(
-                        &resolution_request,
+                        &request,
                         &err,
                         observation.metrics,
                         observation.elapsed,
@@ -485,8 +474,8 @@ mod tests {
 
     use impulse_config::{
         config::{
-            Backend, Config, ForwardedHeaderPolicy, Listen, LoadBalancing, RouteAuth, RouteMatch,
-            Tls, Upstream, UpstreamHostPolicy,
+            Backend, Config, ForwardedHeaderPolicy, Listen, LoadBalancing, Resilience, RouteAuth,
+            RouteMatch, Tls, Upstream, UpstreamHostPolicy,
         },
         runtime::RuntimeConfig,
     };
@@ -524,6 +513,15 @@ mod tests {
     }
 
     fn runtime_config(upstreams: HashMap<String, Upstream>) -> RuntimeConfig {
+        runtime_config_with_connect(upstreams, false)
+    }
+
+    fn runtime_config_with_connect(
+        upstreams: HashMap<String, Upstream>,
+        allow_connect: bool,
+    ) -> RuntimeConfig {
+        let mut resilience = Resilience::default();
+        resilience.protocol.allow_connect = allow_connect;
         RuntimeConfig::from_config(&Config {
             version: 1,
             listen: Listen {
@@ -543,7 +541,7 @@ mod tests {
             log: Default::default(),
             performance: Default::default(),
             observability: Default::default(),
-            resilience: Default::default(),
+            resilience,
             security: Default::default(),
         })
         .expect("runtime config")
@@ -659,6 +657,59 @@ mod tests {
         let (status, body) = QUICListener::bootstrap_route_resolution_error_response(&first);
         assert_eq!(status, http::StatusCode::BAD_GATEWAY);
         assert_eq!(body, b"no route\n");
+    }
+
+    #[test]
+    fn resolve_forwarding_target_keeps_connect_method_for_websocket_routes() {
+        let runtime = runtime_config_with_connect(
+            HashMap::from([
+                (
+                    "websocket_get".to_string(),
+                    upstream(
+                        "/chat",
+                        Some("ws.example.com"),
+                        Some("GET"),
+                        "http://127.0.0.1:7001",
+                    ),
+                ),
+                (
+                    "websocket_connect".to_string(),
+                    upstream(
+                        "/chat",
+                        Some("ws.example.com"),
+                        Some("CONNECT"),
+                        "http://127.0.0.1:7002",
+                    ),
+                ),
+            ]),
+            true,
+        );
+        let routing_index = RouteIndex::from_runtime_upstreams(&runtime.upstreams);
+        let pools = upstream_pools(&runtime);
+        let policies = runtime
+            .upstreams
+            .iter()
+            .map(|(name, upstream)| (name.clone(), upstream.policy.clone()))
+            .collect::<HashMap<_, _>>();
+        let context = ResolutionContext::new(&routing_index, &pools, &policies);
+        let request = TargetResolutionRequest::new(
+            "CONNECT",
+            "/chat/socket",
+            Some("ws.example.com"),
+            None,
+            None,
+        );
+        let metrics = Metrics::new(1, vec!["route".to_string()]);
+
+        let resolved = QUICListener::resolve_forwarding_target(ForwardTargetResolutionInput {
+            request,
+            context,
+            observation: ResolutionObservation::new(&metrics, Duration::ZERO),
+        })
+        .expect("resolved target");
+
+        assert_eq!(resolved.upstream_name, "websocket_connect");
+        assert_eq!(resolved.backend_addr, "http://127.0.0.1:7002");
     }
 
     #[test]
