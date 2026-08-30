@@ -124,8 +124,28 @@ fn response_headers_with_defaults_and_extra(
     headers: &[(String, String)],
     extra_header: Option<(&str, &str)>,
 ) -> Vec<quiche::h3::Header> {
+    response_headers_with_defaults_and_extra_bytes(
+        status,
+        body,
+        headers
+            .iter()
+            .map(|(name, value)| (name.as_bytes(), value.as_bytes())),
+        extra_header.map(|(name, value)| (name.as_bytes(), value.as_bytes())),
+    )
+}
+
+fn response_headers_with_defaults_and_extra_bytes<'a, I>(
+    status: http::StatusCode,
+    body: &[u8],
+    headers: I,
+    extra_header: Option<(&'a [u8], &'a [u8])>,
+) -> Vec<quiche::h3::Header>
+where
+    I: IntoIterator<Item = (&'a [u8], &'a [u8])>,
+{
+    let headers = headers.into_iter();
     let mut resp_headers =
-        Vec::with_capacity(headers.len() + usize::from(extra_header.is_some()) + 3);
+        Vec::with_capacity(headers.size_hint().0 + usize::from(extra_header.is_some()) + 3);
     resp_headers.push(quiche::h3::Header::new(
         b":status",
         status.as_str().as_bytes(),
@@ -133,22 +153,22 @@ fn response_headers_with_defaults_and_extra(
     let mut has_content_type = false;
     let mut has_content_length = false;
     for (name, value) in headers {
-        if name.eq_ignore_ascii_case(http::header::CONTENT_TYPE.as_str()) {
+        if name.eq_ignore_ascii_case(http::header::CONTENT_TYPE.as_str().as_bytes()) {
             has_content_type = true;
         }
-        if name.eq_ignore_ascii_case(http::header::CONTENT_LENGTH.as_str()) {
+        if name.eq_ignore_ascii_case(http::header::CONTENT_LENGTH.as_str().as_bytes()) {
             has_content_length = true;
         }
-        resp_headers.push(quiche::h3::Header::new(name.as_bytes(), value.as_bytes()));
+        resp_headers.push(quiche::h3::Header::new(name, value));
     }
     if let Some((name, value)) = extra_header {
-        if name.eq_ignore_ascii_case(http::header::CONTENT_TYPE.as_str()) {
+        if name.eq_ignore_ascii_case(http::header::CONTENT_TYPE.as_str().as_bytes()) {
             has_content_type = true;
         }
-        if name.eq_ignore_ascii_case(http::header::CONTENT_LENGTH.as_str()) {
+        if name.eq_ignore_ascii_case(http::header::CONTENT_LENGTH.as_str().as_bytes()) {
             has_content_length = true;
         }
-        resp_headers.push(quiche::h3::Header::new(name.as_bytes(), value.as_bytes()));
+        resp_headers.push(quiche::h3::Header::new(name, value));
     }
     if !has_content_type {
         resp_headers.push(quiche::h3::Header::new(b"content-type", b"text/plain"));
@@ -754,8 +774,14 @@ impl QUICListener {
         headers: &[(String, String)],
         extra_header: Option<(&str, &str)>,
     ) -> Result<(), quiche::h3::Error> {
-        let resp_headers =
-            response_headers_with_defaults_and_extra(status, body, headers, extra_header);
+        let resp_headers = response_headers_with_defaults_and_extra_bytes(
+            status,
+            body,
+            headers
+                .iter()
+                .map(|(name, value)| (name.as_bytes(), value.as_bytes())),
+            extra_header.map(|(name, value)| (name.as_bytes(), value.as_bytes())),
+        );
         h3.send_response(quic, stream_id, &resp_headers, false)?;
         h3.send_body(quic, stream_id, body, true)?;
         Ok(())
