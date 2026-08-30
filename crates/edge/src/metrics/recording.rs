@@ -11,6 +11,11 @@ thread_local! {
 }
 
 impl Metrics {
+    fn mark_route_worker_metrics_stale(&self) {
+        self.route_worker_metrics_version
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     fn mark_quota_metrics_stale(&self) {
         self.quota_metrics_version.fetch_add(1, Ordering::Relaxed);
     }
@@ -60,6 +65,12 @@ impl Metrics {
         let worker_labels = (0..worker_slots)
             .map(|idx| format!("worker-{idx}"))
             .collect::<Vec<_>>();
+        let mut worker_render_order = worker_labels
+            .iter()
+            .enumerate()
+            .map(|(idx, label)| (idx, label.to_string()))
+            .collect::<Vec<_>>();
+        worker_render_order.sort_by(|(_, left), (_, right)| left.cmp(right));
         let worker_stats = (0..worker_slots)
             .map(|_| WorkerStatsAtomic::new())
             .collect::<Vec<_>>();
@@ -67,6 +78,12 @@ impl Metrics {
             .iter()
             .map(|_| RouteStatsAtomic::new())
             .collect::<Vec<_>>();
+        let mut route_render_order = route_labels_dedup
+            .iter()
+            .enumerate()
+            .map(|(idx, label)| (idx, label.to_string()))
+            .collect::<Vec<_>>();
+        route_render_order.sort_by(|(_, left), (_, right)| left.cmp(right));
 
         Self {
             requests_total: AtomicU64::new(0),
@@ -168,11 +185,11 @@ impl Metrics {
             jwks_source_state: RwLock::new(HashMap::new()),
             route_latency_sample_every,
             route_latency_sample_counter: AtomicU64::new(0),
-            route_labels: route_labels_dedup,
+            route_render_order,
             route_label_to_id,
             route_stats,
             unrouted_route_id,
-            worker_labels,
+            worker_render_order,
             worker_stats,
             backend_dns_state: RwLock::new(HashMap::new()),
             backend_rotation_state: RwLock::new(HashMap::new()),
@@ -188,6 +205,8 @@ impl Metrics {
             backend_metrics_cache: RwLock::new(BackendMetricsSnapshotCache::default()),
             secret_metrics_version: AtomicU64::new(0),
             secret_metrics_cache: RwLock::new(SecretMetricsSnapshotCache::default()),
+            route_worker_metrics_version: AtomicU64::new(0),
+            route_worker_metrics_cache: RwLock::new(RouteWorkerMetricsRenderCache::default()),
             quota_policy_outcomes: RwLock::new(HashMap::new()),
             quota_backend_health: RwLock::new(HashMap::new()),
             downstream_tls_handshake_failures: RwLock::new(HashMap::new()),
@@ -707,30 +726,35 @@ impl Metrics {
     fn inc_worker_requests_total(&self) {
         if let Some(stats) = self.current_worker_stats() {
             stats.requests_total.fetch_add(1, Ordering::Relaxed);
+            self.mark_route_worker_metrics_stale();
         }
     }
 
     fn inc_worker_requests_success(&self) {
         if let Some(stats) = self.current_worker_stats() {
             stats.requests_success.fetch_add(1, Ordering::Relaxed);
+            self.mark_route_worker_metrics_stale();
         }
     }
 
     fn inc_worker_requests_failure(&self) {
         if let Some(stats) = self.current_worker_stats() {
             stats.requests_failure.fetch_add(1, Ordering::Relaxed);
+            self.mark_route_worker_metrics_stale();
         }
     }
 
     fn inc_worker_ingress_packets_total(&self) {
         if let Some(stats) = self.current_worker_stats() {
             stats.ingress_packets_total.fetch_add(1, Ordering::Relaxed);
+            self.mark_route_worker_metrics_stale();
         }
     }
 
     fn inc_worker_ingress_queue_drops(&self) {
         if let Some(stats) = self.current_worker_stats() {
             stats.ingress_queue_drops.fetch_add(1, Ordering::Relaxed);
+            self.mark_route_worker_metrics_stale();
         }
     }
 
@@ -739,6 +763,7 @@ impl Metrics {
             stats
                 .ingress_queue_drop_bytes
                 .fetch_add(bytes, Ordering::Relaxed);
+            self.mark_route_worker_metrics_stale();
         }
     }
 
@@ -1172,6 +1197,7 @@ impl Metrics {
                 entry.overload_shed.fetch_add(1, Ordering::Relaxed);
             }
         }
+        self.mark_route_worker_metrics_stale();
 
         if self.route_latency_sample_every > 1 {
             let seq = self

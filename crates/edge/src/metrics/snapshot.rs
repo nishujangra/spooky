@@ -311,6 +311,7 @@ impl Metrics {
         if let Ok(mut cache) = self.quota_metrics_cache.write() {
             cache.version = version;
             cache.snapshot = snapshot.clone();
+            cache.rendered.clear();
         }
 
         snapshot
@@ -329,6 +330,7 @@ impl Metrics {
         if let Ok(mut cache) = self.jwt_jwks_metrics_cache.write() {
             cache.version = version;
             cache.snapshot = snapshot.clone();
+            cache.rendered.clear();
         }
 
         snapshot
@@ -347,6 +349,7 @@ impl Metrics {
         if let Ok(mut cache) = self.backend_metrics_cache.write() {
             cache.version = version;
             cache.snapshot = snapshot.clone();
+            cache.rendered.clear();
         }
 
         snapshot
