@@ -640,15 +640,17 @@ impl Metrics {
         }
     }
 
-    pub fn reconcile_runtime_metric_labels<'a, I, J, K>(
+    pub fn reconcile_runtime_metric_labels<'a, I, J, K, L>(
         &self,
         active_upstreams: I,
         active_backends: J,
         active_listeners: K,
+        active_quota_policies: L,
     ) where
         I: IntoIterator<Item = &'a str>,
         J: IntoIterator<Item = &'a str>,
         K: IntoIterator<Item = &'a str>,
+        L: IntoIterator<Item = &'a str>,
     {
         let active_upstreams = active_upstreams
             .into_iter()
@@ -659,6 +661,10 @@ impl Metrics {
             .map(ToOwned::to_owned)
             .collect::<HashSet<_>>();
         let active_listeners = active_listeners
+            .into_iter()
+            .map(ToOwned::to_owned)
+            .collect::<HashSet<_>>();
+        let active_quota_policies = active_quota_policies
             .into_iter()
             .map(ToOwned::to_owned)
             .collect::<HashSet<_>>();
@@ -702,6 +708,9 @@ impl Metrics {
         }
         if let Ok(mut guard) = self.upstream_client_cert_expiry.write() {
             guard.retain(|key, _| active_upstreams.contains(&key.upstream));
+        }
+        if let Ok(mut guard) = self.quota_policy_outcomes.write() {
+            guard.retain(|key, _| active_quota_policies.contains(&key.policy));
         }
 
         self.mark_backend_metrics_stale();
