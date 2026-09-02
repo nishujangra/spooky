@@ -497,7 +497,11 @@ fn validate_request_parts(
                 true,
             ));
         }
-    } else if resilience.path_denied(&path) {
+    }
+
+    // Extended CONNECT carries a routable request path for WebSocket tunnels,
+    // so it must be subject to the same path policy as ordinary requests.
+    if (!is_connect || websocket_tunnel) && resilience.path_denied(&path) {
         return Err((
             http::StatusCode::FORBIDDEN,
             b"request path blocked by policy\n",
@@ -776,6 +780,28 @@ mod tests {
             .expect("HTTP/3 WebSocket legacy upgrade should be accepted as a tunnel");
         assert!(result.websocket_tunnel, "websocket_tunnel flag must be set");
         assert_eq!(result.method, "GET");
+    }
+
+    #[test]
+    fn rejects_denied_path_for_http3_websocket_connect() {
+        let mut config = Resilience::default();
+        config.protocol.denied_path_prefixes = vec!["/admin".to_string()];
+        config.protocol.allow_connect = true;
+        config.protocol.connect_allowed_ports = vec![443];
+        config.protocol.connect_allowed_authorities = vec!["example.com:443".to_string()];
+        let resilience = RuntimeResilience::from_config(&config, 1024);
+        let headers = vec![
+            h3_header(b":method", b"CONNECT"),
+            h3_header(b":protocol", b"websocket"),
+            h3_header(b":path", b"/admin/socket"),
+            h3_header(b":authority", b"example.com:443"),
+        ];
+
+        let err = validate_request_headers(&headers, &resilience)
+            .expect_err("denied WebSocket CONNECT path must be rejected");
+        assert_eq!(err.0, http::StatusCode::FORBIDDEN);
+        assert_eq!(err.1, b"request path blocked by policy\n");
+        assert!(err.2);
     }
 
     #[test]
