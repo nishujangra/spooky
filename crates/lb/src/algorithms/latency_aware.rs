@@ -2,6 +2,7 @@ use crate::backend_pool::BackendPool;
 
 const ACTIVE_REQUEST_PENALTY_MS: f64 = 10.0;
 const UNSAMPLED_PROBE_INTERVAL: u64 = 16;
+const EXPLORATION_INTERVAL: u64 = 32;
 
 #[derive(Clone, Copy)]
 struct SampledCandidate {
@@ -19,16 +20,24 @@ struct UnsampledCandidate {
 
 pub struct LatencyAware {
     unsampled_probe_cursor: u64,
+    exploration_cursor: usize,
+    selections: u64,
 }
 
 impl LatencyAware {
     pub fn new() -> Self {
         Self {
             unsampled_probe_cursor: 0,
+            exploration_cursor: 0,
+            selections: 0,
         }
     }
 
     pub fn pick(&mut self, pool: &BackendPool) -> Option<usize> {
+        if let Some(index) = self.periodic_exploration(pool) {
+            return Some(index);
+        }
+
         let (sampled_best, unsampled_best) = Self::rank_candidates(pool);
         let Some(sampled_best) = sampled_best else {
             return unsampled_best.map(|candidate| candidate.idx);
@@ -44,6 +53,17 @@ impl LatencyAware {
         }
 
         Some(sampled_best.idx)
+    }
+
+    fn periodic_exploration(&mut self, pool: &BackendPool) -> Option<usize> {
+        self.selections = self.selections.wrapping_add(1);
+        if pool.healthy.len() < 2 || !self.selections.is_multiple_of(EXPLORATION_INTERVAL) {
+            return None;
+        }
+
+        let position = self.exploration_cursor % pool.healthy.len();
+        self.exploration_cursor = self.exploration_cursor.wrapping_add(1);
+        pool.healthy.get(position).copied()
     }
 
     pub fn pick_readonly(&self, pool: &BackendPool) -> Option<usize> {
@@ -153,7 +173,7 @@ mod tests {
 
     use impulse_config::config::{Backend, HealthCheck};
 
-    use super::{LatencyAware, UNSAMPLED_PROBE_INTERVAL};
+    use super::{EXPLORATION_INTERVAL, LatencyAware, UNSAMPLED_PROBE_INTERVAL};
     use crate::{backend::BackendState, backend_pool::BackendPool, health::HealthFailureReason};
 
     fn create_backend_state(
@@ -190,6 +210,24 @@ mod tests {
 
         let mut lb = LatencyAware::new();
         assert_eq!(lb.pick(&pool), Some(1));
+    }
+
+    #[test]
+    fn latency_aware_periodically_explores_all_sampled_backends() {
+        let mut pool = BackendPool::new_from_states(vec![
+            create_backend_state("10.0.0.1:1", 1, 1000, 3, 0),
+            create_backend_state("10.0.0.2:1", 1, 1000, 3, 0),
+        ]);
+        pool.finish_request(0, Duration::from_millis(1), Some(200));
+        pool.finish_request(1, Duration::from_millis(1_000), Some(200));
+
+        let mut lb = LatencyAware::new();
+        let picks: Vec<_> = (0..(EXPLORATION_INTERVAL * 2))
+            .map(|_| lb.pick(&pool).expect("backend selection"))
+            .collect();
+
+        assert!(picks.contains(&0));
+        assert!(picks.contains(&1));
     }
 
     #[test]
