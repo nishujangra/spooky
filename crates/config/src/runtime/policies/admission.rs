@@ -323,6 +323,14 @@ impl RuntimeAdmissionPolicy {
             "resilience.protocol.early_data_safe_methods",
             &resilience.protocol.early_data_safe_methods,
         )?;
+        if early_data_safe_methods
+            .iter()
+            .any(|method| !is_valid_http_token(method))
+        {
+            return Err(config_invalid(
+                "resilience.protocol.early_data_safe_methods must contain valid HTTP method tokens",
+            ));
+        }
         let allowed_methods = normalize_nonempty_string_vec(
             "resilience.protocol.allowed_methods",
             &resilience.protocol.allowed_methods,
@@ -381,6 +389,15 @@ impl RuntimeAdmissionPolicy {
         if resilience.protocol.allow_0rtt && early_data_safe_methods.is_empty() {
             return Err(config_invalid(
                 "resilience.protocol.early_data_safe_methods must be non-empty when allow_0rtt=true",
+            ));
+        }
+        if resilience.protocol.allow_0rtt
+            && early_data_safe_methods
+                .iter()
+                .any(|method| !matches!(method.to_ascii_uppercase().as_str(), "GET" | "HEAD"))
+        {
+            return Err(config_invalid(
+                "resilience.protocol.early_data_safe_methods may contain only GET or HEAD when allow_0rtt=true",
             ));
         }
 
@@ -676,6 +693,16 @@ mod tests {
         assert_config_invalid(
             err,
             "resilience.protocol.early_data_safe_methods must be non-empty when allow_0rtt=true",
+        );
+
+        let mut resilience = valid_resilience();
+        resilience.protocol.allow_0rtt = true;
+        resilience.protocol.early_data_safe_methods = vec!["POST".to_string()];
+        let err = RuntimeAdmissionPolicy::normalize(&resilience, 100)
+            .expect_err("state-changing 0-rtt method must fail");
+        assert_config_invalid(
+            err,
+            "resilience.protocol.early_data_safe_methods may contain only GET or HEAD when allow_0rtt=true",
         );
 
         let mut resilience = valid_resilience();
