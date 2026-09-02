@@ -172,6 +172,15 @@ impl QUICListener {
             return None;
         }
 
+        if !self.source_conn_rate_limiter.try_consume(peer.ip()) {
+            debug!(
+                "Per-source new connection rate limit exceeded, dropping Initial packet from {}",
+                peer
+            );
+            self.metrics.inc_ingress_rate_limited();
+            return None;
+        }
+
         if self.connections.len() >= self.max_active_connections {
             self.metrics.inc_connection_cap_reject();
             self.metrics
