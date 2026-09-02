@@ -62,10 +62,11 @@ fn oidc_metadata_cache_entry(url: &str) -> Arc<OidcMetadataCacheEntry> {
     let mut entries = oidc_metadata_cache()
         .write()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if !entries.contains_key(url) && entries.len() >= OIDC_METADATA_CACHE_MAX_ENTRIES {
-        if let Some(evicted_url) = entries.keys().next().cloned() {
-            entries.remove(&evicted_url);
-        }
+    if !entries.contains_key(url)
+        && entries.len() >= OIDC_METADATA_CACHE_MAX_ENTRIES
+        && let Some(evicted_url) = entries.keys().next().cloned()
+    {
+        entries.remove(&evicted_url);
     }
     Arc::clone(entries.entry(url.to_string()).or_insert_with(|| {
         Arc::new(OidcMetadataCacheEntry {
