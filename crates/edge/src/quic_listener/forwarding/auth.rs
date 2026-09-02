@@ -32,6 +32,7 @@ use crate::runtime::connection::{
 const MAX_AUTH_BODY_BYTES: usize = 64 * 1024;
 const OIDC_METADATA_REFRESH_AFTER: Duration = Duration::from_secs(60);
 const OIDC_METADATA_CACHE_TTL: Duration = Duration::from_secs(300);
+const OIDC_METADATA_CACHE_MAX_ENTRIES: usize = 256;
 
 struct OidcMetadataCacheEntry {
     metadata: RwLock<
@@ -61,6 +62,11 @@ fn oidc_metadata_cache_entry(url: &str) -> Arc<OidcMetadataCacheEntry> {
     let mut entries = oidc_metadata_cache()
         .write()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if !entries.contains_key(url) && entries.len() >= OIDC_METADATA_CACHE_MAX_ENTRIES {
+        if let Some(evicted_url) = entries.keys().next().cloned() {
+            entries.remove(&evicted_url);
+        }
+    }
     Arc::clone(entries.entry(url.to_string()).or_insert_with(|| {
         Arc::new(OidcMetadataCacheEntry {
             metadata: RwLock::new(None),
@@ -768,6 +774,19 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn oidc_metadata_cache_has_a_hard_entry_cap() {
+        for index in 0..(OIDC_METADATA_CACHE_MAX_ENTRIES + 16) {
+            let url = format!("https://issuer-{index}.example/.well-known/openid-configuration");
+            let _ = oidc_metadata_cache_entry(&url);
+        }
+
+        let entries = oidc_metadata_cache()
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        assert!(entries.len() <= OIDC_METADATA_CACHE_MAX_ENTRIES);
+    }
     use crate::{
         quic_listener::admission::{
             AdmissionPolicyDecision, UnauthorizedDecision, admission_rejection_response,
