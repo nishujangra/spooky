@@ -148,7 +148,10 @@ impl QuotaCounterBackend {
     ) -> Result<Option<Arc<InMemoryDistributedQuotaCounterStore>>, QuotaCounterBackendError> {
         match self {
             Self::InMemory { key_prefix } => Ok(Some(Arc::new(
-                InMemoryDistributedQuotaCounterStore::new(key_prefix),
+                InMemoryDistributedQuotaCounterStore::bounded(
+                    key_prefix,
+                    memory::DEFAULT_IN_MEMORY_QUOTA_MAX_ENTRIES,
+                ),
             ))),
             Self::Redis { .. } => Ok(None),
         }
@@ -158,9 +161,12 @@ impl QuotaCounterBackend {
         &self,
     ) -> Result<SharedDistributedQuotaCounterBackend, QuotaCounterBackendError> {
         match self {
-            Self::InMemory { key_prefix } => Ok(Arc::new(
-                InMemoryDistributedQuotaCounterStore::new(key_prefix),
-            )),
+            Self::InMemory { key_prefix } => {
+                Ok(Arc::new(InMemoryDistributedQuotaCounterStore::bounded(
+                    key_prefix,
+                    memory::DEFAULT_IN_MEMORY_QUOTA_MAX_ENTRIES,
+                )))
+            }
             Self::Redis {
                 url,
                 key_prefix,

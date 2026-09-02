@@ -18,6 +18,7 @@ pub const IN_MEMORY_QUOTA_PROTOCOL_VERSION: &str = "memory-fixed-window/v1";
 const IN_MEMORY_BACKEND_KIND: &str = "in_memory";
 const IN_MEMORY_KEY_PROTOCOL_TAG: &str = "qmem1";
 const IN_MEMORY_KEY_TTL_GRACE_MS: u64 = 1_000;
+pub(crate) const DEFAULT_IN_MEMORY_QUOTA_MAX_ENTRIES: usize = 4_096;
 type TimeSource = dyn Fn() -> u64 + Send + Sync;
 
 #[derive(Debug, Clone)]
