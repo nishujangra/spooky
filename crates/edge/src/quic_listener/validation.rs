@@ -1,4 +1,5 @@
 use super::*;
+use crate::routing::util::request_path_is_ambiguous;
 
 #[derive(Debug)]
 pub(super) struct RequestValidationResult {
@@ -413,6 +414,14 @@ fn validate_request_parts(
     let is_connect = method.eq_ignore_ascii_case("CONNECT");
     if method.trim().is_empty() || method.as_bytes().iter().any(|b| b.is_ascii_whitespace()) {
         return Err((http::StatusCode::BAD_REQUEST, errors.invalid_method, false));
+    }
+
+    if request_path_is_ambiguous(&path) {
+        return Err((
+            http::StatusCode::BAD_REQUEST,
+            b"ambiguous request path\n",
+            false,
+        ));
     }
 
     if is_connect {
