@@ -53,15 +53,15 @@ impl PerSourceTokenBucket {
             now.saturating_duration_since(*last_seen) < SOURCE_IDLE_TTL
         });
 
-        if !self.buckets.contains_key(&source) && self.buckets.len() >= MAX_TRACKED_SOURCES {
-            if let Some(oldest) = self
+        if !self.buckets.contains_key(&source)
+            && self.buckets.len() >= MAX_TRACKED_SOURCES
+            && let Some(oldest) = self
                 .buckets
                 .iter()
                 .min_by_key(|(_, (_, last_seen))| *last_seen)
                 .map(|(source, _)| *source)
-            {
-                self.buckets.remove(&oldest);
-            }
+        {
+            self.buckets.remove(&oldest);
         }
 
         let (bucket, last_seen) = self
