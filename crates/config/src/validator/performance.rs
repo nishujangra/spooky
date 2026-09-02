@@ -395,6 +395,18 @@ fn validate_resilience(config: &Config) -> bool {
     if config
         .resilience
         .protocol
+        .early_data_safe_methods
+        .iter()
+        .any(|method| !is_valid_http_token(method))
+    {
+        validation_error!(
+            "resilience.protocol.early_data_safe_methods must contain valid HTTP method tokens"
+        );
+        return false;
+    }
+    if config
+        .resilience
+        .protocol
         .allowed_methods
         .iter()
         .any(|method| method.trim().is_empty())
@@ -471,6 +483,19 @@ fn validate_resilience(config: &Config) -> bool {
     {
         validation_error!(
             "resilience.protocol.early_data_safe_methods must be non-empty when allow_0rtt=true"
+        );
+        return false;
+    }
+    if config.resilience.protocol.allow_0rtt
+        && config
+            .resilience
+            .protocol
+            .early_data_safe_methods
+            .iter()
+            .any(|method| !matches!(method.trim().to_ascii_uppercase().as_str(), "GET" | "HEAD"))
+    {
+        validation_error!(
+            "resilience.protocol.early_data_safe_methods may contain only GET or HEAD when allow_0rtt=true"
         );
         return false;
     }

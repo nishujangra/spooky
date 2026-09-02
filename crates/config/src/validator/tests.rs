@@ -626,6 +626,16 @@ fn rejects_invalid_performance_and_observability_values() {
     assert!(validate(&cfg).is_err());
 
     cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.resilience.protocol.allow_0rtt = true;
+    cfg.resilience.protocol.early_data_safe_methods = vec!["POST".to_string()];
+    assert!(validate(&cfg).is_err());
+
+    cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.resilience.protocol.allow_0rtt = true;
+    cfg.resilience.protocol.early_data_safe_methods = vec!["bad method".to_string()];
+    assert!(validate(&cfg).is_err());
+
+    cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
     cfg.resilience.protocol.denied_path_prefixes = vec!["admin".to_string()];
     assert!(validate(&cfg).is_err());
 
