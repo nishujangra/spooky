@@ -90,7 +90,9 @@ impl ControlApiAuthThrottle {
                 },
             );
         }
-        let state = peers.get_mut(&peer).expect("auth throttle state inserted");
+        let Some(state) = peers.get_mut(&peer) else {
+            return;
+        };
         state.failures = state.failures.saturating_add(1);
         if state.failures >= AUTH_FAILURE_LIMIT {
             state.blocked_until = Some(now + AUTH_BLOCK_DURATION);

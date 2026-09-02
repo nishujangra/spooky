@@ -60,7 +60,7 @@ fn oidc_metadata_cache_entry(url: &str) -> Arc<OidcMetadataCacheEntry> {
     }
     let mut entries = oidc_metadata_cache()
         .write()
-        .expect("oidc metadata cache lock");
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
     Arc::clone(entries.entry(url.to_string()).or_insert_with(|| {
         Arc::new(OidcMetadataCacheEntry {
             metadata: RwLock::new(None),
