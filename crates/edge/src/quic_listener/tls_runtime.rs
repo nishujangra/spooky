@@ -1,4 +1,10 @@
-use std::{ffi::OsStr, fs::File, io::Read, path::Path};
+use std::{
+    ffi::OsStr,
+    fs::File,
+    io::Read,
+    path::Path,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use super::*;
 use crate::quic_listener::control_api::security::{
@@ -609,12 +615,38 @@ impl QUICListener {
             ))
         })?;
         let metadata = Self::load_tls_certificate_metadata(leaf, cert_field, &identity.cert_path)?;
+        Self::validate_tls_certificate_validity(&metadata, cert_field, &identity.cert_path)?;
 
         Ok(LoadedListenerIdentity {
             identity: identity.clone(),
             certified_key,
             metadata,
         })
+    }
+
+    fn validate_tls_certificate_validity(
+        metadata: &RuntimeTlsCertificateMetadata,
+        cert_field: &str,
+        cert_path: &str,
+    ) -> Result<(), ProxyError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|err| ProxyError::Tls(format!("system clock is before Unix epoch: {err}")))?
+            .as_secs();
+        let now = i64::try_from(now).unwrap_or(i64::MAX);
+        if metadata.not_before_unix_seconds > now {
+            return Err(ProxyError::Tls(format!(
+                "{cert_field} '{cert_path}' is not yet valid (not_before={}, now={now})",
+                metadata.not_before_unix_seconds
+            )));
+        }
+        if metadata.not_after_unix_seconds <= now {
+            return Err(ProxyError::Tls(format!(
+                "{cert_field} '{cert_path}' is expired (not_after={}, now={now})",
+                metadata.not_after_unix_seconds
+            )));
+        }
+        Ok(())
     }
 
     fn load_client_auth_ca(
@@ -1197,7 +1229,9 @@ mod tests {
     use rustls::RootCertStore;
     use tempfile::tempdir;
 
-    use super::{LoadedClientAuthCa, MAX_TLS_PEM_BYTES, QUICListener};
+    use super::{
+        LoadedClientAuthCa, MAX_TLS_PEM_BYTES, QUICListener, RuntimeTlsCertificateMetadata,
+    };
     use crate::quic_listener::control_api::security::{
         ControlApiClientAuthPolicy, ControlApiClientCaMaterial, ControlApiClientVerifierState,
     };
@@ -1294,6 +1328,39 @@ mod tests {
         .expect_err("mismatched certificate and key must be rejected");
 
         assert!(error.to_string().contains("certificate/key mismatch"));
+    }
+
+    #[test]
+    fn tls_certificate_validity_rejects_expired_and_future_certificates() {
+        let expired = RuntimeTlsCertificateMetadata {
+            serial_hex: "01".to_string(),
+            not_before_unix_seconds: 100,
+            not_after_unix_seconds: 200,
+            dns_names: vec!["example.com".to_string()],
+        };
+        let future = RuntimeTlsCertificateMetadata {
+            serial_hex: "02".to_string(),
+            not_before_unix_seconds: i64::MAX,
+            not_after_unix_seconds: i64::MAX,
+            dns_names: vec!["example.com".to_string()],
+        };
+
+        assert!(
+            QUICListener::validate_tls_certificate_validity(
+                &expired,
+                "listen.tls.default_identity.cert",
+                "/tmp/expired.pem",
+            )
+            .is_err()
+        );
+        assert!(
+            QUICListener::validate_tls_certificate_validity(
+                &future,
+                "listen.tls.default_identity.cert",
+                "/tmp/future.pem",
+            )
+            .is_err()
+        );
     }
 
     #[test]
