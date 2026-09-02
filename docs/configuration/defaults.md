@@ -299,6 +299,7 @@ These apply when a backend provides a `health_check` object and omits individual
 | `observability.metrics.enabled` | `false` | Metrics endpoint disabled by default |
 | `observability.metrics.required` | `false` | Startup does not require the metrics endpoint |
 | `observability.metrics.address` | `"127.0.0.1"` | Loopback-only by default |
+| `observability.metrics.allow_non_loopback` | `false` | Non-loopback plaintext metrics exposure requires explicit opt-in |
 | `observability.metrics.port` | `9901` | Default metrics port |
 | `observability.metrics.path` | `"/metrics"` | Default scrape path |
 | `observability.metrics.max_connections` | `512` | Concurrent metrics connections cap |

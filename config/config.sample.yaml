@@ -173,6 +173,7 @@ observability:
         enabled: true
         required: false          # set true to fail fast when metrics endpoint cannot start
         address: "127.0.0.1"
+        allow_non_loopback: false # explicit opt-in; metrics are unauthenticated plaintext HTTP
         port: 9901
         path: "/metrics"
         max_connections: 512
