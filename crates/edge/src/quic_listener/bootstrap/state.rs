@@ -27,6 +27,8 @@ pub(in crate::quic_listener) struct BootstrapConnectionState {
     pub(in crate::quic_listener) max_request_body_bytes: usize,
     pub(in crate::quic_listener) max_response_body_bytes: usize,
     pub(in crate::quic_listener) max_connections: usize,
+    pub(in crate::quic_listener) new_connections_per_sec: u32,
+    pub(in crate::quic_listener) new_connections_burst: u32,
     pub(in crate::quic_listener) connection_timeout: Duration,
     pub(in crate::quic_listener) listener_tls_store: Arc<ListenerTlsReloadStore>,
     pub(in crate::quic_listener) transport_pool: Arc<UpstreamTransportPool>,
@@ -124,6 +126,8 @@ pub(in crate::quic_listener) fn bootstrap_connection_state(
             .connection_limits
             .max_active_connections
             .max(1),
+        new_connections_per_sec: listener_config.policies.transport.new_connections_per_sec,
+        new_connections_burst: listener_config.policies.transport.new_connections_burst,
         connection_timeout: listener_config.policies.timeouts.client_body_idle,
         listener_tls_store,
         transport_pool,
