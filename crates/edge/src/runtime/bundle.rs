@@ -506,6 +506,12 @@ impl RuntimeBundleHandle {
                 .listener_runtime_configs
                 .keys()
                 .map(String::as_str),
+            generation_state
+                .resilience
+                .quota
+                .policies
+                .iter()
+                .map(|policy| policy.name.as_str()),
         );
         metrics.set_runtime_active_generation(current.generation);
         metrics.set_runtime_history_depth(history_depth);
