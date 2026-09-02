@@ -1,4 +1,5 @@
 use super::*;
+use std::fmt;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
@@ -36,7 +37,7 @@ pub enum ExternalAuthFailureMode {
     FailClosed,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum ExternalAuth {
     Http {
@@ -56,7 +57,7 @@ pub enum ExternalAuth {
         #[serde(default)]
         issuer_url: Option<String>,
         client_id: String,
-        #[serde(default)]
+        #[serde(default, skip_serializing)]
         client_secret: Option<String>,
         #[serde(default)]
         client_secret_ref: Option<SecretRef>,
@@ -105,10 +106,11 @@ impl Default for ApiKeyAuth {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct JwtAuth {
+    #[serde(skip_serializing)]
     pub secret: String,
     pub secret_ref: Option<SecretRef>,
     pub issuer: Option<String>,
@@ -131,6 +133,88 @@ pub struct JwtAuth {
     #[serde(default = "JwksStartupBehavior::default")]
     pub jwks_startup_behavior: JwksStartupBehavior,
     pub clock_skew_secs: u64,
+}
+
+impl fmt::Debug for ExternalAuth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Http {
+                endpoint,
+                request_headers,
+                response_header_allowlist,
+                timeout_ms,
+                failure_mode,
+            } => f
+                .debug_struct("ExternalAuth::Http")
+                .field("endpoint", endpoint)
+                .field("request_headers", request_headers)
+                .field("response_header_allowlist", response_header_allowlist)
+                .field("timeout_ms", timeout_ms)
+                .field("failure_mode", failure_mode)
+                .finish(),
+            Self::Oidc {
+                discovery_url,
+                issuer_url,
+                client_id,
+                client_secret,
+                client_secret_ref,
+                audience,
+                scopes,
+                request_headers,
+                response_header_allowlist,
+                timeout_ms,
+                failure_mode,
+            } => f
+                .debug_struct("ExternalAuth::Oidc")
+                .field("discovery_url", discovery_url)
+                .field("issuer_url", issuer_url)
+                .field("client_id", client_id)
+                .field(
+                    "client_secret",
+                    &client_secret.as_ref().map(|_| "<redacted>"),
+                )
+                .field(
+                    "client_secret_ref",
+                    &client_secret_ref.as_ref().map(|_| "<configured>"),
+                )
+                .field("audience", audience)
+                .field("scopes", scopes)
+                .field("request_headers", request_headers)
+                .field("response_header_allowlist", response_header_allowlist)
+                .field("timeout_ms", timeout_ms)
+                .field("failure_mode", failure_mode)
+                .finish(),
+        }
+    }
+}
+
+impl fmt::Debug for JwtAuth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("JwtAuth")
+            .field("secret", &"<redacted>")
+            .field(
+                "secret_ref",
+                &self.secret_ref.as_ref().map(|_| "<configured>"),
+            )
+            .field("issuer", &self.issuer)
+            .field("audience", &self.audience)
+            .field("issuers", &self.issuers)
+            .field("audiences", &self.audiences)
+            .field("allowed_algorithms", &self.allowed_algorithms)
+            .field("require_kid", &self.require_kid)
+            .field("static_keys", &self.static_keys)
+            .field("jwks_url", &self.jwks_url)
+            .field(
+                "jwks_refresh_interval_secs",
+                &self.jwks_refresh_interval_secs,
+            )
+            .field("jwks_request_timeout_ms", &self.jwks_request_timeout_ms)
+            .field("jwks_cache_ttl_secs", &self.jwks_cache_ttl_secs)
+            .field("jwks_stale_if_error_secs", &self.jwks_stale_if_error_secs)
+            .field("jwks_startup_behavior", &self.jwks_startup_behavior)
+            .field("clock_skew_secs", &self.clock_skew_secs)
+            .finish()
+    }
 }
 
 impl Default for JwtAuth {
