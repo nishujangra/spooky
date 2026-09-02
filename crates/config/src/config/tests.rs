@@ -39,6 +39,14 @@ upstream:
 }
 
 #[test]
+fn bearer_token_default_uses_least_privileged_role() {
+    assert_eq!(
+        super::ControlApiBearerToken::default().role,
+        ControlApiRole::Viewer
+    );
+}
+
+#[test]
 fn backend_health_check_defaults_are_filled_by_serde() {
     let yaml = r#"
 listen:
