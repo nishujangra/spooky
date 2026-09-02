@@ -126,7 +126,7 @@ impl Default for ControlApiBearerToken {
         Self {
             token: String::new(),
             token_ref: None,
-            role: ControlApiRole::Admin,
+            role: ControlApiRole::Viewer,
             actor_id: None,
         }
     }
