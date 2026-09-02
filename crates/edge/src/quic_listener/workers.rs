@@ -174,6 +174,7 @@ fn run_sharded_listener_worker(
                     &shard_config,
                     shard_shared,
                     Some(Arc::clone(&shard_runtime_bundle)),
+                    Arc::clone(&shard_shutdown),
                 )
                 .map_err(|err| {
                     format!(
@@ -334,6 +335,7 @@ fn run_single_listener_worker(worker_runtime: WorkerThreadRuntime) -> Result<(),
         &worker_runtime.listener_config,
         worker_runtime.shared_state,
         Some(Arc::clone(&worker_runtime.runtime_bundle)),
+        Arc::clone(&worker_runtime.shutdown),
     )
     .map_err(|err| {
         format!(

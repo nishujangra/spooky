@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr, SocketAddr as StdSocketAddr, ToSocketAddrs, UdpSocket},
-    sync::{Arc, RwLock},
+    sync::{Arc, RwLock, atomic::AtomicBool},
     time::Duration,
 };
 
@@ -507,6 +507,7 @@ impl QUICListener {
             metrics: Arc::clone(&shared_services.metrics),
             resilience: Arc::clone(&generation_state.resilience),
             watchdog: Arc::clone(&shared_services.watchdog),
+            shutdown: Arc::new(AtomicBool::new(false)),
             draining: false,
             drain_start: None,
             watchdog_worker_drained: false,

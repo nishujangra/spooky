@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     net::{SocketAddr, UdpSocket},
-    sync::{Arc, RwLock},
+    sync::{Arc, RwLock, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 
@@ -54,6 +54,7 @@ pub struct QUICListener {
     pub metrics: Arc<Metrics>,
     pub resilience: Arc<RuntimeResilience>,
     pub watchdog: Arc<WatchdogCoordinator>,
+    pub shutdown: Arc<AtomicBool>,
     pub draining: bool,
     pub drain_start: Option<Instant>,
     pub watchdog_worker_drained: bool,
