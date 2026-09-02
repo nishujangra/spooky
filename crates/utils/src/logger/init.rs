@@ -14,7 +14,7 @@ use log::LevelFilter;
 
 use crate::logger::{
     errors::{build_create_log_dir_error, build_open_log_file_error},
-    formatter::{build_json_payload, should_passthrough_raw_json_target},
+    formatter::{build_json_payload, sanitize_log_text, should_passthrough_raw_json_target},
 };
 
 static LOGGER_INIT_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
@@ -95,8 +95,9 @@ fn configure_and_init_logger(
             return writeln!(buf, "{}", record.args());
         }
 
+        let message = sanitize_log_text(&record.args().to_string());
+
         if json {
-            let message = record.args().to_string();
             let payload = build_json_payload(
                 &buf.timestamp_seconds().to_string(),
                 &record.level().as_str().to_ascii_lowercase(),
@@ -112,7 +113,7 @@ fn configure_and_init_logger(
                 buf.timestamp_seconds(),
                 record.level(),
                 record.target(),
-                record.args()
+                message
             )
         }
     });
