@@ -487,6 +487,15 @@ fn runtime_bearer_tokens(config: &ControlApiConfig) -> Vec<ControlApiBearerToken
     tokens
 }
 
+fn runtime_bearer_token_from_config(token: &ControlApiBearerToken) -> ControlApiBearerTokenEntry {
+    ControlApiBearerTokenEntry {
+        token: token.token.clone(),
+        role: token.role,
+        actor_id: token.actor_id.clone(),
+        source: ControlApiBearerTokenSource::StaticTokenList,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -575,14 +584,5 @@ mod tests {
 
         throttle.record_success(peer);
         assert!(!throttle.is_blocked(peer));
-    }
-}
-
-fn runtime_bearer_token_from_config(token: &ControlApiBearerToken) -> ControlApiBearerTokenEntry {
-    ControlApiBearerTokenEntry {
-        token: token.token.clone(),
-        role: token.role,
-        actor_id: token.actor_id.clone(),
-        source: ControlApiBearerTokenSource::StaticTokenList,
     }
 }
