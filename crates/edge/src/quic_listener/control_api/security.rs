@@ -151,6 +151,58 @@ impl ControlApiIpAllowlistPolicy {
     }
 }
 
+pub(in crate::quic_listener) fn source_ip_from_request<B>(
+    request: &::http::Request<B>,
+    peer_ip: IpAddr,
+    trust_proxy_headers: bool,
+) -> IpAddr {
+    if !trust_proxy_headers {
+        return peer_ip;
+    }
+
+    request
+        .headers()
+        .get("forwarded")
+        .and_then(|value| value.to_str().ok())
+        .and_then(parse_forwarded_for)
+        .or_else(|| {
+            request
+                .headers()
+                .get("x-forwarded-for")
+                .and_then(|value| value.to_str().ok())
+                .and_then(parse_x_forwarded_for)
+        })
+        .unwrap_or(peer_ip)
+}
+
+fn parse_forwarded_for(value: &str) -> Option<IpAddr> {
+    value.split(',').next()?.split(';').find_map(|parameter| {
+        let (name, value) = parameter.trim().split_once('=')?;
+        name.trim()
+            .eq_ignore_ascii_case("for")
+            .then(|| parse_proxy_ip(value.trim()))?
+    })
+}
+
+fn parse_x_forwarded_for(value: &str) -> Option<IpAddr> {
+    parse_proxy_ip(value.split(',').next()?.trim())
+}
+
+fn parse_proxy_ip(value: &str) -> Option<IpAddr> {
+    let value = value.trim().trim_matches('"');
+    if let Some(value) = value.strip_prefix('[') {
+        let end = value.find(']')?;
+        return value[..end].parse().ok();
+    }
+    if let Ok(ip) = value.parse() {
+        return Some(ip);
+    }
+    value
+        .parse::<std::net::SocketAddr>()
+        .ok()
+        .map(|addr| addr.ip())
+}
+
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(in crate::quic_listener) enum ControlApiSourcePolicyDecision {
     Allow,
@@ -297,6 +349,50 @@ fn runtime_bearer_tokens(config: &ControlApiConfig) -> Vec<ControlApiBearerToken
             .map(runtime_bearer_token_from_config),
     );
     tokens
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_ip_uses_peer_without_trusted_proxy_headers() {
+        let request = ::http::Request::builder()
+            .header("x-forwarded-for", "203.0.113.10")
+            .body(())
+            .expect("request");
+        let peer = "10.0.0.2".parse().expect("peer ip");
+
+        assert_eq!(source_ip_from_request(&request, peer, false), peer);
+    }
+
+    #[test]
+    fn source_ip_uses_forwarded_header_when_trusted() {
+        let request = ::http::Request::builder()
+            .header("forwarded", "for=\"[2001:db8::10]:443\";proto=https")
+            .body(())
+            .expect("request");
+        let peer = "10.0.0.2".parse().expect("peer ip");
+
+        assert_eq!(
+            source_ip_from_request(&request, peer, true),
+            "2001:db8::10".parse::<IpAddr>().expect("forwarded ip")
+        );
+    }
+
+    #[test]
+    fn source_ip_uses_first_x_forwarded_for_entry() {
+        let request = ::http::Request::builder()
+            .header("x-forwarded-for", "203.0.113.10, 10.0.0.2")
+            .body(())
+            .expect("request");
+        let peer = "10.0.0.3".parse().expect("peer ip");
+
+        assert_eq!(
+            source_ip_from_request(&request, peer, true),
+            "203.0.113.10".parse::<IpAddr>().expect("forwarded ip")
+        );
+    }
 }
 
 fn runtime_bearer_token_from_config(token: &ControlApiBearerToken) -> ControlApiBearerTokenEntry {

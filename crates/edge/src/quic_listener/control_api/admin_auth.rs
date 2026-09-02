@@ -7,6 +7,7 @@ use super::{
     audit::AdminAuditResult,
     security::{
         ControlApiSecurityPolicy, ControlApiSourcePolicyContext, ControlApiSourcePolicyDecision,
+        source_ip_from_request,
     },
     state::{ControlApiPaths, ControlApiState},
     *,
@@ -326,7 +327,11 @@ impl QUICListener {
         };
 
         let source_policy = ControlApiSourcePolicyContext {
-            source_ip: request_context.peer_addr.ip(),
+            source_ip: source_ip_from_request(
+                req,
+                request_context.peer_addr.ip(),
+                security.ip_allowlist.trust_proxy_headers,
+            ),
             trust_proxy_headers: security.ip_allowlist.trust_proxy_headers,
         };
         match security.evaluate_source_policy(&source_policy) {
