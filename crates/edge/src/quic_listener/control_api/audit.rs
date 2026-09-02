@@ -130,9 +130,10 @@ impl ControlApiAdminAuditDelivery {
 }
 
 struct ControlApiBufferedAuditWriter {
-    sender: SyncSender<String>,
+    sender: Option<SyncSender<String>>,
     path: String,
     metrics: Arc<Metrics>,
+    thread: Option<thread::JoinHandle<()>>,
 }
 
 impl ControlApiBufferedAuditWriter {
@@ -146,7 +147,7 @@ impl ControlApiBufferedAuditWriter {
         let thread_path = path.clone();
         let thread_metrics = Arc::clone(&metrics);
 
-        thread::Builder::new()
+        let thread = thread::Builder::new()
             .name("control-api-audit-writer".to_string())
             .spawn(move || {
                 let mut file = None;
@@ -176,14 +177,19 @@ impl ControlApiBufferedAuditWriter {
             .ok()?;
 
         Some(Self {
-            sender,
+            sender: Some(sender),
             path,
             metrics,
+            thread: Some(thread),
         })
     }
 
     fn emit(&self, serialized: String) {
-        match self.sender.try_send(serialized) {
+        let Some(sender) = self.sender.as_ref() else {
+            self.metrics.inc_control_api_audit_event_drop();
+            return;
+        };
+        match sender.try_send(serialized) {
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {
                 self.metrics.inc_control_api_audit_event_drop();
@@ -261,6 +267,20 @@ impl ControlApiBufferedAuditWriter {
                     path, err
                 );
                 None
+            }
+        }
+    }
+}
+
+impl Drop for ControlApiBufferedAuditWriter {
+    fn drop(&mut self) {
+        // Closing the sender lets the writer drain every queued event before
+        // recv() returns Disconnected. Join the thread so process shutdown
+        // does not discard events that are still being written.
+        self.sender.take();
+        if let Some(thread) = self.thread.take() {
+            if thread.thread().id() != thread::current().id() {
+                let _ = thread.join();
             }
         }
     }
@@ -953,6 +973,24 @@ mod tests {
     }
 
     #[test]
+    fn control_api_audit_buffered_writer_drains_queued_events_on_drop() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("admin-audit.jsonl");
+        let metrics = Arc::new(Metrics::default());
+        let writer = ControlApiBufferedAuditWriter::try_spawn(
+            path.to_string_lossy().to_string(),
+            Arc::clone(&metrics),
+        )
+        .expect("spawn audit writer");
+
+        writer.emit("{\"event\":\"queued\"}".to_string());
+        drop(writer);
+
+        let contents = std::fs::read_to_string(&path).expect("read drained audit file");
+        assert_eq!(contents, "{\"event\":\"queued\"}\n");
+    }
+
+    #[test]
     fn control_api_audit_buffered_writer_sync_fallback_preserves_event_when_thread_is_gone() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("admin-audit.jsonl");
@@ -960,9 +998,10 @@ mod tests {
         let (sender, receiver) = mpsc::sync_channel(1);
         drop(receiver);
         let writer = ControlApiBufferedAuditWriter {
-            sender,
+            sender: Some(sender),
             path: path.to_string_lossy().to_string(),
             metrics: Arc::clone(&metrics),
+            thread: None,
         };
 
         writer.emit("{\"event\":\"audit\"}".to_string());
@@ -993,9 +1032,10 @@ mod tests {
             .send("already-buffered".to_string())
             .expect("fill buffer");
         let writer = ControlApiBufferedAuditWriter {
-            sender,
+            sender: Some(sender),
             path: path.to_string_lossy().to_string(),
             metrics: Arc::clone(&metrics),
+            thread: None,
         };
 
         writer.emit("{\"event\":\"audit\"}".to_string());
