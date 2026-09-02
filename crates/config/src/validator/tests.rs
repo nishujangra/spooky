@@ -737,6 +737,11 @@ fn rejects_invalid_performance_and_observability_values() {
     assert!(validate(&cfg).is_err());
 
     cfg.observability.metrics.allow_non_loopback = true;
+    assert!(validate(&cfg).is_err());
+
+    cfg.observability.control_api.tls.client_auth.mode = ControlApiClientAuthMode::Required;
+    cfg.observability.control_api.tls.client_auth.ca_file =
+        Some(cert.to_string_lossy().to_string());
     assert!(validate(&cfg).is_ok());
 
     cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());

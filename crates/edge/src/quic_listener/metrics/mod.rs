@@ -11,6 +11,8 @@ use hyper_util::rt::TokioIo;
 use impulse_config::config::MetricsEndpoint;
 use impulse_errors::ProxyError;
 use log::{debug, error, info};
+use rustls::ServerConfig as RustlsServerConfig;
+use tokio_rustls::TlsAcceptor;
 
 use super::{
     QUICListener,
