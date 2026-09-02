@@ -409,19 +409,6 @@ pub(super) fn is_valid_http_token(value: &str) -> bool {
         })
 }
 
-pub(super) fn is_valid_http_url(value: &str) -> bool {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-
-    let Ok(uri) = trimmed.parse::<http::Uri>() else {
-        return false;
-    };
-
-    matches!(uri.scheme_str(), Some("http") | Some("https")) && uri.authority().is_some()
-}
-
 pub(crate) fn is_valid_https_url(value: &str) -> bool {
     let trimmed = value.trim();
     if trimmed.is_empty() {

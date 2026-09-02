@@ -406,17 +406,10 @@ fn validate_upstream_policy(
                 timeout_ms,
                 ..
             } => {
-                let valid_endpoint = endpoint
-                    .trim()
-                    .parse::<http::Uri>()
-                    .ok()
-                    .is_some_and(|uri| {
-                        matches!(uri.scheme_str(), Some("http") | Some("https"))
-                            && uri.authority().is_some()
-                    });
+                let valid_endpoint = is_valid_https_or_loopback_http_url(endpoint);
                 if !valid_endpoint {
                     return Err(RuntimeConfigError::ConfigInvalid(format!(
-                        "upstream '{upstream_name}' auth.external_auth.http.endpoint must be an absolute http(s) URL"
+                        "upstream '{upstream_name}' auth.external_auth.http.endpoint must be an absolute https URL or loopback http URL"
                     )));
                 }
                 validate_runtime_external_auth_headers(

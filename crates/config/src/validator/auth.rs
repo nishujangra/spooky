@@ -2,10 +2,7 @@ use std::collections::HashMap;
 
 use super::*;
 use crate::validator::{
-    helpers::{
-        is_valid_http_token, is_valid_http_url, is_valid_https_or_loopback_http_url,
-        is_valid_https_url,
-    },
+    helpers::{is_valid_http_token, is_valid_https_or_loopback_http_url, is_valid_https_url},
     secrets::validate_secret_source_exclusivity,
 };
 
@@ -162,9 +159,9 @@ pub(super) fn validate_upstream_auth(
                 timeout_ms,
                 ..
             } => {
-                if !is_valid_http_url(endpoint) {
+                if !is_valid_https_or_loopback_http_url(endpoint) {
                     validation_error!(
-                        "upstream '{}' auth.external_auth.http.endpoint must be an absolute http(s) URL",
+                        "upstream '{}' auth.external_auth.http.endpoint must be an absolute https URL or loopback http URL",
                         upstream_name
                     );
                     return false;
