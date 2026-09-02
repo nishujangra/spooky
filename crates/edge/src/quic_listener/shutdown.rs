@@ -1,4 +1,4 @@
-use std::{net::UdpSocket, time::Instant};
+use std::{net::UdpSocket, sync::atomic::Ordering, time::Instant};
 
 use log::{error, info, warn};
 
@@ -87,7 +87,8 @@ impl QUICListener {
     }
 
     fn should_enter_draining(&self) -> bool {
-        self.watchdog.restart_requested() && !self.draining
+        (self.watchdog.restart_requested() || self.shutdown.load(Ordering::Relaxed))
+            && !self.draining
     }
 
     fn finish_watchdog_drain(&mut self) {
