@@ -179,6 +179,8 @@ impl Default for ControlApiAuthorization {
 #[serde(deny_unknown_fields)]
 pub struct ControlApiIpAllowlist {
     pub cidrs: Vec<String>,
+    #[serde(default)]
+    pub trusted_proxy_cidrs: Vec<String>,
     pub trust_proxy_headers: bool,
 }
 

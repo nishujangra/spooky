@@ -331,6 +331,7 @@ impl QUICListener {
                 req,
                 request_context.peer_addr.ip(),
                 security.ip_allowlist.trust_proxy_headers,
+                security.ip_allowlist.trusted_proxy_matcher.as_ref(),
             ),
             trust_proxy_headers: security.ip_allowlist.trust_proxy_headers,
         };

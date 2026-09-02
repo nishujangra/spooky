@@ -128,6 +128,7 @@ impl ControlApiAuthorizationPolicy {
 pub(in crate::quic_listener) struct ControlApiIpAllowlistPolicy {
     pub(in crate::quic_listener) trust_proxy_headers: bool,
     pub(in crate::quic_listener) matcher: Option<ControlApiIpAllowlistMatcher>,
+    pub(in crate::quic_listener) trusted_proxy_matcher: Option<ControlApiIpAllowlistMatcher>,
 }
 
 impl ControlApiIpAllowlistPolicy {
@@ -138,9 +139,20 @@ impl ControlApiIpAllowlistPolicy {
             .iter()
             .filter_map(|cidr| ControlApiIpNetwork::parse(cidr))
             .collect::<Vec<_>>();
+        let trusted_proxy_cidrs = config
+            .ip_allowlist
+            .trusted_proxy_cidrs
+            .iter()
+            .filter_map(|cidr| ControlApiIpNetwork::parse(cidr))
+            .collect::<Vec<_>>();
         Self {
             trust_proxy_headers: config.ip_allowlist.trust_proxy_headers,
             matcher: (!cidrs.is_empty()).then_some(ControlApiIpAllowlistMatcher { cidrs }),
+            trusted_proxy_matcher: (!trusted_proxy_cidrs.is_empty()).then_some(
+                ControlApiIpAllowlistMatcher {
+                    cidrs: trusted_proxy_cidrs,
+                },
+            ),
         }
     }
 
@@ -155,8 +167,11 @@ pub(in crate::quic_listener) fn source_ip_from_request<B>(
     request: &::http::Request<B>,
     peer_ip: IpAddr,
     trust_proxy_headers: bool,
+    trusted_proxy_matcher: Option<&ControlApiIpAllowlistMatcher>,
 ) -> IpAddr {
-    if !trust_proxy_headers {
+    if !trust_proxy_headers
+        || !trusted_proxy_matcher.is_some_and(|matcher| matcher.contains(peer_ip))
+    {
         return peer_ip;
     }
 
@@ -164,28 +179,50 @@ pub(in crate::quic_listener) fn source_ip_from_request<B>(
         .headers()
         .get("forwarded")
         .and_then(|value| value.to_str().ok())
-        .and_then(parse_forwarded_for)
+        .and_then(|value| parse_forwarded_for(value, trusted_proxy_matcher))
         .or_else(|| {
             request
                 .headers()
                 .get("x-forwarded-for")
                 .and_then(|value| value.to_str().ok())
-                .and_then(parse_x_forwarded_for)
+                .and_then(|value| parse_x_forwarded_for(value, trusted_proxy_matcher))
         })
         .unwrap_or(peer_ip)
 }
 
-fn parse_forwarded_for(value: &str) -> Option<IpAddr> {
-    value.split(',').next()?.split(';').find_map(|parameter| {
-        let (name, value) = parameter.trim().split_once('=')?;
-        name.trim()
-            .eq_ignore_ascii_case("for")
-            .then(|| parse_proxy_ip(value.trim()))?
-    })
+fn parse_forwarded_for(
+    value: &str,
+    trusted_proxy_matcher: Option<&ControlApiIpAllowlistMatcher>,
+) -> Option<IpAddr> {
+    let chain = value
+        .split(',')
+        .map(|element| {
+            element.split(';').find_map(|parameter| {
+                let (name, value) = parameter.trim().split_once('=')?;
+                name.trim()
+                    .eq_ignore_ascii_case("for")
+                    .then(|| parse_proxy_ip(value.trim()))?
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    chain
+        .into_iter()
+        .rev()
+        .find(|ip| !trusted_proxy_matcher.is_some_and(|matcher| matcher.contains(*ip)))
 }
 
-fn parse_x_forwarded_for(value: &str) -> Option<IpAddr> {
-    parse_proxy_ip(value.split(',').next()?.trim())
+fn parse_x_forwarded_for(
+    value: &str,
+    trusted_proxy_matcher: Option<&ControlApiIpAllowlistMatcher>,
+) -> Option<IpAddr> {
+    let chain = value
+        .split(',')
+        .map(|value| parse_proxy_ip(value.trim()))
+        .collect::<Option<Vec<_>>>()?;
+    chain
+        .into_iter()
+        .rev()
+        .find(|ip| !trusted_proxy_matcher.is_some_and(|matcher| matcher.contains(*ip)))
 }
 
 fn parse_proxy_ip(value: &str) -> Option<IpAddr> {
@@ -363,7 +400,7 @@ mod tests {
             .expect("request");
         let peer = "10.0.0.2".parse().expect("peer ip");
 
-        assert_eq!(source_ip_from_request(&request, peer, false), peer);
+        assert_eq!(source_ip_from_request(&request, peer, false, None), peer);
     }
 
     #[test]
@@ -375,13 +412,37 @@ mod tests {
         let peer = "10.0.0.2".parse().expect("peer ip");
 
         assert_eq!(
-            source_ip_from_request(&request, peer, true),
+            source_ip_from_request(
+                &request,
+                peer,
+                true,
+                Some(&ControlApiIpAllowlistMatcher {
+                    cidrs: vec![ControlApiIpNetwork::parse("10.0.0.0/8").unwrap()],
+                }),
+            ),
             "2001:db8::10".parse::<IpAddr>().expect("forwarded ip")
         );
     }
 
     #[test]
-    fn source_ip_uses_first_x_forwarded_for_entry() {
+    fn source_ip_ignores_forwarded_headers_from_untrusted_peer() {
+        let request = ::http::Request::builder()
+            .header("x-forwarded-for", "203.0.113.10")
+            .body(())
+            .expect("request");
+        let peer = "192.0.2.10".parse().expect("peer ip");
+        let trusted_proxy_matcher = ControlApiIpAllowlistMatcher {
+            cidrs: vec![ControlApiIpNetwork::parse("10.0.0.0/8").unwrap()],
+        };
+
+        assert_eq!(
+            source_ip_from_request(&request, peer, true, Some(&trusted_proxy_matcher)),
+            peer
+        );
+    }
+
+    #[test]
+    fn source_ip_uses_proxy_adjacent_x_forwarded_for_entry() {
         let request = ::http::Request::builder()
             .header("x-forwarded-for", "203.0.113.10, 10.0.0.2")
             .body(())
@@ -389,7 +450,14 @@ mod tests {
         let peer = "10.0.0.3".parse().expect("peer ip");
 
         assert_eq!(
-            source_ip_from_request(&request, peer, true),
+            source_ip_from_request(
+                &request,
+                peer,
+                true,
+                Some(&ControlApiIpAllowlistMatcher {
+                    cidrs: vec![ControlApiIpNetwork::parse("10.0.0.0/8").unwrap()],
+                }),
+            ),
             "203.0.113.10".parse::<IpAddr>().expect("forwarded ip")
         );
     }

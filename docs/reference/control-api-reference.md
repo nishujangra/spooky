@@ -219,6 +219,7 @@ observability:
     ip_allowlist:
       cidrs:
         - "10.0.10.0/24"
+      trusted_proxy_cidrs: []
     audit:
       enabled: true
       format: json
