@@ -4004,6 +4004,8 @@ performance:
 <h3 id="metrics-endpoint">Metrics Endpoint</h3>
 <p>Key fields:</p>
 <ul>
+<li><code>observability.metrics.address</code> (default: <code>127.0.0.1</code>): bind address. Non-loopback addresses are rejected unless <code>allow_non_loopback</code> is explicitly enabled.</li>
+<li><code>observability.metrics.allow_non_loopback</code> (default: <code>false</code>): explicit opt-in for remote scraping. It requires <code>observability.control_api.tls.client_auth.mode=required</code>; the metrics endpoint then uses the primary listener certificate and the configured control-plane CA for mTLS.</li>
 <li><code>observability.metrics.max_connections</code> (default: <code>512</code>): concurrent connection cap.</li>
 <li><code>observability.metrics.connection_timeout_ms</code> (default: <code>30000</code>): per-connection lifetime timeout.</li>
 </ul>

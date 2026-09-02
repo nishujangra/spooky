@@ -1530,7 +1530,7 @@
 <li>When a bearer token and an mTLS identity are presented together, their roles are <strong>unioned</strong>, not intersected: a <code>viewer</code> token with an <code>admin</code> certificate is treated as <code>admin</code>. Certificates cannot be used to constrain a token.</li>
 <li>An unrecognized <code>auth.identity_source.kind</code> is ignored and silently falls back to the default rather than failing config validation.</li>
 <li>The admin audit stream is per-process and local; there is no fleet-wide aggregation, delivery guarantee, or tamper-evidence.</li>
-<li><code>ip_allowlist.trust_proxy_headers</code> is accepted in config but not honored — the source address is always the TCP peer, and proxy headers are never trusted.</li>
+<li><code>ip_allowlist.trust_proxy_headers</code> uses forwarded client addresses only when the raw peer matches <code>ip_allowlist.trusted_proxy_cidrs</code>; configure that list for the proxy network before enabling header trust.</li>
 <li>External auth (HTTP subrequest and OIDC) is implemented as a non-blocking async check per upstream, with configurable fail-open/fail-closed behavior; there is no interactive login or session-cookie flow.</li>
 <li>OIDC external auth covers discovery and token introspection only, and the discovery document is refetched on every request rather than cached. Local signature validation against an issuer's keys is available through JWT auth with <code>jwks_url</code>, not through the OIDC provider.</li>
 <li>No WAF or advanced request-inspection layer.</li>
