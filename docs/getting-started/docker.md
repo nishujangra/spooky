@@ -54,12 +54,18 @@ upstream:
 
 If you are on Linux, replace `host.docker.internal` with a reachable host-gateway address or run the backend in the same Compose project and use its service name.
 
-Also replace the control API token:
+The shipped Docker config keeps the metrics and control API disabled and does
+not publish their ports by default. If you need the control API, enable it and
+configure a real token (or mTLS) before starting the stack; placeholder tokens
+are rejected by configuration validation:
 
 ```yaml
 observability:
+  metrics:
+    enabled: true
   control_api:
-    auth_token: "replace-with-strong-token"   # <-- change this
+    enabled: true
+    auth_token: "<generate-a-unique-secret>"
 ```
 
 **5. Start the stack:**

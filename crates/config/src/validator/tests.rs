@@ -1060,6 +1060,16 @@ fn rejects_loopback_control_api_without_auth_token() {
 }
 
 #[test]
+fn rejects_known_control_api_placeholder_token() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.observability.control_api.enabled = true;
+    cfg.observability.control_api.auth_token = Some("replace-with-strong-token".to_string());
+    assert!(validate(&cfg).is_err());
+}
+
+#[test]
 fn accepts_control_api_with_bearer_tokens_and_no_legacy_auth_token() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_certs(dir.path());
