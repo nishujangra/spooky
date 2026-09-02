@@ -709,6 +709,7 @@ fn rejects_invalid_performance_and_observability_values() {
             enabled: true,
             required: false,
             address: "127.0.0.1".to_string(),
+            allow_non_loopback: false,
             port: 9901,
             path: "metrics".to_string(),
             max_connections: 128,
@@ -729,6 +730,19 @@ fn rejects_invalid_performance_and_observability_values() {
     cfg.observability.metrics.enabled = true;
     cfg.observability.metrics.connection_timeout_ms = 0;
     assert!(validate(&cfg).is_err());
+
+    cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.observability.metrics.enabled = true;
+    cfg.observability.metrics.address = "0.0.0.0".to_string();
+    assert!(validate(&cfg).is_err());
+
+    cfg.observability.metrics.allow_non_loopback = true;
+    assert!(validate(&cfg).is_err());
+
+    cfg.observability.control_api.tls.client_auth.mode = ControlApiClientAuthMode::Required;
+    cfg.observability.control_api.tls.client_auth.ca_file =
+        Some(cert.to_string_lossy().to_string());
+    assert!(validate(&cfg).is_ok());
 
     cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
     cfg.observability.control_api.enabled = true;
@@ -908,6 +922,7 @@ fn accepts_valid_metrics_and_performance_configuration() {
             enabled: true,
             required: false,
             address: "127.0.0.1".to_string(),
+            allow_non_loopback: false,
             port: 9901,
             path: "/metrics".to_string(),
             max_connections: 128,

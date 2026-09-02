@@ -17,6 +17,8 @@ pub struct MetricsEndpoint {
     pub enabled: bool,
     pub required: bool,
     pub address: String,
+    /// Permit binding the unauthenticated plaintext metrics endpoint beyond loopback.
+    pub allow_non_loopback: bool,
     pub port: u16,
     pub path: String,
     pub max_connections: usize,
@@ -29,6 +31,7 @@ impl Default for MetricsEndpoint {
             enabled: false,
             required: false,
             address: "127.0.0.1".to_string(),
+            allow_non_loopback: false,
             port: 9901,
             path: "/metrics".to_string(),
             max_connections: 512,
@@ -179,6 +182,8 @@ impl Default for ControlApiAuthorization {
 #[serde(deny_unknown_fields)]
 pub struct ControlApiIpAllowlist {
     pub cidrs: Vec<String>,
+    #[serde(default)]
+    pub trusted_proxy_cidrs: Vec<String>,
     pub trust_proxy_headers: bool,
 }
 

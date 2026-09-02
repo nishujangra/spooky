@@ -19,6 +19,7 @@ pub(super) struct ControlApiServiceState {
     runtime_bundle_handle: Option<Arc<RuntimeBundleHandle>>,
     pub(super) endpoint: ControlApiConfig,
     pub(super) security: Arc<ControlApiSecurityPolicy>,
+    pub(super) auth_throttle: Arc<super::security::ControlApiAuthThrottle>,
     pub(super) paths: ControlApiPaths,
     pub(super) primary_listener_label: Option<String>,
 }
@@ -96,6 +97,7 @@ impl ControlApiServiceCtx {
             runtime_bundle_handle,
             endpoint,
             security,
+            auth_throttle: Arc::clone(&self.auth_throttle),
             paths,
         }
     }

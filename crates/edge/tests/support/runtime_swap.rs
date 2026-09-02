@@ -115,6 +115,7 @@ impl RuntimeSwapHarness {
                 enabled: true,
                 required: true,
                 address: "127.0.0.1".to_string(),
+                allow_non_loopback: false,
                 port: self.metrics_port,
                 path: "/metrics".to_string(),
                 max_connections: 32,

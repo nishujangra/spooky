@@ -1,4 +1,9 @@
-use std::{net::IpAddr, sync::Arc};
+use std::{
+    collections::HashMap,
+    net::IpAddr,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 use impulse_config::config::{
     ControlApi as ControlApiConfig, ControlApiBearerToken, ControlApiClientAuthMode,
@@ -7,6 +12,100 @@ use impulse_config::config::{
 
 use super::audit::ControlApiAdminAuditEmitter;
 use crate::Metrics;
+
+const AUTH_FAILURE_LIMIT: u32 = 5;
+const AUTH_FAILURE_WINDOW: Duration = Duration::from_secs(60);
+const AUTH_BLOCK_DURATION: Duration = Duration::from_secs(60);
+const AUTH_THROTTLE_MAX_PEERS: usize = 4096;
+
+#[derive(Debug)]
+struct AuthFailureState {
+    first_failure: Instant,
+    failures: u32,
+    blocked_until: Option<Instant>,
+}
+
+#[derive(Debug)]
+pub(in crate::quic_listener) struct ControlApiAuthThrottle {
+    peers: Mutex<HashMap<IpAddr, AuthFailureState>>,
+}
+
+impl ControlApiAuthThrottle {
+    pub(in crate::quic_listener) fn new() -> Self {
+        Self {
+            peers: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub(in crate::quic_listener) fn is_blocked(&self, peer: IpAddr) -> bool {
+        let now = Instant::now();
+        let mut peers = self
+            .peers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(state) = peers.get_mut(&peer) else {
+            return false;
+        };
+        if state.blocked_until.is_some_and(|until| until > now) {
+            return true;
+        }
+        if state.blocked_until.is_some_and(|until| until <= now)
+            || now.duration_since(state.first_failure) >= AUTH_FAILURE_WINDOW
+        {
+            peers.remove(&peer);
+        }
+        false
+    }
+
+    pub(in crate::quic_listener) fn record_failure(&self, peer: IpAddr) {
+        let now = Instant::now();
+        let mut peers = self
+            .peers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(state) = peers.get_mut(&peer)
+            && now.duration_since(state.first_failure) >= AUTH_FAILURE_WINDOW
+        {
+            *state = AuthFailureState {
+                first_failure: now,
+                failures: 0,
+                blocked_until: None,
+            };
+        }
+        if !peers.contains_key(&peer) {
+            if peers.len() >= AUTH_THROTTLE_MAX_PEERS
+                && let Some(oldest_peer) = peers
+                    .iter()
+                    .min_by_key(|(_, state)| state.first_failure)
+                    .map(|(peer, _)| *peer)
+            {
+                peers.remove(&oldest_peer);
+            }
+            peers.insert(
+                peer,
+                AuthFailureState {
+                    first_failure: now,
+                    failures: 0,
+                    blocked_until: None,
+                },
+            );
+        }
+        let Some(state) = peers.get_mut(&peer) else {
+            return;
+        };
+        state.failures = state.failures.saturating_add(1);
+        if state.failures >= AUTH_FAILURE_LIMIT {
+            state.blocked_until = Some(now + AUTH_BLOCK_DURATION);
+        }
+    }
+
+    pub(in crate::quic_listener) fn record_success(&self, peer: IpAddr) {
+        self.peers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&peer);
+    }
+}
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(in crate::quic_listener) struct ControlApiSecurityPolicy {
@@ -128,6 +227,7 @@ impl ControlApiAuthorizationPolicy {
 pub(in crate::quic_listener) struct ControlApiIpAllowlistPolicy {
     pub(in crate::quic_listener) trust_proxy_headers: bool,
     pub(in crate::quic_listener) matcher: Option<ControlApiIpAllowlistMatcher>,
+    pub(in crate::quic_listener) trusted_proxy_matcher: Option<ControlApiIpAllowlistMatcher>,
 }
 
 impl ControlApiIpAllowlistPolicy {
@@ -138,9 +238,20 @@ impl ControlApiIpAllowlistPolicy {
             .iter()
             .filter_map(|cidr| ControlApiIpNetwork::parse(cidr))
             .collect::<Vec<_>>();
+        let trusted_proxy_cidrs = config
+            .ip_allowlist
+            .trusted_proxy_cidrs
+            .iter()
+            .filter_map(|cidr| ControlApiIpNetwork::parse(cidr))
+            .collect::<Vec<_>>();
         Self {
             trust_proxy_headers: config.ip_allowlist.trust_proxy_headers,
             matcher: (!cidrs.is_empty()).then_some(ControlApiIpAllowlistMatcher { cidrs }),
+            trusted_proxy_matcher: (!trusted_proxy_cidrs.is_empty()).then_some(
+                ControlApiIpAllowlistMatcher {
+                    cidrs: trusted_proxy_cidrs,
+                },
+            ),
         }
     }
 
@@ -149,6 +260,83 @@ impl ControlApiIpAllowlistPolicy {
             .as_ref()
             .is_none_or(|matcher| matcher.contains(ip))
     }
+}
+
+pub(in crate::quic_listener) fn source_ip_from_request<B>(
+    request: &::http::Request<B>,
+    peer_ip: IpAddr,
+    trust_proxy_headers: bool,
+    trusted_proxy_matcher: Option<&ControlApiIpAllowlistMatcher>,
+) -> IpAddr {
+    if !trust_proxy_headers
+        || !trusted_proxy_matcher.is_some_and(|matcher| matcher.contains(peer_ip))
+    {
+        return peer_ip;
+    }
+
+    request
+        .headers()
+        .get("forwarded")
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| parse_forwarded_for(value, trusted_proxy_matcher))
+        .or_else(|| {
+            request
+                .headers()
+                .get("x-forwarded-for")
+                .and_then(|value| value.to_str().ok())
+                .and_then(|value| parse_x_forwarded_for(value, trusted_proxy_matcher))
+        })
+        .unwrap_or(peer_ip)
+}
+
+fn parse_forwarded_for(
+    value: &str,
+    trusted_proxy_matcher: Option<&ControlApiIpAllowlistMatcher>,
+) -> Option<IpAddr> {
+    let chain = value
+        .split(',')
+        .map(|element| {
+            element.split(';').find_map(|parameter| {
+                let (name, value) = parameter.trim().split_once('=')?;
+                name.trim()
+                    .eq_ignore_ascii_case("for")
+                    .then(|| parse_proxy_ip(value.trim()))?
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    chain
+        .into_iter()
+        .rev()
+        .find(|ip| !trusted_proxy_matcher.is_some_and(|matcher| matcher.contains(*ip)))
+}
+
+fn parse_x_forwarded_for(
+    value: &str,
+    trusted_proxy_matcher: Option<&ControlApiIpAllowlistMatcher>,
+) -> Option<IpAddr> {
+    let chain = value
+        .split(',')
+        .map(|value| parse_proxy_ip(value.trim()))
+        .collect::<Option<Vec<_>>>()?;
+    chain
+        .into_iter()
+        .rev()
+        .find(|ip| !trusted_proxy_matcher.is_some_and(|matcher| matcher.contains(*ip)))
+}
+
+fn parse_proxy_ip(value: &str) -> Option<IpAddr> {
+    let value = value.trim().trim_matches('"');
+    if let Some(value) = value.strip_prefix('[') {
+        let end = value.find(']')?;
+        return value[..end].parse().ok();
+    }
+    if let Ok(ip) = value.parse() {
+        return Some(ip);
+    }
+    value
+        .parse::<std::net::SocketAddr>()
+        .ok()
+        .map(|addr| addr.ip())
 }
 
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -305,5 +493,96 @@ fn runtime_bearer_token_from_config(token: &ControlApiBearerToken) -> ControlApi
         role: token.role,
         actor_id: token.actor_id.clone(),
         source: ControlApiBearerTokenSource::StaticTokenList,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn source_ip_uses_peer_without_trusted_proxy_headers() {
+        let request = ::http::Request::builder()
+            .header("x-forwarded-for", "203.0.113.10")
+            .body(())
+            .expect("request");
+        let peer = "10.0.0.2".parse().expect("peer ip");
+
+        assert_eq!(source_ip_from_request(&request, peer, false, None), peer);
+    }
+
+    #[test]
+    fn source_ip_uses_forwarded_header_when_trusted() {
+        let request = ::http::Request::builder()
+            .header("forwarded", "for=\"[2001:db8::10]:443\";proto=https")
+            .body(())
+            .expect("request");
+        let peer = "10.0.0.2".parse().expect("peer ip");
+
+        assert_eq!(
+            source_ip_from_request(
+                &request,
+                peer,
+                true,
+                Some(&ControlApiIpAllowlistMatcher {
+                    cidrs: vec![ControlApiIpNetwork::parse("10.0.0.0/8").unwrap()],
+                }),
+            ),
+            "2001:db8::10".parse::<IpAddr>().expect("forwarded ip")
+        );
+    }
+
+    #[test]
+    fn source_ip_ignores_forwarded_headers_from_untrusted_peer() {
+        let request = ::http::Request::builder()
+            .header("x-forwarded-for", "203.0.113.10")
+            .body(())
+            .expect("request");
+        let peer = "192.0.2.10".parse().expect("peer ip");
+        let trusted_proxy_matcher = ControlApiIpAllowlistMatcher {
+            cidrs: vec![ControlApiIpNetwork::parse("10.0.0.0/8").unwrap()],
+        };
+
+        assert_eq!(
+            source_ip_from_request(&request, peer, true, Some(&trusted_proxy_matcher)),
+            peer
+        );
+    }
+
+    #[test]
+    fn source_ip_uses_proxy_adjacent_x_forwarded_for_entry() {
+        let request = ::http::Request::builder()
+            .header("x-forwarded-for", "203.0.113.10, 10.0.0.2")
+            .body(())
+            .expect("request");
+        let peer = "10.0.0.3".parse().expect("peer ip");
+
+        assert_eq!(
+            source_ip_from_request(
+                &request,
+                peer,
+                true,
+                Some(&ControlApiIpAllowlistMatcher {
+                    cidrs: vec![ControlApiIpNetwork::parse("10.0.0.0/8").unwrap()],
+                }),
+            ),
+            "203.0.113.10".parse::<IpAddr>().expect("forwarded ip")
+        );
+    }
+
+    #[test]
+    fn auth_throttle_blocks_repeated_failures_and_resets_on_success() {
+        let throttle = ControlApiAuthThrottle::new();
+        let peer = "192.0.2.10".parse().expect("peer ip");
+
+        for _ in 0..4 {
+            throttle.record_failure(peer);
+            assert!(!throttle.is_blocked(peer));
+        }
+        throttle.record_failure(peer);
+        assert!(throttle.is_blocked(peer));
+
+        throttle.record_success(peer);
+        assert!(!throttle.is_blocked(peer));
     }
 }

@@ -1,10 +1,16 @@
-use std::{convert::Infallible, sync::OnceLock};
+use std::{
+    collections::HashMap,
+    convert::Infallible,
+    sync::{Arc, OnceLock, RwLock},
+    time::Instant,
+};
 
 use http_body_util::Full;
 use hyper_rustls::HttpsConnectorBuilder;
 use hyper_util::client::legacy::{Client, connect::HttpConnector};
 use impulse_config::runtime::RuntimeExternalAuth;
 use serde_json::Value;
+use tokio::sync::Mutex;
 use tokio::task::AbortHandle;
 
 use super::*;
@@ -24,6 +30,112 @@ use crate::runtime::connection::{
 };
 
 const MAX_AUTH_BODY_BYTES: usize = 64 * 1024;
+const OIDC_METADATA_REFRESH_AFTER: Duration = Duration::from_secs(60);
+const OIDC_METADATA_CACHE_TTL: Duration = Duration::from_secs(300);
+
+struct OidcMetadataCacheEntry {
+    metadata: RwLock<
+        Option<(
+            Instant,
+            crate::runtime::connection::auth::OidcProviderMetadata,
+        )>,
+    >,
+    refresh_lock: Arc<Mutex<()>>,
+}
+
+static OIDC_METADATA_CACHE: OnceLock<RwLock<HashMap<String, Arc<OidcMetadataCacheEntry>>>> =
+    OnceLock::new();
+
+fn oidc_metadata_cache() -> &'static RwLock<HashMap<String, Arc<OidcMetadataCacheEntry>>> {
+    OIDC_METADATA_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+fn oidc_metadata_cache_entry(url: &str) -> Arc<OidcMetadataCacheEntry> {
+    if let Some(entry) = oidc_metadata_cache()
+        .read()
+        .ok()
+        .and_then(|entries| entries.get(url).cloned())
+    {
+        return entry;
+    }
+    let mut entries = oidc_metadata_cache()
+        .write()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    Arc::clone(entries.entry(url.to_string()).or_insert_with(|| {
+        Arc::new(OidcMetadataCacheEntry {
+            metadata: RwLock::new(None),
+            refresh_lock: Arc::new(Mutex::new(())),
+        })
+    }))
+}
+
+async fn refresh_oidc_metadata(
+    url: String,
+    entry: Arc<OidcMetadataCacheEntry>,
+    timeout: Duration,
+) -> Result<crate::runtime::connection::auth::OidcProviderMetadata, ProxyError> {
+    let _guard = entry.refresh_lock.lock().await;
+    let now = Instant::now();
+    if let Some((fetched_at, metadata)) = entry
+        .metadata
+        .read()
+        .ok()
+        .and_then(|metadata| metadata.clone())
+        && now.duration_since(fetched_at) < OIDC_METADATA_CACHE_TTL
+    {
+        return Ok(metadata);
+    }
+    let document = fetch_json_document(url, timeout).await?;
+    let metadata = validate_oidc_provider_metadata(&document)?;
+    if let Ok(mut cached) = entry.metadata.write() {
+        *cached = Some((Instant::now(), metadata.clone()));
+    }
+    Ok(metadata)
+}
+
+async fn oidc_provider_metadata(
+    url: String,
+    timeout: Duration,
+) -> Result<crate::runtime::connection::auth::OidcProviderMetadata, ProxyError> {
+    let entry = oidc_metadata_cache_entry(&url);
+    if let Some((fetched_at, metadata)) = entry
+        .metadata
+        .read()
+        .ok()
+        .and_then(|metadata| metadata.clone())
+    {
+        let age = Instant::now().duration_since(fetched_at);
+        if age < OIDC_METADATA_REFRESH_AFTER {
+            return Ok(metadata);
+        }
+        if age < OIDC_METADATA_CACHE_TTL {
+            if let Ok(guard) = Arc::clone(&entry.refresh_lock).try_lock_owned() {
+                let refresh_entry = Arc::clone(&entry);
+                let refresh_url = url.clone();
+                if let Some(handle) = runtime_handle() {
+                    handle.spawn(async move {
+                        let _guard = guard;
+                        match fetch_json_document(refresh_url, timeout)
+                            .await
+                            .and_then(|document| validate_oidc_provider_metadata(&document))
+                        {
+                            Ok(metadata) => {
+                                if let Ok(mut cached) = refresh_entry.metadata.write() {
+                                    *cached = Some((Instant::now(), metadata));
+                                }
+                            }
+                            Err(error) => {
+                                log::warn!("OIDC discovery background refresh failed: {error}");
+                            }
+                        }
+                    });
+                }
+            }
+            return Ok(metadata);
+        }
+    }
+    refresh_oidc_metadata(url, entry, timeout).await
+}
 
 pub(super) struct AuthStart {
     pub(super) rx: oneshot::Receiver<ExternalAuthResult>,
@@ -307,8 +419,7 @@ async fn run_oidc_external_auth(input: OidcExternalAuthInput) -> ExternalAuthRes
         }
     };
     let discovery = oidc_discovery_target(discovery_url.as_deref(), issuer_url.as_deref())?;
-    let document = fetch_json_document(discovery.url, timeout).await?;
-    let metadata = validate_oidc_provider_metadata(&document)?;
+    let metadata = oidc_provider_metadata(discovery.url, timeout).await?;
 
     let mut body = format!(
         "token={}&client_id={}",

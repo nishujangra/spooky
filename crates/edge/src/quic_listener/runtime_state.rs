@@ -12,7 +12,7 @@ use impulse_transport::{SharedDnsResolver, UpstreamTransportPool};
 
 use crate::{
     Metrics,
-    quic_listener::control_api::security::ControlApiSecurityPolicy,
+    quic_listener::control_api::security::{ControlApiAuthThrottle, ControlApiSecurityPolicy},
     resilience::runtime::RuntimeResilience,
     runtime::{
         backend::lifecycle::BackendLifecycleCoordinator,
@@ -226,6 +226,7 @@ impl ControlPlaneRuntimeCtx {
 pub(crate) struct ControlApiServiceCtx {
     pub(super) runtime: ControlPlaneRuntimeCtx,
     pub(super) started_at: Instant,
+    pub(super) auth_throttle: Arc<ControlApiAuthThrottle>,
 }
 
 impl ControlApiServiceCtx {
@@ -233,6 +234,7 @@ impl ControlApiServiceCtx {
         Self {
             runtime,
             started_at: Instant::now(),
+            auth_throttle: Arc::new(ControlApiAuthThrottle::new()),
         }
     }
 }

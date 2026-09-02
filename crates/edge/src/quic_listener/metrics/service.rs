@@ -1,5 +1,9 @@
 use super::*;
 
+trait MetricsIo: tokio::io::AsyncRead + tokio::io::AsyncWrite {}
+
+impl<T: tokio::io::AsyncRead + tokio::io::AsyncWrite> MetricsIo for T {}
+
 pub(super) struct MetricsEndpointBinding {
     bind: String,
     listener: tokio::net::TcpListener,
@@ -16,6 +20,16 @@ impl QUICListener {
             return Ok(());
         }
         let required = startup_state.endpoint.required;
+        if startup_state.endpoint.enabled
+            && startup_state.endpoint.allow_non_loopback
+            && let Err(err) = service_ctx.current_tls_config()
+        {
+            if required {
+                return Err(err);
+            }
+            error!("failed to initialize metrics endpoint TLS config: {}", err);
+            return Ok(());
+        }
 
         let handle = match runtime_handle() {
             Some(handle) => handle,
@@ -74,6 +88,15 @@ impl QUICListener {
                         tokio::time::sleep(Duration::from_millis(200)).await;
                         continue;
                     }
+
+                    let tls_config = match service_ctx.current_tls_config() {
+                        Ok(config) => config,
+                        Err(err) => {
+                            error!("failed to refresh metrics endpoint TLS config: {}", err);
+                            tokio::time::sleep(Duration::from_millis(200)).await;
+                            continue;
+                        }
+                    };
 
                     let needs_rebind = match listener_binding.as_ref() {
                         Some(binding) => binding.bind != desired_bind,
@@ -134,7 +157,6 @@ impl QUICListener {
                         continue;
                     }
 
-                    let io = TokioIo::new(stream);
                     let metrics = Arc::clone(&runtime_state.metrics);
                     let metrics_path = runtime_state.endpoint.path.clone();
                     let timeout =
@@ -142,6 +164,18 @@ impl QUICListener {
 
                     tokio::spawn(async move {
                         let _connection_guard = RuntimeConnectionSlotGuard::new(active_connections);
+                        let io: TokioIo<Box<dyn MetricsIo + Send + Unpin>> =
+                            if let Some(server_config) = tls_config {
+                                match TlsAcceptor::from(server_config).accept(stream).await {
+                                    Ok(stream) => TokioIo::new(Box::new(stream)),
+                                    Err(err) => {
+                                        debug!("Metrics endpoint mTLS handshake failed: {}", err);
+                                        return;
+                                    }
+                                }
+                            } else {
+                                TokioIo::new(Box::new(stream))
+                            };
                         let service = service_fn(move |req: Request<Incoming>| {
                             let metrics = Arc::clone(&metrics);
                             let metrics_path = metrics_path.clone();

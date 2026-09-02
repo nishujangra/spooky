@@ -1,4 +1,8 @@
 use super::*;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
 
 fn configure_http_external_auth(
     config: &mut Config,
@@ -370,47 +374,57 @@ async fn oidc_external_auth_uses_discovery_and_introspection() {
     }
 
     let backend_addr = start_h2_backend("oidc ok").await;
-    let auth_addr = start_http_auth_server(|req| async move {
-        match req.uri().path() {
-            "/.well-known/openid-configuration" => {
-                let host = req
-                    .headers()
-                    .get("host")
-                    .and_then(|value| value.to_str().ok())
-                    .expect("host header");
-                let body = format!(
-                    "{{\"introspection_endpoint\":\"http://{host}/introspect\"}}"
-                );
-                Ok::<_, Infallible>(
-                    Response::builder()
-                        .status(http::StatusCode::OK)
-                        .header("content-type", "application/json")
-                        .body(Full::new(Bytes::from(body)))
-                        .expect("discovery response"),
-                )
+    let discovery_requests = Arc::new(AtomicUsize::new(0));
+    let introspection_requests = Arc::new(AtomicUsize::new(0));
+    let discovery_requests_seen = Arc::clone(&discovery_requests);
+    let introspection_requests_seen = Arc::clone(&introspection_requests);
+    let auth_addr = start_http_auth_server(move |req| {
+        let discovery_requests_seen = Arc::clone(&discovery_requests_seen);
+        let introspection_requests_seen = Arc::clone(&introspection_requests_seen);
+        async move {
+            match req.uri().path() {
+                "/.well-known/openid-configuration" => {
+                    discovery_requests_seen.fetch_add(1, Ordering::Relaxed);
+                    let host = req
+                        .headers()
+                        .get("host")
+                        .and_then(|value| value.to_str().ok())
+                        .expect("host header");
+                    let body = format!(
+                        "{{\"introspection_endpoint\":\"http://{host}/introspect\"}}"
+                    );
+                    Ok::<_, Infallible>(
+                        Response::builder()
+                            .status(http::StatusCode::OK)
+                            .header("content-type", "application/json")
+                            .body(Full::new(Bytes::from(body)))
+                            .expect("discovery response"),
+                    )
+                }
+                "/introspect" => {
+                    introspection_requests_seen.fetch_add(1, Ordering::Relaxed);
+                    let body = req
+                        .into_body()
+                        .collect()
+                        .await
+                        .expect("introspection body")
+                        .to_bytes();
+                    let encoded = String::from_utf8_lossy(&body);
+                    assert!(encoded.contains("token=good-token"));
+                    assert!(encoded.contains("client_id=edge-client"));
+                    assert!(encoded.contains("audience=api%3A%2F%2Fedge"));
+                    Ok::<_, Infallible>(
+                        Response::builder()
+                            .status(http::StatusCode::OK)
+                            .header("content-type", "application/json")
+                            .body(Full::new(Bytes::from(
+                                r#"{"active":true,"scope":"openid profile read","aud":"api://edge","iss":"https://issuer.example.com"}"#,
+                            )))
+                            .expect("introspection response"),
+                    )
+                }
+                other => panic!("unexpected auth path: {other}"),
             }
-            "/introspect" => {
-                let body = req
-                    .into_body()
-                    .collect()
-                    .await
-                    .expect("introspection body")
-                    .to_bytes();
-                let encoded = String::from_utf8_lossy(&body);
-                assert!(encoded.contains("token=good-token"));
-                assert!(encoded.contains("client_id=edge-client"));
-                assert!(encoded.contains("audience=api%3A%2F%2Fedge"));
-                Ok::<_, Infallible>(
-                    Response::builder()
-                        .status(http::StatusCode::OK)
-                        .header("content-type", "application/json")
-                        .body(Full::new(Bytes::from(
-                            r#"{"active":true,"scope":"openid profile read","aud":"api://edge","iss":"https://issuer.example.com"}"#,
-                        )))
-                        .expect("introspection response"),
-                )
-            }
-            other => panic!("unexpected auth path: {other}"),
         }
     })
     .await;
@@ -435,10 +449,22 @@ async fn oidc_external_auth_uses_discovery_and_introspection() {
         None,
     )
     .expect("h3 response");
+    let second_response = run_h3_client_request(
+        addr,
+        "GET",
+        "/",
+        &[("authorization", "Bearer good-token")],
+        None,
+    )
+    .expect("second h3 response");
     stop_listener_loop(stop, handle);
 
     assert_eq!(response.status, 200);
     assert_eq!(response.body, "oidc ok");
+    assert_eq!(second_response.status, 200);
+    assert_eq!(second_response.body, "oidc ok");
+    assert_eq!(discovery_requests.load(Ordering::Relaxed), 1);
+    assert_eq!(introspection_requests.load(Ordering::Relaxed), 2);
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

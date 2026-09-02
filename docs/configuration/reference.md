@@ -1588,6 +1588,8 @@ Use this section when you need to decide:
 
 Key fields:
 
+- `observability.metrics.address` (default: `127.0.0.1`): bind address. Non-loopback addresses are rejected unless `allow_non_loopback` is explicitly enabled.
+- `observability.metrics.allow_non_loopback` (default: `false`): explicit opt-in for remote scraping. It requires `observability.control_api.tls.client_auth.mode=required`; the metrics endpoint then uses the primary listener certificate and the configured control-plane CA for mTLS.
 - `observability.metrics.max_connections` (default: `512`): concurrent connection cap.
 - `observability.metrics.connection_timeout_ms` (default: `30000`): per-connection lifetime timeout.
 

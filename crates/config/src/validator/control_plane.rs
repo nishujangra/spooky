@@ -209,6 +209,37 @@ pub(super) fn validate_control_api_security(control_api: &ControlApi) -> bool {
         }
     }
 
+    for (idx, cidr) in control_api
+        .ip_allowlist
+        .trusted_proxy_cidrs
+        .iter()
+        .enumerate()
+    {
+        if cidr.trim().is_empty() {
+            validation_error!(
+                "observability.control_api.ip_allowlist.trusted_proxy_cidrs[{}] cannot be empty",
+                idx
+            );
+            return false;
+        }
+        if !is_valid_cidr(cidr.trim()) {
+            validation_error!(
+                "observability.control_api.ip_allowlist.trusted_proxy_cidrs[{}] must be a valid CIDR",
+                idx
+            );
+            return false;
+        }
+    }
+
+    if control_api.ip_allowlist.trust_proxy_headers
+        && control_api.ip_allowlist.trusted_proxy_cidrs.is_empty()
+    {
+        validation_error!(
+            "observability.control_api.ip_allowlist.trusted_proxy_cidrs must not be empty when trust_proxy_headers=true"
+        );
+        return false;
+    }
+
     if let Some(path) = control_api.audit.file_path.as_ref()
         && path.trim().is_empty()
     {

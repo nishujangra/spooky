@@ -683,8 +683,22 @@ fn validate_observability(config: &Config) -> bool {
             return false;
         }
         if !is_loopback_bind_address(&config.observability.metrics.address) {
+            if !config.observability.metrics.allow_non_loopback {
+                validation_error!(
+                    "observability.metrics.address must be loopback unless observability.metrics.allow_non_loopback=true; the metrics endpoint is unauthenticated plaintext HTTP"
+                );
+                return false;
+            }
+            if config.observability.control_api.tls.client_auth.mode
+                != crate::config::ControlApiClientAuthMode::Required
+            {
+                validation_error!(
+                    "observability.metrics.allow_non_loopback=true requires observability.control_api.tls.client_auth.mode=required so remote metrics use mTLS"
+                );
+                return false;
+            }
             warn!(
-                "observability.metrics is bound to non-loopback address {}; ensure network ACLs protect plaintext metrics endpoint",
+                "observability.metrics.allow_non_loopback=true exposes metrics over mTLS on {}",
                 config.observability.metrics.address
             );
         }
