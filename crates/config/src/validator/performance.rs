@@ -164,6 +164,14 @@ fn validate_performance(config: &Config) -> bool {
         validation_error!("performance.shutdown_drain_timeout_ms must be greater than 0");
         return false;
     }
+    if config.resilience.watchdog.enabled
+        && config.resilience.watchdog.drain_grace_ms < config.performance.shutdown_drain_timeout_ms
+    {
+        validation_error!(
+            "resilience.watchdog.drain_grace_ms must be at least performance.shutdown_drain_timeout_ms when the watchdog is enabled"
+        );
+        return false;
+    }
     if config.performance.udp_recv_buffer_bytes == 0 {
         validation_error!("performance.udp_recv_buffer_bytes must be greater than 0");
         return false;
