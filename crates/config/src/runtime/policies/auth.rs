@@ -950,7 +950,7 @@ mod tests {
     #[test]
     fn external_auth_normalization_rejects_invalid_header_name() {
         let external_auth = ExternalAuth::Http {
-            endpoint: "http://auth.internal/check".to_string(),
+            endpoint: "http://127.0.0.1:8080/check".to_string(),
             request_headers: vec![ExternalAuthRequestHeader {
                 name: "bad header".to_string(),
                 value: "value".to_string(),
