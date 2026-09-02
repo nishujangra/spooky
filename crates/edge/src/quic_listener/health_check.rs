@@ -33,6 +33,7 @@ impl QUICListener {
             backend_identity: String,
             health_uri: String,
             base_interval_ms: u64,
+            timeout: Duration,
             consecutive_failures: u32,
             next_due_at: Instant,
         }
@@ -79,6 +80,7 @@ impl QUICListener {
                     backend_identity: address,
                     health_uri: endpoint.uri_for_path(&health.path),
                     base_interval_ms,
+                    timeout: health.timeout,
                     consecutive_failures: 0,
                     next_due_at,
                 };
@@ -117,7 +119,8 @@ impl QUICListener {
                     loop {
                         ticker.tick().await;
                         let now = Instant::now();
-                        for job in jobs.iter_mut() {
+                        let mut pending = tokio::task::JoinSet::new();
+                        for (job_index, job) in jobs.iter_mut().enumerate() {
                             if now < job.next_due_at {
                                 continue;
                             }
@@ -131,9 +134,26 @@ impl QUICListener {
                                 Err(_) => continue,
                             };
 
-                            let result = transport_pool
-                                .send_backend_request(&job.backend_identity, request)
-                                .await;
+                            let backend_identity = job.backend_identity.clone();
+                            let timeout = job.timeout;
+                            let transport_pool = Arc::clone(&transport_pool);
+                            pending.spawn(async move {
+                                let result = transport_pool
+                                    .send_backend_request_with_timeout(
+                                        &backend_identity,
+                                        request,
+                                        timeout,
+                                    )
+                                    .await;
+                                (job_index, result)
+                            });
+                        }
+
+                        while let Some(joined) = pending.join_next().await {
+                            let Ok((job_index, result)) = joined else {
+                                continue;
+                            };
+                            let job = &mut jobs[job_index];
 
                             let evaluation = match result {
                                 Ok(response) => {
