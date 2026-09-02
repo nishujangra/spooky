@@ -5,7 +5,7 @@ use std::{
     sync::{
         Arc,
         atomic::Ordering,
-        mpsc::{self, SyncSender},
+        mpsc::{self, SyncSender, TrySendError},
     },
     thread,
 };
@@ -183,17 +183,25 @@ impl ControlApiBufferedAuditWriter {
     }
 
     fn emit(&self, serialized: String) {
-        if self.sender.send(serialized.clone()).is_ok() {
-            return;
-        }
-
-        self.metrics.inc_control_api_audit_write_failure();
-        error!(
-            "control API admin audit writer thread for {} is unavailable; falling back to synchronous file append",
-            self.path
-        );
-        if !self.write_synchronously(serialized) {
-            self.metrics.inc_control_api_audit_event_drop();
+        match self.sender.try_send(serialized) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                self.metrics.inc_control_api_audit_event_drop();
+                error!(
+                    "control API admin audit buffer for {} is full; dropping audit event",
+                    self.path
+                );
+            }
+            Err(TrySendError::Disconnected(serialized)) => {
+                self.metrics.inc_control_api_audit_write_failure();
+                error!(
+                    "control API admin audit writer thread for {} is unavailable; falling back to synchronous file append",
+                    self.path
+                );
+                if !self.write_synchronously(serialized) {
+                    self.metrics.inc_control_api_audit_event_drop();
+                }
+            }
         }
     }
 
@@ -973,5 +981,32 @@ mod tests {
                 .load(std::sync::atomic::Ordering::Relaxed),
             1
         );
+    }
+
+    #[test]
+    fn control_api_audit_buffered_writer_drops_without_blocking_when_full() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("admin-audit.jsonl");
+        let metrics = Arc::new(Metrics::default());
+        let (sender, receiver) = mpsc::sync_channel(1);
+        sender
+            .send("already-buffered".to_string())
+            .expect("fill buffer");
+        let writer = ControlApiBufferedAuditWriter {
+            sender,
+            path: path.to_string_lossy().to_string(),
+            metrics: Arc::clone(&metrics),
+        };
+
+        writer.emit("{\"event\":\"audit\"}".to_string());
+
+        assert!(!path.exists());
+        assert_eq!(
+            metrics
+                .control_api_audit_event_drops
+                .load(std::sync::atomic::Ordering::Relaxed),
+            1
+        );
+        drop(receiver);
     }
 }
