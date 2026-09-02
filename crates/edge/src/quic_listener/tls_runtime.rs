@@ -199,6 +199,12 @@ impl QUICListener {
                     identity.identity.key_path, err
                 ))
             })?;
+            Self::validate_boring_certificate_key(
+                &leaf,
+                &key,
+                &identity.identity.cert_path,
+                &identity.identity.key_path,
+            )?;
             sni_certs.insert(
                 server_name.clone(),
                 QuicSniCertMaterial { leaf, chain, key },
@@ -271,7 +277,8 @@ impl QUICListener {
                 identity.cert_path
             )));
         }
-        builder.set_certificate(&certs.remove(0)).map_err(|err| {
+        let leaf = certs.remove(0);
+        builder.set_certificate(&leaf).map_err(|err| {
             ProxyError::Tls(format!(
                 "failed to load certificate '{}': {}",
                 identity.cert_path, err
@@ -296,6 +303,12 @@ impl QUICListener {
                 identity.key_path, err
             ))
         })?;
+        Self::validate_boring_certificate_key(
+            &leaf,
+            &key,
+            &identity.cert_path,
+            &identity.key_path,
+        )?;
         builder.set_private_key(&key).map_err(|err| {
             ProxyError::Tls(format!(
                 "failed to load key '{}': {}",
@@ -358,6 +371,27 @@ impl QUICListener {
         }
 
         Ok(builder)
+    }
+
+    fn validate_boring_certificate_key(
+        certificate: &X509,
+        key: &PKey<boring::pkey::Private>,
+        cert_path: &str,
+        key_path: &str,
+    ) -> Result<(), ProxyError> {
+        let certificate_key = certificate.public_key().map_err(|err| {
+            ProxyError::Tls(format!(
+                "failed to read public key from certificate '{}': {}",
+                cert_path, err
+            ))
+        })?;
+        if !certificate_key.public_eq(key) {
+            return Err(ProxyError::Tls(format!(
+                "certificate/key mismatch for '{}' and '{}'",
+                cert_path, key_path
+            )));
+        }
+        Ok(())
     }
 
     pub(super) fn tls_reload_generation_if_needed(
@@ -1160,6 +1194,7 @@ impl QUICListener {
 mod tests {
     use std::sync::Arc;
 
+    use boring::{pkey::PKey, x509::X509};
     use impulse_config::config::ControlApiClientAuthMode;
     use impulse_config::{config::ClientAuth, runtime::RuntimeTlsIdentity};
     use rcgen::{Certificate, CertificateParams, SanType};
@@ -1239,6 +1274,30 @@ mod tests {
             err.to_string()
                 .contains("exceeds the maximum supported PEM size")
         );
+    }
+
+    #[test]
+    fn boring_quic_identity_rejects_mismatched_certificate_and_key() {
+        let dir = tempdir().expect("tempdir");
+        let first = write_test_identity_files(dir.path());
+        let second_dir = tempdir().expect("second tempdir");
+        let second = write_test_identity_files(second_dir.path());
+        let certificate_pem = std::fs::read(&first.cert_path).expect("certificate");
+        let key_pem = std::fs::read(&second.key_path).expect("key");
+        let certificate = X509::stack_from_pem(&certificate_pem)
+            .expect("parse certificate")
+            .remove(0);
+        let key = PKey::private_key_from_pem(&key_pem).expect("parse key");
+
+        let error = QUICListener::validate_boring_certificate_key(
+            &certificate,
+            &key,
+            &first.cert_path,
+            &second.key_path,
+        )
+        .expect_err("mismatched certificate and key must be rejected");
+
+        assert!(error.to_string().contains("certificate/key mismatch"));
     }
 
     #[test]
