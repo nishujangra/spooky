@@ -205,24 +205,50 @@ impl QUICListener {
             return Ok(());
         };
 
+        let peer_ip = request_context
+            .as_ref()
+            .map(|context| context.peer_addr.ip());
+        if peer_ip.is_some_and(|peer| service_state.auth_throttle.is_blocked(peer)) {
+            return Err(Box::new(Self::control_api_auth_error_response(
+                route,
+                StatusCode::TOO_MANY_REQUESTS,
+                "too_many_requests",
+                "authentication_throttled",
+                Some(required_role),
+            )));
+        }
+
         let decision = match Self::authenticate_control_api_request(req, &service_state.security) {
-            AuthenticationOutcome::Missing => AuthorizationDecision::Deny {
-                status: StatusCode::UNAUTHORIZED,
-                error: "unauthorized",
-                reason: "missing_authentication",
-                required_role: Some(required_role),
-                identity: None,
-                route,
-            },
-            AuthenticationOutcome::Invalid(reason) => AuthorizationDecision::Deny {
-                status: StatusCode::UNAUTHORIZED,
-                error: "unauthorized",
-                reason,
-                required_role: Some(required_role),
-                identity: None,
-                route,
-            },
+            AuthenticationOutcome::Missing => {
+                if let Some(peer) = peer_ip {
+                    service_state.auth_throttle.record_failure(peer);
+                }
+                AuthorizationDecision::Deny {
+                    status: StatusCode::UNAUTHORIZED,
+                    error: "unauthorized",
+                    reason: "missing_authentication",
+                    required_role: Some(required_role),
+                    identity: None,
+                    route,
+                }
+            }
+            AuthenticationOutcome::Invalid(reason) => {
+                if let Some(peer) = peer_ip {
+                    service_state.auth_throttle.record_failure(peer);
+                }
+                AuthorizationDecision::Deny {
+                    status: StatusCode::UNAUTHORIZED,
+                    error: "unauthorized",
+                    reason,
+                    required_role: Some(required_role),
+                    identity: None,
+                    route,
+                }
+            }
             AuthenticationOutcome::Authenticated(identity) => {
+                if let Some(peer) = peer_ip {
+                    service_state.auth_throttle.record_success(peer);
+                }
                 Self::emit_control_api_auth_audit_event(
                     &service_state.security,
                     Some(&identity),
@@ -405,7 +431,13 @@ impl QUICListener {
                 "required_role": required_role,
             }),
         };
-        Self::json_response(status, response)
+        let mut response = Self::json_response(status, response);
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            response
+                .headers_mut()
+                .insert(header::RETRY_AFTER, ::http::HeaderValue::from_static("60"));
+        }
+        response
     }
 
     pub(super) fn gate_control_api_request_for<B>(

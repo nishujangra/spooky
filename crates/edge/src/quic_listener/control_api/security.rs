@@ -1,4 +1,9 @@
-use std::{net::IpAddr, sync::Arc};
+use std::{
+    collections::HashMap,
+    net::IpAddr,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 use impulse_config::config::{
     ControlApi as ControlApiConfig, ControlApiBearerToken, ControlApiClientAuthMode,
@@ -7,6 +12,98 @@ use impulse_config::config::{
 
 use super::audit::ControlApiAdminAuditEmitter;
 use crate::Metrics;
+
+const AUTH_FAILURE_LIMIT: u32 = 5;
+const AUTH_FAILURE_WINDOW: Duration = Duration::from_secs(60);
+const AUTH_BLOCK_DURATION: Duration = Duration::from_secs(60);
+const AUTH_THROTTLE_MAX_PEERS: usize = 4096;
+
+#[derive(Debug)]
+struct AuthFailureState {
+    first_failure: Instant,
+    failures: u32,
+    blocked_until: Option<Instant>,
+}
+
+#[derive(Debug)]
+pub(in crate::quic_listener) struct ControlApiAuthThrottle {
+    peers: Mutex<HashMap<IpAddr, AuthFailureState>>,
+}
+
+impl ControlApiAuthThrottle {
+    pub(in crate::quic_listener) fn new() -> Self {
+        Self {
+            peers: Mutex::new(HashMap::new()),
+        }
+    }
+
+    pub(in crate::quic_listener) fn is_blocked(&self, peer: IpAddr) -> bool {
+        let now = Instant::now();
+        let mut peers = self
+            .peers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let Some(state) = peers.get_mut(&peer) else {
+            return false;
+        };
+        if state.blocked_until.is_some_and(|until| until > now) {
+            return true;
+        }
+        if state.blocked_until.is_some_and(|until| until <= now)
+            || now.duration_since(state.first_failure) >= AUTH_FAILURE_WINDOW
+        {
+            peers.remove(&peer);
+        }
+        false
+    }
+
+    pub(in crate::quic_listener) fn record_failure(&self, peer: IpAddr) {
+        let now = Instant::now();
+        let mut peers = self
+            .peers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(state) = peers.get_mut(&peer)
+            && now.duration_since(state.first_failure) >= AUTH_FAILURE_WINDOW
+        {
+            *state = AuthFailureState {
+                first_failure: now,
+                failures: 0,
+                blocked_until: None,
+            };
+        }
+        if !peers.contains_key(&peer) {
+            if peers.len() >= AUTH_THROTTLE_MAX_PEERS
+                && let Some(oldest_peer) = peers
+                    .iter()
+                    .min_by_key(|(_, state)| state.first_failure)
+                    .map(|(peer, _)| *peer)
+            {
+                peers.remove(&oldest_peer);
+            }
+            peers.insert(
+                peer,
+                AuthFailureState {
+                    first_failure: now,
+                    failures: 0,
+                    blocked_until: None,
+                },
+            );
+        }
+        let state = peers.get_mut(&peer).expect("auth throttle state inserted");
+        state.failures = state.failures.saturating_add(1);
+        if state.failures >= AUTH_FAILURE_LIMIT {
+            state.blocked_until = Some(now + AUTH_BLOCK_DURATION);
+        }
+    }
+
+    pub(in crate::quic_listener) fn record_success(&self, peer: IpAddr) {
+        self.peers
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&peer);
+    }
+}
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub(in crate::quic_listener) struct ControlApiSecurityPolicy {
@@ -460,6 +557,22 @@ mod tests {
             ),
             "203.0.113.10".parse::<IpAddr>().expect("forwarded ip")
         );
+    }
+
+    #[test]
+    fn auth_throttle_blocks_repeated_failures_and_resets_on_success() {
+        let throttle = ControlApiAuthThrottle::new();
+        let peer = "192.0.2.10".parse().expect("peer ip");
+
+        for _ in 0..4 {
+            throttle.record_failure(peer);
+            assert!(!throttle.is_blocked(peer));
+        }
+        throttle.record_failure(peer);
+        assert!(throttle.is_blocked(peer));
+
+        throttle.record_success(peer);
+        assert!(!throttle.is_blocked(peer));
     }
 }
 
