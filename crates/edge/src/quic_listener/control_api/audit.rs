@@ -36,6 +36,7 @@ pub(in crate::quic_listener) struct ControlApiAdminAuditEmitter {
     pub(in crate::quic_listener) format: ControlApiAuditFormat,
     pub(in crate::quic_listener) sink: ControlApiAdminAuditTarget,
     delivery: ControlApiAdminAuditDelivery,
+    metrics: Arc<Metrics>,
 }
 
 impl ControlApiAdminAuditEmitter {
@@ -52,8 +53,9 @@ impl ControlApiAdminAuditEmitter {
         Self {
             enabled: config.audit.enabled,
             format: config.audit.format,
-            delivery: ControlApiAdminAuditDelivery::for_target(&sink, metrics),
+            delivery: ControlApiAdminAuditDelivery::for_target(&sink, Arc::clone(&metrics)),
             sink,
+            metrics,
         }
     }
 }
@@ -65,6 +67,7 @@ impl Clone for ControlApiAdminAuditEmitter {
             format: self.format,
             sink: self.sink.clone(),
             delivery: self.delivery.clone(),
+            metrics: Arc::clone(&self.metrics),
         }
     }
 }
@@ -153,6 +156,7 @@ impl ControlApiBufferedAuditWriter {
                     }
 
                     let Some(open_file) = file.as_mut() else {
+                        thread_metrics.inc_control_api_audit_event_drop();
                         continue;
                     };
 
@@ -160,6 +164,7 @@ impl ControlApiBufferedAuditWriter {
                         writeln!(open_file, "{}", serialized).and_then(|()| open_file.flush())
                     {
                         thread_metrics.inc_control_api_audit_write_failure();
+                        thread_metrics.inc_control_api_audit_event_drop();
                         error!(
                             "failed to write control API admin audit event to {}: {}",
                             thread_path, err
@@ -187,12 +192,14 @@ impl ControlApiBufferedAuditWriter {
             "control API admin audit writer thread for {} is unavailable; falling back to synchronous file append",
             self.path
         );
-        self.write_synchronously(serialized);
+        if !self.write_synchronously(serialized) {
+            self.metrics.inc_control_api_audit_event_drop();
+        }
     }
 
-    fn write_synchronously(&self, serialized: String) {
+    fn write_synchronously(&self, serialized: String) -> bool {
         let Some(mut file) = Self::open_sink(&self.path, self.metrics.as_ref()) else {
-            return;
+            return false;
         };
 
         if let Err(err) = writeln!(file, "{}", serialized).and_then(|()| file.flush()) {
@@ -201,7 +208,9 @@ impl ControlApiBufferedAuditWriter {
                 "failed to synchronously write control API admin audit event to {}: {}",
                 self.path, err
             );
+            return false;
         }
+        true
     }
 
     fn open_sink(path: &str, metrics: &Metrics) -> Option<File> {
@@ -710,6 +719,7 @@ impl ControlApiAdminAuditEmitter {
                 Ok(serialized) => serialized,
                 Err(err) => {
                     error!("failed to serialize control API admin audit event: {}", err);
+                    self.metrics.inc_control_api_audit_event_drop();
                     return;
                 }
             },
@@ -722,12 +732,14 @@ impl ControlApiAdminAuditEmitter {
             ControlApiAdminAuditTarget::File(Some(_)) => match &self.delivery {
                 ControlApiAdminAuditDelivery::BufferedFile(writer) => writer.emit(serialized),
                 ControlApiAdminAuditDelivery::UnavailableFile { path, reason } => {
+                    self.metrics.inc_control_api_audit_event_drop();
                     error!(
                         "dropping control API admin audit event because file sink {} is unavailable: {}",
                         path, reason
                     );
                 }
                 ControlApiAdminAuditDelivery::Inline => {
+                    self.metrics.inc_control_api_audit_event_drop();
                     error!(
                         "dropping control API admin audit event because file sink configuration unexpectedly resolved to inline delivery"
                     );
