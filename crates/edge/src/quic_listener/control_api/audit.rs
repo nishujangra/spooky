@@ -278,10 +278,10 @@ impl Drop for ControlApiBufferedAuditWriter {
         // recv() returns Disconnected. Join the thread so process shutdown
         // does not discard events that are still being written.
         self.sender.take();
-        if let Some(thread) = self.thread.take() {
-            if thread.thread().id() != thread::current().id() {
-                let _ = thread.join();
-            }
+        if let Some(thread) = self.thread.take()
+            && thread.thread().id() != thread::current().id()
+        {
+            let _ = thread.join();
         }
     }
 }
