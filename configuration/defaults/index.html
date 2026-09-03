@@ -2305,6 +2305,11 @@
 <td>Default counter key prefix</td>
 </tr>
 <tr>
+<td><code>resilience.quota.backend</code> in-memory bucket cap</td>
+<td><code>4096</code></td>
+<td>Internal safety cap for active in-memory quota buckets; requests exceeding the cap fail according to the quota backend failure policy</td>
+</tr>
+<tr>
 <td><code>resilience.quota.backend.connect_timeout_ms</code></td>
 <td><code>250</code></td>
 <td>Redis only</td>
