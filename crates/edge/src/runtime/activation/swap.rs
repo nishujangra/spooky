@@ -29,6 +29,7 @@ pub(super) fn commit_staged_runtime_reload(
         handle,
         next_runtime,
         RuntimeGenerationRecordStatus::Previous,
+        plan.plan.current_generation,
     )
     .map(|generation| (generation, diff.clone()))
     .map_err(|err| (candidate_generation, diff, err.to_string()))
@@ -38,12 +39,13 @@ pub(super) fn commit_runtime_bundle_swap(
     handle: &RuntimeBundleHandle,
     next_runtime: RuntimeBundle,
     previous_status: RuntimeGenerationRecordStatus,
+    expected_generation: Option<GenerationId>,
 ) -> Result<GenerationId, ProxyError> {
     QUICListener::spawn_generation_background_tasks_for_runtime(
         &next_runtime.runtime_config,
         next_runtime.shared_state.as_ref(),
     );
-    handle.replace_with_archive_status(next_runtime, previous_status)
+    handle.replace_with_archive_status(next_runtime, previous_status, expected_generation)
 }
 
 pub(super) fn prepare_rollback_bundle(

@@ -267,6 +267,7 @@ These apply when a backend provides a `health_check` object and omits individual
 | `resilience.quota.backend_failure_policy` | `fail_closed` | Backend failures deny by default when quota is enabled |
 | `resilience.quota.backend.kind` | `in_memory` | Local in-memory backend is the default base backend |
 | `resilience.quota.backend.key_prefix` | `"impulse:quota"` | Default counter key prefix |
+| `resilience.quota.backend` in-memory bucket cap | `4096` | Internal safety cap for active in-memory quota buckets; requests exceeding the cap fail according to the quota backend failure policy |
 | `resilience.quota.backend.connect_timeout_ms` | `250` | Redis only |
 | `resilience.quota.backend.command_timeout_ms` | `100` | Redis only |
 | `resilience.quota.backend.max_inflight` | `1024` | Redis only |

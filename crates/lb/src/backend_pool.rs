@@ -12,6 +12,8 @@ use crate::{
 
 const EWMA_ALPHA: f64 = 0.2;
 const FAILURE_PENALTY_LATENCY_MS: f64 = 1_000.0;
+const MIN_LATENCY_SAMPLE_MS: f64 = 1.0;
+const MAX_LATENCY_SAMPLE_MS: f64 = 60_000.0;
 
 pub struct BackendPool {
     pub backends: Vec<BackendState>,
@@ -331,7 +333,8 @@ impl BackendPool {
             return;
         }
 
-        let observed_ms = latency.as_secs_f64() * 1_000.0;
+        let observed_ms =
+            (latency.as_secs_f64() * 1_000.0).clamp(MIN_LATENCY_SAMPLE_MS, MAX_LATENCY_SAMPLE_MS);
         Self::record_latency_sample(backend, observed_ms);
     }
 

@@ -423,6 +423,7 @@ impl RuntimeActivationService {
             handle,
             prepared,
             RuntimeGenerationRecordStatus::RolledBack,
+            Some(active_generation),
         ) {
             Ok(generation) => successful_rollback_result(
                 request,

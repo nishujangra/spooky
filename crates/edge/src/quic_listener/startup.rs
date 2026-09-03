@@ -16,7 +16,10 @@ use tokio::sync::Semaphore;
 use crate::{
     Metrics,
     constants::UDP_READ_TIMEOUT_MS,
-    quic_listener::{ListenerRuntimeSettings, TokenBucket, runtime_state::PreparedListenerStartup},
+    quic_listener::{
+        ListenerRuntimeSettings, PerSourceTokenBucket, TokenBucket,
+        runtime_state::PreparedListenerStartup,
+    },
     resilience::{quota::QuotaRuntime, runtime::RuntimeResilience},
     routing::index::RouteIndex,
     runtime::{
@@ -479,6 +482,10 @@ impl QUICListener {
             settings.new_connections_per_sec,
             settings.new_connections_burst,
         );
+        let source_conn_rate_limiter = PerSourceTokenBucket::new(
+            settings.new_connections_per_sec,
+            settings.new_connections_burst,
+        );
 
         Ok(Self {
             socket,
@@ -527,6 +534,7 @@ impl QUICListener {
             peer_routes: HashMap::new(),
             cid_radix: crate::cid_radix::CidRadix::new(),
             conn_rate_limiter,
+            source_conn_rate_limiter,
         })
     }
 
