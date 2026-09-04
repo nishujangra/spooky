@@ -1077,6 +1077,10 @@ fn rejects_watchdog_grace_shorter_than_shutdown_drain_timeout() {
     cfg.resilience.watchdog.enabled = true;
     cfg.resilience.watchdog.drain_grace_ms = 1_000;
     cfg.performance.shutdown_drain_timeout_ms = 2_000;
+    assert!(validate(&cfg).is_err());
+}
+
+#[test]
 fn rejects_known_control_api_placeholder_token() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_certs(dir.path());
