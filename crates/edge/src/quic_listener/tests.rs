@@ -744,6 +744,45 @@ fn start_draining_is_idempotent_and_drain_completes_when_idle() {
 }
 
 #[test]
+fn process_shutdown_signal_starts_listener_draining_before_worker_exit() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let mut startup = tls_test_config(cert, key, Vec::new());
+    startup.listen.port = 0;
+
+    let startup_runtime = RuntimeConfig::from_config(&startup).expect("startup runtime");
+    let startup_bundle = super::QUICListener::build_runtime_bundle(
+        "startup.yaml".to_string(),
+        startup.log.clone(),
+        &startup_runtime,
+    )
+    .expect("startup bundle");
+    let listener_config = startup_bundle
+        .runtime_config
+        .primary_listener_runtime_config()
+        .expect("listener runtime config");
+    let socket = match super::QUICListener::bind_socket(&listener_config, false) {
+        Ok(socket) => socket,
+        Err(impulse_errors::ProxyError::Transport(message))
+            if message.contains("Operation not permitted") =>
+        {
+            return;
+        }
+        Err(err) => panic!("bind socket: {err:?}"),
+    };
+    let mut listener = super::QUICListener::new_with_socket_and_shared_state(
+        listener_config,
+        socket,
+        Arc::clone(&startup_bundle.shared_state),
+    )
+    .expect("listener");
+
+    listener.shutdown.store(true, Ordering::Relaxed);
+    assert!(!listener.poll_preamble());
+    assert!(listener.draining);
+}
+
+#[test]
 fn watchdog_restart_transitions_listener_into_draining_and_counts_worker_drain_once() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");

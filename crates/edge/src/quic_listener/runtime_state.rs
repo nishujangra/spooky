@@ -333,20 +333,25 @@ pub(super) fn initialize_listener_from_runtime(
     startup_listener_config: &ListenerRuntimeConfig,
     startup_shared_state: Arc<SharedRuntimeState>,
     runtime_bundle: Option<Arc<RuntimeBundleHandle>>,
+    shutdown: Arc<AtomicBool>,
 ) -> Result<crate::runtime::listener::QUICListener, ProxyError> {
     let listener_label =
         crate::quic_listener::QUICListener::listener_label(startup_listener_config);
     if let Some(runtime_bundle) = runtime_bundle {
-        return crate::quic_listener::QUICListener::new_with_socket_and_runtime_bundle(
+        let mut listener = crate::quic_listener::QUICListener::new_with_socket_and_runtime_bundle(
             &listener_label,
             socket,
             runtime_bundle,
-        );
+        )?;
+        listener.shutdown = shutdown;
+        return Ok(listener);
     }
 
-    crate::quic_listener::QUICListener::new_with_socket_and_shared_state(
+    let mut listener = crate::quic_listener::QUICListener::new_with_socket_and_shared_state(
         startup_listener_config.clone(),
         socket,
         startup_shared_state,
-    )
+    )?;
+    listener.shutdown = shutdown;
+    Ok(listener)
 }

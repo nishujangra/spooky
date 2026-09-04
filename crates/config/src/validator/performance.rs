@@ -164,6 +164,14 @@ fn validate_performance(config: &Config) -> bool {
         validation_error!("performance.shutdown_drain_timeout_ms must be greater than 0");
         return false;
     }
+    if config.resilience.watchdog.enabled
+        && config.resilience.watchdog.drain_grace_ms < config.performance.shutdown_drain_timeout_ms
+    {
+        validation_error!(
+            "resilience.watchdog.drain_grace_ms must be at least performance.shutdown_drain_timeout_ms when the watchdog is enabled"
+        );
+        return false;
+    }
     if config.performance.udp_recv_buffer_bytes == 0 {
         validation_error!("performance.udp_recv_buffer_bytes must be greater than 0");
         return false;
@@ -387,6 +395,18 @@ fn validate_resilience(config: &Config) -> bool {
     if config
         .resilience
         .protocol
+        .early_data_safe_methods
+        .iter()
+        .any(|method| !is_valid_http_token(method))
+    {
+        validation_error!(
+            "resilience.protocol.early_data_safe_methods must contain valid HTTP method tokens"
+        );
+        return false;
+    }
+    if config
+        .resilience
+        .protocol
         .allowed_methods
         .iter()
         .any(|method| method.trim().is_empty())
@@ -463,6 +483,19 @@ fn validate_resilience(config: &Config) -> bool {
     {
         validation_error!(
             "resilience.protocol.early_data_safe_methods must be non-empty when allow_0rtt=true"
+        );
+        return false;
+    }
+    if config.resilience.protocol.allow_0rtt
+        && config
+            .resilience
+            .protocol
+            .early_data_safe_methods
+            .iter()
+            .any(|method| !matches!(method.trim().to_ascii_uppercase().as_str(), "GET" | "HEAD"))
+    {
+        validation_error!(
+            "resilience.protocol.early_data_safe_methods may contain only GET or HEAD when allow_0rtt=true"
         );
         return false;
     }

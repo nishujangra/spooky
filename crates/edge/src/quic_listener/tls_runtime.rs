@@ -1,4 +1,10 @@
-use std::{ffi::OsStr, fs::File, io::Read, path::Path};
+use std::{
+    ffi::OsStr,
+    fs::File,
+    io::Read,
+    path::Path,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use super::*;
 use crate::quic_listener::control_api::security::{
@@ -199,6 +205,12 @@ impl QUICListener {
                     identity.identity.key_path, err
                 ))
             })?;
+            Self::validate_boring_certificate_key(
+                &leaf,
+                &key,
+                &identity.identity.cert_path,
+                &identity.identity.key_path,
+            )?;
             sni_certs.insert(
                 server_name.clone(),
                 QuicSniCertMaterial { leaf, chain, key },
@@ -271,7 +283,8 @@ impl QUICListener {
                 identity.cert_path
             )));
         }
-        builder.set_certificate(&certs.remove(0)).map_err(|err| {
+        let leaf = certs.remove(0);
+        builder.set_certificate(&leaf).map_err(|err| {
             ProxyError::Tls(format!(
                 "failed to load certificate '{}': {}",
                 identity.cert_path, err
@@ -296,6 +309,12 @@ impl QUICListener {
                 identity.key_path, err
             ))
         })?;
+        Self::validate_boring_certificate_key(
+            &leaf,
+            &key,
+            &identity.cert_path,
+            &identity.key_path,
+        )?;
         builder.set_private_key(&key).map_err(|err| {
             ProxyError::Tls(format!(
                 "failed to load key '{}': {}",
@@ -358,6 +377,27 @@ impl QUICListener {
         }
 
         Ok(builder)
+    }
+
+    fn validate_boring_certificate_key(
+        certificate: &X509,
+        key: &PKey<boring::pkey::Private>,
+        cert_path: &str,
+        key_path: &str,
+    ) -> Result<(), ProxyError> {
+        let certificate_key = certificate.public_key().map_err(|err| {
+            ProxyError::Tls(format!(
+                "failed to read public key from certificate '{}': {}",
+                cert_path, err
+            ))
+        })?;
+        if !certificate_key.public_eq(key) {
+            return Err(ProxyError::Tls(format!(
+                "certificate/key mismatch for '{}' and '{}'",
+                cert_path, key_path
+            )));
+        }
+        Ok(())
     }
 
     pub(super) fn tls_reload_generation_if_needed(
@@ -579,12 +619,38 @@ impl QUICListener {
             ))
         })?;
         let metadata = Self::load_tls_certificate_metadata(leaf, cert_field, &identity.cert_path)?;
+        Self::validate_tls_certificate_validity(&metadata, cert_field, &identity.cert_path)?;
 
         Ok(LoadedListenerIdentity {
             identity: identity.clone(),
             certified_key,
             metadata,
         })
+    }
+
+    fn validate_tls_certificate_validity(
+        metadata: &RuntimeTlsCertificateMetadata,
+        cert_field: &str,
+        cert_path: &str,
+    ) -> Result<(), ProxyError> {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|err| ProxyError::Tls(format!("system clock is before Unix epoch: {err}")))?
+            .as_secs();
+        let now = i64::try_from(now).unwrap_or(i64::MAX);
+        if metadata.not_before_unix_seconds > now {
+            return Err(ProxyError::Tls(format!(
+                "{cert_field} '{cert_path}' is not yet valid (not_before={}, now={now})",
+                metadata.not_before_unix_seconds
+            )));
+        }
+        if metadata.not_after_unix_seconds <= now {
+            return Err(ProxyError::Tls(format!(
+                "{cert_field} '{cert_path}' is expired (not_after={}, now={now})",
+                metadata.not_after_unix_seconds
+            )));
+        }
+        Ok(())
     }
 
     fn load_client_auth_ca(
@@ -1160,13 +1226,16 @@ impl QUICListener {
 mod tests {
     use std::sync::Arc;
 
+    use boring::{pkey::PKey, x509::X509};
     use impulse_config::config::ControlApiClientAuthMode;
     use impulse_config::{config::ClientAuth, runtime::RuntimeTlsIdentity};
     use rcgen::{Certificate, CertificateParams, SanType};
     use rustls::RootCertStore;
     use tempfile::tempdir;
 
-    use super::{LoadedClientAuthCa, MAX_TLS_PEM_BYTES, QUICListener};
+    use super::{
+        LoadedClientAuthCa, MAX_TLS_PEM_BYTES, QUICListener, RuntimeTlsCertificateMetadata,
+    };
     use crate::quic_listener::control_api::security::{
         ControlApiClientAuthPolicy, ControlApiClientCaMaterial, ControlApiClientVerifierState,
     };
@@ -1238,6 +1307,63 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("exceeds the maximum supported PEM size")
+        );
+    }
+
+    #[test]
+    fn boring_quic_identity_rejects_mismatched_certificate_and_key() {
+        let dir = tempdir().expect("tempdir");
+        let first = write_test_identity_files(dir.path());
+        let second_dir = tempdir().expect("second tempdir");
+        let second = write_test_identity_files(second_dir.path());
+        let certificate_pem = std::fs::read(&first.cert_path).expect("certificate");
+        let key_pem = std::fs::read(&second.key_path).expect("key");
+        let certificate = X509::stack_from_pem(&certificate_pem)
+            .expect("parse certificate")
+            .remove(0);
+        let key = PKey::private_key_from_pem(&key_pem).expect("parse key");
+
+        let error = QUICListener::validate_boring_certificate_key(
+            &certificate,
+            &key,
+            &first.cert_path,
+            &second.key_path,
+        )
+        .expect_err("mismatched certificate and key must be rejected");
+
+        assert!(error.to_string().contains("certificate/key mismatch"));
+    }
+
+    #[test]
+    fn tls_certificate_validity_rejects_expired_and_future_certificates() {
+        let expired = RuntimeTlsCertificateMetadata {
+            serial_hex: "01".to_string(),
+            not_before_unix_seconds: 100,
+            not_after_unix_seconds: 200,
+            dns_names: vec!["example.com".to_string()],
+        };
+        let future = RuntimeTlsCertificateMetadata {
+            serial_hex: "02".to_string(),
+            not_before_unix_seconds: i64::MAX,
+            not_after_unix_seconds: i64::MAX,
+            dns_names: vec!["example.com".to_string()],
+        };
+
+        assert!(
+            QUICListener::validate_tls_certificate_validity(
+                &expired,
+                "listen.tls.default_identity.cert",
+                "/tmp/expired.pem",
+            )
+            .is_err()
+        );
+        assert!(
+            QUICListener::validate_tls_certificate_validity(
+                &future,
+                "listen.tls.default_identity.cert",
+                "/tmp/future.pem",
+            )
+            .is_err()
         );
     }
 

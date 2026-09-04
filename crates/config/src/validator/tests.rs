@@ -626,6 +626,16 @@ fn rejects_invalid_performance_and_observability_values() {
     assert!(validate(&cfg).is_err());
 
     cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.resilience.protocol.allow_0rtt = true;
+    cfg.resilience.protocol.early_data_safe_methods = vec!["POST".to_string()];
+    assert!(validate(&cfg).is_err());
+
+    cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.resilience.protocol.allow_0rtt = true;
+    cfg.resilience.protocol.early_data_safe_methods = vec!["bad method".to_string()];
+    assert!(validate(&cfg).is_err());
+
+    cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
     cfg.resilience.protocol.denied_path_prefixes = vec!["admin".to_string()];
     assert!(validate(&cfg).is_err());
 
@@ -1056,6 +1066,17 @@ fn rejects_loopback_control_api_without_auth_token() {
     cfg.observability.control_api.enabled = true;
     cfg.observability.control_api.address = "127.0.0.1".to_string();
     cfg.observability.control_api.auth_token = None;
+    assert!(validate(&cfg).is_err());
+}
+
+#[test]
+fn rejects_watchdog_grace_shorter_than_shutdown_drain_timeout() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.resilience.watchdog.enabled = true;
+    cfg.resilience.watchdog.drain_grace_ms = 1_000;
+    cfg.performance.shutdown_drain_timeout_ms = 2_000;
     assert!(validate(&cfg).is_err());
 }
 
