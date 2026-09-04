@@ -15,6 +15,11 @@ struct ControlApiTlsState {
     server_config: Arc<RustlsServerConfig>,
 }
 
+enum ControlApiTlsAcceptError {
+    Handshake(std::io::Error),
+    Timeout,
+}
+
 impl QUICListener {
     pub(in crate::quic_listener) fn spawn_control_api_endpoint(
         bootstrap: &ControlPlaneBootstrap<'_>,
@@ -242,16 +247,19 @@ impl QUICListener {
             error!("Control API endpoint missing live TLS config");
             return;
         };
-        let acceptor = TlsAcceptor::from(server_config);
-        let tls_stream = match acceptor.accept(stream).await {
+        let tls_stream = match Self::accept_control_api_tls(stream, server_config, timeout).await {
             Ok(stream) => stream,
-            Err(err) => {
+            Err(ControlApiTlsAcceptError::Handshake(err)) => {
                 let detail = err.to_string();
                 let reason = Self::classify_downstream_tls_failure_reason(&detail);
                 error!(
                     "Control API endpoint TLS handshake failed from {}: reason={} detail={}",
                     peer, reason, detail
                 );
+                return;
+            }
+            Err(ControlApiTlsAcceptError::Timeout) => {
+                debug!("Control API endpoint TLS handshake timed out from {}", peer);
                 return;
             }
         };
@@ -281,6 +289,20 @@ impl QUICListener {
             Err(_) => {
                 debug!("Control API endpoint connection timed out");
             }
+        }
+    }
+
+    async fn accept_control_api_tls(
+        stream: tokio::net::TcpStream,
+        server_config: Arc<RustlsServerConfig>,
+        timeout: Duration,
+    ) -> Result<tokio_rustls::server::TlsStream<tokio::net::TcpStream>, ControlApiTlsAcceptError>
+    {
+        let accept = TlsAcceptor::from(server_config).accept(stream);
+        match tokio::time::timeout(timeout, accept).await {
+            Ok(Ok(stream)) => Ok(stream),
+            Ok(Err(err)) => Err(ControlApiTlsAcceptError::Handshake(err)),
+            Err(_) => Err(ControlApiTlsAcceptError::Timeout),
         }
     }
 
@@ -343,5 +365,45 @@ impl QUICListener {
             *tls_state = Some(Self::build_control_api_tls_state(runtime_state)?);
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rcgen::{Certificate, CertificateParams};
+    use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn stalled_control_api_tls_handshake_times_out() {
+        let certificate =
+            Certificate::from_params(CertificateParams::new(vec!["localhost".to_string()]))
+                .expect("test certificate");
+        let cert_der = CertificateDer::from(certificate.serialize_der().expect("certificate DER"));
+        let key_der = PrivateKeyDer::from(PrivatePkcs8KeyDer::from(
+            certificate.serialize_private_key_der(),
+        ));
+        let server_config = Arc::new(
+            RustlsServerConfig::builder()
+                .with_no_client_auth()
+                .with_single_cert(vec![cert_der], key_der)
+                .expect("server TLS config"),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener");
+        let peer = listener.local_addr().expect("listener address");
+        let client = tokio::net::TcpStream::connect(peer);
+        let accept = listener.accept();
+        let (client_result, server_result) = tokio::join!(client, accept);
+        let _client = client_result.expect("client connection");
+        let (server, _) = server_result.expect("server connection");
+
+        let result =
+            QUICListener::accept_control_api_tls(server, server_config, Duration::from_millis(10))
+                .await;
+
+        assert!(matches!(result, Err(ControlApiTlsAcceptError::Timeout)));
     }
 }
