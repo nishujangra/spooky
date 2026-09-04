@@ -40,6 +40,13 @@ impl AdaptiveAdmission {
     }
 
     pub fn try_acquire(self: &Arc<Self>) -> Option<AdaptivePermit> {
+        if !self.enabled {
+            self.inflight.fetch_add(1, Ordering::Relaxed);
+            return Some(AdaptivePermit {
+                admission: Arc::clone(self),
+            });
+        }
+
         loop {
             let current = self.inflight.load(Ordering::Relaxed);
             let limit = self.current_limit.load(Ordering::Relaxed).max(1);
@@ -152,5 +159,21 @@ mod tests {
 
         admission.observe(Duration::from_millis(10), true);
         assert_eq!(admission.current_limit(), 2);
+    }
+
+    #[test]
+    fn disabled_admission_does_not_enforce_configured_limit() {
+        let admission = Arc::new(AdaptiveAdmission::new(false, 1, 1, 1, 1, 10));
+
+        let first = admission.try_acquire().expect("first permit");
+        let second = admission
+            .try_acquire()
+            .expect("disabled admission must not reject");
+
+        assert_eq!(admission.current_limit(), 1);
+        assert_eq!(admission.inflight(), 2);
+
+        drop((first, second));
+        assert_eq!(admission.inflight(), 0);
     }
 }

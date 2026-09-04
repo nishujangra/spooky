@@ -1409,6 +1409,35 @@ mod tests {
         }
 
         #[test]
+        fn post_auth_admission_bypasses_adaptive_limit_when_disabled() {
+            let resilience = test_runtime_resilience(
+                |config| {
+                    config.adaptive_admission.enabled = false;
+                    config.adaptive_admission.min_limit = 1;
+                    config.adaptive_admission.max_limit = Some(1);
+                },
+                8,
+            );
+            let _held = resilience
+                .adaptive_admission
+                .clone()
+                .try_acquire()
+                .expect("held permit");
+            let pending_forward = test_pending_forward_for_api(vec![]);
+
+            let result = execute_post_auth_for_api(
+                &resilience,
+                &pending_forward,
+                Some(&test_upstream_pool()),
+                Some(0),
+                &test_upstream_inflight(),
+                Arc::new(Semaphore::new(1)),
+            );
+
+            assert!(matches!(result, PostAuthAdmissionExecution::Ready(_)));
+        }
+
+        #[test]
         fn post_auth_admission_rejects_route_cap_and_global_cap_with_distinct_reasons() {
             let route_cap = test_runtime_resilience(
                 |config| {
