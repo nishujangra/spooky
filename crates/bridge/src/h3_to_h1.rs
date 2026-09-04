@@ -32,11 +32,12 @@ pub(crate) fn build_h1_request(
         headers,
         auth_header_mutations,
         body,
-        content_length,
-        body_mode: _body_mode,
+        body_mode,
         trace,
         forwarded,
     } = input;
+
+    let content_length = body_mode.content_length();
 
     let method = Method::from_bytes(method.as_bytes()).map_err(|_| BridgeError::InvalidMethod)?;
     let preserve_upgrade = legacy_websocket_upgrade_requested(method.as_str(), headers);

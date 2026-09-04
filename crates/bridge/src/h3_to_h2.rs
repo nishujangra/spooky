@@ -26,11 +26,12 @@ pub(crate) fn build_h2_request_for_target(
         headers,
         auth_header_mutations,
         body,
-        content_length,
-        body_mode: _body_mode,
+        body_mode,
         trace,
         forwarded,
     } = input;
+
+    let content_length = body_mode.content_length();
 
     let method = Method::from_bytes(method.as_bytes()).map_err(|_| BridgeError::InvalidMethod)?;
     let websocket_kind = h3_websocket_request_kind(method.as_str(), headers);

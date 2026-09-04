@@ -245,7 +245,6 @@ impl PendingForward {
             headers,
             auth_header_mutations,
             body,
-            content_length,
             body_mode:
                 impulse_bridge::request::RequestBuildInput::<BoxBody<Bytes, Infallible>>::body_mode_for_length(content_length),
             trace: impulse_bridge::request::RequestTraceContext {

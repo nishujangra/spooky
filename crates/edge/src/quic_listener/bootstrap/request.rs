@@ -417,7 +417,6 @@ fn bootstrap_request_build_input<'a>(
         headers,
         auth_header_mutations: &[],
         body,
-        content_length,
         body_mode: RequestBuildInput::<BoxBody<Bytes, Infallible>>::body_mode_for_length(
             content_length,
         ),
@@ -946,7 +945,6 @@ mod tests {
                 headers: &quic_headers,
                 auth_header_mutations: &[],
                 body: boxed_full(Bytes::new()),
-                content_length: Some(0),
                 body_mode: RequestBuildInput::<BoxBody<Bytes, Infallible>>::body_mode_for_length(
                     Some(0),
                 ),
@@ -987,7 +985,6 @@ mod tests {
                 headers: &bridge_headers,
                 auth_header_mutations: &[],
                 body: boxed_full(Bytes::new()),
-                content_length: intake.content_length,
                 body_mode: RequestBuildInput::<BoxBody<Bytes, Infallible>>::body_mode_for_length(
                     intake.content_length,
                 ),
@@ -1035,7 +1032,6 @@ mod tests {
                 headers: &bridge_headers,
                 auth_header_mutations: &[],
                 body: boxed_full(Bytes::new()),
-                content_length: Some(0),
                 body_mode: RequestBuildInput::<BoxBody<Bytes, Infallible>>::body_mode_for_length(
                     Some(0),
                 ),
