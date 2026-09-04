@@ -658,7 +658,11 @@ fn quic_to_h2_upstream_mtls_requires_client_certificate() {
     let mut after_metrics = String::new();
     let mut observed_client_auth_rejection = false;
     let mut last_status = 0u16;
-    const MAX_ATTEMPTS: u32 = 10;
+    // 25 attempts at 200ms gives a 5s budget for the connection-warmup race
+    // described above to settle even under slower/contended CI runners,
+    // versus the previous 10 attempts / ~1s budget that was observed to be
+    // too tight there.
+    const MAX_ATTEMPTS: u32 = 25;
     for attempt in 0..MAX_ATTEMPTS {
         let response = harness
             .run_request(H3RequestSpec::get("public.example.com", "/mtls-required"))
@@ -676,7 +680,7 @@ fn quic_to_h2_upstream_mtls_requires_client_certificate() {
         if observed_client_auth_rejection || attempt == MAX_ATTEMPTS - 1 {
             break;
         }
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(Duration::from_millis(200));
     }
 
     assert!(
