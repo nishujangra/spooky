@@ -111,7 +111,6 @@ impl RequestMode {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RequestBodyState {
     Open,
@@ -120,7 +119,6 @@ pub enum RequestBodyState {
     ClosedToUpstream,
 }
 
-#[allow(dead_code)]
 impl RequestBodyState {
     pub fn from_runtime(
         request_fin_received: bool,
@@ -175,7 +173,6 @@ impl RequestBodyState {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResponseEmissionState {
     DeferredHeaders,
@@ -185,21 +182,18 @@ pub enum ResponseEmissionState {
     EndPending,
 }
 
-#[allow(dead_code)]
 #[derive(Debug)]
 pub(crate) enum ResponseBackpressureState {
     Ready,
     Blocked(ResponseChunk),
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompletionReason {
     ResponseStreamFinished,
     ImmediateResponse,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CancellationReason {
     ClientReset,
@@ -207,7 +201,6 @@ pub enum CancellationReason {
     OperatorAbort,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TimeoutReason {
     RequestBodyIdle,
@@ -219,7 +212,6 @@ pub enum TimeoutReason {
     ResponseBodyTotal,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RejectionReason {
     AuthDenied,
@@ -233,7 +225,6 @@ pub enum RejectionReason {
     ResponsePrebufferCap,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BackendFailureReason {
     DispatchSpawnFailed,
@@ -247,7 +238,6 @@ pub enum BackendFailureReason {
     ResponseStreamAborted,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct RequestContext {
     pub request_id: u64,
@@ -262,7 +252,6 @@ pub struct RequestContext {
     pub total_request_deadline: Instant,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct RoutingSnapshot {
     pub backend_addr: String,
@@ -274,14 +263,12 @@ pub struct RoutingSnapshot {
     pub backend_lb: Option<String>,
 }
 
-#[allow(dead_code)]
 pub struct RequestIntakeState {
     pub context: RequestContext,
     pub request_mode: RequestMode,
     pub request_body: RequestBodyState,
 }
 
-#[allow(dead_code)]
 pub struct AwaitingAuthState {
     pub context: RequestContext,
     pub routing: RoutingSnapshot,
@@ -311,7 +298,6 @@ impl AwaitingAuthState {
     }
 }
 
-#[allow(dead_code)]
 pub struct DispatchReadyState {
     pub context: RequestContext,
     pub routing: RoutingSnapshot,
@@ -341,7 +327,6 @@ impl RequestBodyRuntime {
     }
 }
 
-#[allow(dead_code)]
 pub struct AdmissionPermits {
     pub global: OwnedSemaphorePermit,
     pub upstream: OwnedSemaphorePermit,
@@ -349,28 +334,24 @@ pub struct AdmissionPermits {
     pub route_queue: RouteQueuePermit,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BackendAccountingState {
     pub response_status: Option<StatusCode>,
     pub finalized: bool,
 }
 
-#[allow(dead_code)]
 impl BackendAccountingState {
     pub fn should_finalize(self) -> bool {
         !self.finalized
     }
 }
 
-#[allow(dead_code)]
 pub struct BackendDispatchState {
     pub body_tx: Option<mpsc::Sender<Bytes>>,
     pub(crate) upstream_result_rx: oneshot::Receiver<UpstreamResult>,
     pub backend_accounting: BackendAccountingState,
 }
 
-#[allow(dead_code)]
 pub struct AdmittedState {
     pub context: RequestContext,
     pub routing: RoutingSnapshot,
@@ -381,7 +362,6 @@ pub struct AdmittedState {
     pub permits: AdmissionPermits,
 }
 
-#[allow(dead_code)]
 pub struct AwaitingUpstreamState {
     pub context: RequestContext,
     pub routing: RoutingSnapshot,
@@ -393,7 +373,6 @@ pub struct AwaitingUpstreamState {
     pub dispatch: BackendDispatchState,
 }
 
-#[allow(dead_code)]
 pub struct ResponseStreamingState {
     pub context: RequestContext,
     pub routing: RoutingSnapshot,
@@ -407,7 +386,6 @@ pub struct ResponseStreamingState {
     pub backend_accounting: BackendAccountingState,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct TerminalSnapshot {
     pub context: RequestContext,
@@ -418,37 +396,31 @@ pub struct TerminalSnapshot {
     pub backend_accounting: Option<BackendAccountingState>,
 }
 
-#[allow(dead_code)]
 pub struct CompletedState {
     pub reason: CompletionReason,
     pub snapshot: TerminalSnapshot,
 }
 
-#[allow(dead_code)]
 pub struct CancelledState {
     pub reason: CancellationReason,
     pub snapshot: TerminalSnapshot,
 }
 
-#[allow(dead_code)]
 pub struct TimedOutState {
     pub reason: TimeoutReason,
     pub snapshot: TerminalSnapshot,
 }
 
-#[allow(dead_code)]
 pub struct RejectedState {
     pub reason: RejectionReason,
     pub snapshot: TerminalSnapshot,
 }
 
-#[allow(dead_code)]
 pub struct BackendFailedState {
     pub reason: BackendFailureReason,
     pub snapshot: TerminalSnapshot,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum TerminalReason {
     Completed(CompletionReason),
@@ -458,7 +430,6 @@ pub(crate) enum TerminalReason {
     BackendFailed(BackendFailureReason),
 }
 
-#[allow(dead_code)]
 impl TerminalReason {
     pub(crate) fn terminal_status(self, snapshot: &TerminalSnapshot) -> Option<StatusCode> {
         snapshot.response_status
@@ -481,7 +452,6 @@ impl TerminalReason {
     }
 }
 
-#[allow(dead_code)]
 pub enum TerminalState {
     Completed(CompletedState),
     Cancelled(CancelledState),
@@ -490,7 +460,6 @@ pub enum TerminalState {
     BackendFailed(BackendFailedState),
 }
 
-#[allow(dead_code)]
 impl TerminalState {
     pub fn terminal_status(&self) -> Option<StatusCode> {
         match self {
@@ -528,7 +497,6 @@ impl TerminalState {
     }
 }
 
-#[allow(dead_code)]
 pub enum RequestExecutionState {
     Intake(RequestIntakeState),
     AwaitingAuth(AwaitingAuthState),
@@ -539,7 +507,6 @@ pub enum RequestExecutionState {
     Terminal(TerminalState),
 }
 
-#[allow(dead_code)]
 impl RequestExecutionState {
     pub fn is_terminal(&self) -> bool {
         matches!(self, Self::Terminal(_))

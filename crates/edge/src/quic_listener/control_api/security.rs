@@ -370,7 +370,6 @@ pub(in crate::quic_listener) struct ControlApiIpAllowlistMatcher {
 }
 
 impl ControlApiIpAllowlistMatcher {
-    #[allow(dead_code)]
     pub(in crate::quic_listener) fn contains(&self, ip: IpAddr) -> bool {
         self.cidrs.iter().any(|cidr| cidr.contains(ip))
     }
@@ -415,7 +414,6 @@ impl ControlApiIpNetwork {
         }
     }
 
-    #[allow(dead_code)]
     fn contains(&self, ip: IpAddr) -> bool {
         match (self, ip) {
             (
