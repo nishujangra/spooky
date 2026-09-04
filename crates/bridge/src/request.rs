@@ -18,7 +18,7 @@ use impulse_errors::BridgeError;
 use crate::{
     forwarded::{ForwardedHeaderChains, ForwardedHeaderValues, build_forwarded_header_values},
     h3_to_h1, h3_to_h2,
-    headers::{connection_header_tokens, should_strip_request_header},
+    headers::{connection_header_tokens, should_strip_proxy_header, should_strip_request_header},
     host::resolve_upstream_host_value,
 };
 
@@ -191,7 +191,7 @@ pub(crate) fn apply_request_header_policies(
         };
         let header_name =
             HeaderName::from_bytes(mutation.name).map_err(|_| BridgeError::InvalidHeader)?;
-        if should_strip_request_header(&header_name, &connection_tokens, preserve_upgrade) {
+        if should_strip_proxy_header(&header_name, preserve_upgrade) {
             continue;
         }
         if header_name == http::header::HOST {

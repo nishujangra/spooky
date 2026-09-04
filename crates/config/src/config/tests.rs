@@ -660,3 +660,33 @@ required_scopes:
     assert!(route_auth.jwt.is_none());
     assert!(route_auth.external_auth.is_none());
 }
+
+#[test]
+fn resolved_jwt_and_oidc_secrets_are_redacted_from_debug_and_serialization() {
+    let jwt: JwtAuth = serde_yaml::from_str(
+        r#"
+secret: jwt-super-secret
+"#,
+    )
+    .expect("JWT auth should parse");
+    let jwt_debug = format!("{jwt:?}");
+    let jwt_json = serde_yaml::to_string(&jwt).expect("JWT auth should serialize");
+    assert!(!jwt_debug.contains("jwt-super-secret"));
+    assert!(!jwt_json.contains("jwt-super-secret"));
+    assert!(!jwt_json.contains("\"secret\""));
+
+    let oidc: ExternalAuth = serde_yaml::from_str(
+        r#"
+kind: oidc
+discovery_url: https://issuer.example/.well-known/openid-configuration
+client_id: edge
+client_secret: oidc-super-secret
+"#,
+    )
+    .expect("OIDC auth should parse");
+    let oidc_debug = format!("{oidc:?}");
+    let oidc_json = serde_yaml::to_string(&oidc).expect("OIDC auth should serialize");
+    assert!(!oidc_debug.contains("oidc-super-secret"));
+    assert!(!oidc_json.contains("oidc-super-secret"));
+    assert!(!oidc_json.contains("\"client_secret\""));
+}

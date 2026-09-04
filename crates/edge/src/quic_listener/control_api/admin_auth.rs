@@ -205,10 +205,19 @@ impl QUICListener {
             return Ok(());
         };
 
-        let peer_ip = request_context
-            .as_ref()
-            .map(|context| context.peer_addr.ip());
-        if peer_ip.is_some_and(|peer| service_state.auth_throttle.is_blocked(peer)) {
+        let throttle_ip = request_context.as_ref().map(|context| {
+            source_ip_from_request(
+                req,
+                context.peer_addr.ip(),
+                service_state.security.ip_allowlist.trust_proxy_headers,
+                service_state
+                    .security
+                    .ip_allowlist
+                    .trusted_proxy_matcher
+                    .as_ref(),
+            )
+        });
+        if throttle_ip.is_some_and(|ip| service_state.auth_throttle.is_blocked(ip)) {
             return Err(Box::new(Self::control_api_auth_error_response(
                 route,
                 StatusCode::TOO_MANY_REQUESTS,
@@ -220,8 +229,8 @@ impl QUICListener {
 
         let decision = match Self::authenticate_control_api_request(req, &service_state.security) {
             AuthenticationOutcome::Missing => {
-                if let Some(peer) = peer_ip {
-                    service_state.auth_throttle.record_failure(peer);
+                if let Some(ip) = throttle_ip {
+                    service_state.auth_throttle.record_failure(ip);
                 }
                 AuthorizationDecision::Deny {
                     status: StatusCode::UNAUTHORIZED,
@@ -233,8 +242,8 @@ impl QUICListener {
                 }
             }
             AuthenticationOutcome::Invalid(reason) => {
-                if let Some(peer) = peer_ip {
-                    service_state.auth_throttle.record_failure(peer);
+                if let Some(ip) = throttle_ip {
+                    service_state.auth_throttle.record_failure(ip);
                 }
                 AuthorizationDecision::Deny {
                     status: StatusCode::UNAUTHORIZED,
@@ -246,8 +255,8 @@ impl QUICListener {
                 }
             }
             AuthenticationOutcome::Authenticated(identity) => {
-                if let Some(peer) = peer_ip {
-                    service_state.auth_throttle.record_success(peer);
+                if let Some(ip) = throttle_ip {
+                    service_state.auth_throttle.record_success(ip);
                 }
                 Self::emit_control_api_auth_audit_event(
                     &service_state.security,
