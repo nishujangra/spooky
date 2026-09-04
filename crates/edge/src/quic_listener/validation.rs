@@ -193,7 +193,7 @@ pub(super) fn validate_request_headers(
             false,
         ));
     }
-    if h3_upgrade_requested && !websocket_tunnel {
+    if h3_upgrade_requested {
         return Err((
             http::StatusCode::BAD_REQUEST,
             b"HTTP/3 does not support Upgrade requests
@@ -766,7 +766,7 @@ mod tests {
     }
 
     #[test]
-    fn accepts_http3_websocket_legacy_upgrade_as_tunnel() {
+    fn rejects_http3_websocket_legacy_upgrade() {
         let resilience = runtime_resilience();
         let headers = vec![
             h3_header(b":method", b"GET"),
@@ -776,10 +776,11 @@ mod tests {
             h3_header(b"upgrade", b"websocket"),
         ];
 
-        let result = validate_request_headers(&headers, &resilience)
-            .expect("HTTP/3 WebSocket legacy upgrade should be accepted as a tunnel");
-        assert!(result.websocket_tunnel, "websocket_tunnel flag must be set");
-        assert_eq!(result.method, "GET");
+        let err = validate_request_headers(&headers, &resilience)
+            .expect_err("HTTP/3 WebSocket legacy upgrade must be rejected");
+        assert_eq!(err.0, http::StatusCode::BAD_REQUEST);
+        assert_eq!(err.1, b"HTTP/3 does not support Upgrade requests\n");
+        assert!(!err.2);
     }
 
     #[test]

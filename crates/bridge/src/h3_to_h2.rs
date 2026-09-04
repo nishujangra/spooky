@@ -35,8 +35,7 @@ pub(crate) fn build_h2_request_for_target(
     let method = Method::from_bytes(method.as_bytes()).map_err(|_| BridgeError::InvalidMethod)?;
     let websocket_kind = h3_websocket_request_kind(method.as_str(), headers);
     // Extended CONNECT is the H2 websocket path (RFC 8441).
-    let websocket_extended_connect = websocket_kind == H3WebsocketRequestKind::ExtendedConnect
-        || websocket_kind == H3WebsocketRequestKind::LegacyUpgrade;
+    let websocket_extended_connect = websocket_kind == H3WebsocketRequestKind::ExtendedConnect;
     let upstream_method = if websocket_extended_connect {
         Method::CONNECT
     } else {

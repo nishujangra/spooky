@@ -1993,11 +1993,11 @@ fn bootstrap_websocket_upgrade_is_an_explicit_quic_parity_boundary() {
     );
 
     assert_eq!(
-        quic.status, 200,
-        "quic should not pretend to share bootstrap-only HTTP/1.1 switching-protocols mechanics"
+        quic.status, 400,
+        "HTTP/3 must reject HTTP/1.1 WebSocket upgrade semantics"
     );
-    assert!(quic.body.is_empty());
-    assert_eq!(quic.header("sec-websocket-accept"), Some("test-accept"));
+    assert_eq!(quic.body, b"HTTP/3 does not support Upgrade requests\n");
+    assert_eq!(quic.header("sec-websocket-accept"), None);
     assert_eq!(
         quic.header("connection"),
         None,

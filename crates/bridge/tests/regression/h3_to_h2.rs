@@ -356,8 +356,7 @@ fn connect_uses_authority_form_request_target() {
 fn websocket_requests_are_shaped_as_extended_connect() {
     let endpoint = parse_backend_endpoint("backend.internal:443").expect("endpoint");
     let headers = vec![
-        Header::new(b"connection", b"upgrade"),
-        Header::new(b"upgrade", b"websocket"),
+        Header::new(b":protocol", b"websocket"),
         Header::new(b"sec-websocket-key", b"dGhlIHNhbXBsZSBub25jZQ=="),
     ];
 
@@ -365,7 +364,7 @@ fn websocket_requests_are_shaped_as_extended_connect() {
         &endpoint,
         &UpstreamHostPolicy::default(),
         &ForwardedHeaderPolicy::default(),
-        "GET",
+        "CONNECT",
         "/ws",
         &headers,
         RequestInputMeta {
