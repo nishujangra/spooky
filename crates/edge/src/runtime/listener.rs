@@ -81,6 +81,7 @@ pub struct QUICListener {
     pub(crate) peer_routes: HashMap<SocketAddr, Arc<[u8]>>, // KEY: peer address, VALUE: primary SCID
     pub(crate) cid_radix: CidRadix,
     pub(crate) conn_rate_limiter: crate::quic_listener::TokenBucket,
+    pub(crate) source_conn_rate_limiter: crate::quic_listener::PerSourceTokenBucket,
 }
 
 impl QUICListener {

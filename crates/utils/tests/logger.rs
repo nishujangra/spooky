@@ -7,7 +7,7 @@ use std::{
 use impulse_utils::logger::{
     CONTROL_API_AUDIT_LOG_TARGET,
     errors::{build_create_log_dir_error, build_open_log_file_error},
-    formatter::{build_json_payload, should_passthrough_raw_json_target},
+    formatter::{build_json_payload, sanitize_log_text, should_passthrough_raw_json_target},
     init::{LoggerInitStatus, try_init_logger},
     set_log_level,
 };
@@ -152,4 +152,12 @@ fn control_api_audit_target_is_marked_for_raw_json_passthrough() {
         CONTROL_API_AUDIT_LOG_TARGET
     ));
     assert!(!should_passthrough_raw_json_target("impulse_edge"));
+}
+
+#[test]
+fn log_text_sanitization_removes_terminal_sequences_and_line_breaks() {
+    assert_eq!(
+        sanitize_log_text("path=/bad\n\u{1b}[31mALERT\u{1b}[0m\r\t"),
+        r"path=/bad\nALERT\r\t"
+    );
 }

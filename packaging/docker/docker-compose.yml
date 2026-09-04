@@ -13,6 +13,4 @@ services:
     ports:
       - "9889:9889/udp"
       - "9889:9889/tcp"
-      - "9901:9901/tcp"
-      - "9902:9902/tcp"
     restart: unless-stopped

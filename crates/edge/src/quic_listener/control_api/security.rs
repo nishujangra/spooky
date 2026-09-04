@@ -585,4 +585,32 @@ mod tests {
         throttle.record_success(peer);
         assert!(!throttle.is_blocked(peer));
     }
+
+    #[test]
+    fn trusted_proxy_clients_use_independent_auth_throttle_keys() {
+        let throttle = ControlApiAuthThrottle::new();
+        let proxy = "10.0.0.2".parse().expect("proxy ip");
+        let trusted_proxy_matcher = ControlApiIpAllowlistMatcher {
+            cidrs: vec![ControlApiIpNetwork::parse("10.0.0.0/8").unwrap()],
+        };
+        let request_a = ::http::Request::builder()
+            .header("x-forwarded-for", "203.0.113.10, 10.0.0.2")
+            .body(())
+            .expect("request a");
+        let request_b = ::http::Request::builder()
+            .header("x-forwarded-for", "203.0.113.11, 10.0.0.2")
+            .body(())
+            .expect("request b");
+        let client_a =
+            source_ip_from_request(&request_a, proxy, true, Some(&trusted_proxy_matcher));
+        let client_b =
+            source_ip_from_request(&request_b, proxy, true, Some(&trusted_proxy_matcher));
+
+        for _ in 0..5 {
+            throttle.record_failure(client_a);
+        }
+
+        assert!(throttle.is_blocked(client_a));
+        assert!(!throttle.is_blocked(client_b));
+    }
 }

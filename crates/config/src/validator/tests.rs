@@ -1077,6 +1077,12 @@ fn rejects_watchdog_grace_shorter_than_shutdown_drain_timeout() {
     cfg.resilience.watchdog.enabled = true;
     cfg.resilience.watchdog.drain_grace_ms = 1_000;
     cfg.performance.shutdown_drain_timeout_ms = 2_000;
+fn rejects_known_control_api_placeholder_token() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.observability.control_api.enabled = true;
+    cfg.observability.control_api.auth_token = Some("replace-with-strong-token".to_string());
     assert!(validate(&cfg).is_err());
 }
 
@@ -1872,6 +1878,46 @@ fn accepts_http_external_auth_with_default_timeout() {
         .auth
         .external_auth = Some(ExternalAuth::Http {
         endpoint: "https://auth.internal/check".to_string(),
+        request_headers: Vec::new(),
+        response_header_allowlist: Vec::new(),
+        timeout_ms: 1_000,
+        failure_mode: ExternalAuthFailureMode::FailClosed,
+    });
+
+    assert!(validate(&cfg).is_ok());
+}
+
+#[test]
+fn rejects_remote_plaintext_http_external_auth() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.upstream
+        .get_mut("test_upstream")
+        .expect("upstream")
+        .auth
+        .external_auth = Some(ExternalAuth::Http {
+        endpoint: "http://auth.internal/check".to_string(),
+        request_headers: Vec::new(),
+        response_header_allowlist: Vec::new(),
+        timeout_ms: 1_000,
+        failure_mode: ExternalAuthFailureMode::FailClosed,
+    });
+
+    assert!(validate(&cfg).is_err());
+}
+
+#[test]
+fn accepts_loopback_plaintext_http_external_auth() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_certs(dir.path());
+    let mut cfg = base_config(&cert.to_string_lossy(), &key.to_string_lossy());
+    cfg.upstream
+        .get_mut("test_upstream")
+        .expect("upstream")
+        .auth
+        .external_auth = Some(ExternalAuth::Http {
+        endpoint: "http://127.0.0.1:8080/check".to_string(),
         request_headers: Vec::new(),
         response_header_allowlist: Vec::new(),
         timeout_ms: 1_000,

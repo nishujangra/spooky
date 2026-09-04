@@ -37,7 +37,9 @@ use super::{
 };
 use crate::{
     REQUEST_ID_COUNTER,
-    quic_listener::{QUICListener, runtime_endpoint::RuntimeConnectionSlotGuard},
+    quic_listener::{
+        PerSourceTokenBucket, QUICListener, runtime_endpoint::RuntimeConnectionSlotGuard,
+    },
     runtime::{
         bundle::RuntimeBundleHandle,
         connection::guardrails::{
@@ -96,6 +98,18 @@ pub(in crate::quic_listener) fn spawn_bootstrap_tls_listener(
             connection_timeout.as_millis()
         );
         let active_connections = Arc::new(AtomicUsize::new(0));
+        let mut source_rate_limiter = PerSourceTokenBucket::new(
+            startup_state
+                .listener_config
+                .policies
+                .transport
+                .new_connections_per_sec,
+            startup_state
+                .listener_config
+                .policies
+                .transport
+                .new_connections_burst,
+        );
         loop {
             let accept_result = if let Some(shutdown_signal) = shutdown_signal.as_ref() {
                 tokio::select! {
@@ -136,6 +150,18 @@ pub(in crate::quic_listener) fn spawn_bootstrap_tls_listener(
                 );
                 continue;
             };
+            source_rate_limiter.reconfigure(
+                runtime_state.new_connections_per_sec,
+                runtime_state.new_connections_burst,
+            );
+            if !source_rate_limiter.try_consume(peer.ip()) {
+                runtime_state.metrics.inc_ingress_rate_limited();
+                debug!(
+                    "Bootstrap TLS per-source connection rate limit exceeded for {}",
+                    peer
+                );
+                continue;
+            }
             let active_connections = Arc::clone(&active_connections);
             if !QUICListener::try_claim_runtime_connection_slot(
                 &active_connections,

@@ -640,6 +640,85 @@ impl Metrics {
         }
     }
 
+    pub fn reconcile_runtime_metric_labels<'a, I, J, K, L>(
+        &self,
+        active_upstreams: I,
+        active_backends: J,
+        active_listeners: K,
+        active_quota_policies: L,
+    ) where
+        I: IntoIterator<Item = &'a str>,
+        J: IntoIterator<Item = &'a str>,
+        K: IntoIterator<Item = &'a str>,
+        L: IntoIterator<Item = &'a str>,
+    {
+        let active_upstreams = active_upstreams
+            .into_iter()
+            .map(ToOwned::to_owned)
+            .collect::<HashSet<_>>();
+        let active_backends = active_backends
+            .into_iter()
+            .map(ToOwned::to_owned)
+            .collect::<HashSet<_>>();
+        let active_listeners = active_listeners
+            .into_iter()
+            .map(ToOwned::to_owned)
+            .collect::<HashSet<_>>();
+        let active_quota_policies = active_quota_policies
+            .into_iter()
+            .map(ToOwned::to_owned)
+            .collect::<HashSet<_>>();
+
+        if let Ok(mut guard) = self.backend_dns_state.write() {
+            guard.retain(|backend, _| active_backends.contains(backend));
+        }
+        if let Ok(mut guard) = self.backend_rotation_state.write() {
+            guard.retain(|backend, _| active_backends.contains(backend));
+        }
+        if let Ok(mut guard) = self.backend_connect_attempts.write() {
+            guard.retain(|key, _| active_backends.contains(&key.backend));
+        }
+        if let Ok(mut guard) = self.request_result_metrics.write() {
+            guard
+                .upstream_request_counts
+                .retain(|key, _| active_upstreams.contains(&key.upstream));
+            guard.backend_request_counts.retain(|key, _| {
+                active_upstreams.contains(&key.upstream) && active_backends.contains(&key.backend)
+            });
+            guard
+                .upstream_request_latency
+                .retain(|key, _| active_upstreams.contains(&key.upstream));
+        }
+        if let Ok(mut guard) = self.downstream_tls_handshake_failures.write() {
+            guard.retain(|key, _| active_listeners.contains(&key.listener));
+        }
+        if let Ok(mut guard) = self.downstream_tls_cert_selections.write() {
+            guard.retain(|key, _| active_listeners.contains(&key.listener));
+        }
+        if let Ok(mut guard) = self.downstream_tls_alpn_negotiated.write() {
+            guard.retain(|key, _| active_listeners.contains(&key.listener));
+        }
+        if let Ok(mut guard) = self.downstream_tls_cert_expiry.write() {
+            guard.retain(|key, _| active_listeners.contains(&key.listener));
+        }
+        if let Ok(mut guard) = self.upstream_tls_failures.write() {
+            guard.retain(|key, _| {
+                active_upstreams.contains(&key.upstream) && active_backends.contains(&key.backend)
+            });
+        }
+        if let Ok(mut guard) = self.upstream_client_cert_expiry.write() {
+            guard.retain(|key, _| active_upstreams.contains(&key.upstream));
+        }
+        if let Ok(mut guard) = self.quota_policy_outcomes.write() {
+            guard.retain(|key, _| active_quota_policies.contains(&key.policy));
+        }
+
+        self.mark_backend_metrics_stale();
+        self.request_result_metrics_version
+            .fetch_add(1, Ordering::Relaxed);
+        self.mark_secret_metrics_stale();
+    }
+
     pub fn record_backend_connect(
         &self,
         backend: &str,

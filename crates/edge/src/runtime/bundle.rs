@@ -419,13 +419,14 @@ impl RuntimeBundleHandle {
     /// generation, so a reload cannot race a shutdown into ambiguous state.
     #[cfg(test)]
     pub(crate) fn replace(&self, bundle: RuntimeBundle) -> Result<u64, ProxyError> {
-        self.replace_with_archive_status(bundle, RuntimeGenerationRecordStatus::Previous)
+        self.replace_with_archive_status(bundle, RuntimeGenerationRecordStatus::Previous, None)
     }
 
     pub(crate) fn replace_with_archive_status(
         &self,
         bundle: RuntimeBundle,
         previous_status: RuntimeGenerationRecordStatus,
+        expected_generation: Option<u64>,
     ) -> Result<u64, ProxyError> {
         let generation = bundle.generation;
         let next_tasks = Arc::clone(&bundle.shared_state.generation_state().generation_tasks);
@@ -440,7 +441,6 @@ impl RuntimeBundleHandle {
             return Err(ProxyError::Transport(rejection.to_string()));
         }
 
-        let previous_generation = self.current().generation;
         let previous = {
             // Poisoning cannot actually occur (the critical section runs no
             // panic-prone code — see `current()`), but the reload path can safely
@@ -455,6 +455,16 @@ impl RuntimeBundleHandle {
                     ));
                 }
             };
+            let previous_generation = guard.generation;
+            if let Some(expected_generation) = expected_generation
+                && previous_generation != expected_generation
+            {
+                next_tasks.abort_generation();
+                return Err(ProxyError::Transport(format!(
+                    "runtime generation conflict: expected active generation {}, found {}",
+                    expected_generation, previous_generation
+                )));
+            }
             // --- old-generation teardown boundary: BEGIN ---
             // The previous bundle's generation-owned state is now unreachable to
             // new readers; existing readers keep their clone until it drains.
@@ -471,7 +481,7 @@ impl RuntimeBundleHandle {
         // --- old-generation teardown boundary: END ---
         info!(
             "runtime generation swap committed: {} -> {} (lifecycle phase {:?})",
-            previous_generation,
+            previous.generation,
             generation,
             self.lifecycle.phase()
         );
@@ -492,6 +502,27 @@ impl RuntimeBundleHandle {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .len();
         let metrics = &current.shared_state.shared_services().metrics;
+        let generation_state = current.shared_state.generation_state();
+        metrics.reconcile_runtime_metric_labels(
+            generation_state
+                .upstream_policies
+                .keys()
+                .map(String::as_str),
+            generation_state
+                .backend_endpoints
+                .keys()
+                .map(String::as_str),
+            generation_state
+                .listener_runtime_configs
+                .keys()
+                .map(String::as_str),
+            generation_state
+                .resilience
+                .quota
+                .policies
+                .iter()
+                .map(|policy| policy.name.as_str()),
+        );
         metrics.set_runtime_active_generation(current.generation);
         metrics.set_runtime_history_depth(history_depth);
     }
@@ -724,6 +755,31 @@ mod tests {
             summarize_upstream_lb_policies(&adaptive_bundle),
             "api:least-connections:unweighted:rejected-as-invalid"
         );
+    }
+
+    #[test]
+    fn stale_generation_swap_is_rejected_under_the_write_lock() {
+        let dir = tempdir().expect("tempdir");
+        let (current_bundle, next_bundle) = runtime_bundle_pair(
+            dir.path(),
+            "startup.yaml",
+            "http://127.0.0.1:7001",
+            2,
+            "reloaded.yaml",
+            "http://127.0.0.1:7002",
+        );
+        let handle = RuntimeBundleHandle::new(current_bundle);
+
+        let error = handle
+            .replace_with_archive_status(
+                next_bundle,
+                RuntimeGenerationRecordStatus::Previous,
+                Some(99),
+            )
+            .expect_err("a stale expected generation must reject the swap");
+
+        assert!(error.to_string().contains("runtime generation conflict"));
+        assert_eq!(handle.current_generation(), 1);
     }
 
     struct CompletionSignal(Option<oneshot::Sender<()>>);

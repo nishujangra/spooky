@@ -98,6 +98,39 @@ impl UpstreamTransportPool {
         self.execute(backend, req).await
     }
 
+    /// Execute a request with a caller-specific timeout.
+    ///
+    /// Health checks use this to keep a slow backend from consuming the
+    /// pool-wide request timeout.
+    pub async fn send_backend_request_with_timeout(
+        &self,
+        backend: &str,
+        req: Request<BoxBody<Bytes, Infallible>>,
+        timeout: Duration,
+    ) -> Result<hyper::Response<Incoming>, ProxyError> {
+        match self.backend_entry(backend) {
+            Some(BackendTransportEntry::Http1) => {
+                self.execute_with_timeout_duration(
+                    backend,
+                    self.h1_pool.send(backend, req),
+                    timeout,
+                )
+                .await
+            }
+            Some(BackendTransportEntry::H2) => {
+                self.execute_with_timeout_duration(
+                    backend,
+                    self.h2_pool.send(backend, req),
+                    timeout,
+                )
+                .await
+            }
+            None => Err(ProxyError::Pool(PoolError::UnknownBackend(
+                backend.to_string(),
+            ))),
+        }
+    }
+
     /// Execute an HTTP/1 backend request that may upgrade into a long-lived tunnel.
     ///
     /// The returned lease keeps the per-backend inflight permit held until the
@@ -317,7 +350,20 @@ impl UpstreamTransportPool {
     where
         F: Future<Output = Result<T, PoolError>>,
     {
-        tokio::time::timeout(self.execution_timeout, send)
+        self.execute_with_timeout_duration(_backend, send, self.execution_timeout)
+            .await
+    }
+
+    async fn execute_with_timeout_duration<F, T>(
+        &self,
+        _backend: &str,
+        send: F,
+        timeout: Duration,
+    ) -> Result<T, ProxyError>
+    where
+        F: Future<Output = Result<T, PoolError>>,
+    {
+        tokio::time::timeout(timeout, send)
             .await
             .map_err(|_| ProxyError::Timeout)?
             .map_err(ProxyError::Pool)

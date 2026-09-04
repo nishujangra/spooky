@@ -73,6 +73,82 @@ fn reconcile_jwks_sources_prunes_removed_telemetry_state() {
 }
 
 #[test]
+fn reconcile_runtime_metric_labels_prunes_removed_reload_identities() {
+    let metrics = Metrics::default();
+    let now = UNIX_EPOCH + Duration::from_secs(1_700_000_000);
+    metrics.record_backend_dns_refresh_success("backend-old", now, 1, false);
+    metrics.record_backend_dns_refresh_success("backend-new", now, 1, false);
+    metrics.record_request_result(
+        "upstream-old",
+        Some("backend-old"),
+        Some(200),
+        RouteOutcome::Success,
+        Duration::from_millis(1),
+    );
+    metrics.record_request_result(
+        "upstream-new",
+        Some("backend-new"),
+        Some(200),
+        RouteOutcome::Success,
+        Duration::from_millis(1),
+    );
+    metrics.record_quota_policy_outcome(
+        "quota-old",
+        QuotaPolicyDecision::Denied,
+        QuotaPolicyReason::Allowed,
+        "route",
+        "in_memory",
+    );
+    metrics.record_quota_policy_outcome(
+        "quota-new",
+        QuotaPolicyDecision::Allowed,
+        QuotaPolicyReason::Allowed,
+        "route",
+        "in_memory",
+    );
+    metrics.replace_upstream_client_cert_expiry([
+        ("upstream-old".to_string(), 1_800_000_000),
+        ("upstream-new".to_string(), 1_800_000_000),
+    ]);
+
+    metrics.reconcile_runtime_metric_labels(
+        ["upstream-new"],
+        ["backend-new"],
+        ["listener-new"],
+        ["quota-new"],
+    );
+
+    let backend = metrics.snapshot_backend_metrics();
+    assert!(
+        backend
+            .backend_dns_state
+            .iter()
+            .all(|(backend, _)| backend != "backend-old")
+    );
+    let requests = metrics.snapshot_request_result_metrics();
+    assert!(
+        requests
+            .upstream_request_counts
+            .iter()
+            .all(|(key, _)| key.upstream != "upstream-old")
+    );
+    let quota = metrics.snapshot_quota_metrics();
+    assert!(
+        quota
+            .quota_policy_outcomes
+            .iter()
+            .all(|(key, _)| key.policy != "quota-old")
+    );
+    let secrets = metrics.snapshot_secret_metrics();
+    assert!(
+        secrets
+            .upstream_client_cert_expiry
+            .iter()
+            .all(|(key, _)| key.upstream != "upstream-old")
+    );
+}
+
+#[test]
 fn prometheus_render_includes_quota_observability_series() {
     let metrics = Metrics::default();
     metrics.record_quota_policy_outcome(

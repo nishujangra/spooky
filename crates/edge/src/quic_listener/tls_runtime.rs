@@ -504,6 +504,10 @@ impl QUICListener {
             settings.new_connections_per_sec,
             settings.new_connections_burst,
         );
+        self.source_conn_rate_limiter.reconfigure(
+            settings.new_connections_per_sec,
+            settings.new_connections_burst,
+        );
         self.quic_config = Self::build_quic_config(&self.config)?;
         self.runtime_generation = runtime.generation();
         self.tls_reload_generation = current_tls_generation;
