@@ -55,11 +55,13 @@ fn route_queue_global_cap_enforced() {
 #[test]
 fn circuit_breaker_opens_after_threshold() {
     let cb = CircuitBreakers::new(true, 2, Duration::from_secs(1), 1);
-    assert!(cb.allow_request("b1"));
-    cb.record_failure("b1");
-    assert!(cb.allow_request("b1"));
-    cb.record_failure("b1");
-    assert!(!cb.allow_request("b1"));
+    cb.allow_request("b1")
+        .expect("first request")
+        .record_failure();
+    cb.allow_request("b1")
+        .expect("second request")
+        .record_failure();
+    assert!(cb.allow_request("b1").is_none());
 }
 
 #[test]
