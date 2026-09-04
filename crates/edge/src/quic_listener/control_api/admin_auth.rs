@@ -5,10 +5,7 @@ use http_body_util::Full;
 use super::{
     admin_identity::{AdminIdentity, AdminRole, ControlApiRequestContext},
     audit::AdminAuditResult,
-    security::{
-        ControlApiSecurityPolicy, ControlApiSourcePolicyContext, ControlApiSourcePolicyDecision,
-        source_ip_from_request,
-    },
+    security::{ControlApiSecurityPolicy, ControlApiSourcePolicyDecision, source_ip_from_request},
     state::{ControlApiPaths, ControlApiState},
     *,
 };
@@ -361,16 +358,13 @@ impl QUICListener {
             )));
         };
 
-        let source_policy = ControlApiSourcePolicyContext {
-            source_ip: source_ip_from_request(
-                req,
-                request_context.peer_addr.ip(),
-                security.ip_allowlist.trust_proxy_headers,
-                security.ip_allowlist.trusted_proxy_matcher.as_ref(),
-            ),
-            trust_proxy_headers: security.ip_allowlist.trust_proxy_headers,
-        };
-        match security.evaluate_source_policy(&source_policy) {
+        let source_ip = source_ip_from_request(
+            req,
+            request_context.peer_addr.ip(),
+            security.ip_allowlist.trust_proxy_headers,
+            security.ip_allowlist.trusted_proxy_matcher.as_ref(),
+        );
+        match security.evaluate_source_policy(source_ip) {
             ControlApiSourcePolicyDecision::Allow => Ok(()),
             ControlApiSourcePolicyDecision::Deny { reason } => {
                 Self::emit_control_api_auth_audit_event(

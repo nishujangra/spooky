@@ -345,12 +345,6 @@ pub(in crate::quic_listener) enum ControlApiSourcePolicyDecision {
     Deny { reason: &'static str },
 }
 
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub(in crate::quic_listener) struct ControlApiSourcePolicyContext {
-    pub(in crate::quic_listener) source_ip: IpAddr,
-    pub(in crate::quic_listener) trust_proxy_headers: bool,
-}
-
 impl ControlApiSecurityPolicy {
     pub(in crate::quic_listener) fn has_source_policy(&self) -> bool {
         self.ip_allowlist.matcher.is_some()
@@ -358,23 +352,15 @@ impl ControlApiSecurityPolicy {
 
     pub(in crate::quic_listener) fn evaluate_source_policy(
         &self,
-        context: &ControlApiSourcePolicyContext,
+        source_ip: IpAddr,
     ) -> ControlApiSourcePolicyDecision {
-        if !self.ip_allowlist.allows(context.source_ip) {
-            return ControlApiSourcePolicyDecision::Deny {
+        if self.ip_allowlist.allows(source_ip) {
+            ControlApiSourcePolicyDecision::Allow
+        } else {
+            ControlApiSourcePolicyDecision::Deny {
                 reason: "source_ip_not_allowed",
-            };
+            }
         }
-
-        // Phase 1 hook point for future sidecar / policy-engine integration.
-        self.evaluate_external_source_policy_hooks(context)
-    }
-
-    fn evaluate_external_source_policy_hooks(
-        &self,
-        _context: &ControlApiSourcePolicyContext,
-    ) -> ControlApiSourcePolicyDecision {
-        ControlApiSourcePolicyDecision::Allow
     }
 }
 
