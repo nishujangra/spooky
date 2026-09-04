@@ -46,7 +46,7 @@ impl RetryBudget {
             return Ok(());
         }
 
-        let ratio = self
+        let route_ratio = self
             .per_route_ratio_percent
             .get(route)
             .copied()
@@ -54,7 +54,7 @@ impl RetryBudget {
 
         let primary = self.global_primary.load(Ordering::Relaxed);
         let retries = self.global_retries.load(Ordering::Relaxed);
-        let global_limit = ((primary * ratio as u64) / 100).saturating_add(1);
+        let global_limit = ((primary * self.global_ratio_percent as u64) / 100).saturating_add(1);
         if retries >= global_limit {
             return Err(RetryPolicyDenialReason::BudgetDenied);
         }
@@ -62,7 +62,7 @@ impl RetryBudget {
         let mut route_allowed = true;
         if let Ok(mut stats) = self.route_stats.lock() {
             let entry = stats.entry(route.to_string()).or_insert((0, 0));
-            let route_limit = ((entry.0 * ratio as u64) / 100).saturating_add(1);
+            let route_limit = ((entry.0 * route_ratio as u64) / 100).saturating_add(1);
             if entry.1 >= route_limit {
                 route_allowed = false;
             } else {
@@ -165,6 +165,20 @@ mod tests {
         assert_eq!(
             budget.route_stats.lock().expect("route stats").get("other"),
             Some(&(1, 1))
+        );
+    }
+
+    #[test]
+    fn route_override_does_not_reduce_global_retry_budget() {
+        let budget = RetryBudget::new(true, 100, HashMap::from([(String::from("strict"), 0)]));
+        budget.mark_primary("strict");
+        budget.mark_primary("other");
+
+        assert_eq!(budget.allow_retry("other"), Ok(()));
+        assert_eq!(budget.allow_retry("strict"), Ok(()));
+        assert_eq!(
+            budget.allow_retry("strict"),
+            Err(RetryPolicyDenialReason::BudgetDenied)
         );
     }
 }
