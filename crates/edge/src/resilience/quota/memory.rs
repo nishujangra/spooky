@@ -219,13 +219,21 @@ impl InMemoryDistributedQuotaCounterStore {
 
         let mut evaluated = Vec::with_capacity(windows.len());
         let mut deny_reason = None;
+        let shard_routing_error = || QuotaCounterBackendError {
+            policy_name: Some(request.policy_name.clone()),
+            composite_key: Some(request.composite_key.key.clone()),
+            kind: QuotaCounterBackendErrorKind::Error,
+            detail: Some("in-memory quota window shard routing failed".to_string()),
+        };
 
         for window in windows {
             let shard_index = self.shard_index(&window.storage_key);
             let shard_position = shard_indices
                 .binary_search(&shard_index)
-                .expect("window shard must be locked");
-            let current = shards[shard_position]
+                .map_err(|_| shard_routing_error())?;
+            let current = shards
+                .get(shard_position)
+                .ok_or_else(&shard_routing_error)?
                 .buckets
                 .get(&window.storage_key)
                 .map(|state| state.consumed)
@@ -247,17 +255,18 @@ impl InMemoryDistributedQuotaCounterStore {
 
         let allowed = deny_reason.is_none();
         if allowed {
-            let additional_entries = evaluated
-                .iter()
-                .filter(|window| {
-                    let shard_position = shard_indices
-                        .binary_search(&window.shard_index)
-                        .expect("window shard must be locked");
-                    !shards[shard_position]
-                        .buckets
-                        .contains_key(&window.spec.storage_key)
-                })
-                .count();
+            let mut additional_entries = 0usize;
+            for window in &evaluated {
+                let shard_position = shard_indices
+                    .binary_search(&window.shard_index)
+                    .map_err(|_| shard_routing_error())?;
+                let shard = shards
+                    .get(shard_position)
+                    .ok_or_else(&shard_routing_error)?;
+                if !shard.buckets.contains_key(&window.spec.storage_key) {
+                    additional_entries = additional_entries.saturating_add(1);
+                }
+            }
             if !self.reserve_entries(additional_entries) {
                 return Err(QuotaCounterBackendError {
                     policy_name: Some(request.policy_name.clone()),
@@ -269,8 +278,11 @@ impl InMemoryDistributedQuotaCounterStore {
             for window in &evaluated {
                 let shard_position = shard_indices
                     .binary_search(&window.shard_index)
-                    .expect("window shard must be locked");
-                shards[shard_position].buckets.insert(
+                    .map_err(|_| shard_routing_error())?;
+                let shard = shards
+                    .get_mut(shard_position)
+                    .ok_or_else(&shard_routing_error)?;
+                shard.buckets.insert(
                     window.spec.storage_key.clone(),
                     InMemoryBucketState {
                         consumed: window.projected,
