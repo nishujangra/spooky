@@ -53,9 +53,14 @@ impl RetryBudget {
             .unwrap_or(self.global_ratio_percent);
 
         let primary = self.global_primary.load(Ordering::Relaxed);
-        let retries = self.global_retries.load(Ordering::Relaxed);
         let global_limit = ((primary * self.global_ratio_percent as u64) / 100).saturating_add(1);
-        if retries >= global_limit {
+        if self
+            .global_retries
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |retries| {
+                (retries < global_limit).then_some(retries + 1)
+            })
+            .is_err()
+        {
             return Err(RetryPolicyDenialReason::BudgetDenied);
         }
 
@@ -70,17 +75,21 @@ impl RetryBudget {
             }
         }
         if !route_allowed {
+            self.global_retries.fetch_sub(1, Ordering::Relaxed);
             return Err(RetryPolicyDenialReason::BudgetDenied);
         }
 
-        self.global_retries.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use std::{
+        collections::HashMap,
+        sync::{Arc, Barrier, atomic::Ordering},
+        thread,
+    };
 
     use impulse_errors::RetryPolicyDenialReason;
 
@@ -180,5 +189,32 @@ mod tests {
             budget.allow_retry("strict"),
             Err(RetryPolicyDenialReason::BudgetDenied)
         );
+    }
+
+    #[test]
+    fn concurrent_attempts_do_not_overshoot_global_retry_budget() {
+        const ATTEMPTS: usize = 64;
+
+        let budget = Arc::new(RetryBudget::new(true, 0, HashMap::new()));
+        let barrier = Arc::new(Barrier::new(ATTEMPTS));
+        let handles = (0..ATTEMPTS)
+            .map(|attempt| {
+                let budget = Arc::clone(&budget);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    barrier.wait();
+                    budget.allow_retry(&format!("route-{attempt}"))
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let admitted = handles
+            .into_iter()
+            .map(|handle| handle.join().expect("retry attempt thread").is_ok())
+            .filter(|admitted| *admitted)
+            .count();
+
+        assert_eq!(admitted, 1);
+        assert_eq!(budget.global_retries.load(Ordering::Relaxed), 1);
     }
 }
