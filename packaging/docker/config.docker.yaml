@@ -37,23 +37,25 @@ performance:
 
 observability:
   metrics:
-    enabled: true
+    enabled: false
     required: false
-    address: "0.0.0.0"
+    address: "127.0.0.1"
     port: 9901
     path: "/metrics"
     max_connections: 256
     connection_timeout_ms: 30000
   control_api:
-    enabled: true
+    enabled: false
     required: false
-    address: "0.0.0.0"
+    address: "127.0.0.1"
     port: 9902
     health_path: "/health"
     ready_path: "/ready"
     runtime_path: "/admin/runtime"
     restart_path: "/admin/runtime/restart"
-    auth_token: "replace-with-strong-token"
+    auth_token: null
+    ip_allowlist:
+      cidrs: ["127.0.0.0/8"]
     max_connections: 128
     connection_timeout_ms: 30000
   tracing:

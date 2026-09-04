@@ -31,11 +31,24 @@ fn is_valid_cidr(cidr: &str) -> bool {
     valid_prefix_len(addr.trim(), prefix.trim())
 }
 
+fn is_known_placeholder_token(token: &str) -> bool {
+    matches!(
+        token.trim().to_ascii_lowercase().as_str(),
+        "replace-with-strong-token" | "change-me" | "changeme" | "replace-me"
+    )
+}
+
 pub(super) fn validate_control_api_authentication(control_api: &ControlApi) -> bool {
     if let Some(token) = control_api.auth_token.as_ref()
         && token.trim().is_empty()
     {
         validation_error!("observability.control_api.auth_token cannot be empty when provided");
+        return false;
+    }
+    if let Some(token) = control_api.auth_token.as_ref()
+        && is_known_placeholder_token(token)
+    {
+        validation_error!("observability.control_api.auth_token must not use a placeholder value");
         return false;
     }
     if !validate_secret_source_exclusivity(

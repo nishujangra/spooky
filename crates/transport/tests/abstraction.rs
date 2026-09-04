@@ -383,6 +383,16 @@ async fn transport_facade_maps_execution_timeouts_to_proxy_timeout_across_protoc
         .await
         .expect_err("h2 execution should time out");
     assert!(matches!(h2_err, ProxyError::Timeout));
+
+    let h1_response = pool
+        .send_backend_request_with_timeout(
+            &h1_backend,
+            request_to_backend(&h1_backend),
+            Duration::from_millis(100),
+        )
+        .await
+        .expect("caller timeout should override the shorter pool timeout");
+    assert_eq!(h1_response.status().as_u16(), 200);
 }
 
 #[test]
