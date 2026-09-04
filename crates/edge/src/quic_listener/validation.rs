@@ -35,7 +35,7 @@ pub(super) fn validate_request_headers(
     let mut path = None::<String>;
     let mut authority = None::<String>;
     let mut host = None::<String>;
-    let mut scheme_seen = false;
+    let mut scheme = None::<String>;
     let mut protocol = None::<String>;
     let mut h3_upgrade_requested = false;
 
@@ -133,7 +133,7 @@ pub(super) fn validate_request_headers(
                 h3_upgrade_requested = true;
             }
             b":scheme" => {
-                if scheme_seen {
+                if scheme.is_some() {
                     return Err((
                         http::StatusCode::BAD_REQUEST,
                         b"duplicate :scheme header
@@ -141,7 +141,20 @@ pub(super) fn validate_request_headers(
                         false,
                     ));
                 }
-                scheme_seen = true;
+                let value = strict_header_value(
+                    header.value(),
+                    b"invalid :scheme header
+",
+                )?;
+                if !value.eq_ignore_ascii_case("http") && !value.eq_ignore_ascii_case("https") {
+                    return Err((
+                        http::StatusCode::BAD_REQUEST,
+                        b"invalid :scheme header
+",
+                        false,
+                    ));
+                }
+                scheme = Some(value);
             }
             b":protocol" => {
                 if protocol.is_some() {
@@ -203,6 +216,25 @@ pub(super) fn validate_request_headers(
     }
 
     let is_connect = method.eq_ignore_ascii_case("CONNECT");
+    match (is_connect, websocket_tunnel, scheme.is_some()) {
+        (false, _, false) | (true, true, false) => {
+            return Err((
+                http::StatusCode::BAD_REQUEST,
+                b"missing :scheme header
+",
+                false,
+            ));
+        }
+        (true, false, true) => {
+            return Err((
+                http::StatusCode::BAD_REQUEST,
+                b"invalid CONNECT :scheme header
+",
+                false,
+            ));
+        }
+        _ => {}
+    }
     let path = match (is_connect, websocket_tunnel, path) {
         (true, true, Some(path)) => path,
         (true, true, None) => {
@@ -644,10 +676,108 @@ mod tests {
     }
 
     #[test]
+    fn rejects_missing_scheme_for_non_connect_request() {
+        let resilience = runtime_resilience();
+        let headers = vec![
+            h3_header(b":method", b"GET"),
+            h3_header(b":path", b"/"),
+            h3_header(b":authority", b"example.com"),
+        ];
+
+        let err = validate_request_headers(&headers, &resilience)
+            .expect_err("ordinary HTTP/3 requests must include :scheme");
+        assert_eq!(err.0, http::StatusCode::BAD_REQUEST);
+        assert_eq!(err.1, b"missing :scheme header\n");
+        assert!(!err.2);
+    }
+
+    #[test]
+    fn rejects_invalid_http3_scheme_values() {
+        let resilience = runtime_resilience();
+
+        for invalid_scheme in [
+            b"ftp".as_slice(),
+            b"".as_slice(),
+            b"https ".as_slice(),
+            b"ht\xfftps".as_slice(),
+        ] {
+            let headers = vec![
+                quiche::h3::Header::new(b":method", b"GET"),
+                quiche::h3::Header::new(b":scheme", invalid_scheme),
+                quiche::h3::Header::new(b":path", b"/"),
+                quiche::h3::Header::new(b":authority", b"example.com"),
+            ];
+
+            let err = validate_request_headers(&headers, &resilience)
+                .expect_err("unsupported or malformed HTTP/3 scheme must be rejected");
+            assert_eq!(err.0, http::StatusCode::BAD_REQUEST);
+            assert_eq!(err.1, b"invalid :scheme header\n");
+            assert!(!err.2);
+        }
+    }
+
+    #[test]
+    fn accepts_registered_http_schemes_case_insensitively() {
+        let resilience = runtime_resilience();
+
+        for scheme in [b"http".as_slice(), b"https".as_slice(), b"HTTPS".as_slice()] {
+            let headers = vec![
+                quiche::h3::Header::new(b":method", b"GET"),
+                quiche::h3::Header::new(b":scheme", scheme),
+                quiche::h3::Header::new(b":path", b"/"),
+                quiche::h3::Header::new(b":authority", b"example.com"),
+            ];
+
+            validate_request_headers(&headers, &resilience)
+                .expect("registered HTTP scheme should be accepted");
+        }
+    }
+
+    #[test]
+    fn rejects_missing_scheme_for_extended_connect() {
+        let mut config = Resilience::default();
+        config.protocol.allow_connect = true;
+        config.protocol.connect_allowed_authorities = vec!["example.com:443".to_string()];
+        let resilience = RuntimeResilience::from_config(&config, 1024);
+        let headers = vec![
+            h3_header(b":method", b"CONNECT"),
+            h3_header(b":protocol", b"websocket"),
+            h3_header(b":path", b"/ws"),
+            h3_header(b":authority", b"example.com:443"),
+        ];
+
+        let err = validate_request_headers(&headers, &resilience)
+            .expect_err("extended CONNECT must include :scheme");
+        assert_eq!(err.0, http::StatusCode::BAD_REQUEST);
+        assert_eq!(err.1, b"missing :scheme header\n");
+        assert!(!err.2);
+    }
+
+    #[test]
+    fn rejects_scheme_on_classic_connect() {
+        let mut config = Resilience::default();
+        config.protocol.allow_connect = true;
+        config.protocol.connect_allowed_authorities = vec!["example.com:443".to_string()];
+        let resilience = RuntimeResilience::from_config(&config, 1024);
+        let headers = vec![
+            h3_header(b":method", b"CONNECT"),
+            h3_header(b":scheme", b"https"),
+            h3_header(b":authority", b"example.com:443"),
+        ];
+
+        let err = validate_request_headers(&headers, &resilience)
+            .expect_err("classic CONNECT must omit :scheme");
+        assert_eq!(err.0, http::StatusCode::BAD_REQUEST);
+        assert_eq!(err.1, b"invalid CONNECT :scheme header\n");
+        assert!(!err.2);
+    }
+
+    #[test]
     fn rejects_invalid_utf8_method_header() {
         let resilience = runtime_resilience();
         let headers = vec![
             h3_header(b":method", b"GE\xffT"),
+            h3_header(b":scheme", b"https"),
             h3_header(b":path", b"/"),
             h3_header(b":authority", b"example.com"),
         ];
@@ -666,6 +796,7 @@ mod tests {
         let resilience = runtime_resilience();
         let headers = vec![
             h3_header(b":method", b"GET"),
+            h3_header(b":scheme", b"https"),
             h3_header(b":path", b"/\xff"),
             h3_header(b":authority", b"example.com"),
         ];
@@ -684,6 +815,7 @@ mod tests {
         let resilience = runtime_resilience();
         let headers = vec![
             h3_header(b":method", b"GET"),
+            h3_header(b":scheme", b"https"),
             h3_header(b":path", b"/"),
             h3_header(b":authority", b"exa\xffmple.com"),
         ];
@@ -702,6 +834,7 @@ mod tests {
         let resilience = runtime_resilience();
         let headers = vec![
             h3_header(b":method", b"GET"),
+            h3_header(b":scheme", b"https"),
             h3_header(b":path", b"/"),
             h3_header(b"host", b"exa\xffmple.com"),
         ];
@@ -720,6 +853,7 @@ mod tests {
         let resilience = runtime_resilience();
         let headers = vec![
             h3_header(b":method", b"GET"),
+            h3_header(b":scheme", b"https"),
             h3_header(b":path", b"/"),
             h3_header(b":authority", b"example.com invalid"),
         ];
@@ -736,6 +870,7 @@ mod tests {
         let resilience = runtime_resilience();
         let headers = vec![
             h3_header(b":method", b"GET"),
+            h3_header(b":scheme", b"https"),
             h3_header(b":path", b"/"),
             h3_header(b"host", b"example.com/path"),
         ];
@@ -752,6 +887,7 @@ mod tests {
         let resilience = runtime_resilience();
         let headers = vec![
             h3_header(b":method", b"GET"),
+            h3_header(b":scheme", b"https"),
             h3_header(b":path", b"/"),
             h3_header(b":authority", b"example.com"),
             h3_header(b"connection", b"Upgrade"),
@@ -770,6 +906,7 @@ mod tests {
         let resilience = runtime_resilience();
         let headers = vec![
             h3_header(b":method", b"GET"),
+            h3_header(b":scheme", b"https"),
             h3_header(b":path", b"/ws"),
             h3_header(b":authority", b"example.com"),
             h3_header(b"connection", b"keep-alive, Upgrade"),
@@ -794,6 +931,7 @@ mod tests {
         let headers = vec![
             h3_header(b":method", b"CONNECT"),
             h3_header(b":protocol", b"websocket"),
+            h3_header(b":scheme", b"https"),
             h3_header(b":path", b"/admin/socket"),
             h3_header(b":authority", b"example.com:443"),
         ];
@@ -810,6 +948,7 @@ mod tests {
         let resilience = runtime_resilience();
         let headers = vec![
             h3_header(b":method", b"POST"),
+            h3_header(b":scheme", b"https"),
             h3_header(b":path", b"/"),
             h3_header(b":authority", b"example.com"),
             h3_header(b"content-length", b"10"),
@@ -826,6 +965,7 @@ mod tests {
         let resilience = runtime_resilience();
         let headers = vec![
             h3_header(b":method", b"POST"),
+            h3_header(b":scheme", b"https"),
             h3_header(b":path", b"/"),
             h3_header(b":authority", b"example.com"),
             h3_header(b"content-length", b"10"),
@@ -844,6 +984,7 @@ mod tests {
         let resilience = runtime_resilience();
         let headers = vec![
             h3_header(b":method", b"POST"),
+            h3_header(b":scheme", b"https"),
             h3_header(b":path", b"/"),
             h3_header(b":authority", b"example.com"),
             h3_header(b"content-length", b"ten"),
@@ -882,6 +1023,7 @@ mod tests {
         let resilience = RuntimeResilience::from_config(&cfg, 1024);
         let headers = vec![
             h3_header(b":method", b"GET"),
+            h3_header(b":scheme", b"https"),
             h3_header(b":path", b"/"),
             h3_header(b":authority", b"api.example.com:443"),
             h3_header(b"host", b"api.example.com"),
@@ -899,6 +1041,7 @@ mod tests {
         let resilience = RuntimeResilience::from_config(&cfg, 1024);
         let headers = vec![
             h3_header(b":method", b"GET"),
+            h3_header(b":scheme", b"https"),
             h3_header(b":path", b"/"),
             h3_header(b":authority", b"api.example.com:443"),
             h3_header(b"host", b"api.example.com:8443"),
