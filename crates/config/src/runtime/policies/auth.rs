@@ -497,6 +497,11 @@ impl RuntimeExternalAuth {
                 timeout_ms,
                 failure_mode,
             } => {
+                if !is_valid_https_or_loopback_http_url(endpoint) {
+                    return Err(config_invalid(format!(
+                        "upstream '{upstream_name}' auth.external_auth.http.endpoint must be an absolute https URL or loopback http URL"
+                    )));
+                }
                 if *timeout_ms == 0 {
                     return Err(config_invalid(format!(
                         "upstream '{upstream_name}' auth.external_auth.http.timeout_ms must be greater than 0"
@@ -762,7 +767,7 @@ mod tests {
     #[test]
     fn external_http_auth_normalization_preserves_failure_mode_and_request_headers() {
         let external_auth = ExternalAuth::Http {
-            endpoint: "http://auth.internal/check".to_string(),
+            endpoint: "http://127.0.0.1:8080/check".to_string(),
             request_headers: vec![ExternalAuthRequestHeader {
                 name: "  x-tenant-id  ".to_string(),
                 value: "{route.tenant}".to_string(),
@@ -778,7 +783,7 @@ mod tests {
         assert_eq!(
             normalized,
             RuntimeExternalAuth::Http {
-                endpoint: "http://auth.internal/check".to_string(),
+                endpoint: "http://127.0.0.1:8080/check".to_string(),
                 request_headers: vec![RuntimeExternalAuthRequestHeader {
                     name: "x-tenant-id".to_string(),
                     value: "{route.tenant}".to_string(),
@@ -945,7 +950,7 @@ mod tests {
     #[test]
     fn external_auth_normalization_rejects_invalid_header_name() {
         let external_auth = ExternalAuth::Http {
-            endpoint: "http://auth.internal/check".to_string(),
+            endpoint: "http://127.0.0.1:8080/check".to_string(),
             request_headers: vec![ExternalAuthRequestHeader {
                 name: "bad header".to_string(),
                 value: "value".to_string(),
