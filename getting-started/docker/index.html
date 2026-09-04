@@ -1493,10 +1493,16 @@ cd impulse
         address: &quot;http://host.docker.internal:8080&quot;
 </code></pre>
 <p>If you are on Linux, replace <code>host.docker.internal</code> with a reachable host-gateway address or run the backend in the same Compose project and use its service name.</p>
-<p>Also replace the control API token:</p>
+<p>The shipped Docker config keeps the metrics and control API disabled and does
+not publish their ports by default. If you need the control API, enable it and
+configure a real token (or mTLS) before starting the stack; placeholder tokens
+are rejected by configuration validation:</p>
 <pre><code class="language-yaml">observability:
+  metrics:
+    enabled: true
   control_api:
-    auth_token: &quot;replace-with-strong-token&quot;   # &lt;-- change this
+    enabled: true
+    auth_token: &quot;&lt;generate-a-unique-secret&gt;&quot;
 </code></pre>
 <p><strong>5. Start the stack:</strong></p>
 <pre><code class="language-bash">docker compose -f packaging/docker/docker-compose.yml up -d --build
