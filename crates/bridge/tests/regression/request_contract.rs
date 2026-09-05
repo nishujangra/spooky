@@ -225,7 +225,7 @@ fn request_body_mode_helper_maps_lengths_to_canonical_modes() {
         RequestBuildInput::<
             http_body_util::combinators::BoxBody<bytes::Bytes, std::convert::Infallible>,
         >::body_mode_for_length(Some(12)),
-        RequestBodyMode::KnownLength
+        RequestBodyMode::KnownLength(12)
     );
     assert_eq!(
         RequestBuildInput::<

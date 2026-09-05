@@ -562,7 +562,7 @@ fn bootstrap_h2_head_suppresses_response_body() {
 }
 
 #[test]
-fn http3_websocket_upgrade_tunnels_to_http1_upstream() {
+fn http3_websocket_legacy_upgrade_is_rejected() {
     if !local_listener_bind_available() {
         return;
     }
@@ -592,11 +592,46 @@ fn http3_websocket_upgrade_tunnels_to_http1_upstream() {
     )
     .expect("websocket request failed");
 
+    assert_eq!(response.status, "400");
+    assert_eq!(response.body, b"HTTP/3 does not support Upgrade requests\n");
+    assert!(!response.reset, "invalid request should receive a response");
+}
+
+#[test]
+fn http3_websocket_extended_connect_tunnels_to_http1_upstream() {
+    if !local_listener_bind_available() {
+        return;
+    }
+    let dir = tempdir().expect("failed to create temp dir");
+    let (cert, key) = write_test_certs(&dir);
+
+    let rt = tokio::runtime::Runtime::new().expect("runtime");
+    let backend_addr = rt.block_on(start_h1_backend_with_websocket_upgrade());
+    let mut config = make_config(0, format!("http://{backend_addr}"), cert, key);
+    config.resilience.protocol.allow_connect = true;
+    config.resilience.protocol.connect_allowed_ports = vec![443];
+    config.resilience.protocol.connect_allowed_authorities = vec!["localhost:443".to_string()];
+    let listener = QUICListener::new(config).expect("failed to create listener");
+    let listen_addr = listener.socket.local_addr().unwrap();
+    let _listener_task = ListenerTaskGuard::spawn(&rt, listener);
+
+    let response = run_h3_client_collect_response(
+        listen_addr,
+        vec![
+            quiche::h3::Header::new(b":method", b"CONNECT"),
+            quiche::h3::Header::new(b":scheme", b"https"),
+            quiche::h3::Header::new(b":authority", b"localhost:443"),
+            quiche::h3::Header::new(b":path", b"/ws"),
+            quiche::h3::Header::new(b":protocol", b"websocket"),
+            quiche::h3::Header::new(b"sec-websocket-version", b"13"),
+        ],
+        true,
+        Duration::from_secs(REQUEST_TIMEOUT_SECS),
+    )
+    .expect("extended CONNECT websocket request failed");
+
     assert_eq!(response.status, "200");
-    assert!(
-        response.body.is_empty(),
-        "websocket handshake should not emit an HTTP body"
-    );
+    assert!(response.body.is_empty());
     assert!(
         response.headers.iter().any(|(name, value)| name
             .eq_ignore_ascii_case("sec-websocket-accept")

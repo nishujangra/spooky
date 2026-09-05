@@ -10,14 +10,16 @@ use crate::{
         RequestBuildInput, RequestBuildTarget, RequestHeaderAssembly, RequestHeaderPolicyInput,
         apply_request_header_assembly, apply_request_header_policies,
     },
-    websocket::{H3WebsocketRequestKind, h3_websocket_request_kind},
+    websocket::legacy_websocket_upgrade_requested,
 };
 
 /// Build an HTTP/1.1 request forwarded to an `http://` upstream.
 ///
 /// For plain requests: strips hop-by-hop headers and adds `TE: trailers`.
-/// For WebSocket legacy upgrades (`GET` + `Upgrade: websocket`): preserves
-/// `Connection` and `Upgrade` so the H1 upstream can complete the handshake.
+/// For explicitly prepared HTTP/1 WebSocket upgrades (`GET` +
+/// `Upgrade: websocket`): preserves `Connection` and `Upgrade` so the H1
+/// upstream can complete the handshake. HTTP/3 ingress validation must reject
+/// this legacy request shape before invoking the bridge.
 pub(crate) fn build_h1_request(
     target: RequestBuildTarget<'_>,
     input: RequestBuildInput<'_, BoxBody<Bytes, Infallible>>,
@@ -30,15 +32,15 @@ pub(crate) fn build_h1_request(
         headers,
         auth_header_mutations,
         body,
-        content_length,
-        body_mode: _body_mode,
+        body_mode,
         trace,
         forwarded,
     } = input;
 
+    let content_length = body_mode.content_length();
+
     let method = Method::from_bytes(method.as_bytes()).map_err(|_| BridgeError::InvalidMethod)?;
-    let websocket_kind = h3_websocket_request_kind(method.as_str(), headers);
-    let preserve_upgrade = websocket_kind == H3WebsocketRequestKind::LegacyUpgrade;
+    let preserve_upgrade = legacy_websocket_upgrade_requested(method.as_str(), headers);
 
     let mut builder = Request::builder().method(method.clone());
     let resolved_headers = apply_request_header_policies(RequestHeaderPolicyInput {

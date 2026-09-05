@@ -39,7 +39,7 @@ pub fn build_h2_request_for_target(
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RequestBodyMode {
     Empty,
-    KnownLength,
+    KnownLength(usize),
     Streaming,
 }
 
@@ -73,7 +73,6 @@ pub struct RequestBuildInput<'a, B = BoxBody<Bytes, Infallible>> {
     pub headers: &'a [quiche::h3::Header],
     pub auth_header_mutations: &'a [RequestHeaderMutationRef<'a>],
     pub body: B,
-    pub content_length: Option<usize>,
     pub body_mode: RequestBodyMode,
     pub trace: RequestTraceContext<'a>,
     pub forwarded: RequestForwardedContext,
@@ -115,8 +114,17 @@ impl<'a, B> RequestBuildInput<'a, B> {
     pub fn body_mode_for_length(content_length: Option<usize>) -> RequestBodyMode {
         match content_length {
             Some(0) => RequestBodyMode::Empty,
-            Some(_) => RequestBodyMode::KnownLength,
+            Some(length) => RequestBodyMode::KnownLength(length),
             None => RequestBodyMode::Streaming,
+        }
+    }
+}
+
+impl RequestBodyMode {
+    pub(crate) fn content_length(self) -> Option<usize> {
+        match self {
+            Self::KnownLength(length) => Some(length),
+            Self::Empty | Self::Streaming => None,
         }
     }
 }

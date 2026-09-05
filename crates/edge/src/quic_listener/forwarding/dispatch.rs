@@ -171,16 +171,17 @@ impl QUICListener {
         circuit_breakers: &crate::resilience::circuit_breaker::CircuitBreakers,
         transport: &UpstreamTransportPool,
     ) -> Result<Response<Incoming>, ProxyError> {
-        if !circuit_breakers.allow_request(backend) {
+        let Some(breaker_permit) = circuit_breakers.allow_request(backend) else {
             return Err(ProxyError::Pool(PoolError::CircuitOpen(
                 backend.to_string(),
             )));
-        }
+        };
 
         let send_result = transport.send_backend_request(backend, request).await;
-        match &send_result {
-            Ok(_) => circuit_breakers.record_success(backend),
-            _ => circuit_breakers.record_failure(backend),
+        if send_result.is_ok() {
+            breaker_permit.record_success();
+        } else {
+            breaker_permit.record_failure();
         }
         send_result
     }
@@ -191,16 +192,17 @@ impl QUICListener {
         circuit_breakers: &crate::resilience::circuit_breaker::CircuitBreakers,
         transport: &UpstreamTransportPool,
     ) -> Result<impulse_transport::BackendUpgradeResponse, ProxyError> {
-        if !circuit_breakers.allow_request(backend) {
+        let Some(breaker_permit) = circuit_breakers.allow_request(backend) else {
             return Err(ProxyError::Pool(PoolError::CircuitOpen(
                 backend.to_string(),
             )));
-        }
+        };
 
         let send_result = transport.send_http1_upgrade_request(backend, request).await;
-        match &send_result {
-            Ok(_) => circuit_breakers.record_success(backend),
-            _ => circuit_breakers.record_failure(backend),
+        if send_result.is_ok() {
+            breaker_permit.record_success();
+        } else {
+            breaker_permit.record_failure();
         }
         send_result
     }

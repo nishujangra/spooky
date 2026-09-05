@@ -331,7 +331,6 @@ pub(in crate::quic_listener) enum AdminAuditFailureClass {
     Watchdog,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(in crate::quic_listener) enum AdminAuditEventType {
@@ -374,7 +373,6 @@ impl AdminAuditActor {
     }
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
 pub(in crate::quic_listener) enum AdminAuditAction {
     #[serde(rename = "auth")]
@@ -439,7 +437,6 @@ pub(in crate::quic_listener) struct AdminAuditGeneration {
     pub(in crate::quic_listener) target_generation: Option<u64>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub(in crate::quic_listener) enum AdminAuditResult {

@@ -1,6 +1,10 @@
 use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
+    collections::{HashMap, hash_map::RandomState},
+    hash::BuildHasher,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+    },
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -18,6 +22,8 @@ pub const IN_MEMORY_QUOTA_PROTOCOL_VERSION: &str = "memory-fixed-window/v1";
 const IN_MEMORY_BACKEND_KIND: &str = "in_memory";
 const IN_MEMORY_KEY_PROTOCOL_TAG: &str = "qmem1";
 const IN_MEMORY_KEY_TTL_GRACE_MS: u64 = 1_000;
+const IN_MEMORY_QUOTA_BUCKET_SHARDS: usize = 16;
+const IN_MEMORY_QUOTA_PRUNE_INTERVAL_MS: u64 = 1_000;
 pub(crate) const DEFAULT_IN_MEMORY_QUOTA_MAX_ENTRIES: usize = 4_096;
 type TimeSource = dyn Fn() -> u64 + Send + Sync;
 
@@ -41,14 +47,28 @@ struct InMemoryQuotaWindowSpec {
 #[derive(Debug, Clone)]
 struct EvaluatedWindow {
     spec: InMemoryQuotaWindowSpec,
+    shard_index: usize,
     current: u64,
     projected: u64,
+}
+
+#[derive(Default)]
+struct InMemoryQuotaBucketShard {
+    buckets: HashMap<String, InMemoryBucketState>,
+}
+
+struct InMemoryQuotaPruneState {
+    last_pruned_at_unix_ms: u64,
+    next_shard: usize,
 }
 
 pub struct InMemoryDistributedQuotaCounterStore {
     key_prefix: String,
     max_entries: Option<usize>,
-    buckets: Mutex<HashMap<String, InMemoryBucketState>>,
+    hash_builder: RandomState,
+    shards: Box<[Mutex<InMemoryQuotaBucketShard>]>,
+    live_entries: AtomicUsize,
+    prune_state: Mutex<InMemoryQuotaPruneState>,
     time_source: Arc<TimeSource>,
 }
 
@@ -85,11 +105,75 @@ impl InMemoryDistributedQuotaCounterStore {
     where
         F: Fn() -> u64 + Send + Sync + 'static,
     {
+        let time_source: Arc<TimeSource> = Arc::new(time_source);
+        let now_ms = time_source();
         Self {
             key_prefix: key_prefix.trim().to_string(),
             max_entries,
-            buckets: Mutex::new(HashMap::new()),
-            time_source: Arc::new(time_source),
+            hash_builder: RandomState::new(),
+            shards: (0..IN_MEMORY_QUOTA_BUCKET_SHARDS)
+                .map(|_| Mutex::new(InMemoryQuotaBucketShard::default()))
+                .collect(),
+            live_entries: AtomicUsize::new(0),
+            prune_state: Mutex::new(InMemoryQuotaPruneState {
+                last_pruned_at_unix_ms: now_ms,
+                next_shard: 0,
+            }),
+            time_source,
+        }
+    }
+
+    fn shard_index(&self, storage_key: &str) -> usize {
+        (self.hash_builder.hash_one(storage_key) as usize) % self.shards.len()
+    }
+
+    fn prune_expired_if_due(&self, now_ms: u64) {
+        let shard_index = {
+            let Ok(mut state) = self.prune_state.lock() else {
+                return;
+            };
+            if now_ms.saturating_sub(state.last_pruned_at_unix_ms)
+                < IN_MEMORY_QUOTA_PRUNE_INTERVAL_MS
+            {
+                return;
+            }
+            state.last_pruned_at_unix_ms = now_ms;
+            let shard_index = state.next_shard;
+            state.next_shard = (state.next_shard + 1) % self.shards.len();
+            shard_index
+        };
+
+        let Ok(mut shard) = self.shards[shard_index].lock() else {
+            return;
+        };
+        let before = shard.buckets.len();
+        shard
+            .buckets
+            .retain(|_, state| state.expires_at_unix_ms > now_ms);
+        let removed = before.saturating_sub(shard.buckets.len());
+        if removed != 0 {
+            self.live_entries.fetch_sub(removed, Ordering::Relaxed);
+        }
+    }
+
+    fn reserve_entries(&self, additional_entries: usize) -> bool {
+        if additional_entries == 0 {
+            return true;
+        }
+        match self.max_entries {
+            Some(max_entries) => self
+                .live_entries
+                .fetch_update(Ordering::AcqRel, Ordering::Acquire, |count| {
+                    count
+                        .checked_add(additional_entries)
+                        .filter(|next| *next <= max_entries)
+                })
+                .is_ok(),
+            None => {
+                self.live_entries
+                    .fetch_add(additional_entries, Ordering::Relaxed);
+                true
+            }
         }
     }
 
@@ -111,19 +195,46 @@ impl InMemoryDistributedQuotaCounterStore {
             });
         }
 
-        let mut buckets = self.buckets.lock().map_err(|_| QuotaCounterBackendError {
-            policy_name: Some(request.policy_name.clone()),
-            composite_key: Some(request.composite_key.key.clone()),
-            kind: QuotaCounterBackendErrorKind::Unavailable,
-            detail: Some("in-memory quota store lock is poisoned".to_string()),
-        })?;
-        buckets.retain(|_, state| state.expires_at_unix_ms > now_ms);
+        self.prune_expired_if_due(now_ms);
+
+        let mut shard_indices = windows
+            .iter()
+            .map(|window| self.shard_index(&window.storage_key))
+            .collect::<Vec<_>>();
+        shard_indices.sort_unstable();
+        shard_indices.dedup();
+        let mut shards = Vec::with_capacity(shard_indices.len());
+        for &shard_index in &shard_indices {
+            shards.push(
+                self.shards[shard_index]
+                    .lock()
+                    .map_err(|_| QuotaCounterBackendError {
+                        policy_name: Some(request.policy_name.clone()),
+                        composite_key: Some(request.composite_key.key.clone()),
+                        kind: QuotaCounterBackendErrorKind::Unavailable,
+                        detail: Some("in-memory quota store shard lock is poisoned".to_string()),
+                    })?,
+            );
+        }
 
         let mut evaluated = Vec::with_capacity(windows.len());
         let mut deny_reason = None;
+        let shard_routing_error = || QuotaCounterBackendError {
+            policy_name: Some(request.policy_name.clone()),
+            composite_key: Some(request.composite_key.key.clone()),
+            kind: QuotaCounterBackendErrorKind::Error,
+            detail: Some("in-memory quota window shard routing failed".to_string()),
+        };
 
         for window in windows {
-            let current = buckets
+            let shard_index = self.shard_index(&window.storage_key);
+            let shard_position = shard_indices
+                .binary_search(&shard_index)
+                .map_err(|_| shard_routing_error())?;
+            let current = shards
+                .get(shard_position)
+                .ok_or_else(&shard_routing_error)?
+                .buckets
                 .get(&window.storage_key)
                 .map(|state| state.consumed)
                 .unwrap_or(0);
@@ -136,6 +247,7 @@ impl InMemoryDistributedQuotaCounterStore {
             }
             evaluated.push(EvaluatedWindow {
                 spec: window,
+                shard_index,
                 current,
                 projected,
             });
@@ -143,13 +255,19 @@ impl InMemoryDistributedQuotaCounterStore {
 
         let allowed = deny_reason.is_none();
         if allowed {
-            let additional_entries = evaluated
-                .iter()
-                .filter(|window| !buckets.contains_key(&window.spec.storage_key))
-                .count();
-            if let Some(max_entries) = self.max_entries
-                && buckets.len().saturating_add(additional_entries) > max_entries
-            {
+            let mut additional_entries = 0usize;
+            for window in &evaluated {
+                let shard_position = shard_indices
+                    .binary_search(&window.shard_index)
+                    .map_err(|_| shard_routing_error())?;
+                let shard = shards
+                    .get(shard_position)
+                    .ok_or_else(&shard_routing_error)?;
+                if !shard.buckets.contains_key(&window.spec.storage_key) {
+                    additional_entries = additional_entries.saturating_add(1);
+                }
+            }
+            if !self.reserve_entries(additional_entries) {
                 return Err(QuotaCounterBackendError {
                     policy_name: Some(request.policy_name.clone()),
                     composite_key: Some(request.composite_key.key.clone()),
@@ -158,7 +276,13 @@ impl InMemoryDistributedQuotaCounterStore {
                 });
             }
             for window in &evaluated {
-                buckets.insert(
+                let shard_position = shard_indices
+                    .binary_search(&window.shard_index)
+                    .map_err(|_| shard_routing_error())?;
+                let shard = shards
+                    .get_mut(shard_position)
+                    .ok_or_else(&shard_routing_error)?;
+                shard.buckets.insert(
                     window.spec.storage_key.clone(),
                     InMemoryBucketState {
                         consumed: window.projected,
@@ -312,9 +436,10 @@ mod tests {
     use std::{
         collections::HashSet,
         sync::{
-            Arc,
+            Arc, Barrier,
             atomic::{AtomicU64, Ordering},
         },
+        thread,
         time::Duration,
     };
 
@@ -495,6 +620,93 @@ mod tests {
         assert_eq!(
             err.detail.as_deref(),
             Some("in-memory quota store capacity exhausted")
+        );
+    }
+
+    #[test]
+    fn concurrent_shards_preserve_global_capacity_bound() {
+        const MAX_ENTRIES: usize = 8;
+        const ATTEMPTS: usize = 32;
+
+        let store = Arc::new(InMemoryDistributedQuotaCounterStore::bounded(
+            "impulse:quota:concurrent",
+            MAX_ENTRIES,
+        ));
+        let barrier = Arc::new(Barrier::new(ATTEMPTS));
+        let handles = (0..ATTEMPTS)
+            .map(|attempt| {
+                let store = Arc::clone(&store);
+                let barrier = Arc::clone(&barrier);
+                thread::spawn(move || {
+                    let mut request = sample_request();
+                    request.sustained = None;
+                    request.composite_key.key = format!("concurrent-key-{attempt}");
+                    barrier.wait();
+                    store.evaluate_request(request)
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let admitted = handles
+            .into_iter()
+            .filter_map(|handle| handle.join().expect("quota evaluation thread").ok())
+            .filter(|outcome| outcome.decision == QuotaCounterEvaluationDecision::Allowed)
+            .count();
+
+        assert_eq!(admitted, MAX_ENTRIES);
+        assert_eq!(store.live_entries.load(Ordering::Relaxed), MAX_ENTRIES);
+    }
+
+    #[test]
+    fn expiry_pruning_rotates_one_shard_per_interval() {
+        let now_ms = Arc::new(AtomicU64::new(10_000));
+        let store = InMemoryDistributedQuotaCounterStore::with_limits_and_time_source(
+            "impulse:quota:prune",
+            Some(IN_MEMORY_QUOTA_BUCKET_SHARDS),
+            {
+                let now_ms = Arc::clone(&now_ms);
+                move || now_ms.load(Ordering::Relaxed)
+            },
+        );
+
+        for shard_index in 0..IN_MEMORY_QUOTA_BUCKET_SHARDS {
+            let storage_key = (0..)
+                .map(|candidate| format!("shard-{shard_index}-candidate-{candidate}"))
+                .find(|key| store.shard_index(key) == shard_index)
+                .expect("key for shard");
+            store.shards[shard_index]
+                .lock()
+                .expect("quota shard")
+                .buckets
+                .insert(
+                    storage_key,
+                    InMemoryBucketState {
+                        consumed: 1,
+                        expires_at_unix_ms: 10_000,
+                    },
+                );
+            store.live_entries.fetch_add(1, Ordering::Relaxed);
+        }
+
+        now_ms.store(11_000, Ordering::Relaxed);
+        store.prune_expired_if_due(now_ms.load(Ordering::Relaxed));
+        assert_eq!(
+            store.live_entries.load(Ordering::Relaxed),
+            IN_MEMORY_QUOTA_BUCKET_SHARDS - 1
+        );
+
+        store.prune_expired_if_due(now_ms.load(Ordering::Relaxed));
+        assert_eq!(
+            store.live_entries.load(Ordering::Relaxed),
+            IN_MEMORY_QUOTA_BUCKET_SHARDS - 1,
+            "the same interval must not trigger another shard scan"
+        );
+
+        now_ms.store(12_000, Ordering::Relaxed);
+        store.prune_expired_if_due(now_ms.load(Ordering::Relaxed));
+        assert_eq!(
+            store.live_entries.load(Ordering::Relaxed),
+            IN_MEMORY_QUOTA_BUCKET_SHARDS - 2
         );
     }
 
