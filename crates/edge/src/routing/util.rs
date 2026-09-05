@@ -19,7 +19,10 @@ pub fn request_path_is_ambiguous(path_and_query: &str) -> bool {
         return true;
     }
 
-    let mut decoded = String::with_capacity(path.len());
+    // Percent escapes encode octets, not Latin-1 code points. Decode into a
+    // byte buffer first so invalid and overlong UTF-8 sequences cannot be
+    // reinterpreted differently by a downstream component.
+    let mut decoded = Vec::with_capacity(path.len());
     let bytes = path.as_bytes();
     let mut index = 0;
     while index < bytes.len() {
@@ -33,13 +36,17 @@ pub fn request_path_is_ambiguous(path_and_query: &str) -> bool {
             let Some(low) = hex_digit(bytes[index + 2]) else {
                 return true;
             };
-            decoded.push((high << 4 | low) as char);
+            decoded.push(high << 4 | low);
             index += 3;
         } else {
-            decoded.push(bytes[index] as char);
+            decoded.push(bytes[index]);
             index += 1;
         }
     }
+
+    let Ok(decoded) = std::str::from_utf8(&decoded) else {
+        return true;
+    };
 
     decoded
         .split('/')
@@ -89,6 +96,8 @@ mod tests {
             "/%2E./admin/x",
             "//admin/x",
             "/admin\\x",
+            "/public%2f..%2fadmin",
+            "/public%5cadmin",
         ] {
             assert!(
                 request_path_is_ambiguous(path),
@@ -98,9 +107,28 @@ mod tests {
     }
 
     #[test]
+    fn request_path_rejects_overlong_and_invalid_utf8_percent_encodings() {
+        for path in [
+            "/public%c0%afadmin",
+            "/public%e0%80%afadmin",
+            "/public%f0%80%80%afadmin",
+            "/public%c1%9cadmin",
+            "/public%afadmin",
+            "/public%ffadmin",
+        ] {
+            assert!(
+                request_path_is_ambiguous(path),
+                "invalid UTF-8 path encoding should be rejected: {path}"
+            );
+        }
+    }
+
+    #[test]
     fn request_path_allows_unambiguous_percent_encoding_and_query_values() {
         assert!(!request_path_is_ambiguous(
             "/public/report%20final?next=../admin"
         ));
+        assert!(!request_path_is_ambiguous("/caf%C3%A9/menu"));
+        assert!(!request_path_is_ambiguous("/café/menu"));
     }
 }
