@@ -40,6 +40,7 @@ upstream:
 
 #[test]
 fn bearer_token_default_uses_least_privileged_role() {
+    assert_eq!(ControlApiRole::default(), ControlApiRole::Viewer);
     assert_eq!(
         super::ControlApiBearerToken::default().role,
         ControlApiRole::Viewer

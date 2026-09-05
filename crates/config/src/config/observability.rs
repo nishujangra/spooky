@@ -52,9 +52,9 @@ pub enum ControlApiClientAuthMode {
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, Default, Eq, PartialEq, Ord, PartialOrd)]
 #[serde(rename_all = "snake_case")]
 pub enum ControlApiRole {
+    #[default]
     Viewer,
     Operator,
-    #[default]
     Admin,
 }
 
