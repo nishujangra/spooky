@@ -835,9 +835,11 @@ mod tests {
         let _ = cache.entry("https://new.example/.well-known/openid-configuration");
 
         assert!(cache.entries.contains_key(hot_url));
-        assert!(!cache
-            .entries
-            .contains_key("https://issuer-1.example/.well-known/openid-configuration"));
+        assert!(
+            !cache
+                .entries
+                .contains_key("https://issuer-1.example/.well-known/openid-configuration")
+        );
         assert_eq!(cache.entries.len(), OIDC_METADATA_CACHE_MAX_ENTRIES);
     }
     use crate::{
