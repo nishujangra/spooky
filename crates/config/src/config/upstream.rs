@@ -42,7 +42,7 @@ pub enum ExternalAuthFailureMode {
 pub enum ExternalAuth {
     Http {
         endpoint: String,
-        #[serde(default)]
+        #[serde(default, skip_serializing)]
         request_headers: Vec<ExternalAuthRequestHeader>,
         #[serde(default)]
         response_header_allowlist: Vec<String>,
@@ -65,7 +65,7 @@ pub enum ExternalAuth {
         audience: Option<String>,
         #[serde(default)]
         scopes: Vec<String>,
-        #[serde(default)]
+        #[serde(default, skip_serializing)]
         request_headers: Vec<ExternalAuthRequestHeader>,
         #[serde(default)]
         response_header_allowlist: Vec<String>,
@@ -82,18 +82,19 @@ impl ExternalAuth {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct ExternalAuthRequestHeader {
     pub name: String,
     pub value: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct ApiKeyAuth {
     pub header_name: String,
+    #[serde(skip_serializing)]
     pub keys: Vec<String>,
 }
 
@@ -103,6 +104,24 @@ impl Default for ApiKeyAuth {
             header_name: "x-api-key".to_string(),
             keys: Vec::new(),
         }
+    }
+}
+
+impl fmt::Debug for ExternalAuthRequestHeader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExternalAuthRequestHeader")
+            .field("name", &self.name)
+            .field("value", &"<redacted>")
+            .finish()
+    }
+}
+
+impl fmt::Debug for ApiKeyAuth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ApiKeyAuth")
+            .field("header_name", &self.header_name)
+            .field("keys", &"<redacted>")
+            .finish()
     }
 }
 

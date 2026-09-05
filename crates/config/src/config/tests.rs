@@ -663,7 +663,22 @@ required_scopes:
 }
 
 #[test]
-fn resolved_jwt_and_oidc_secrets_are_redacted_from_debug_and_serialization() {
+fn resolved_auth_secrets_are_redacted_from_debug_and_serialization() {
+    let api_key: ApiKeyAuth = serde_yaml::from_str(
+        r#"
+header_name: x-api-key
+keys:
+  - api-key-super-secret
+"#,
+    )
+    .expect("API key auth should parse");
+    assert_eq!(api_key.keys, ["api-key-super-secret"]);
+    let api_key_debug = format!("{api_key:?}");
+    let api_key_yaml = serde_yaml::to_string(&api_key).expect("API key auth should serialize");
+    assert!(!api_key_debug.contains("api-key-super-secret"));
+    assert!(!api_key_yaml.contains("api-key-super-secret"));
+    assert!(!api_key_yaml.contains("keys:"));
+
     let jwt: JwtAuth = serde_yaml::from_str(
         r#"
 secret: jwt-super-secret
@@ -690,4 +705,40 @@ client_secret: oidc-super-secret
     assert!(!oidc_debug.contains("oidc-super-secret"));
     assert!(!oidc_json.contains("oidc-super-secret"));
     assert!(!oidc_json.contains("\"client_secret\""));
+
+    let external_http: ExternalAuth = serde_yaml::from_str(
+        r#"
+kind: http
+endpoint: https://auth.example/check
+request_headers:
+  - name: authorization
+    value: http-header-super-secret
+"#,
+    )
+    .expect("HTTP external auth should parse");
+    let external_http_debug = format!("{external_http:?}");
+    let external_http_yaml =
+        serde_yaml::to_string(&external_http).expect("HTTP external auth should serialize");
+    assert!(external_http_debug.contains("authorization"));
+    assert!(!external_http_debug.contains("http-header-super-secret"));
+    assert!(!external_http_yaml.contains("http-header-super-secret"));
+    assert!(!external_http_yaml.contains("request_headers:"));
+
+    let external_oidc: ExternalAuth = serde_yaml::from_str(
+        r#"
+kind: oidc
+client_id: edge
+request_headers:
+  - name: x-oidc-secret
+    value: oidc-header-super-secret
+"#,
+    )
+    .expect("OIDC external auth should parse");
+    let external_oidc_debug = format!("{external_oidc:?}");
+    let external_oidc_yaml =
+        serde_yaml::to_string(&external_oidc).expect("OIDC external auth should serialize");
+    assert!(external_oidc_debug.contains("x-oidc-secret"));
+    assert!(!external_oidc_debug.contains("oidc-header-super-secret"));
+    assert!(!external_oidc_yaml.contains("oidc-header-super-secret"));
+    assert!(!external_oidc_yaml.contains("request_headers:"));
 }
