@@ -741,10 +741,9 @@ fn runtime_reload_is_rejected_after_listener_lifecycle_leaves_running() {
     // can grab the port in between. Retry harness construction a few times
     // on that specific failure rather than trying to eliminate an
     // unavoidable TCP race.
-    let Some(mut harness) = start_static_runtime_swap_listener_retrying_on_port_conflict(
-        b"lifecycle-running",
-        |_| {},
-    ) else {
+    let Some(mut harness) =
+        start_static_runtime_swap_listener_retrying_on_port_conflict(b"lifecycle-running", |_| {})
+    else {
         return;
     };
 
