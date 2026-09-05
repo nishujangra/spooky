@@ -202,18 +202,14 @@ impl QUICListener {
             return Ok(());
         };
 
-        let throttle_ip = request_context.as_ref().map(|context| {
-            source_ip_from_request(
-                req,
-                context.peer_addr.ip(),
-                service_state.security.ip_allowlist.trust_proxy_headers,
-                service_state
-                    .security
-                    .ip_allowlist
-                    .trusted_proxy_matcher
-                    .as_ref(),
-            )
-        });
+        // Authentication throttling is keyed to the transport peer, never to
+        // request headers. Trusted forwarding headers remain relevant to the
+        // source allowlist below, but allowing them to select the throttle key
+        // lets one client rotate spoofed addresses to bypass brute-force
+        // protection.
+        let throttle_ip = request_context
+            .as_ref()
+            .map(|context| context.peer_addr.ip());
         if throttle_ip.is_some_and(|ip| service_state.auth_throttle.is_blocked(ip)) {
             return Err(Box::new(Self::control_api_auth_error_response(
                 route,
