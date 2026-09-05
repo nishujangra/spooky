@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     convert::Infallible,
-    sync::{Arc, OnceLock, RwLock},
+    sync::{Arc, Mutex as StdMutex, OnceLock, RwLock},
     time::Instant,
 };
 
@@ -44,36 +44,67 @@ struct OidcMetadataCacheEntry {
     refresh_lock: Arc<Mutex<()>>,
 }
 
-static OIDC_METADATA_CACHE: OnceLock<RwLock<HashMap<String, Arc<OidcMetadataCacheEntry>>>> =
-    OnceLock::new();
+struct CachedOidcMetadataEntry {
+    entry: Arc<OidcMetadataCacheEntry>,
+    last_access: u64,
+}
 
-fn oidc_metadata_cache() -> &'static RwLock<HashMap<String, Arc<OidcMetadataCacheEntry>>> {
-    OIDC_METADATA_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+#[derive(Default)]
+struct OidcMetadataCache {
+    entries: HashMap<String, CachedOidcMetadataEntry>,
+    access_sequence: u64,
+}
+
+impl OidcMetadataCache {
+    fn entry(&mut self, url: &str) -> Arc<OidcMetadataCacheEntry> {
+        self.access_sequence = self.access_sequence.saturating_add(1);
+        let last_access = self.access_sequence;
+
+        if let Some(cached) = self.entries.get_mut(url) {
+            cached.last_access = last_access;
+            return Arc::clone(&cached.entry);
+        }
+
+        if self.entries.len() >= OIDC_METADATA_CACHE_MAX_ENTRIES
+            && let Some(evicted_url) = self
+                .entries
+                .iter()
+                .min_by(|(left_url, left), (right_url, right)| {
+                    left.last_access
+                        .cmp(&right.last_access)
+                        .then_with(|| left_url.cmp(right_url))
+                })
+                .map(|(url, _)| url.clone())
+        {
+            self.entries.remove(&evicted_url);
+        }
+
+        let entry = Arc::new(OidcMetadataCacheEntry {
+            metadata: RwLock::new(None),
+            refresh_lock: Arc::new(Mutex::new(())),
+        });
+        self.entries.insert(
+            url.to_string(),
+            CachedOidcMetadataEntry {
+                entry: Arc::clone(&entry),
+                last_access,
+            },
+        );
+        entry
+    }
+}
+
+static OIDC_METADATA_CACHE: OnceLock<StdMutex<OidcMetadataCache>> = OnceLock::new();
+
+fn oidc_metadata_cache() -> &'static StdMutex<OidcMetadataCache> {
+    OIDC_METADATA_CACHE.get_or_init(|| StdMutex::new(OidcMetadataCache::default()))
 }
 
 fn oidc_metadata_cache_entry(url: &str) -> Arc<OidcMetadataCacheEntry> {
-    if let Some(entry) = oidc_metadata_cache()
-        .read()
-        .ok()
-        .and_then(|entries| entries.get(url).cloned())
-    {
-        return entry;
-    }
-    let mut entries = oidc_metadata_cache()
-        .write()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    if !entries.contains_key(url)
-        && entries.len() >= OIDC_METADATA_CACHE_MAX_ENTRIES
-        && let Some(evicted_url) = entries.keys().next().cloned()
-    {
-        entries.remove(&evicted_url);
-    }
-    Arc::clone(entries.entry(url.to_string()).or_insert_with(|| {
-        Arc::new(OidcMetadataCacheEntry {
-            metadata: RwLock::new(None),
-            refresh_lock: Arc::new(Mutex::new(())),
-        })
-    }))
+    oidc_metadata_cache()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .entry(url)
 }
 
 async fn refresh_oidc_metadata(
@@ -783,10 +814,31 @@ mod tests {
             let _ = oidc_metadata_cache_entry(&url);
         }
 
-        let entries = oidc_metadata_cache()
-            .read()
+        let cache = oidc_metadata_cache()
+            .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        assert!(entries.len() <= OIDC_METADATA_CACHE_MAX_ENTRIES);
+        assert!(cache.entries.len() <= OIDC_METADATA_CACHE_MAX_ENTRIES);
+    }
+
+    #[test]
+    fn oidc_metadata_cache_evicts_the_least_recently_used_issuer() {
+        let mut cache = OidcMetadataCache::default();
+        let hot_url = "https://hot.example/.well-known/openid-configuration";
+        let hot_entry = cache.entry(hot_url);
+
+        for index in 1..OIDC_METADATA_CACHE_MAX_ENTRIES {
+            let url = format!("https://issuer-{index}.example/.well-known/openid-configuration");
+            let _ = cache.entry(&url);
+        }
+
+        assert!(Arc::ptr_eq(&hot_entry, &cache.entry(hot_url)));
+        let _ = cache.entry("https://new.example/.well-known/openid-configuration");
+
+        assert!(cache.entries.contains_key(hot_url));
+        assert!(!cache
+            .entries
+            .contains_key("https://issuer-1.example/.well-known/openid-configuration"));
+        assert_eq!(cache.entries.len(), OIDC_METADATA_CACHE_MAX_ENTRIES);
     }
     use crate::{
         quic_listener::admission::{
