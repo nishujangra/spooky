@@ -200,6 +200,47 @@ fn start_static_runtime_swap_listener(
     Some(harness)
 }
 
+/// Like [`start_static_runtime_swap_listener`], but tolerant of the harness's
+/// inherent reserve-port/drop/rebind race: the reserved ephemeral port is
+/// released just before the real listener binds it, and another process can
+/// win that narrow window. Retries with a freshly reserved port on that
+/// specific failure instead of treating it as a hard bug.
+fn start_static_runtime_swap_listener_retrying_on_port_conflict(
+    body: &'static [u8],
+    configure: impl Fn(&mut Config),
+) -> Option<RuntimeSwapHarness> {
+    if !local_listener_bind_available() {
+        return None;
+    }
+
+    const MAX_ATTEMPTS: u32 = 5;
+    let mut last_error = None;
+    for attempt in 0..MAX_ATTEMPTS {
+        let mut harness = RuntimeSwapHarness::new();
+        let backend_addr = harness.start_h1_static_backend(body);
+        let mut config = harness.make_config(HashMap::from([(
+            "api".to_string(),
+            single_backend_upstream(backend_addr),
+        )]));
+        configure(&mut config);
+
+        match harness.start_listener(config) {
+            Ok(_) => return Some(harness),
+            Err(err) if err.contains("Address already in use") => {
+                last_error = Some(err);
+                if attempt + 1 < MAX_ATTEMPTS {
+                    thread::sleep(Duration::from_millis(50));
+                }
+            }
+            Err(err) => panic!("start runtime swap listener: {err}"),
+        }
+    }
+    panic!(
+        "start runtime swap listener: exhausted retries on port conflict: {}",
+        last_error.unwrap_or_default()
+    );
+}
+
 fn assert_listener_stops_accepting_fresh_quic_connections(harness: &RuntimeSwapHarness) {
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut established = true;
@@ -694,7 +735,16 @@ fn startup_owned_log_sink_change_is_rejected_and_keeps_request_behavior() {
 #[test]
 #[serial]
 fn runtime_reload_is_rejected_after_listener_lifecycle_leaves_running() {
-    let Some(mut harness) = start_static_runtime_swap_listener(b"lifecycle-running", |_| {}) else {
+    // The harness reserves an ephemeral TCP port, releases it, then rebinds
+    // the same port number for the real control API listener. That
+    // release-then-rebind window is a genuine OS-level race: another process
+    // can grab the port in between. Retry harness construction a few times
+    // on that specific failure rather than trying to eliminate an
+    // unavoidable TCP race.
+    let Some(mut harness) = start_static_runtime_swap_listener_retrying_on_port_conflict(
+        b"lifecycle-running",
+        |_| {},
+    ) else {
         return;
     };
 
