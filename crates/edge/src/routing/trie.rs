@@ -1,5 +1,6 @@
 use crate::routing::{
     decision::RouteDecisionReason, matcher::best_matching_route_with_reason, route::IndexedRoute,
+    util::uri_path,
 };
 
 #[derive(Default)]
@@ -87,10 +88,11 @@ impl RouteTrie {
 
     pub fn longest_prefix_with_reason(
         &self,
-        path: &str,
+        path_and_query: &str,
         method: Option<&str>,
         upstream_methods: &[Option<String>],
     ) -> Option<(IndexedRoute, Option<RouteDecisionReason>)> {
+        let path = uri_path(path_and_query);
         let mut node = &self.root;
         let mut best =
             best_matching_route_with_reason(&node.routes, path, method, upstream_methods, None);
@@ -157,6 +159,22 @@ mod tests {
             trie.longest_prefix("/unmatched", None, &upstream_methods),
             Some(route(0, 0))
         );
+    }
+
+    #[test]
+    fn longest_prefix_matches_path_before_query() {
+        let mut trie = RouteTrie::default();
+        let upstream_methods = vec![None, None];
+        trie.insert(None, route(0, 0));
+        trie.insert(Some("/admin"), route(1, "/admin".len()));
+
+        for request_target in ["/admin", "/admin?x=1", "/admin?", "/admin/sub?x=1"] {
+            assert_eq!(
+                trie.longest_prefix(request_target, None, &upstream_methods),
+                Some(route(1, "/admin".len())),
+                "request target: {request_target}"
+            );
+        }
     }
 
     #[test]

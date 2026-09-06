@@ -9,12 +9,21 @@ pub fn prefix_boundary_matches(path: &str, prefix_len: usize) -> bool {
     path.as_bytes().get(prefix_len) == Some(&b'/')
 }
 
+/// Return the URI path component from a request-target or HTTP/3 `:path`.
+///
+/// Routing must ignore the query component, while the original request-target
+/// is retained elsewhere for forwarding to the upstream.
+#[inline]
+pub fn uri_path(path_and_query: &str) -> &str {
+    path_and_query
+        .split_once('?')
+        .map_or(path_and_query, |(path, _)| path)
+}
+
 /// Returns whether a request path can be interpreted differently by routing
 /// and an upstream server.
 pub fn request_path_is_ambiguous(path_and_query: &str) -> bool {
-    let path = path_and_query
-        .split_once('?')
-        .map_or(path_and_query, |(path, _)| path);
+    let path = uri_path(path_and_query);
     if path.contains("//") || path.contains('\\') {
         return true;
     }
@@ -66,7 +75,14 @@ fn hex_digit(byte: u8) -> Option<u8> {
 
 #[cfg(test)]
 mod tests {
-    use super::{prefix_boundary_matches, request_path_is_ambiguous};
+    use super::{prefix_boundary_matches, request_path_is_ambiguous, uri_path};
+
+    #[test]
+    fn uri_path_strips_query_without_changing_path() {
+        assert_eq!(uri_path("/admin"), "/admin");
+        assert_eq!(uri_path("/admin?x=1"), "/admin");
+        assert_eq!(uri_path("/admin?"), "/admin");
+    }
 
     #[test]
     fn prefix_boundary_matches_exact_prefix_length() {

@@ -7,7 +7,7 @@ use crate::routing::{
         ConfiguredHostPatternRef, normalize_host_for_routing, parse_configured_host_pattern_ref,
     },
     route::HostMatchKind,
-    util::prefix_boundary_matches,
+    util::{prefix_boundary_matches, uri_path},
 };
 
 pub fn scan_lookup<'a>(
@@ -24,6 +24,7 @@ pub fn scan_lookup_for_method<'a>(
     host: Option<&str>,
     method: Option<&str>,
 ) -> Option<&'a str> {
+    let path = uri_path(path);
     let path_bytes = path.as_bytes();
     let normalized_request_host = host.and_then(normalize_host_for_routing);
     let mut best_match: Option<(&str, usize, bool, HostMatchKind, usize, bool)> = None;
