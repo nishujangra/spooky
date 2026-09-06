@@ -8,6 +8,7 @@ use super::{
     secrets_jwks::{build_auth_and_jwks_payloads, build_secrets_payload, build_tls_upstreams},
     *,
 };
+use crate::runtime::policy::RuntimeLifecyclePhase;
 
 impl QUICListener {
     pub(in crate::quic_listener::control_api) fn json_response<T>(
@@ -54,8 +55,15 @@ impl QUICListener {
         let runtime_state = state.current_service_state();
         let backend_summary = runtime_state.snapshot_backend_health();
         let restart_requested = runtime_state.watchdog().restart_requested();
+        let shutdown_requested = runtime_state.runtime_bundle_handle().is_some_and(|handle| {
+            matches!(
+                handle.lifecycle().phase(),
+                RuntimeLifecyclePhase::ShuttingDown | RuntimeLifecyclePhase::Terminated
+            )
+        });
         let payload = ControlApiReadyPayload {
             ready: !restart_requested
+                && !shutdown_requested
                 && (backend_summary.total_backends == 0 || backend_summary.healthy_backends > 0),
             healthy_backends: backend_summary.healthy_backends,
             total_backends: backend_summary.total_backends,
