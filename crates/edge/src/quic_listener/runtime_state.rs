@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     net::UdpSocket,
-    sync::{Arc, RwLock, atomic::AtomicBool},
+    sync::{Arc, RwLock},
     time::Instant,
 };
 
@@ -319,7 +319,7 @@ pub struct ListenerWorkerRuntimeState {
     pub listener_config: ListenerRuntimeConfig,
     pub shared_state: Arc<SharedRuntimeState>,
     pub runtime_bundle: Arc<RuntimeBundleHandle>,
-    pub shutdown: Arc<AtomicBool>,
+    pub shutdown: crate::runtime::listener::ShutdownSignal,
 }
 
 impl ListenerWorkerRuntimeState {
@@ -333,25 +333,27 @@ pub(super) fn initialize_listener_from_runtime(
     startup_listener_config: &ListenerRuntimeConfig,
     startup_shared_state: Arc<SharedRuntimeState>,
     runtime_bundle: Option<Arc<RuntimeBundleHandle>>,
-    shutdown: Arc<AtomicBool>,
+    shutdown: crate::runtime::listener::ShutdownSignal,
 ) -> Result<crate::runtime::listener::QUICListener, ProxyError> {
     let listener_label =
         crate::quic_listener::QUICListener::listener_label(startup_listener_config);
     if let Some(runtime_bundle) = runtime_bundle {
-        let mut listener = crate::quic_listener::QUICListener::new_with_socket_and_runtime_bundle(
-            &listener_label,
-            socket,
-            runtime_bundle,
-        )?;
-        listener.shutdown = shutdown;
+        let listener =
+            crate::quic_listener::QUICListener::new_with_socket_and_runtime_bundle_and_shutdown(
+                &listener_label,
+                socket,
+                runtime_bundle,
+                shutdown,
+            )?;
         return Ok(listener);
     }
 
-    let mut listener = crate::quic_listener::QUICListener::new_with_socket_and_shared_state(
-        startup_listener_config.clone(),
-        socket,
-        startup_shared_state,
-    )?;
-    listener.shutdown = shutdown;
+    let listener =
+        crate::quic_listener::QUICListener::new_with_socket_and_shared_state_and_shutdown(
+            startup_listener_config.clone(),
+            socket,
+            startup_shared_state,
+            shutdown,
+        )?;
     Ok(listener)
 }

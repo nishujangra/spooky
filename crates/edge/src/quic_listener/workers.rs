@@ -2,7 +2,7 @@ use std::{
     net::SocketAddr,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
         mpsc::{self, RecvTimeoutError, SyncSender, TrySendError},
     },
     thread,
@@ -34,7 +34,7 @@ struct WorkerThreadRuntime {
     socket: std::net::UdpSocket,
     shared_state: Arc<SharedRuntimeState>,
     runtime_bundle: Arc<RuntimeBundleHandle>,
-    shutdown: Arc<AtomicBool>,
+    shutdown: crate::runtime::listener::ShutdownSignal,
 }
 
 struct ShardedWorkerConfig {
@@ -80,7 +80,7 @@ pub fn spawn_listener_worker_group(
             socket,
             shared_state: Arc::clone(&runtime.shared_state),
             runtime_bundle: Arc::clone(&runtime.runtime_bundle),
-            shutdown: Arc::clone(&runtime.shutdown),
+            shutdown: runtime.shutdown.clone(),
         };
         let sharded_config = ShardedWorkerConfig {
             shard_count: config.shard_count,
@@ -146,7 +146,7 @@ fn run_sharded_listener_worker(
         })?;
         let shard_config = worker_runtime.listener_config.clone();
         let shard_shared = Arc::clone(&worker_runtime.shared_state);
-        let shard_shutdown = Arc::clone(&worker_runtime.shutdown);
+        let shard_shutdown = worker_runtime.shutdown.clone();
         let shard_thread_idx = worker_runtime
             .worker_idx
             .saturating_mul(sharded_config.shard_count)
@@ -174,7 +174,7 @@ fn run_sharded_listener_worker(
                     &shard_config,
                     shard_shared,
                     Some(Arc::clone(&shard_runtime_bundle)),
-                    Arc::clone(&shard_shutdown),
+                    shard_shutdown.clone(),
                 )
                 .map_err(|err| {
                     format!(
@@ -335,7 +335,7 @@ fn run_single_listener_worker(worker_runtime: WorkerThreadRuntime) -> Result<(),
         &worker_runtime.listener_config,
         worker_runtime.shared_state,
         Some(Arc::clone(&worker_runtime.runtime_bundle)),
-        Arc::clone(&worker_runtime.shutdown),
+        worker_runtime.shutdown.clone(),
     )
     .map_err(|err| {
         format!(

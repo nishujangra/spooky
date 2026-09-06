@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     net::{IpAddr, SocketAddr, SocketAddr as StdSocketAddr, ToSocketAddrs, UdpSocket},
-    sync::{Arc, RwLock, atomic::AtomicBool},
+    sync::{Arc, RwLock},
     time::Duration,
 };
 
@@ -29,7 +29,7 @@ use crate::{
         },
         bundle::{RuntimeBundle, RuntimeBundleHandle},
         generation::{RuntimeGenerationState, RuntimeSharedServices, StartupOwnedRuntimeState},
-        listener::QUICListener,
+        listener::{QUICListener, ShutdownSignal},
         shared_state::SharedRuntimeState,
         tasks::RuntimeTaskRegistry,
     },
@@ -448,6 +448,20 @@ impl QUICListener {
         socket: UdpSocket,
         shared_state: Arc<SharedRuntimeState>,
     ) -> Result<Self, ProxyError> {
+        Self::new_with_socket_and_shared_state_and_shutdown(
+            config,
+            socket,
+            shared_state,
+            ShutdownSignal::new(),
+        )
+    }
+
+    pub(crate) fn new_with_socket_and_shared_state_and_shutdown(
+        config: ListenerRuntimeConfig,
+        socket: UdpSocket,
+        shared_state: Arc<SharedRuntimeState>,
+        shutdown: ShutdownSignal,
+    ) -> Result<Self, ProxyError> {
         let local_addr = socket.local_addr().map_err(|err| {
             ProxyError::Transport(format!("failed to read UDP socket local address: {}", err))
         })?;
@@ -507,7 +521,7 @@ impl QUICListener {
             metrics: Arc::clone(&shared_services.metrics),
             resilience: Arc::clone(&generation_state.resilience),
             watchdog: Arc::clone(&shared_services.watchdog),
-            shutdown: Arc::new(AtomicBool::new(false)),
+            shutdown,
             draining: false,
             drain_start: None,
             watchdog_worker_drained: false,
@@ -544,6 +558,20 @@ impl QUICListener {
         socket: UdpSocket,
         runtime_bundle: Arc<RuntimeBundleHandle>,
     ) -> Result<Self, ProxyError> {
+        Self::new_with_socket_and_runtime_bundle_and_shutdown(
+            listener_label,
+            socket,
+            runtime_bundle,
+            ShutdownSignal::new(),
+        )
+    }
+
+    pub(crate) fn new_with_socket_and_runtime_bundle_and_shutdown(
+        listener_label: &str,
+        socket: UdpSocket,
+        runtime_bundle: Arc<RuntimeBundleHandle>,
+        shutdown: ShutdownSignal,
+    ) -> Result<Self, ProxyError> {
         let runtime = runtime_bundle.current_view();
         let listener_config = runtime
             .listener_runtime_config(listener_label)
@@ -553,10 +581,11 @@ impl QUICListener {
                     listener_label
                 ))
             })?;
-        let mut listener = Self::new_with_socket_and_shared_state(
+        let mut listener = Self::new_with_socket_and_shared_state_and_shutdown(
             listener_config,
             socket,
             Arc::clone(&runtime.bundle().shared_state),
+            shutdown,
         )?;
         listener.runtime_generation = runtime.generation();
         listener.runtime_bundle = Some(runtime_bundle);
