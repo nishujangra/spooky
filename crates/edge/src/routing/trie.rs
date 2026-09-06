@@ -1,6 +1,6 @@
 use crate::routing::{
     decision::RouteDecisionReason, matcher::best_matching_route_with_reason, route::IndexedRoute,
-    util::uri_path,
+    util::canonical_uri_path,
 };
 
 #[derive(Default)]
@@ -92,18 +92,23 @@ impl RouteTrie {
         method: Option<&str>,
         upstream_methods: &[Option<String>],
     ) -> Option<(IndexedRoute, Option<RouteDecisionReason>)> {
-        let path = uri_path(path_and_query);
+        let path = canonical_uri_path(path_and_query);
         let mut node = &self.root;
         let mut best =
-            best_matching_route_with_reason(&node.routes, path, method, upstream_methods, None);
+            best_matching_route_with_reason(&node.routes, &path, method, upstream_methods, None);
 
         for byte in path.as_bytes() {
             let Some(next) = node.child(*byte) else {
                 break;
             };
             node = next;
-            best =
-                best_matching_route_with_reason(&node.routes, path, method, upstream_methods, best);
+            best = best_matching_route_with_reason(
+                &node.routes,
+                &path,
+                method,
+                upstream_methods,
+                best,
+            );
         }
 
         best
