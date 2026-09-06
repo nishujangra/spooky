@@ -487,12 +487,9 @@ fn validate_resilience(config: &Config) -> bool {
         return false;
     }
     if config.resilience.protocol.allow_0rtt
-        && config
-            .resilience
-            .protocol
-            .early_data_safe_methods
-            .iter()
-            .any(|method| !matches!(method.trim().to_ascii_uppercase().as_str(), "GET" | "HEAD"))
+        && !crate::policy_helpers::early_data_methods_are_safe(
+            &config.resilience.protocol.early_data_safe_methods,
+        )
     {
         validation_error!(
             "resilience.protocol.early_data_safe_methods may contain only GET or HEAD when allow_0rtt=true"

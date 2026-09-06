@@ -382,7 +382,7 @@ pub(super) fn is_loopback_bind_address(raw: &str) -> bool {
         .unwrap_or(false)
 }
 
-pub(super) fn is_valid_http_token(value: &str) -> bool {
+pub(crate) fn is_valid_http_token(value: &str) -> bool {
     !value.is_empty()
         && value.as_bytes().iter().all(|byte| {
             matches!(
