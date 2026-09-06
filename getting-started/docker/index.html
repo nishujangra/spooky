@@ -1455,7 +1455,7 @@
   </div>
   <div class="typography w-full flex-1 *:data-[slot=alert]:first:mt-0">
     <h1 id="docker-installation">Docker Installation</h1>
-<p>This page is the fastest way to run Impulse in containers and verify health, metrics, and first proxied traffic.</p>
+<p>This page is the fastest way to run Impulse in containers and verify startup and first proxied traffic. Metrics and the control API are disabled by default for a safer container baseline.</p>
 <h2 id="prerequisites">Prerequisites</h2>
 <ul>
 <li><a href="https://docs.docker.com/get-docker/">Docker</a> 24+ (or Docker Desktop)</li>
@@ -1472,7 +1472,7 @@
 <ol>
 <li>use the provided Compose stack</li>
 <li>point the default upstream at a demo backend</li>
-<li>verify first traffic, health, and metrics</li>
+<li>verify startup and first proxied traffic</li>
 </ol>
 <p><strong>1. Clone the repository:</strong></p>
 <pre><code class="language-bash">git clone https://github.com/Supernova-Labs-Org/impulse.git
@@ -1500,23 +1500,32 @@ are rejected by configuration validation:</p>
 <pre><code class="language-yaml">observability:
   metrics:
     enabled: true
+    address: &quot;0.0.0.0&quot;
   control_api:
     enabled: true
+    address: &quot;0.0.0.0&quot;
     auth_token: &quot;&lt;generate-a-unique-secret&gt;&quot;
 </code></pre>
 <p><strong>5. Start the stack:</strong></p>
 <pre><code class="language-bash">docker compose -f packaging/docker/docker-compose.yml up -d --build
 </code></pre>
-<p><strong>6. Verify health, metrics, and first traffic:</strong></p>
-<pre><code class="language-bash"># Health check
-curl -k --http1.1 https://127.0.0.1:9902/health
-
-# Metrics
-curl http://127.0.0.1:9901/metrics
+<p><strong>6. Verify startup and first traffic:</strong></p>
+<pre><code class="language-bash"># The default Compose stack publishes only the proxy listener.
+docker compose -f packaging/docker/docker-compose.yml ps
 
 # First proxied request
 curl --http3-only -k https://127.0.0.1:9889/
 </code></pre>
+<p>The default stack does not publish ports <code>9901</code> or <code>9902</code>, and the mounted
+configuration keeps metrics and the control API disabled. To expose them for a
+local diagnostic session, set both observability addresses to <code>0.0.0.0</code>, enable
+the endpoints, configure a unique control-API token, and add these Compose port
+mappings before starting the stack:</p>
+<pre><code class="language-yaml">ports:
+  - &quot;9901:9901&quot;
+  - &quot;9902:9902&quot;
+</code></pre>
+<p>Do not expose these ports on an untrusted network.</p>
 <p><strong>Stop the stack:</strong></p>
 <pre><code class="language-bash">docker compose -f packaging/docker/docker-compose.yml down
 docker rm -f impulse-demo-backend 2&gt;/dev/null || true
@@ -1529,8 +1538,6 @@ docker run -d \
   --name impulse \
   -p 9889:9889/udp \
   -p 9889:9889/tcp \
-  -p 9901:9901 \
-  -p 9902:9902 \
   -v &quot;$(pwd)/packaging/docker/config.docker.yaml:/etc/impulse/config.yaml:ro&quot; \
   -v &quot;$(pwd)/certs:/etc/impulse/certs:ro&quot; \
   --restart unless-stopped \
@@ -1553,13 +1560,13 @@ docker run -d \
 </tr>
 <tr>
 <td>9901</td>
-<td>TCP</td>
-<td>Prometheus metrics endpoint</td>
+<td>TCP (optional)</td>
+<td>Prometheus metrics endpoint; disabled/unpublished by default</td>
 </tr>
 <tr>
 <td>9902</td>
-<td>TCP</td>
-<td>Control API (health, ready, admin)</td>
+<td>TCP (optional)</td>
+<td>Control API (health, ready, admin); disabled/unpublished by default</td>
 </tr>
 </tbody>
 </table></div>
@@ -1584,13 +1591,12 @@ docker run -d \
 ./packaging/docker/scripts/build-image.sh impulse:1.0.0
 </code></pre>
 <h2 id="smoke-test">Smoke Test</h2>
-<p>Run the bundled smoke test to verify the image builds, starts, and responds correctly:</p>
+<p>Run the bundled smoke test to verify the image builds, starts, and preserves the secure default port exposure:</p>
 <pre><code class="language-bash">./packaging/docker/scripts/smoke-test.sh
 </code></pre>
 <p>This validates:
-- Image builds and the container starts cleanly
-- Control API health endpoint responds at <code>https://127.0.0.1:9902/health</code>
-- Metrics endpoint responds at <code>http://127.0.0.1:9901/metrics</code>
+- Image builds and the container remains running
+- The secure default does not publish optional observability ports
 - Container logs show a clean runtime startup</p>
 <h2 id="logs">Logs</h2>
 <pre><code class="language-bash"># Follow live logs
