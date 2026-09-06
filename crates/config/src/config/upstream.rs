@@ -42,7 +42,10 @@ pub enum ExternalAuthFailureMode {
 pub enum ExternalAuth {
     Http {
         endpoint: String,
-        #[serde(default)]
+        // Deliberately omitted from every serialized config view, not only logs:
+        // injected header values may contain credentials. Deserialization still
+        // accepts this field from operator-supplied configuration.
+        #[serde(default, skip_serializing)]
         request_headers: Vec<ExternalAuthRequestHeader>,
         #[serde(default)]
         response_header_allowlist: Vec<String>,
@@ -57,6 +60,8 @@ pub enum ExternalAuth {
         #[serde(default)]
         issuer_url: Option<String>,
         client_id: String,
+        // Deliberately omitted from every serialized config view, not only logs.
+        // Deserialization remains supported for operator-supplied configuration.
         #[serde(default, skip_serializing)]
         client_secret: Option<String>,
         #[serde(default)]
@@ -65,7 +70,9 @@ pub enum ExternalAuth {
         audience: Option<String>,
         #[serde(default)]
         scopes: Vec<String>,
-        #[serde(default)]
+        // See the HTTP variant: header values are treated as credentials and
+        // therefore never emitted by generic config serialization.
+        #[serde(default, skip_serializing)]
         request_headers: Vec<ExternalAuthRequestHeader>,
         #[serde(default)]
         response_header_allowlist: Vec<String>,
@@ -82,18 +89,21 @@ impl ExternalAuth {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct ExternalAuthRequestHeader {
     pub name: String,
     pub value: String,
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
+#[derive(Deserialize, Serialize, Clone)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct ApiKeyAuth {
     pub header_name: String,
+    // This affects every serialization consumer, not only Debug/log output.
+    // Keys are accepted while deserializing but never exported in config views.
+    #[serde(skip_serializing)]
     pub keys: Vec<String>,
 }
 
@@ -106,10 +116,39 @@ impl Default for ApiKeyAuth {
     }
 }
 
+impl fmt::Debug for ExternalAuthRequestHeader {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Keep this pattern exhaustive: adding a field must trigger a compile
+        // error until its redaction behavior is reviewed.
+        let Self { name, value: _ } = self;
+        f.debug_struct("ExternalAuthRequestHeader")
+            .field("name", name)
+            .field("value", &"<redacted>")
+            .finish()
+    }
+}
+
+impl fmt::Debug for ApiKeyAuth {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Keep this pattern exhaustive: adding a field must trigger a compile
+        // error until its redaction behavior is reviewed.
+        let Self {
+            header_name,
+            keys: _,
+        } = self;
+        f.debug_struct("ApiKeyAuth")
+            .field("header_name", header_name)
+            .field("keys", &"<redacted>")
+            .finish()
+    }
+}
+
 #[derive(Deserialize, Serialize, Clone)]
 #[serde(default)]
 #[serde(deny_unknown_fields)]
 pub struct JwtAuth {
+    // Deliberately omitted from every serialized config view, not only logs.
+    // Deserialization remains supported for operator-supplied configuration.
     #[serde(skip_serializing)]
     pub secret: String,
     pub secret_ref: Option<SecretRef>,
@@ -137,6 +176,8 @@ pub struct JwtAuth {
 
 impl fmt::Debug for ExternalAuth {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Keep every variant pattern exhaustive (no `..`): adding an auth field
+        // must fail compilation until its Debug/redaction behavior is reviewed.
         match self {
             Self::Http {
                 endpoint,
@@ -190,29 +231,43 @@ impl fmt::Debug for ExternalAuth {
 
 impl fmt::Debug for JwtAuth {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Keep this pattern exhaustive: adding a field must trigger a compile
+        // error until its Debug/redaction behavior is reviewed.
+        let Self {
+            secret: _,
+            secret_ref,
+            issuer,
+            audience,
+            issuers,
+            audiences,
+            allowed_algorithms,
+            require_kid,
+            static_keys,
+            jwks_url,
+            jwks_refresh_interval_secs,
+            jwks_request_timeout_ms,
+            jwks_cache_ttl_secs,
+            jwks_stale_if_error_secs,
+            jwks_startup_behavior,
+            clock_skew_secs,
+        } = self;
         f.debug_struct("JwtAuth")
             .field("secret", &"<redacted>")
-            .field(
-                "secret_ref",
-                &self.secret_ref.as_ref().map(|_| "<configured>"),
-            )
-            .field("issuer", &self.issuer)
-            .field("audience", &self.audience)
-            .field("issuers", &self.issuers)
-            .field("audiences", &self.audiences)
-            .field("allowed_algorithms", &self.allowed_algorithms)
-            .field("require_kid", &self.require_kid)
-            .field("static_keys", &self.static_keys)
-            .field("jwks_url", &self.jwks_url)
-            .field(
-                "jwks_refresh_interval_secs",
-                &self.jwks_refresh_interval_secs,
-            )
-            .field("jwks_request_timeout_ms", &self.jwks_request_timeout_ms)
-            .field("jwks_cache_ttl_secs", &self.jwks_cache_ttl_secs)
-            .field("jwks_stale_if_error_secs", &self.jwks_stale_if_error_secs)
-            .field("jwks_startup_behavior", &self.jwks_startup_behavior)
-            .field("clock_skew_secs", &self.clock_skew_secs)
+            .field("secret_ref", &secret_ref.as_ref().map(|_| "<configured>"))
+            .field("issuer", issuer)
+            .field("audience", audience)
+            .field("issuers", issuers)
+            .field("audiences", audiences)
+            .field("allowed_algorithms", allowed_algorithms)
+            .field("require_kid", require_kid)
+            .field("static_keys", static_keys)
+            .field("jwks_url", jwks_url)
+            .field("jwks_refresh_interval_secs", jwks_refresh_interval_secs)
+            .field("jwks_request_timeout_ms", jwks_request_timeout_ms)
+            .field("jwks_cache_ttl_secs", jwks_cache_ttl_secs)
+            .field("jwks_stale_if_error_secs", jwks_stale_if_error_secs)
+            .field("jwks_startup_behavior", jwks_startup_behavior)
+            .field("clock_skew_secs", clock_skew_secs)
             .finish()
     }
 }

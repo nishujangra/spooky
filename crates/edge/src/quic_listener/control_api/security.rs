@@ -571,8 +571,7 @@ mod tests {
     }
 
     #[test]
-    fn trusted_proxy_clients_use_independent_auth_throttle_keys() {
-        let throttle = ControlApiAuthThrottle::new();
+    fn trusted_proxy_clients_resolve_to_independent_source_policy_addresses() {
         let proxy = "10.0.0.2".parse().expect("proxy ip");
         let trusted_proxy_matcher = ControlApiIpAllowlistMatcher {
             cidrs: vec![ControlApiIpNetwork::parse("10.0.0.0/8").unwrap()],
@@ -590,11 +589,6 @@ mod tests {
         let client_b =
             source_ip_from_request(&request_b, proxy, true, Some(&trusted_proxy_matcher));
 
-        for _ in 0..5 {
-            throttle.record_failure(client_a);
-        }
-
-        assert!(throttle.is_blocked(client_a));
-        assert!(!throttle.is_blocked(client_b));
+        assert_ne!(client_a, client_b);
     }
 }

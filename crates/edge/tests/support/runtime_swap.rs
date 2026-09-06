@@ -57,7 +57,9 @@ pub struct RuntimeSwapHarness {
     config_path: PathBuf,
     listen_port: u16,
     metrics_port: u16,
+    metrics_port_reservation: Option<StdTcpListener>,
     control_api_port: u16,
+    control_api_port_reservation: Option<StdTcpListener>,
     current_config: Option<Config>,
     runtime_bundle: Option<Arc<RuntimeBundleHandle>>,
     listen_addr: Option<SocketAddr>,
@@ -82,6 +84,16 @@ impl RuntimeSwapHarness {
             CONTROL_API_TOKEN,
         )
         .expect("write control api token file");
+        let metrics_port_reservation = reserve_tcp_port();
+        let metrics_port = metrics_port_reservation
+            .local_addr()
+            .expect("metrics reservation local addr")
+            .port();
+        let control_api_port_reservation = reserve_tcp_port();
+        let control_api_port = control_api_port_reservation
+            .local_addr()
+            .expect("control API reservation local addr")
+            .port();
         Self {
             backends: Vec::new(),
             listener_task: None,
@@ -91,8 +103,10 @@ impl RuntimeSwapHarness {
             config_path: config_dir.path().join("impulse-runtime-swap.yaml"),
             config_dir,
             listen_port: reserve_udp_port(),
-            metrics_port: reserve_tcp_port(),
-            control_api_port: reserve_tcp_port(),
+            metrics_port,
+            metrics_port_reservation: Some(metrics_port_reservation),
+            control_api_port,
+            control_api_port_reservation: Some(control_api_port_reservation),
             current_config: None,
             runtime_bundle: None,
             listen_addr: None,
@@ -220,6 +234,14 @@ impl RuntimeSwapHarness {
             .ok_or_else(|| "missing primary listener runtime config".to_string())?;
         let socket = RuntimeListener::bind_socket(&listener_config, false)
             .map_err(|err| format!("bind socket: {err}"))?;
+
+        // Keep both TCP ports exclusively reserved while certificates, config,
+        // and the runtime bundle are prepared. Release them together only when
+        // the production listeners are ready to bind, closing the large
+        // bind-to-port-0/drop/rebind race in this integration harness and
+        // preventing both endpoints from receiving the same ephemeral port.
+        drop(self.metrics_port_reservation.take());
+        drop(self.control_api_port_reservation.take());
 
         {
             let _enter = self.rt.enter();
@@ -599,12 +621,8 @@ impl RuntimeSwapHarness {
     }
 }
 
-fn reserve_tcp_port() -> u16 {
-    StdTcpListener::bind(("127.0.0.1", 0))
-        .expect("reserve tcp port")
-        .local_addr()
-        .expect("tcp local addr")
-        .port()
+fn reserve_tcp_port() -> StdTcpListener {
+    StdTcpListener::bind(("127.0.0.1", 0)).expect("reserve tcp port")
 }
 
 fn reserve_udp_port() -> u16 {

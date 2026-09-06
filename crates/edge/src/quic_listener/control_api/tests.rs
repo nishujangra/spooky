@@ -1465,6 +1465,62 @@ async fn control_api_gate_rejects_invalid_bearer_token() {
 }
 
 #[tokio::test]
+async fn control_api_auth_throttle_ignores_spoofed_forwarding_addresses() {
+    let dir = tempdir().expect("tempdir");
+    let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
+    let mut startup = test_config(cert, key);
+    startup.observability.control_api.enabled = true;
+    startup.observability.control_api.auth_token = Some("secret-token".to_string());
+    startup.observability.control_api.ip_allowlist.cidrs = vec!["0.0.0.0/0".to_string()];
+    startup
+        .observability
+        .control_api
+        .ip_allowlist
+        .trust_proxy_headers = true;
+    startup
+        .observability
+        .control_api
+        .ip_allowlist
+        .trusted_proxy_cidrs = vec!["10.0.0.0/8".to_string()];
+    let state = control_api_state_with_runtime_bundle(&startup, &startup);
+    let runtime_path = state.current_paths().runtime_path;
+
+    for attempt in 0..5 {
+        let mut req = control_api_request(
+            Method::GET,
+            &runtime_path,
+            Some("Bearer definitely-not-secret-token"),
+        );
+        req.headers_mut().insert(
+            "x-forwarded-for",
+            format!("203.0.113.{attempt}")
+                .parse()
+                .expect("forwarded ip"),
+        );
+        attach_control_api_peer_addr(&mut req, "10.0.0.2:9443");
+
+        let response = QUICListener::gate_control_api_request_for(&mut req, &state)
+            .expect_err("invalid token should be rejected");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    let mut req = control_api_request(
+        Method::GET,
+        &runtime_path,
+        Some("Bearer definitely-not-secret-token"),
+    );
+    req.headers_mut().insert(
+        "forwarded",
+        "for=198.51.100.99".parse().expect("forwarded ip"),
+    );
+    attach_control_api_peer_addr(&mut req, "10.0.0.2:9443");
+
+    let response = QUICListener::gate_control_api_request_for(&mut req, &state)
+        .expect_err("transport peer should remain throttled across spoofed headers");
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
 async fn control_api_gate_returns_forbidden_for_operator_hitting_restart() {
     let dir = tempdir().expect("tempdir");
     let (cert, key) = write_test_cert_for_name(dir.path(), "server", "api.example.com");
