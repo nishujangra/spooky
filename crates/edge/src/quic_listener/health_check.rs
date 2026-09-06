@@ -120,6 +120,7 @@ impl QUICListener {
                         ticker.tick().await;
                         let now = Instant::now();
                         let mut pending = tokio::task::JoinSet::new();
+                        let mut pending_job_indices = HashMap::new();
                         for (job_index, job) in jobs.iter_mut().enumerate() {
                             if now < job.next_due_at {
                                 continue;
@@ -137,20 +138,53 @@ impl QUICListener {
                             let backend_identity = job.backend_identity.clone();
                             let timeout = job.timeout;
                             let transport_pool = Arc::clone(&transport_pool);
-                            pending.spawn(async move {
-                                let result = transport_pool
+                            let task = pending.spawn(async move {
+                                transport_pool
                                     .send_backend_request_with_timeout(
                                         &backend_identity,
                                         request,
                                         timeout,
                                     )
-                                    .await;
-                                (job_index, result)
+                                    .await
                             });
+                            pending_job_indices.insert(task.id(), job_index);
                         }
 
-                        while let Some(joined) = pending.join_next().await {
-                            let Ok((job_index, result)) = joined else {
+                        while let Some(joined) = pending.join_next_with_id().await {
+                            let (task_id, result) = match joined {
+                                Ok(completed) => completed,
+                                Err(join_error) => {
+                                    let task_id = join_error.id();
+                                    let Some(job_index) = pending_job_indices.remove(&task_id)
+                                    else {
+                                        error!(
+                                            "health check task failed without a scheduler job mapping: {}",
+                                            join_error
+                                        );
+                                        continue;
+                                    };
+                                    let job = &mut jobs[job_index];
+                                    let evaluation = Self::evaluate_interrupted_health_check(
+                                        &job.backend_identity,
+                                        job.base_interval_ms,
+                                        job.consecutive_failures,
+                                    );
+                                    job.consecutive_failures = evaluation.next_consecutive_failures;
+                                    job.next_due_at = Instant::now() + evaluation.next_delay;
+                                    task_metrics.inc_health_check_failure();
+                                    error!(
+                                        "health check task failed backend='{}' cancelled={} panicked={} retry_delay_ms={}: {}",
+                                        job.backend_identity,
+                                        join_error.is_cancelled(),
+                                        join_error.is_panic(),
+                                        evaluation.next_delay.as_millis(),
+                                        join_error
+                                    );
+                                    continue;
+                                }
+                            };
+                            let Some(job_index) = pending_job_indices.remove(&task_id) else {
+                                error!("completed health check task missing scheduler job mapping");
                                 continue;
                             };
                             let job = &mut jobs[job_index];
@@ -269,6 +303,23 @@ impl QUICListener {
             consecutive_failures,
         )
     }
+
+    fn evaluate_interrupted_health_check(
+        backend_identity: &str,
+        base_interval_ms: u64,
+        consecutive_failures: u32,
+    ) -> ActiveHealthCheckEvaluation {
+        // A JoinError is an internal execution failure, not evidence that the
+        // backend itself is unhealthy. Reuse the canonical failure schedule for
+        // bounded backoff, but do not apply this observation to backend state.
+        evaluate_active_health_check(
+            BackendIdentity::new(backend_identity.to_string()),
+            BackendHealthObservationOutcome::Failure,
+            None,
+            base_interval_ms,
+            consecutive_failures,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -332,5 +383,25 @@ mod tests {
         assert_eq!(evaluation.next_consecutive_failures, 3);
         assert_eq!(metrics.health_failure_transport.load(Ordering::Relaxed), 1);
         assert_eq!(metrics.health_failure_timeout.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn interrupted_health_check_advances_failure_backoff_without_backend_reason() {
+        let first = QUICListener::evaluate_interrupted_health_check("http://backend-a", 1_000, 0);
+        assert_eq!(first.next_consecutive_failures, 1);
+        assert_eq!(first.next_delay, Duration::from_millis(2_000));
+        assert_eq!(
+            first.observation.outcome,
+            BackendHealthObservationOutcome::Failure
+        );
+        assert_eq!(first.observation.reason, None);
+
+        let repeated = QUICListener::evaluate_interrupted_health_check(
+            "http://backend-a",
+            1_000,
+            first.next_consecutive_failures,
+        );
+        assert_eq!(repeated.next_consecutive_failures, 2);
+        assert_eq!(repeated.next_delay, Duration::from_millis(4_000));
     }
 }
