@@ -1,6 +1,6 @@
 # Docker Installation
 
-This page is the fastest way to run Impulse in containers and verify health, metrics, and first proxied traffic.
+This page is the fastest way to run Impulse in containers and verify startup and first proxied traffic. Metrics and the control API are disabled by default for a safer container baseline.
 
 ## Prerequisites
 
@@ -19,7 +19,7 @@ The fastest working container path is:
 
 1. use the provided Compose stack
 2. point the default upstream at a demo backend
-3. verify first traffic, health, and metrics
+3. verify startup and first proxied traffic
 
 **1. Clone the repository:**
 
@@ -63,8 +63,10 @@ are rejected by configuration validation:
 observability:
   metrics:
     enabled: true
+    address: "0.0.0.0"
   control_api:
     enabled: true
+    address: "0.0.0.0"
     auth_token: "<generate-a-unique-secret>"
 ```
 
@@ -74,18 +76,29 @@ observability:
 docker compose -f packaging/docker/docker-compose.yml up -d --build
 ```
 
-**6. Verify health, metrics, and first traffic:**
+**6. Verify startup and first traffic:**
 
 ```bash
-# Health check
-curl -k --http1.1 https://127.0.0.1:9902/health
-
-# Metrics
-curl http://127.0.0.1:9901/metrics
+# The default Compose stack publishes only the proxy listener.
+docker compose -f packaging/docker/docker-compose.yml ps
 
 # First proxied request
 curl --http3-only -k https://127.0.0.1:9889/
 ```
+
+The default stack does not publish ports `9901` or `9902`, and the mounted
+configuration keeps metrics and the control API disabled. To expose them for a
+local diagnostic session, set both observability addresses to `0.0.0.0`, enable
+the endpoints, configure a unique control-API token, and add these Compose port
+mappings before starting the stack:
+
+```yaml
+ports:
+  - "9901:9901"
+  - "9902:9902"
+```
+
+Do not expose these ports on an untrusted network.
 
 **Stop the stack:**
 
@@ -105,8 +118,6 @@ docker run -d \
   --name impulse \
   -p 9889:9889/udp \
   -p 9889:9889/tcp \
-  -p 9901:9901 \
-  -p 9902:9902 \
   -v "$(pwd)/packaging/docker/config.docker.yaml:/etc/impulse/config.yaml:ro" \
   -v "$(pwd)/certs:/etc/impulse/certs:ro" \
   --restart unless-stopped \
@@ -118,8 +129,8 @@ docker run -d \
 | Port | Protocol | Purpose |
 |------|----------|---------|
 | 9889 | UDP + TCP | QUIC / HTTP3 proxy listener |
-| 9901 | TCP | Prometheus metrics endpoint |
-| 9902 | TCP | Control API (health, ready, admin) |
+| 9901 | TCP (optional) | Prometheus metrics endpoint; disabled/unpublished by default |
+| 9902 | TCP (optional) | Control API (health, ready, admin); disabled/unpublished by default |
 
 ## Using a Custom Config
 
@@ -152,16 +163,15 @@ A helper script is provided to build and tag the image:
 
 ## Smoke Test
 
-Run the bundled smoke test to verify the image builds, starts, and responds correctly:
+Run the bundled smoke test to verify the image builds, starts, and preserves the secure default port exposure:
 
 ```bash
 ./packaging/docker/scripts/smoke-test.sh
 ```
 
 This validates:
-- Image builds and the container starts cleanly
-- Control API health endpoint responds at `https://127.0.0.1:9902/health`
-- Metrics endpoint responds at `http://127.0.0.1:9901/metrics`
+- Image builds and the container remains running
+- The secure default does not publish optional observability ports
 - Container logs show a clean runtime startup
 
 ## Logs

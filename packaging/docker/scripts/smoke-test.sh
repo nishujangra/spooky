@@ -13,19 +13,30 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "Waiting for health endpoint..."
+echo "Waiting for the container to remain running..."
 for _ in {1..30}; do
-  if curl -ksf "https://127.0.0.1:9902/health" >/dev/null; then
+  if docker compose -f "${COMPOSE_FILE}" ps --status running --services \
+    | grep -qx "impulse"; then
     break
   fi
   sleep 1
 done
 
-curl -ksf "https://127.0.0.1:9902/health" >/dev/null
-echo "Control API health endpoint is reachable"
+if ! docker compose -f "${COMPOSE_FILE}" ps --status running --services \
+  | grep -qx "impulse"; then
+  echo "Impulse container did not remain running"
+  docker compose -f "${COMPOSE_FILE}" logs --tail=120 impulse
+  exit 1
+fi
 
-curl -sf "http://127.0.0.1:9901/metrics" | head -n 20
-echo "Metrics endpoint is reachable"
+echo "Container is running (metrics and control API are disabled by default)"
+
+for optional_port in 9901 9902; do
+  if docker compose -f "${COMPOSE_FILE}" port impulse "${optional_port}" >/dev/null 2>&1; then
+    echo "Optional observability port ${optional_port} must not be published by the default stack"
+    exit 1
+  fi
+done
 
 docker compose -f "${COMPOSE_FILE}" logs --tail=120 impulse
 echo "Smoke test passed"
