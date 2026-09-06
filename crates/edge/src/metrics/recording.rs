@@ -710,7 +710,11 @@ impl Metrics {
             guard.retain(|key, _| active_upstreams.contains(&key.upstream));
         }
         if let Ok(mut guard) = self.quota_policy_outcomes.write() {
+            let previous_len = guard.len();
             guard.retain(|key, _| active_quota_policies.contains(&key.policy));
+            if guard.len() != previous_len {
+                self.mark_quota_metrics_stale();
+            }
         }
 
         self.mark_backend_metrics_stale();

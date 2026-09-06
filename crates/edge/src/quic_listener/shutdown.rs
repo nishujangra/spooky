@@ -63,7 +63,11 @@ impl QUICListener {
             self.watchdog_worker_drained = false;
         }
         if self.should_enter_draining() {
-            warn!("Watchdog requested restart; entering draining mode");
+            if self.watchdog.restart_requested() {
+                warn!("Watchdog requested restart; entering draining mode");
+            } else {
+                info!("Shutdown requested; entering draining mode");
+            }
             self.start_draining();
         }
         if self.draining && self.drain_complete() {

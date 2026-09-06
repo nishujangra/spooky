@@ -311,7 +311,7 @@ fn load_listener_tls_material_extracts_leaf_metadata() {
 
     let loaded = super::QUICListener::load_listener_tls_material(&runtime_config)
         .expect("loaded listener tls");
-    let metadata = &loaded.default_identity.metadata;
+    let metadata = loaded.default_identity.metadata();
     assert!(
         !metadata.serial_hex.is_empty(),
         "serial should be populated"

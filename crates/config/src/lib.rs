@@ -8,6 +8,7 @@
 //! - [`backend_endpoint`] for shared backend endpoint parsing/runtime shaping
 
 mod bounded_file;
+pub(crate) mod policy_helpers;
 
 pub mod backend_endpoint;
 pub mod config;

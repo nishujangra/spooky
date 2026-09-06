@@ -16,12 +16,35 @@ pub fn sanitize_log_text(value: &str) -> String {
 
     while let Some(ch) = chars.next() {
         if ch == '\u{1b}' {
-            if chars.next() == Some('[') {
-                for sequence_char in chars.by_ref() {
-                    if ('@'..='~').contains(&sequence_char) {
-                        break;
+            match chars.next() {
+                Some('[') => {
+                    for sequence_char in chars.by_ref() {
+                        if ('@'..='~').contains(&sequence_char) {
+                            break;
+                        }
                     }
                 }
+                Some(']') => {
+                    // OSC (Operating System Command) strings are terminated by
+                    // BEL or by the two-byte ST sequence (ESC followed by '\\').
+                    // Consume the entire payload, including malformed or
+                    // unterminated strings, so none of it can reach a terminal.
+                    let mut saw_escape = false;
+                    for sequence_char in chars.by_ref() {
+                        if sequence_char == '\u{7}' {
+                            break;
+                        }
+                        if saw_escape {
+                            if sequence_char == '\\' {
+                                break;
+                            }
+                            saw_escape = sequence_char == '\u{1b}';
+                        } else {
+                            saw_escape = sequence_char == '\u{1b}';
+                        }
+                    }
+                }
+                _ => {}
             }
             continue;
         }

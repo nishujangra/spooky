@@ -111,6 +111,12 @@ fn reconcile_runtime_metric_labels_prunes_removed_reload_identities() {
         ("upstream-new".to_string(), 1_800_000_000),
     ]);
 
+    // Warm the rendered quota-family cache before reconciliation. Policy
+    // removal must invalidate this text as well as the underlying snapshot.
+    let rendered_before = metrics.render_prometheus();
+    assert!(rendered_before.contains("policy=\"quota-old\""));
+    assert!(rendered_before.contains("policy=\"quota-new\""));
+
     metrics.reconcile_runtime_metric_labels(
         ["upstream-new"],
         ["backend-new"],
@@ -139,6 +145,9 @@ fn reconcile_runtime_metric_labels_prunes_removed_reload_identities() {
             .iter()
             .all(|(key, _)| key.policy != "quota-old")
     );
+    let rendered_after = metrics.render_prometheus();
+    assert!(!rendered_after.contains("policy=\"quota-old\""));
+    assert!(rendered_after.contains("policy=\"quota-new\""));
     let secrets = metrics.snapshot_secret_metrics();
     assert!(
         secrets

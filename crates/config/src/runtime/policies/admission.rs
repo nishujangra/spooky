@@ -9,7 +9,9 @@ use super::{
 };
 use crate::{
     config::Resilience,
+    policy_helpers::early_data_methods_are_safe,
     runtime::{RuntimeConfigError, RuntimeProtocolPolicy},
+    validator::is_valid_http_token,
 };
 
 fn require_nonzero_usize(name: &str, value: usize) -> Result<(), RuntimeConfigError> {
@@ -39,29 +41,6 @@ fn normalize_nonempty_string_vec(
         )));
     }
     Ok(normalized)
-}
-
-fn is_valid_http_token(value: &str) -> bool {
-    !value.is_empty()
-        && value.bytes().all(|byte| {
-            matches!(
-                byte,
-                b'!'
-                    | b'#'..=b'\''
-                    | b'*'
-                    | b'+'
-                    | b'-'
-                    | b'.'
-                    | b'0'..=b'9'
-                    | b'A'..=b'Z'
-                    | b'^'
-                    | b'_'
-                    | b'`'
-                    | b'a'..=b'z'
-                    | b'|'
-                    | b'~'
-            )
-        })
 }
 
 fn is_valid_connect_authority(authority: &str) -> bool {
@@ -391,10 +370,7 @@ impl RuntimeAdmissionPolicy {
                 "resilience.protocol.early_data_safe_methods must be non-empty when allow_0rtt=true",
             ));
         }
-        if resilience.protocol.allow_0rtt
-            && early_data_safe_methods
-                .iter()
-                .any(|method| !matches!(method.to_ascii_uppercase().as_str(), "GET" | "HEAD"))
+        if resilience.protocol.allow_0rtt && !early_data_methods_are_safe(&early_data_safe_methods)
         {
             return Err(config_invalid(
                 "resilience.protocol.early_data_safe_methods may contain only GET or HEAD when allow_0rtt=true",

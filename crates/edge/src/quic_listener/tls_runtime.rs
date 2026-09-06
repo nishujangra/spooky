@@ -21,9 +21,41 @@ struct FallbackServerCertResolver {
 
 #[derive(Clone)]
 pub(super) struct LoadedListenerIdentity {
-    pub(super) identity: RuntimeTlsIdentity,
-    pub(super) certified_key: Arc<CertifiedKey>,
-    pub(super) metadata: RuntimeTlsCertificateMetadata,
+    identity: RuntimeTlsIdentity,
+    certified_key: Arc<CertifiedKey>,
+    metadata: RuntimeTlsCertificateMetadata,
+}
+
+impl LoadedListenerIdentity {
+    /// The only way to build this type: certificate validity is checked
+    /// before construction, so a `LoadedListenerIdentity` can never carry an
+    /// expired or not-yet-valid certificate.
+    fn new(
+        identity: RuntimeTlsIdentity,
+        certified_key: Arc<CertifiedKey>,
+        metadata: RuntimeTlsCertificateMetadata,
+        cert_field: &str,
+        cert_path: &str,
+    ) -> Result<Self, ProxyError> {
+        QUICListener::validate_tls_certificate_validity(&metadata, cert_field, cert_path)?;
+        Ok(Self {
+            identity,
+            certified_key,
+            metadata,
+        })
+    }
+
+    pub(super) fn identity(&self) -> &RuntimeTlsIdentity {
+        &self.identity
+    }
+
+    pub(super) fn certified_key(&self) -> &Arc<CertifiedKey> {
+        &self.certified_key
+    }
+
+    pub(super) fn metadata(&self) -> &RuntimeTlsCertificateMetadata {
+        &self.metadata
+    }
 }
 
 #[derive(Clone)]
@@ -45,6 +77,22 @@ struct QuicSniCertMaterial {
     leaf: X509,
     chain: Vec<X509>,
     key: PKey<Private>,
+}
+
+impl QuicSniCertMaterial {
+    /// The only way to build this type: cert/key match is checked before
+    /// construction, so a `QuicSniCertMaterial` can never pair a leaf
+    /// certificate with a private key that doesn't match it.
+    fn new(
+        leaf: X509,
+        chain: Vec<X509>,
+        key: PKey<Private>,
+        cert_path: &str,
+        key_path: &str,
+    ) -> Result<Self, ProxyError> {
+        QUICListener::validate_boring_certificate_key(&leaf, &key, cert_path, key_path)?;
+        Ok(Self { leaf, chain, key })
+    }
 }
 
 impl ResolvesServerCert for FallbackServerCertResolver {
@@ -107,9 +155,9 @@ impl QUICListener {
         let timeout_policy = &config.policies.timeouts;
         debug!(
             "Loaded downstream default TLS identity cert='{}' serial={} san_dns={:?} sni_identities={}",
-            loaded_tls.default_identity.identity.cert_path,
-            loaded_tls.default_identity.metadata.serial_hex,
-            loaded_tls.default_identity.metadata.dns_names,
+            loaded_tls.default_identity.identity().cert_path,
+            loaded_tls.default_identity.metadata().serial_hex,
+            loaded_tls.default_identity.metadata().dns_names,
             loaded_tls.sni_identities.len()
         );
         if let Some(client_auth_ca) = loaded_tls.client_auth_ca.as_ref() {
@@ -168,7 +216,7 @@ impl QUICListener {
         loaded_tls: &LoadedListenerTlsMaterial,
     ) -> Result<SslContextBuilder, ProxyError> {
         let mut default_builder = Self::build_quic_ssl_context_builder_for_identity(
-            &loaded_tls.default_identity.identity,
+            loaded_tls.default_identity.identity(),
             &loaded_tls.client_auth,
             loaded_tls.client_auth_ca.as_ref(),
         )?;
@@ -182,39 +230,39 @@ impl QUICListener {
         for (server_name, identity) in &loaded_tls.sni_identities {
             Self::validate_loaded_sni_identity(server_name, identity)?;
             let cert_pem =
-                Self::read_tls_pem_file_with_limit(&identity.identity.cert_path, "SNI cert")?;
+                Self::read_tls_pem_file_with_limit(&identity.identity().cert_path, "SNI cert")?;
             let mut certs = X509::stack_from_pem(&cert_pem).map_err(|err| {
                 ProxyError::Tls(format!(
                     "failed to parse SNI cert '{}': {}",
-                    identity.identity.cert_path, err
+                    identity.identity().cert_path,
+                    err
                 ))
             })?;
             if certs.is_empty() {
                 return Err(ProxyError::Tls(format!(
                     "SNI cert '{}' contains no certificates",
-                    identity.identity.cert_path
+                    identity.identity().cert_path
                 )));
             }
             let leaf = certs.remove(0);
             let chain = certs;
             let key_pem =
-                Self::read_tls_pem_file_with_limit(&identity.identity.key_path, "SNI key")?;
+                Self::read_tls_pem_file_with_limit(&identity.identity().key_path, "SNI key")?;
             let key = PKey::private_key_from_pem(&key_pem).map_err(|err| {
                 ProxyError::Tls(format!(
                     "failed to parse SNI key '{}': {}",
-                    identity.identity.key_path, err
+                    identity.identity().key_path,
+                    err
                 ))
             })?;
-            Self::validate_boring_certificate_key(
-                &leaf,
-                &key,
-                &identity.identity.cert_path,
-                &identity.identity.key_path,
+            let sni_material = QuicSniCertMaterial::new(
+                leaf,
+                chain,
+                key,
+                &identity.identity().cert_path,
+                &identity.identity().key_path,
             )?;
-            sni_certs.insert(
-                server_name.clone(),
-                QuicSniCertMaterial { leaf, chain, key },
-            );
+            sni_certs.insert(server_name.clone(), sni_material);
         }
 
         let sni_certs = Arc::new(sni_certs);
@@ -619,13 +667,14 @@ impl QUICListener {
             ))
         })?;
         let metadata = Self::load_tls_certificate_metadata(leaf, cert_field, &identity.cert_path)?;
-        Self::validate_tls_certificate_validity(&metadata, cert_field, &identity.cert_path)?;
 
-        Ok(LoadedListenerIdentity {
-            identity: identity.clone(),
+        LoadedListenerIdentity::new(
+            identity.clone(),
             certified_key,
             metadata,
-        })
+            cert_field,
+            &identity.cert_path,
+        )
     }
 
     fn validate_tls_certificate_validity(
@@ -644,7 +693,7 @@ impl QUICListener {
                 metadata.not_before_unix_seconds
             )));
         }
-        if metadata.not_after_unix_seconds <= now {
+        if metadata.not_after_unix_seconds < now {
             return Err(ProxyError::Tls(format!(
                 "{cert_field} '{cert_path}' is expired (not_after={}, now={now})",
                 metadata.not_after_unix_seconds
@@ -798,17 +847,19 @@ impl QUICListener {
     fn listener_tls_inventory(loaded_tls: &LoadedListenerTlsMaterial) -> ListenerTlsInventory {
         ListenerTlsInventory {
             listener_tls: RuntimeListenerTls {
-                default_identity: loaded_tls.default_identity.identity.clone(),
+                default_identity: loaded_tls.default_identity.identity().clone(),
                 sni_identities: loaded_tls
                     .sni_identities
                     .iter()
-                    .map(|(server_name, identity)| (server_name.clone(), identity.identity.clone()))
+                    .map(|(server_name, identity)| {
+                        (server_name.clone(), identity.identity().clone())
+                    })
                     .collect(),
                 client_auth: loaded_tls.client_auth.clone(),
             },
             default_identity: RuntimeLoadedTlsIdentity {
-                identity: loaded_tls.default_identity.identity.clone(),
-                metadata: loaded_tls.default_identity.metadata.clone(),
+                identity: loaded_tls.default_identity.identity().clone(),
+                metadata: loaded_tls.default_identity.metadata().clone(),
             },
             sni_identities: loaded_tls
                 .sni_identities
@@ -817,8 +868,8 @@ impl QUICListener {
                     (
                         server_name.clone(),
                         RuntimeLoadedTlsIdentity {
-                            identity: identity.identity.clone(),
-                            metadata: identity.metadata.clone(),
+                            identity: identity.identity().clone(),
+                            metadata: identity.metadata().clone(),
                         },
                     )
                 })
@@ -868,7 +919,7 @@ impl QUICListener {
             sni_resolver
                 .add(
                     server_name.as_str(),
-                    identity.certified_key.as_ref().clone(),
+                    identity.certified_key().as_ref().clone(),
                 )
                 .map_err(|err| {
                     ProxyError::Tls(format!(
@@ -879,7 +930,7 @@ impl QUICListener {
         }
         let resolver = Arc::new(FallbackServerCertResolver {
             sni_resolver,
-            fallback: loaded_tls.default_identity.certified_key.clone(),
+            fallback: loaded_tls.default_identity.certified_key().clone(),
         });
         let mut tls_config = builder.with_cert_resolver(resolver);
         tls_config.alpn_protocols = alpn_protocols;
@@ -930,7 +981,7 @@ impl QUICListener {
             sni_resolver
                 .add(
                     server_name.as_str(),
-                    identity.certified_key.as_ref().clone(),
+                    identity.certified_key().as_ref().clone(),
                 )
                 .map_err(|err| {
                     ProxyError::Tls(format!(
@@ -941,7 +992,7 @@ impl QUICListener {
         }
         let resolver = Arc::new(FallbackServerCertResolver {
             sni_resolver,
-            fallback: loaded_tls.default_identity.certified_key.clone(),
+            fallback: loaded_tls.default_identity.certified_key().clone(),
         });
         let mut tls_config = builder.with_cert_resolver(resolver);
         tls_config.alpn_protocols = vec![b"http/1.1".to_vec()];
@@ -952,13 +1003,13 @@ impl QUICListener {
         server_name: &str,
         identity: &LoadedListenerIdentity,
     ) -> Result<(), ProxyError> {
-        if Self::certificate_covers_server_name(&identity.metadata, server_name) {
+        if Self::certificate_covers_server_name(identity.metadata(), server_name) {
             return Ok(());
         }
 
         Err(ProxyError::Tls(format!(
             "failed to add SNI certificate mapping for '{server_name}': certificate SANs {:?} do not cover server name",
-            identity.metadata.dns_names
+            identity.metadata().dns_names
         )))
     }
 
@@ -1031,8 +1082,8 @@ impl QUICListener {
         let loaded_tls = Self::load_listener_tls_material(config)?;
         debug!(
             "Building rustls downstream acceptor with default cert='{}' serial={} and {} explicit SNI identities",
-            loaded_tls.default_identity.identity.cert_path,
-            loaded_tls.default_identity.metadata.serial_hex,
+            loaded_tls.default_identity.identity().cert_path,
+            loaded_tls.default_identity.metadata().serial_hex,
             loaded_tls.sni_identities.len()
         );
         Ok(TlsAcceptor::from(Arc::new(

@@ -1,8 +1,4 @@
-use std::{
-    future::Future,
-    sync::{Arc, atomic::AtomicBool},
-    time::Duration,
-};
+use std::{future::Future, sync::Arc, time::Duration};
 
 use impulse_config::runtime::ListenerRuntimeConfig;
 use impulse_errors::ProxyError;
@@ -11,6 +7,7 @@ use tokio::{net::TcpListener, runtime::Handle};
 use super::state::{BootstrapStartupState, build_bootstrap_startup_state};
 use crate::{
     quic_listener::{QUICListener, runtime_handle, spawn_supervised_async_task},
+    runtime::listener::ShutdownSignal,
     runtime::{bundle::RuntimeBundleHandle, shared_state::SharedRuntimeState},
 };
 
@@ -23,7 +20,7 @@ pub(in crate::quic_listener) struct PreparedBootstrapListenerStartup {
     pub(in crate::quic_listener) listener: TcpListener,
     pub(in crate::quic_listener) runtime_handle: Handle,
     pub(in crate::quic_listener) runtime_bundle: Option<Arc<RuntimeBundleHandle>>,
-    pub(in crate::quic_listener) shutdown_signal: Option<Arc<AtomicBool>>,
+    pub(in crate::quic_listener) shutdown_signal: Option<ShutdownSignal>,
     pub(in crate::quic_listener) startup_state: BootstrapStartupState,
 }
 
@@ -31,7 +28,7 @@ pub(in crate::quic_listener) fn prepare_bootstrap_listener_startup(
     config: &ListenerRuntimeConfig,
     shared_state: &SharedRuntimeState,
     runtime_bundle: Option<Arc<RuntimeBundleHandle>>,
-    shutdown_signal: Option<Arc<AtomicBool>>,
+    shutdown_signal: Option<ShutdownSignal>,
 ) -> Result<PreparedBootstrapListenerStartup, ProxyError> {
     let transport_policy = &config.policies.transport;
     let timeout_policy = &config.policies.timeouts;

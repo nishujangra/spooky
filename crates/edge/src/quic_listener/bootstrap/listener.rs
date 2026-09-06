@@ -2,7 +2,7 @@ use std::{
     convert::Infallible,
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+        atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -46,6 +46,7 @@ use crate::{
             BodyLimitKind, REQUEST_BODY_TOO_LARGE_BODY, RequestBodyGuardrailConfig,
             RequestBodyGuardrailDecision, RequestBodyGuardrailInput, checked_request_body_ingress,
         },
+        listener::ShutdownSignal,
         shared_state::SharedRuntimeState,
     },
 };
@@ -67,7 +68,7 @@ pub(in crate::quic_listener) fn spawn_bootstrap_tls_listener(
     config: &ListenerRuntimeConfig,
     shared_state: &SharedRuntimeState,
     runtime_bundle: Option<Arc<RuntimeBundleHandle>>,
-    shutdown_signal: Option<Arc<AtomicBool>>,
+    shutdown_signal: Option<ShutdownSignal>,
 ) -> Result<(), ProxyError> {
     let PreparedBootstrapListenerStartup {
         bind,

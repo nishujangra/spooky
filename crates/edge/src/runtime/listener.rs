@@ -26,6 +26,31 @@ use crate::{
     watchdog::coordinator::WatchdogCoordinator,
 };
 
+/// Shared cancellation signal used by both the QUIC worker and bootstrap
+/// listener for a listener group.
+#[derive(Clone, Debug)]
+pub struct ShutdownSignal(Arc<AtomicBool>);
+
+impl ShutdownSignal {
+    pub fn new() -> Self {
+        Self(Arc::new(AtomicBool::new(false)))
+    }
+
+    pub fn load(&self, ordering: std::sync::atomic::Ordering) -> bool {
+        self.0.load(ordering)
+    }
+
+    pub fn store(&self, value: bool, ordering: std::sync::atomic::Ordering) {
+        self.0.store(value, ordering);
+    }
+}
+
+impl Default for ShutdownSignal {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Live listener worker state for the edge data plane.
 ///
 /// This type owns the socket, routing/runtime handles, connection tables, and
@@ -54,7 +79,7 @@ pub struct QUICListener {
     pub metrics: Arc<Metrics>,
     pub resilience: Arc<RuntimeResilience>,
     pub watchdog: Arc<WatchdogCoordinator>,
-    pub shutdown: Arc<AtomicBool>,
+    pub shutdown: ShutdownSignal,
     pub draining: bool,
     pub drain_start: Option<Instant>,
     pub watchdog_worker_drained: bool,

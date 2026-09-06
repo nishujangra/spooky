@@ -1,9 +1,6 @@
 use std::{
     collections::HashMap,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, atomic::Ordering},
     thread,
 };
 
@@ -11,7 +8,9 @@ use impulse_config::runtime::{ListenerRuntimeConfig, RuntimeConfig};
 use impulse_edge::{
     ListenerWorkerGroupConfig, ListenerWorkerRuntimeState,
     runtime::{
-        bundle::RuntimeBundleHandle, listener::QUICListener, shared_state::SharedRuntimeState,
+        bundle::RuntimeBundleHandle,
+        listener::{QUICListener, ShutdownSignal},
+        shared_state::SharedRuntimeState,
     },
     spawn_listener_worker_group,
 };
@@ -34,7 +33,7 @@ pub(crate) struct ListenerGroupSignature {
 
 pub(crate) struct ListenerGroupRuntime {
     pub(crate) signature: ListenerGroupSignature,
-    pub(crate) shutdown: Arc<AtomicBool>,
+    pub(crate) shutdown: ShutdownSignal,
     worker_handles: Vec<thread::JoinHandle<Result<(), String>>>,
     worker_index_base: usize,
 }
@@ -117,13 +116,13 @@ pub(crate) fn spawn_managed_listener_group(
     worker_index_base: usize,
 ) -> Result<ListenerGroupRuntime, String> {
     let signature = listener_group_signature(&listener_config);
-    let shutdown = Arc::new(AtomicBool::new(false));
+    let shutdown = ShutdownSignal::new();
 
     QUICListener::spawn_bootstrap_tls_listener(
         &listener_config,
         worker_shared.as_ref(),
         Some(Arc::clone(&runtime_bundle)),
-        Some(Arc::clone(&shutdown)),
+        Some(shutdown.clone()),
     )
     .map_err(|err| {
         format!(
@@ -148,7 +147,7 @@ pub(crate) fn spawn_managed_listener_group(
             listener_config,
             shared_state: worker_shared,
             runtime_bundle,
-            shutdown: Arc::clone(&shutdown),
+            shutdown: shutdown.clone(),
         },
     )?;
 
