@@ -161,3 +161,21 @@ fn log_text_sanitization_removes_terminal_sequences_and_line_breaks() {
         r"path=/bad\nALERT\r\t"
     );
 }
+
+#[test]
+fn log_text_sanitization_removes_osc_sequences() {
+    assert_eq!(
+        sanitize_log_text(
+            "before\u{1b}]8;;https://attacker.example\u{7}link\u{1b}]0;title\u{1b}\\after"
+        ),
+        "beforelinkafter"
+    );
+}
+
+#[test]
+fn log_text_sanitization_discards_unterminated_osc_payload() {
+    assert_eq!(
+        sanitize_log_text("before\u{1b}]0;forged title\nforged line"),
+        "before"
+    );
+}
