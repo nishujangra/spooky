@@ -26,7 +26,7 @@ Impulse is built for the moments when traffic is no longer normal:
 
 Impulse gives teams one runtime to receive traffic, make explicit decisions, protect backends, and surface operator-usable outcomes.
 
-![Impulse request lifecycle](assets/image.png)
+![Impulse request lifecycle](assets/image.svg)
 
 - accepts modern client traffic at the edge
 - routes requests by host and path
